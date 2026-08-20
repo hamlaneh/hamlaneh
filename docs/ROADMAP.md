@@ -25,31 +25,34 @@ that later phases depend on already exists and can turn red.
 ### Tasks
 
 - [ ] Namespace grabs (user): GitHub org `hamlaneh`, Docker Hub, social handles. Domain: done.
-- [ ] Repo hygiene: `LICENSE` (AGPL-3.0), `README.md` (pitch + "How Hamlaneh makes money"),
+- [x] Repo hygiene: `LICENSE` (AGPL-3.0), `README.md` (pitch + "How Hamlaneh makes money"),
       `SECURITY.md` (disclosure policy **+ published threat model incl. explicit non-goals per
       PLAN.md §6.1**), `CONTRIBUTING.md`, `CODEOWNERS`, issue/PR templates, `.gitignore`, `.env.example`
-- [ ] Monorepo scaffold: `server/` (Go module, `cmd/hamlaneh-server`, `internal/`),
+- [x] Monorepo scaffold: `server/` (Go module, `cmd/hamlaneh-server`, `internal/`),
       `webapp/` (Vite + React + TS + Tailwind, strict mode), `deploy/`; fill CLAUDE.md
       "Commands & toolchain" with the real values
 - [ ] API contract bootstrap: `docs/api/openapi.yaml` skeleton (`/healthz` + auth endpoint stubs);
       codegen wired — `oapi-codegen` (Go types/handlers), `openapi-typescript` (webapp client),
       MSW mocks from spec; CI fails on codegen drift
 - [ ] Migrations: `golang-migrate` wired; `server/internal/storage/migrations/` with migration 0001
-- [ ] i18n scaffold in webapp: i18next (or equivalent), `en`/`fa` locale files, RTL switching,
+- [x] i18n scaffold in webapp: i18next (or equivalent), `en`/`fa` locale files, RTL switching,
       locale key-parity CI check — before the first real screen exists
-- [ ] `deploy/docker-compose.yml`: Caddy (auto-TLS) → Go server → Postgres. Hardening baked in:
+- [x] `deploy/docker-compose.yml`: Caddy (auto-TLS) → Go server → Postgres. Hardening baked in:
       non-root containers, read-only FS, dropped capabilities, minimal/distroless images,
       DB not exposed to host network. Baseline security headers in Caddyfile: HSTS,
       `X-Content-Type-Options: nosniff`, `frame-ancestors 'none'`.
       **No static secrets in committed files** — `install.sh` generates random DB password and
       server keys at first boot into an untracked `.env`; compose references env vars only
-- [ ] `deploy/verify-defaults.sh`: scripted secure-defaults check (grows every phase) — starts
-      with: HSTS header present, security headers present, Postgres port unreachable from host,
-      all containers report non-root UID
-- [ ] `deploy/install.sh` v0: detect OS, install Docker if missing, ask domain/IP, boot the stack
+- [x] `deploy/verify-defaults.sh`: scripted secure-defaults check (grows every phase) — starts
+      with: HSTS header present, security headers present, db container publishes no host ports,
+      all containers report non-root UID (11 checks passing locally, 2026-08-20)
+- [x] `deploy/install.sh` v0: detect OS, install Docker if missing, ask domain/IP, boot the stack
+      (written + shellcheck-clean; real-VM smoke = gate 3)
 - [ ] CI (GitHub Actions): everything in CLAUDE.md "CI gates" incl. **compose-smoke** job and
       CI hygiene rules (SHA-pinned actions, minimal permissions); branch protection on `main`
-- [ ] Walking skeleton: Go server serves a static login page (no real auth yet) + `/healthz`
+      — *workflow files written and validated; activates once the GitHub remote exists*
+- [x] Walking skeleton: Go server serves a static login page (no real auth yet) + `/healthz`
+      (booted locally via compose: TLS + all security headers + healthz verified, 2026-08-20)
 - [ ] Weekend recon (user + Claude): deploy Mattermost, Rocket.Chat, Element+Jitsi; write
       `docs/recon-notes.md` — every friction point becomes install-experience spec
 

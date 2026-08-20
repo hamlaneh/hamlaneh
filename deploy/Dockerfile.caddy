@@ -1,0 +1,32 @@
+# Hamlaneh edge proxy image.
+#
+# Thin layer over the official Caddy image so the whole stack runs
+# non-root with a read-only root filesystem:
+#   - bakes the Caddyfile into the image (no bind mounts, so no SELinux
+#     relabeling problems on Fedora/RHEL hosts)
+#   - pre-owns /data and /config so freshly created named volumes inherit
+#     non-root ownership (Docker copies the mountpoint's ownership into a
+#     new volume on first use)
+#
+# Binding :80/:443 as non-root is enabled by the
+# net.ipv4.ip_unprivileged_port_start=0 sysctl in docker-compose.yml.
+
+FROM caddy:2.10-alpine
+
+COPY Caddyfile /etc/caddy/Caddyfile
+
+# The official image ships /usr/bin/caddy with cap_net_bind_service=ep.
+# Under cap_drop:ALL + no-new-privileges, exec of a binary carrying file
+# capabilities fails with EPERM, and the sysctl in docker-compose.yml
+# already allows non-root binds to :80/:443 — so strip the file capability.
+RUN apk add --no-cache libcap \
+    && setcap -r /usr/bin/caddy \
+    && apk del libcap
+
+# 65532 matches the distroless "nonroot" UID used by the server image;
+# no passwd entry is needed — Caddy only relies on the XDG_* env vars,
+# which the base image points at /data and /config.
+RUN mkdir -p /data/caddy /config/caddy \
+    && chown -R 65532:65532 /data /config
+
+USER 65532:65532

@@ -1,0 +1,4 @@
+# Default owner for everything in the repo.
+# TODO: switch to an org team (e.g. @hamlaneh/maintainers) once the GitHub org
+# and team exist — individual-account ownership is a bus-factor liability.
+* @AmirDezyani

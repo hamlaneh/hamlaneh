@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+/* Custom CSS must use logical properties only (RTL rule — see CLAUDE.md). */
+body {
+  margin: 0;
+}
+
+#root {
+  max-inline-size: 40rem;
+  margin-inline: auto;
+  padding-inline: 1rem;
+  padding-block: 1rem;
+}

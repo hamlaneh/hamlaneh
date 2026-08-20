@@ -1,0 +1,29 @@
+# Hamlaneh edge proxy configuration.
+#
+# The site address resolves from HAMLANEH_DOMAIN (default "localhost"):
+#   - "localhost" or a bare IP  -> certificate from Caddy's internal CA
+#     (browsers warn until the CA cert, stored in the caddy_data volume,
+#     is trusted — documented in the install docs)
+#   - a real domain             -> automatic publicly trusted certificates
+#     via ACME, plus HTTP->HTTPS redirect
+# Switching between the two needs no edits here — only the env var.
+#
+# Note: this file is baked into the proxy image (Dockerfile.caddy).
+# After editing it, re-run: docker compose up -d --build
+
+{$HAMLANEH_DOMAIN:localhost} {
+	encode zstd gzip
+
+	header {
+		# 180 days.
+		Strict-Transport-Security "max-age=15552000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Strict baseline CSP: no inline script/style anywhere in the app.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
+		# Do not advertise server software.
+		-Server
+	}
+
+	reverse_proxy server:8080
+}

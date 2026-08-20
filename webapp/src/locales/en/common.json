@@ -1,0 +1,18 @@
+{
+  "app": {
+    "name": "Hamlaneh",
+    "tagline": "Self-hosted team communication"
+  },
+  "language": {
+    "label": "Language",
+    "en": "English",
+    "fa": "Persian"
+  },
+  "login": {
+    "title": "Sign in",
+    "usernameLabel": "Username",
+    "passwordLabel": "Password",
+    "submit": "Sign in",
+    "notice": "Authentication is not available yet."
+  }
+}

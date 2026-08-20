@@ -53,7 +53,7 @@ Filled/updated by the Phase 0 scaffold PR — keep this section current; every a
 - Go: latest stable, pinned via `toolchain` in `go.mod`. Module: `github.com/hamlaneh/hamlaneh/server`
 - Node: current LTS + npm (lockfile committed, `npm ci` in CI)
 - Server: `go build ./...` · `go test -race ./...` · `golangci-lint run` (from `server/`)
-- Webapp: `npm run dev` · `npm test` · `npm run lint` · `npm run typecheck` · `npm run e2e` (add `-- --locale=fa` for Persian run) (from `webapp/`)
+- Webapp: `npm run dev` · `npm test` · `npm run lint` · `npm run typecheck` · `npm run i18n:check` (from `webapp/`; Playwright e2e arrives in Phase 1)
 - Stack: `docker compose up` (from `deploy/`) · `deploy/verify-defaults.sh` checks secure defaults
 - Locale parity: `npm run i18n:check` (fails on en/fa key divergence)
 

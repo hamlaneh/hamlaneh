@@ -1,0 +1,244 @@
+# Hamlaneh CI — Phase 0 walking-skeleton pipeline.
+#
+# CI hygiene (CLAUDE.md "CI gates"):
+#   - Every third-party action is pinned by full commit SHA; the trailing comment
+#     records the version tag and Dependabot keeps both in sync.
+#   - Minimal token permissions: contents: read at the top level; individual jobs
+#     opt in to the least extra scope they need.
+#   - No pull_request_target anywhere.
+#   - Superseded runs are cancelled via the concurrency group (never on main).
+#   - Secrets are never echoed: the compose-smoke DB password is generated per run,
+#     written only to a runner temp file, and no step prints it.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # Detects which parts of the repo a pull request touches so unrelated jobs are
+  # skipped (server-only changes skip the webapp job and vice versa). Pushes to
+  # main and manual dispatches always run every job. gitleaks always runs.
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      webapp: ${{ steps.filter.outputs.webapp }}
+      deploy: ${{ steps.filter.outputs.deploy }}
+    steps:
+      - name: Filter changed paths
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            server:
+              - 'server/**'
+              - '.github/workflows/ci.yml'
+            webapp:
+              - 'webapp/**'
+              - '.github/workflows/ci.yml'
+            deploy:
+              - 'server/**'
+              - 'deploy/**'
+              - '.github/workflows/ci.yml'
+
+  server:
+    name: Server (Go)
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.server == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Verify module checksums
+        run: go mod verify
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.13.0
+          working-directory: server
+
+      - name: Test (race detector)
+        run: go test -race ./...
+
+      - name: Security scan (gosec)
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+          gosec ./...
+
+      - name: Vulnerability scan (govulncheck)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          govulncheck ./...
+
+  webapp:
+    name: Webapp (TypeScript)
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.webapp == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: webapp
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # Current LTS, per CLAUDE.md "Commands & toolchain".
+          node-version: 24
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Locale key parity (en/fa)
+        run: npm run i18n:check
+
+      - name: Build
+        run: npm run build
+
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out repository (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
+  compose-smoke:
+    name: Compose smoke (deploy stack)
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Generate throwaway environment file
+        # POSTGRES_PASSWORD is random per run, exists only in the runner temp
+        # directory, and is never printed. Nothing is hard-coded.
+        run: |
+          umask 077
+          env_file="$RUNNER_TEMP/compose-smoke.env"
+          {
+            echo "HAMLANEH_DOMAIN=localhost"
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 32)"
+          } > "$env_file"
+          echo "COMPOSE=docker compose -f deploy/docker-compose.yml --env-file $env_file" >> "$GITHUB_ENV"
+
+      - name: Build and start the stack
+        run: $COMPOSE up -d --build
+
+      - name: Wait for all services to report healthy
+        run: |
+          deadline=$((SECONDS + 300))
+          while true; do
+            state="$($COMPOSE ps --all --format json | jq -s 'flatten')"
+            count="$(jq 'length' <<<"$state")"
+            exited="$(jq '[.[] | select(.State == "exited" or .State == "dead")] | length' <<<"$state")"
+            pending="$(jq '[.[] | select(.State != "running" or ((.Health // "") != "" and .Health != "healthy"))] | length' <<<"$state")"
+            if [ "$exited" -gt 0 ]; then
+              echo "::error::A service exited during startup"
+              $COMPOSE ps --all
+              exit 1
+            fi
+            if [ "$count" -gt 0 ] && [ "$pending" -eq 0 ]; then
+              echo "All $count services are running and healthy"
+              $COMPOSE ps
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Timed out waiting for services to become healthy"
+              $COMPOSE ps --all
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Check health endpoint and login page through Caddy
+        # HAMLANEH_DOMAIN=localhost means Caddy issues a certificate from its
+        # internal CA, hence -k (the smoke test checks reachability and status,
+        # not the public trust chain).
+        run: |
+          curl -fsSk --retry 10 --retry-delay 3 --retry-all-errors https://localhost/healthz
+          curl -fsSk --retry 10 --retry-delay 3 --retry-all-errors -o /dev/null https://localhost/
+
+      - name: Verify secure defaults
+        env:
+          HAMLANEH_DOMAIN: localhost
+        run: bash deploy/verify-defaults.sh
+
+      - name: Dump service state and logs on failure
+        if: failure()
+        run: |
+          if [ -n "${COMPOSE:-}" ]; then
+            $COMPOSE ps --all || true
+            $COMPOSE logs --no-color || true
+          fi
+
+      - name: Tear down
+        if: always()
+        run: |
+          if [ -n "${COMPOSE:-}" ]; then
+            $COMPOSE down -v --remove-orphans
+          fi
