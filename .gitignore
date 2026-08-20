@@ -1,0 +1,57 @@
+# Secrets & config — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+*.ppk
+id_rsa*
+id_ed25519*
+.npmrc
+.netrc
+secrets/
+
+# Runtime data (anchored — do not ignore source dirs that happen to share names)
+/data/
+/uploads/
+deploy/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Go
+server/bin/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Node / webapp
+node_modules/
+webapp/dist/
+webapp/build/
+.vite/
+*.tsbuildinfo
+coverage/
+test-results/
+playwright-report/
+
+# Tauri / Rust
+desktop/src-tauri/target/
+
+# IDE / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+.DS_Store
+Thumbs.db
+
+# Scratch
+*.log
+tmp/
+scratch/
