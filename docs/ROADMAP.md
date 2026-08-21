@@ -88,6 +88,17 @@ retrofit is how security fails.
       responses (no account enumeration); completing a reset invalidates all sessions.
       UI is already designed — build the `reset-request`, `reset-request-confirmation` and
       `reset-new-password` artboards plus the `BackLink` component (design/LOGIN_HANDOFF.md)
+- [ ] Mail infrastructure the reset depends on: a `Mailer` interface with a recording fake for
+      tests and an SMTP implementation wired in `cmd/`, dispatching asynchronously so SMTP
+      latency never sits on a response; SMTP settings plus a public base URL in `.env.example`
+      (the server has no other way to build an absolute reset link — Caddy owns the origin);
+      a null mailer that logs and drops when SMTP is unconfigured
+- [ ] Server-side bilingual email templates need a language-policy amendment: the Persian
+      exception in CLAUDE.md currently covers only `webapp/**/locales/fa/**`
+- [ ] **Recovery codes have no sign-in entry point.** `login-totp` is six numeric cells; a
+      `XXXX-XXXX` recovery code cannot be typed into it, so codes that exist entirely for
+      account recovery are unreachable at the moment they are needed. The endpoint accepts them;
+      the screen needs a design addendum before the feature is real
 - [x] Sessions core: short-lived access (15m) + rotating refresh (30d) **with reuse detection
       (family revocation)**, opaque tokens stored as SHA-256; HttpOnly+Secure+SameSite=Strict
       cookies; CSRF double-submit via `X-Hamlaneh-CSRF`; change-password revokes all other
@@ -96,10 +107,13 @@ retrofit is how security fails.
       notification (needs email infra); expired-row cleanup sweep; client reacts to an
       unrecoverable 401 mid-use by returning to sign-in; decide a short server-side grace
       window for concurrent refresh (two tabs racing trips family revocation) — before 1.2
-- [ ] Login 429 carries `Retry-After` (contract + server), so the sign-in form can show a real
-      countdown instead of clearing its rate-limited state on the next edit (1.1a review finding)
-- [ ] Password-policy endpoint feeding the requirements list and `PASSWORD_MIN_LENGTH`, so the
-      minimum is served with the form as instance policy rather than a client constant
+- [ ] `Retry-After` on every 429 in the contract, not just login — the sign-in form can then show
+      a real countdown instead of clearing its rate-limited state on the next edit (1.1a finding)
+- [ ] `GET /api/v1/instance` carries `password_min_length` (so the webapp stops hard-coding 12)
+      and `password_reset_available`, because a zero-config install has no SMTP and a
+      "Forgot password?" link that silently goes nowhere is dishonest
+- [ ] TOTP secrets are stored raw — they cannot be hashed, since verification needs the
+      plaintext. Encrypting them at rest needs a key-management decision; revisit in Phase 5
 - [ ] 2FA: TOTP first (attempt-limited), then WebAuthn/passkeys; org policy to enforce 2FA.
       UI is already designed — build the `login-totp` artboard plus the `OtpInput` component
       (six 60×60 cells, paste distributes, backspace walks back — design/LOGIN_HANDOFF.md)
