@@ -129,6 +129,21 @@ func (e SearchKind) Valid() bool {
 	}
 }
 
+// Defines values for TwoFactorChallengeMethods.
+const (
+	Totp TwoFactorChallengeMethods = "totp"
+)
+
+// Valid indicates whether the value is a known member of the TwoFactorChallengeMethods enum.
+func (e TwoFactorChallengeMethods) Valid() bool {
+	switch e {
+	case Totp:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UserLocale.
 const (
 	UserLocaleEn UserLocale = "en"
@@ -285,6 +300,12 @@ type HealthStatus struct {
 // HealthStatusStatus defines model for HealthStatus.Status.
 type HealthStatusStatus string
 
+// InstanceInfo What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere.
+type InstanceInfo struct {
+	PasswordMinLength      int  `json:"password_min_length"`
+	PasswordResetAvailable bool `json:"password_reset_available"`
+}
+
 // LinkPreview The link-preview card: image, title, description, and the host line the client derives from url. Read-only, and always absent until the Phase 1.3 egress preview proxy exists.
 type LinkPreview struct {
 	Description *string `json:"description,omitempty"`
@@ -351,8 +372,31 @@ type OpenDirectMessageRequest struct {
 	UserId openapi_types.UUID `json:"user_id"`
 }
 
+// PasswordConfirmRequest Re-authentication for an action that changes the second factor. The session alone is not enough: a hijacked session must not be able to disable two-step verification or mint fresh sign-in codes.
+type PasswordConfirmRequest struct {
+	Password string `json:"password"`
+}
+
+// PasswordResetCompleteRequest defines model for PasswordResetCompleteRequest.
+type PasswordResetCompleteRequest struct {
+	NewPassword string `json:"new_password"`
+
+	// Token The opaque token from the emailed link.
+	Token string `json:"token"`
+}
+
+// PasswordResetRequest defines model for PasswordResetRequest.
+type PasswordResetRequest struct {
+	Email openapi_types.Email `json:"email"`
+}
+
 // Presence online — a live socket. away — the client reported itself idle. offline — no socket after a short grace period.
 type Presence string
+
+// RecoveryCodes Ten single-use codes in the design's XXXX-XXXX format, shown exactly once — the server keeps only argon2id hashes and can never display them again. Regeneration replaces the entire set.
+type RecoveryCodes struct {
+	Codes []string `json:"codes"`
+}
 
 // SearchKind The two tabs above the results. `files` is accepted from Phase 1.2 but returns an empty page until the Phase 1.3 upload pipeline exists.
 type SearchKind string
@@ -408,11 +452,74 @@ type SendMessageRequest struct {
 	Content string `json:"content"`
 }
 
+// SessionFamily One signed-in device — a refresh-token family. Every field is one a settings-sessions row draws.
+type SessionFamily struct {
+	// Current True for the family that authenticated this request — the row with the this-device badge and no sign-out control of its own.
+	Current  bool               `json:"current"`
+	FamilyId openapi_types.UUID `json:"family_id"`
+
+	// Ip The newest generation's recorded address, verbatim.
+	Ip *string `json:"ip,omitempty"`
+
+	// LastActiveAt Approximate: the newest generation's created_at. Refreshes are the observable heartbeat, so precision is the access-token lifetime, which is why the design labels these rows approximate.
+	LastActiveAt time.Time `json:"last_active_at"`
+
+	// Location IP-estimated and labelled approximate in the UI. Null renders as Unknown location, and stays null until a geolocation source is chosen — so it can light up later without a contract change.
+	Location *string `json:"location,omitempty"`
+
+	// UserAgent Raw User-Agent of the family's newest generation; the client derives the device and browser labels from it.
+	UserAgent string `json:"user_agent"`
+}
+
+// SessionFamilyList defines model for SessionFamilyList.
+type SessionFamilyList struct {
+	Sessions []SessionFamily `json:"sessions"`
+}
+
 // SetReadPositionRequest defines model for SetReadPositionRequest.
 type SetReadPositionRequest struct {
 	// MessageId The newest message the caller has seen. Must belong to this channel.
 	MessageId openapi_types.UUID `json:"message_id"`
 }
+
+// TotpLoginRequest defines model for TotpLoginRequest.
+type TotpLoginRequest struct {
+	// Code A six-digit authenticator code, or one recovery code (XXXX-XXXX; case-insensitive, hyphens and spaces ignored).
+	Code string `json:"code"`
+}
+
+// TotpSetup Setup step 1. Every field is drawn on settings-2fa-setup: the QR, the always-visible manual key, and the account line beneath it. Time-based, thirty-second period, six digits.
+type TotpSetup struct {
+	// OtpauthUri What the QR encodes; issuer and account back the account line.
+	OtpauthUri string `json:"otpauth_uri"`
+
+	// QrSvg Server-rendered inline SVG of the QR. Rendered per request from the secret, never stored as an image.
+	QrSvg string `json:"qr_svg"`
+
+	// Secret The manual key: the 160-bit secret, base32 without padding. The client renders it in groups of four.
+	Secret string `json:"secret"`
+}
+
+// TotpStatus The Security card's state: off (the Set up card) or on with the turned-on date and the codes-left line.
+type TotpStatus struct {
+	// ActivatedAt When two-step verification was turned on; null while off.
+	ActivatedAt *time.Time `json:"activated_at,omitempty"`
+	Enabled     bool       `json:"enabled"`
+
+	// RecoveryCodesRemaining Unused codes in the current set; null while off.
+	RecoveryCodesRemaining *int `json:"recovery_codes_remaining,omitempty"`
+
+	// RecoveryCodesTotal Size of the current set; null while off.
+	RecoveryCodesTotal *int `json:"recovery_codes_total,omitempty"`
+}
+
+// TwoFactorChallenge The 202 login answer for an account with two-step verification on. methods lists how the challenge may be completed; totp is the only method until WebAuthn arrives.
+type TwoFactorChallenge struct {
+	Methods []TwoFactorChallengeMethods `json:"methods"`
+}
+
+// TwoFactorChallengeMethods defines model for TwoFactorChallenge.Methods.
+type TwoFactorChallengeMethods string
 
 // UpdateChannelRequest defines model for UpdateChannelRequest.
 type UpdateChannelRequest struct {
@@ -459,6 +566,12 @@ type UserSummaryPage struct {
 	// NextCursor Present when another page exists.
 	NextCursor *string       `json:"next_cursor,omitempty"`
 	Users      []UserSummary `json:"users"`
+}
+
+// VerifyTotpSetupRequest defines model for VerifyTotpSetupRequest.
+type VerifyTotpSetupRequest struct {
+	// Code Six digits from the authenticator; recovery codes are not valid here.
+	Code string `json:"code"`
 }
 
 // ChannelId defines model for ChannelId.
@@ -548,6 +661,15 @@ type ChangePasswordJSONRequestBody = ChangePasswordRequest
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
 
+// CompleteTotpLoginJSONRequestBody defines body for CompleteTotpLogin for application/json ContentType.
+type CompleteTotpLoginJSONRequestBody = TotpLoginRequest
+
+// CompletePasswordResetJSONRequestBody defines body for CompletePasswordReset for application/json ContentType.
+type CompletePasswordResetJSONRequestBody = PasswordResetCompleteRequest
+
+// RequestPasswordResetJSONRequestBody defines body for RequestPasswordReset for application/json ContentType.
+type RequestPasswordResetJSONRequestBody = PasswordResetRequest
+
 // CreateChannelJSONRequestBody defines body for CreateChannel for application/json ContentType.
 type CreateChannelJSONRequestBody = CreateChannelRequest
 
@@ -569,6 +691,15 @@ type SetReadPositionJSONRequestBody = SetReadPositionRequest
 // OpenDirectMessageJSONRequestBody defines body for OpenDirectMessage for application/json ContentType.
 type OpenDirectMessageJSONRequestBody = OpenDirectMessageRequest
 
+// DisableTotpJSONRequestBody defines body for DisableTotp for application/json ContentType.
+type DisableTotpJSONRequestBody = PasswordConfirmRequest
+
+// RegenerateRecoveryCodesJSONRequestBody defines body for RegenerateRecoveryCodes for application/json ContentType.
+type RegenerateRecoveryCodesJSONRequestBody = PasswordConfirmRequest
+
+// VerifyTotpSetupJSONRequestBody defines body for VerifyTotpSetup for application/json ContentType.
+type VerifyTotpSetupJSONRequestBody = VerifyTotpSetupRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// AdminListUsers List users (dashboard). adminOnly.
@@ -583,12 +714,21 @@ type ServerInterface interface {
 	// Login Authenticate with username/email and password.
 	// (POST /api/v1/auth/login)
 	Login(w http.ResponseWriter, r *http.Request)
+	// CompleteTotpLogin Complete a two-step sign-in with an authenticator or recovery code.
+	// (POST /api/v1/auth/login/totp)
+	CompleteTotpLogin(w http.ResponseWriter, r *http.Request)
 	// Logout End the current session and clear cookies.
 	// (POST /api/v1/auth/logout)
 	Logout(w http.ResponseWriter, r *http.Request)
 	// RefreshSession Rotate the refresh token and mint a new session.
 	// (POST /api/v1/auth/refresh)
 	RefreshSession(w http.ResponseWriter, r *http.Request)
+	// CompletePasswordReset Set a new password with an emailed reset token.
+	// (POST /api/v1/auth/reset-complete)
+	CompletePasswordReset(w http.ResponseWriter, r *http.Request)
+	// RequestPasswordReset Request a password-reset email.
+	// (POST /api/v1/auth/reset-request)
+	RequestPasswordReset(w http.ResponseWriter, r *http.Request)
 	// ListChannels Every channel and DM the caller belongs to (the sidebar).
 	// (GET /api/v1/channels)
 	ListChannels(w http.ResponseWriter, r *http.Request, params ListChannelsParams)
@@ -628,6 +768,9 @@ type ServerInterface interface {
 	// OpenDirectMessage Open — or reuse — the 1:1 direct message with one user.
 	// (POST /api/v1/dms)
 	OpenDirectMessage(w http.ResponseWriter, r *http.Request)
+	// GetInstance Public instance capabilities and policy.
+	// (GET /api/v1/instance)
+	GetInstance(w http.ResponseWriter, r *http.Request)
 	// Search Search messages (and, from Phase 1.3, files).
 	// (GET /api/v1/search)
 	Search(w http.ResponseWriter, r *http.Request, params SearchParams)
@@ -637,6 +780,33 @@ type ServerInterface interface {
 	// GetCurrentUser The authenticated user.
 	// (GET /api/v1/users/me)
 	GetCurrentUser(w http.ResponseWriter, r *http.Request)
+	// ListMySessions Every device signed in to the caller's account.
+	// (GET /api/v1/users/me/sessions)
+	ListMySessions(w http.ResponseWriter, r *http.Request)
+	// RevokeOtherSessions Sign out everywhere else.
+	// (POST /api/v1/users/me/sessions/revoke-others)
+	RevokeOtherSessions(w http.ResponseWriter, r *http.Request)
+	// RevokeSessionFamily Sign one device out.
+	// (DELETE /api/v1/users/me/sessions/{familyId})
+	RevokeSessionFamily(w http.ResponseWriter, r *http.Request, familyId openapi_types.UUID)
+	// GetTotpStatus The caller's two-step verification state (the Security card).
+	// (GET /api/v1/users/me/totp)
+	GetTotpStatus(w http.ResponseWriter, r *http.Request)
+	// ActivateTotp Turn two-step verification on (setup step 3).
+	// (POST /api/v1/users/me/totp/activate)
+	ActivateTotp(w http.ResponseWriter, r *http.Request)
+	// DisableTotp Turn two-step verification off.
+	// (POST /api/v1/users/me/totp/disable)
+	DisableTotp(w http.ResponseWriter, r *http.Request)
+	// RegenerateRecoveryCodes Generate a fresh set of recovery codes.
+	// (POST /api/v1/users/me/totp/recovery-codes)
+	RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request)
+	// StartTotpSetup Start (or restart) two-step verification setup.
+	// (POST /api/v1/users/me/totp/setup)
+	StartTotpSetup(w http.ResponseWriter, r *http.Request)
+	// VerifyTotpSetup Verify the first authenticator code (setup step 2).
+	// (POST /api/v1/users/me/totp/verify)
+	VerifyTotpSetup(w http.ResponseWriter, r *http.Request)
 	// ConnectWebSocket Upgrade to the realtime WebSocket.
 	// (GET /api/v1/ws)
 	ConnectWebSocket(w http.ResponseWriter, r *http.Request)
@@ -745,6 +915,20 @@ func (siw *ServerInterfaceWrapper) Login(w http.ResponseWriter, r *http.Request)
 	handler.ServeHTTP(w, r)
 }
 
+// CompleteTotpLogin operation middleware
+func (siw *ServerInterfaceWrapper) CompleteTotpLogin(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CompleteTotpLogin(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // Logout operation middleware
 func (siw *ServerInterfaceWrapper) Logout(w http.ResponseWriter, r *http.Request) {
 
@@ -764,6 +948,34 @@ func (siw *ServerInterfaceWrapper) RefreshSession(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RefreshSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CompletePasswordReset operation middleware
+func (siw *ServerInterfaceWrapper) CompletePasswordReset(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CompletePasswordReset(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RequestPasswordReset operation middleware
+func (siw *ServerInterfaceWrapper) RequestPasswordReset(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RequestPasswordReset(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1218,6 +1430,20 @@ func (siw *ServerInterfaceWrapper) OpenDirectMessage(w http.ResponseWriter, r *h
 	handler.ServeHTTP(w, r)
 }
 
+// GetInstance operation middleware
+func (siw *ServerInterfaceWrapper) GetInstance(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetInstance(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // Search operation middleware
 func (siw *ServerInterfaceWrapper) Search(w http.ResponseWriter, r *http.Request) {
 
@@ -1354,6 +1580,144 @@ func (siw *ServerInterfaceWrapper) GetCurrentUser(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetCurrentUser(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListMySessions operation middleware
+func (siw *ServerInterfaceWrapper) ListMySessions(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMySessions(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeOtherSessions operation middleware
+func (siw *ServerInterfaceWrapper) RevokeOtherSessions(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeOtherSessions(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeSessionFamily operation middleware
+func (siw *ServerInterfaceWrapper) RevokeSessionFamily(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "familyId" -------------
+	var familyId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "familyId", r.PathValue("familyId"), &familyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "familyId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeSessionFamily(w, r, familyId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetTotpStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetTotpStatus(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetTotpStatus(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ActivateTotp operation middleware
+func (siw *ServerInterfaceWrapper) ActivateTotp(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ActivateTotp(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DisableTotp operation middleware
+func (siw *ServerInterfaceWrapper) DisableTotp(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DisableTotp(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RegenerateRecoveryCodes operation middleware
+func (siw *ServerInterfaceWrapper) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RegenerateRecoveryCodes(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartTotpSetup operation middleware
+func (siw *ServerInterfaceWrapper) StartTotpSetup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartTotpSetup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// VerifyTotpSetup operation middleware
+func (siw *ServerInterfaceWrapper) VerifyTotpSetup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.VerifyTotpSetup(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1526,12 +1890,25 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/healthz", wrapper.GetHealthz)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/instance", wrapper.GetInstance)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/readyz", wrapper.GetReadyz)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/login", wrapper.Login)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/login/totp", wrapper.CompleteTotpLogin)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/logout", wrapper.Logout)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/refresh", wrapper.RefreshSession)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/change-password", wrapper.ChangePassword)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/reset-request", wrapper.RequestPasswordReset)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/reset-complete", wrapper.CompletePasswordReset)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me", wrapper.GetCurrentUser)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me/totp", wrapper.GetTotpStatus)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/setup", wrapper.StartTotpSetup)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/verify", wrapper.VerifyTotpSetup)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/activate", wrapper.ActivateTotp)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/disable", wrapper.DisableTotp)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/recovery-codes", wrapper.RegenerateRecoveryCodes)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me/sessions", wrapper.ListMySessions)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/users/me/sessions/{familyId}", wrapper.RevokeSessionFamily)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/sessions/revoke-others", wrapper.RevokeOtherSessions)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users", wrapper.ListUsers)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/users", wrapper.AdminListUsers)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/users", wrapper.AdminCreateUser)

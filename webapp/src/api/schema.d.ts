@@ -21,6 +21,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public instance capabilities and policy.
+         * @description Unauthenticated: the sign-in screen needs it before anyone has a session. Carries the values a client would otherwise have to hard-code or guess. password_reset_available exists because a zero-config install has no mail server, and a "Forgot password?" link that silently goes nowhere is dishonest (CLAUDE.md principle 4) — the client hides the link when it is false.
+         */
+        get: operations["getInstance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/readyz": {
         parameters: {
             query?: never;
@@ -52,6 +72,26 @@ export interface paths {
          * @description Rate-limited. On success sets the session and refresh cookies and returns the authenticated user. Responses for unknown user and wrong password are identical (no account enumeration).
          */
         post: operations["login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/login/totp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete a two-step sign-in with an authenticator or recovery code.
+         * @description The second half of login. Authenticated by the hamlaneh_2fa challenge cookie the 202 login set — deliberately no security scheme here, mirroring /auth/refresh; the authz matrix classifies it as challenge-cookie-gated. `code` is the six-digit authenticator code or one unused recovery code (case-insensitive, hyphens optional); a recovery code is consumed by the attempt that uses it. An accepted authenticator code is never accepted twice, even inside its thirty-second window. Five wrong codes revoke the challenge and the caller starts again at the password step. On success the challenge is consumed and session cookies are set exactly as a plain login sets them.
+         */
+        post: operations["completeTotpLogin"];
         delete?: never;
         options?: never;
         head?: never;
@@ -115,6 +155,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/reset-request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request a password-reset email.
+         * @description Enumeration-safe: 202 with an empty body whether or not the address matches an account, the token mint and hash run either way so timing does not distinguish them, and the mail is dispatched asynchronously so SMTP latency never sits on the response. Tokens are 256-bit, single-use, thirty-minute, stored as SHA-256; issuing a new one invalidates the account's previous unused tokens, so at most one link is ever live. Rate-limited per IP and per PRESENTED address — keyed to the string as typed, existing or not, because a limiter that only counted real accounts would itself leak which addresses exist.
+         */
+        post: operations["requestPasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/reset-complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set a new password with an emailed reset token.
+         * @description Consumes the token and stores the new password in one transaction. Unknown, expired and already-used tokens answer identically so a replayed link learns nothing. Completing a reset revokes EVERY session family — unlike change-password, which keeps the current one, because a reset means the old password may be in someone else's hands — clears must_change_password, and consumes the account's other outstanding reset tokens and pending two-step challenges. It does NOT disable two-step verification: the token proves control of the mailbox, not of the authenticator. No cookies are set; the user signs in fresh.
+         */
+        post: operations["completePasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/me": {
         parameters: {
             query?: never;
@@ -126,6 +206,186 @@ export interface paths {
         get: operations["getCurrentUser"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/totp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's two-step verification state (the Security card). */
+        get: operations["getTotpStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/totp/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start (or restart) two-step verification setup.
+         * @description Generates a fresh 160-bit secret and returns the manual key, the otpauth URI and a server-rendered QR (the settings handoff: rendered server-side from the secret, never a stored image). The pending setup lives one hour; calling again before activation replaces it, which is also why Cancel needs no endpoint. The account stays password-only until activate. Answers carry Cache-Control: no-store.
+         */
+        post: operations["startTotpSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/totp/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify the first authenticator code (setup step 2).
+         * @description Checks a six-digit code against the pending secret. A wrong code does not restart setup — the secret stays valid and the client clears the cells — but five wrong codes revoke the pending setup, because an uncapped verifier is a brute-force oracle. On success the ten recovery codes are generated and returned, shown exactly once (only argon2id hashes are kept). Two-step verification is still OFF until activate. Answers carry Cache-Control: no-store.
+         */
+        post: operations["verifyTotpSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/totp/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Turn two-step verification on (setup step 3).
+         * @description The action behind the saved-the-codes acknowledgement. Only a VERIFIED pending setup activates: the server never turns two-step verification on for an account that has not proven its authenticator and been shown its recovery codes, so closing the panel at step 3 can never strand an account whose only fallback was never displayed.
+         */
+        post: operations["activateTotp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/totp/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Turn two-step verification off.
+         * @description Re-asks for the password (the design's confirm dialog). Removes the secret and invalidates every recovery code. Sessions are deliberately NOT revoked: the threat is a hijacked session entrenching itself, and revoking other families would punish only the legitimate user's devices while the attacker's own session survives. The password prompt, the rate limit and the audit log are the defences.
+         */
+        post: operations["disableTotp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/totp/recovery-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate a fresh set of recovery codes.
+         * @description Invalidates the entire previous set and returns ten new codes, shown exactly once. Re-asks for the password: minting sign-in credentials deserves the same posture as disabling the second factor. Answers carry Cache-Control: no-store.
+         */
+        post: operations["regenerateRecoveryCodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every device signed in to the caller's account.
+         * @description One row per live session family — a device in the UI is a family (migration 0002). Deliberately unpaged, a knowing deviation from the cursor convention: the set is bounded by the thirty-day refresh TTL and the artboard draws a flat list. Current family first, then last_active_at descending.
+         */
+        get: operations["listMySessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/sessions/{familyId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A session family belonging to the caller. */
+                familyId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Sign one device out.
+         * @description Revokes every generation of the family; its open WebSocket closes within ten seconds (the ws contract). Idempotent on the caller's own families. The current family refuses — the design gives that row no sign-out control, and signing this device out is logout, which also clears its cookies. A family that is not the caller's answers 404, so a guessed id never confirms another account's session.
+         */
+        delete: operations["revokeSessionFamily"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/sessions/revoke-others": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign out everywhere else.
+         * @description Revokes every live family except the caller's own. 204 even when nothing else was signed in; the client already knows the count.
+         */
+        post: operations["revokeOtherSessions"];
         delete?: never;
         options?: never;
         head?: never;
@@ -479,6 +739,85 @@ export interface components {
             /** @default false */
             is_admin?: boolean;
         };
+        /** @description What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere. */
+        InstanceInfo: {
+            password_min_length: number;
+            password_reset_available: boolean;
+        };
+        /** @description The 202 login answer for an account with two-step verification on. methods lists how the challenge may be completed; totp is the only method until WebAuthn arrives. */
+        TwoFactorChallenge: {
+            methods: "totp"[];
+        };
+        TotpLoginRequest: {
+            /** @description A six-digit authenticator code, or one recovery code (XXXX-XXXX; case-insensitive, hyphens and spaces ignored). */
+            code: string;
+        };
+        PasswordResetRequest: {
+            /** Format: email */
+            email: string;
+        };
+        PasswordResetCompleteRequest: {
+            /** @description The opaque token from the emailed link. */
+            token: string;
+            /** Format: password */
+            new_password: string;
+        };
+        /** @description Re-authentication for an action that changes the second factor. The session alone is not enough: a hijacked session must not be able to disable two-step verification or mint fresh sign-in codes. */
+        PasswordConfirmRequest: {
+            /** Format: password */
+            password: string;
+        };
+        /** @description The Security card's state: off (the Set up card) or on with the turned-on date and the codes-left line. */
+        TotpStatus: {
+            enabled: boolean;
+            /**
+             * Format: date-time
+             * @description When two-step verification was turned on; null while off.
+             */
+            activated_at?: string | null;
+            /** @description Unused codes in the current set; null while off. */
+            recovery_codes_remaining?: number | null;
+            /** @description Size of the current set; null while off. */
+            recovery_codes_total?: number | null;
+        };
+        /** @description Setup step 1. Every field is drawn on settings-2fa-setup: the QR, the always-visible manual key, and the account line beneath it. Time-based, thirty-second period, six digits. */
+        TotpSetup: {
+            /** @description The manual key: the 160-bit secret, base32 without padding. The client renders it in groups of four. */
+            secret: string;
+            /** @description What the QR encodes; issuer and account back the account line. */
+            otpauth_uri: string;
+            /** @description Server-rendered inline SVG of the QR. Rendered per request from the secret, never stored as an image. */
+            qr_svg: string;
+        };
+        VerifyTotpSetupRequest: {
+            /** @description Six digits from the authenticator; recovery codes are not valid here. */
+            code: string;
+        };
+        /** @description Ten single-use codes in the design's XXXX-XXXX format, shown exactly once — the server keeps only argon2id hashes and can never display them again. Regeneration replaces the entire set. */
+        RecoveryCodes: {
+            codes: string[];
+        };
+        /** @description One signed-in device — a refresh-token family. Every field is one a settings-sessions row draws. */
+        SessionFamily: {
+            /** Format: uuid */
+            family_id: string;
+            /** @description Raw User-Agent of the family's newest generation; the client derives the device and browser labels from it. */
+            user_agent: string;
+            /** @description The newest generation's recorded address, verbatim. */
+            ip?: string | null;
+            /** @description IP-estimated and labelled approximate in the UI. Null renders as Unknown location, and stays null until a geolocation source is chosen — so it can light up later without a contract change. */
+            location?: string | null;
+            /**
+             * Format: date-time
+             * @description Approximate: the newest generation's created_at. Refreshes are the observable heartbeat, so precision is the access-token lifetime, which is why the design labels these rows approximate.
+             */
+            last_active_at: string;
+            /** @description True for the family that authenticated this request — the row with the this-device badge and no sign-out control of its own. */
+            current: boolean;
+        };
+        SessionFamilyList: {
+            sessions: components["schemas"]["SessionFamily"][];
+        };
         /**
          * @description online — a live socket. away — the client reported itself idle. offline — no socket after a short grace period.
          * @enum {string}
@@ -777,6 +1116,26 @@ export interface operations {
             };
         };
     };
+    getInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Instance capabilities. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstanceInfo"];
+                };
+            };
+        };
+    };
     getReadyz: {
         parameters: {
             query?: never;
@@ -828,8 +1187,52 @@ export interface operations {
                     "application/json": components["schemas"]["User"];
                 };
             };
+            /** @description Password verified, but two-step verification is on: no session exists yet. The challenge cookie is set; complete sign-in at /api/v1/auth/login/totp. A distinct status so no client can mistake this for a signed-in state. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwoFactorChallenge"];
+                };
+            };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    completeTotpLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpLoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Authenticated; session cookies set. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description No live challenge — missing, expired, consumed or revoked (code not_authenticated; return to the password step) — or a live challenge with a wrong code (code invalid_totp_code; the cells clear and the caller retries). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             429: components["responses"]["RateLimited"];
         };
     };
@@ -904,6 +1307,63 @@ export interface operations {
             };
         };
     };
+    requestPasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted. If that address belongs to an account a reset link is on its way — the response is identical either way. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    completePasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetCompleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Password replaced; every session family revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description Token unknown, expired or already used (code invalid_reset_token) — one answer for all three. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
     getCurrentUser: {
         parameters: {
             query?: never;
@@ -923,6 +1383,305 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    getTotpStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Two-step state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TotpStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    startTotpSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pending setup created or replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TotpSetup"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Two-step verification is already on (code totp_already_enabled). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    verifyTotpSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyTotpSetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Code accepted; the recovery codes for step 3. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodes"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Wrong code (code invalid_totp_code); the setup survives. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No pending setup, it expired, or the attempt cap revoked it (code totp_setup_expired) — start again at step 1. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    activateTotp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Two-step verification is on for the next sign-in. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Nothing to activate — no pending setup, not yet verified, or expired (code totp_setup_not_verified). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    disableTotp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Two-step verification is off; recovery codes void. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Password incorrect (code invalid_current_password). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Two-step verification is not on (code totp_not_enabled). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    regenerateRecoveryCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description The replacement set; every previous code is void. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodes"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Password incorrect (code invalid_current_password). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Two-step verification is not on (code totp_not_enabled). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listMySessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's session families. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionFamilyList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    revokeSessionFamily: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A session family belonging to the caller. */
+                familyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The family is revoked (now, or already was). */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description That family is the one making this request (code cannot_revoke_current_session) — use logout. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such session family for this caller (code session_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    revokeOtherSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All other families revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     listUsers: {

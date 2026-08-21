@@ -29,6 +29,11 @@ const (
 	// binds to session-authenticated routes, and logging the user out
 	// mid-password-change would help nobody.
 	classRefreshCookie
+	// classChallengeCookie is authenticated by the two-step challenge cookie
+	// inside the handler, not by a session — the sibling of classRefreshCookie.
+	// A password-verified login on a two-step account holds nothing else, and
+	// this class grants nothing beyond completing that one sign-in.
+	classChallengeCookie
 	// classSessionMustChangeAllowed requires a valid session and stays
 	// reachable while must_change_password is set (the allowed trio:
 	// change-password, logout, users/me).
@@ -72,6 +77,10 @@ var routePolicies = map[string]routePolicy{
 	"POST /api/v1/auth/logout":          {class: classSessionMustChangeAllowed},
 	"POST /api/v1/auth/change-password": {class: classSessionMustChangeAllowed},
 	"GET /api/v1/users/me":              {class: classSessionMustChangeAllowed},
+	"GET /api/v1/instance":              {class: classPublic},
+	"POST /api/v1/auth/reset-request":   {class: classPublic},
+	"POST /api/v1/auth/reset-complete":  {class: classPublic},
+	"POST /api/v1/auth/login/totp":      {class: classChallengeCookie},
 	"GET /api/v1/admin/users":           {class: classAdmin, action: authz.AdminUsersList},
 	"POST /api/v1/admin/users":          {class: classAdmin, action: authz.AdminUsersCreate},
 
@@ -93,7 +102,20 @@ var routePolicies = map[string]routePolicy{
 	"PUT /api/v1/channels/{channelId}/read":                    {class: classSession},
 	"POST /api/v1/dms":                                         {class: classSession},
 	"GET /api/v1/search":                                       {class: classSession},
-	"GET /api/v1/ws":                                           {class: classSession},
+
+	// Phase 1.1b self-service security. All session-gated; none joins the
+	// must-change trio, because a user who owes a password change fixes that
+	// before touching their second factor or their device list.
+	"GET /api/v1/users/me/totp":                    {class: classSession},
+	"POST /api/v1/users/me/totp/setup":             {class: classSession},
+	"POST /api/v1/users/me/totp/verify":            {class: classSession},
+	"POST /api/v1/users/me/totp/activate":          {class: classSession},
+	"POST /api/v1/users/me/totp/disable":           {class: classSession},
+	"POST /api/v1/users/me/totp/recovery-codes":    {class: classSession},
+	"GET /api/v1/users/me/sessions":                {class: classSession},
+	"DELETE /api/v1/users/me/sessions/{familyId}":  {class: classSession},
+	"POST /api/v1/users/me/sessions/revoke-others": {class: classSession},
+	"GET /api/v1/ws":                               {class: classSession},
 }
 
 // principal is the authenticated caller: the user plus the session that
@@ -145,7 +167,8 @@ func (s *apiServer) securityMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		if pol.class == classPublic || pol.class == classRefreshCookie {
+		if pol.class == classPublic || pol.class == classRefreshCookie ||
+			pol.class == classChallengeCookie {
 			next.ServeHTTP(w, r)
 			return
 		}

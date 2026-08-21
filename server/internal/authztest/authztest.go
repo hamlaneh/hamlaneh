@@ -49,6 +49,10 @@ const (
 	// refresh cookie inside the handler, deliberately not "anonymous" even
 	// though the spec models no security scheme for it (ROADMAP 1.1).
 	ClassRefreshCookie
+	// ClassChallengeCookie marks POST /api/v1/auth/login/totp: gated by the
+	// two-step challenge cookie the 202 login sets, not by a session. A valid
+	// session grants nothing there, which is the point of the class.
+	ClassChallengeCookie
 	// ClassSession endpoints require a valid session.
 	ClassSession
 	// ClassAdmin endpoints require a valid session plus admin.
@@ -281,6 +285,86 @@ func Registry() []Entry {
 		sessionStub(http.MethodPut, "/api/v1/channels/{channelId}/read", channelPath("/read")),
 		sessionStub(http.MethodGet, "/api/v1/search", "/api/v1/search?q=hello"),
 		sessionStub(http.MethodGet, "/api/v1/ws", ""),
+
+		// Phase 1.1b self-service security. Stub-level expectations: a 501 here
+		// means the route-level gates ran and let the caller through, never that
+		// permission was granted. They tighten to real outcomes when the TOTP,
+		// reset and session slices land — for example verify answers 409 with no
+		// pending setup, and revoking another account's family answers 404 so a
+		// guessed id confirms nothing.
+		sessionStub(http.MethodGet, "/api/v1/users/me/totp", ""),
+		sessionStub(http.MethodPost, "/api/v1/users/me/totp/setup", ""),
+		sessionStub(http.MethodPost, "/api/v1/users/me/totp/verify", ""),
+		sessionStub(http.MethodPost, "/api/v1/users/me/totp/activate", ""),
+		sessionStub(http.MethodPost, "/api/v1/users/me/totp/disable", ""),
+		sessionStub(http.MethodPost, "/api/v1/users/me/totp/recovery-codes", ""),
+		sessionStub(http.MethodGet, "/api/v1/users/me/sessions", ""),
+		sessionStub(
+			http.MethodDelete,
+			"/api/v1/users/me/sessions/{familyId}",
+			"/api/v1/users/me/sessions/00000000-0000-4000-8000-0000000000ff",
+		),
+		sessionStub(http.MethodPost, "/api/v1/users/me/sessions/revoke-others", ""),
+
+		// Public by design. The instance document is read before anyone has a
+		// session, and the reset pair answers identically to every principal —
+		// that uniformity IS the enumeration-safety property, so the matrix
+		// pins it rather than leaving it to the handler tests.
+		publicStub(http.MethodGet, "/api/v1/instance", ""),
+		publicStub(http.MethodPost, "/api/v1/auth/reset-request", ""),
+		publicStub(http.MethodPost, "/api/v1/auth/reset-complete", ""),
+
+		// Gated by the two-step challenge cookie, not a session: a valid session
+		// grants nothing here, which is the property worth pinning.
+		challengeStub(http.MethodPost, "/api/v1/auth/login/totp", ""),
+	}
+}
+
+// publicStub registers an unauthenticated endpoint whose behaviour has not
+// landed yet: every principal reaches the handler and gets the same 501.
+func publicStub(method, path, target string) Entry {
+	return Entry{
+		Method:        method,
+		Path:          path,
+		Class:         ClassPublic,
+		RequestTarget: target,
+		Want: map[Principal]int{
+			Anonymous:        http.StatusNotImplemented,
+			MemberMustChange: http.StatusNotImplemented,
+			Member:           http.StatusNotImplemented,
+			Admin:            http.StatusNotImplemented,
+		},
+		WantCode: map[Principal]string{
+			Anonymous:        "not_implemented",
+			MemberMustChange: "not_implemented",
+			Member:           "not_implemented",
+			Admin:            "not_implemented",
+		},
+	}
+}
+
+// challengeStub registers an endpoint gated by the two-step challenge cookie.
+// No fixture holds a challenge, so every principal — session or not — is
+// treated identically; once implemented these become 401 for everyone without
+// a live challenge, which is exactly the guarantee the class exists for.
+func challengeStub(method, path, target string) Entry {
+	return Entry{
+		Method:        method,
+		Path:          path,
+		Class:         ClassChallengeCookie,
+		RequestTarget: target,
+		Want: map[Principal]int{
+			Anonymous:        http.StatusNotImplemented,
+			MemberMustChange: http.StatusNotImplemented,
+			Member:           http.StatusNotImplemented,
+			Admin:            http.StatusNotImplemented,
+		},
+		WantCode: map[Principal]string{
+			Anonymous:        "not_implemented",
+			MemberMustChange: "not_implemented",
+			Member:           "not_implemented",
+			Admin:            "not_implemented",
+		},
 	}
 }
 

@@ -21,10 +21,22 @@ const (
 	codeCSRFFailed             errorCode = "csrf_failed"
 	codePasswordChangeRequired errorCode = "password_change_required"
 	codeInvalidCurrentPassword errorCode = "invalid_current_password"
-	codeRateLimited            errorCode = "rate_limited"
-	codeUsernameTaken          errorCode = "username_taken"
-	codeEmailTaken             errorCode = "email_taken"
-	codeInternalError          errorCode = "internal_error"
+
+	// Phase 1.1b: two-step verification, password reset, session management.
+	codeInvalidTOTPCode      errorCode = "invalid_totp_code"
+	codeTOTPAlreadyEnabled   errorCode = "totp_already_enabled"
+	codeTOTPSetupExpired     errorCode = "totp_setup_expired"
+	codeTOTPSetupNotVerified errorCode = "totp_setup_not_verified"
+	codeTOTPNotEnabled       errorCode = "totp_not_enabled"
+	// One answer for unknown, expired and already-used reset tokens, so a
+	// replayed link cannot tell an attacker which of the three it hit.
+	codeInvalidResetToken   errorCode = "invalid_reset_token"
+	codeCannotRevokeCurrent errorCode = "cannot_revoke_current_session"
+	codeSessionNotFound     errorCode = "session_not_found"
+	codeRateLimited         errorCode = "rate_limited"
+	codeUsernameTaken       errorCode = "username_taken"
+	codeEmailTaken          errorCode = "email_taken"
+	codeInternalError       errorCode = "internal_error"
 	// codeNotImplemented marks a contract endpoint whose behavior has not
 	// shipped yet (see messaging_stubs.go). It is never an authorization
 	// answer: route-level gates run first and answer 401/403 themselves.

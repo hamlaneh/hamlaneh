@@ -13,6 +13,12 @@
 #     cookies; they never appear in response bodies or URLs.
 #   - State-changing requests additionally require the X-Hamlaneh-CSRF custom
 #     header (double-submit defense; SameSite is the first line).
+#   - A password-verified login on an account with two-step verification on
+#     answers 202 and sets the HttpOnly hamlaneh_2fa challenge cookie
+#     (path-scoped to /api/v1/auth/login/totp, five minutes, single-use).
+#     Session cookies exist ONLY after the code verifies: cookies are the only
+#     authority here, so minting them at password time and trusting the UI to
+#     gate would make two-step verification decorative for a direct API caller.
 #   - Endpoints marked with the `sessionCookie` security scheme require a
 #     valid session; `adminOnly: true` in the description means the authz
 #     matrix must cover anonymous/member/admin for it.
@@ -38,8 +44,10 @@ info:
     messaging surface the chat shell needs: channels and 1:1 direct messages
     with membership, cursor-paged message history with idempotent send, edit
     and soft delete, per-user read positions, message search, and the
-    WebSocket upgrade that carries realtime delivery.
-  version: 0.2.0
+    WebSocket upgrade that carries realtime delivery. Phase 1.1b completes the
+    identity surface: email password reset, TOTP two-step verification with
+    recovery codes, and self-service session management.
+  version: 0.3.0
   license:
     name: AGPL-3.0
     url: https://www.gnu.org/licenses/agpl-3.0.html
@@ -79,6 +87,26 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /api/v1/instance:
+    get:
+      tags: [system]
+      operationId: getInstance
+      summary: Public instance capabilities and policy.
+      description: >
+        Unauthenticated: the sign-in screen needs it before anyone has a
+        session. Carries the values a client would otherwise have to hard-code
+        or guess. password_reset_available exists because a zero-config
+        install has no mail server, and a "Forgot password?" link that
+        silently goes nowhere is dishonest (CLAUDE.md principle 4) — the
+        client hides the link when it is false.
+      responses:
+        "200":
+          description: Instance capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceInfo"
 
   /readyz:
     get:
@@ -121,10 +149,64 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/User"
+        "202":
+          description: >
+            Password verified, but two-step verification is on: no session
+            exists yet. The challenge cookie is set; complete sign-in at
+            /api/v1/auth/login/totp. A distinct status so no client can
+            mistake this for a signed-in state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TwoFactorChallenge"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/auth/login/totp:
+    post:
+      tags: [auth]
+      operationId: completeTotpLogin
+      summary: Complete a two-step sign-in with an authenticator or recovery code.
+      description: >
+        The second half of login. Authenticated by the hamlaneh_2fa challenge
+        cookie the 202 login set — deliberately no security scheme here,
+        mirroring /auth/refresh; the authz matrix classifies it as
+        challenge-cookie-gated. `code` is the six-digit authenticator code or
+        one unused recovery code (case-insensitive, hyphens optional); a
+        recovery code is consumed by the attempt that uses it. An accepted
+        authenticator code is never accepted twice, even inside its
+        thirty-second window. Five wrong codes revoke the challenge and the
+        caller starts again at the password step. On success the challenge is
+        consumed and session cookies are set exactly as a plain login sets them.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TotpLoginRequest"
+      responses:
+        "200":
+          description: Authenticated; session cookies set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: >
+            No live challenge — missing, expired, consumed or revoked (code
+            not_authenticated; return to the password step) — or a live
+            challenge with a wrong code (code invalid_totp_code; the cells
+            clear and the caller retries).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
 
@@ -186,6 +268,74 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/auth/reset-request:
+    post:
+      tags: [auth]
+      operationId: requestPasswordReset
+      summary: Request a password-reset email.
+      description: >
+        Enumeration-safe: 202 with an empty body whether or not the address
+        matches an account, the token mint and hash run either way so timing
+        does not distinguish them, and the mail is dispatched asynchronously
+        so SMTP latency never sits on the response. Tokens are 256-bit,
+        single-use, thirty-minute, stored as SHA-256; issuing a new one
+        invalidates the account's previous unused tokens, so at most one link
+        is ever live. Rate-limited per IP and per PRESENTED address — keyed to
+        the string as typed, existing or not, because a limiter that only
+        counted real accounts would itself leak which addresses exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetRequest"
+      responses:
+        "202":
+          description: >
+            Accepted. If that address belongs to an account a reset link is on
+            its way — the response is identical either way.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/auth/reset-complete:
+    post:
+      tags: [auth]
+      operationId: completePasswordReset
+      summary: Set a new password with an emailed reset token.
+      description: >
+        Consumes the token and stores the new password in one transaction.
+        Unknown, expired and already-used tokens answer identically so a
+        replayed link learns nothing. Completing a reset revokes EVERY session
+        family — unlike change-password, which keeps the current one, because
+        a reset means the old password may be in someone else's hands — clears
+        must_change_password, and consumes the account's other outstanding
+        reset tokens and pending two-step challenges. It does NOT disable
+        two-step verification: the token proves control of the mailbox, not of
+        the authenticator. No cookies are set; the user signs in fresh.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetCompleteRequest"
+      responses:
+        "204":
+          description: Password replaced; every session family revoked.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: >
+            Token unknown, expired or already used (code invalid_reset_token)
+            — one answer for all three.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /api/v1/users/me:
     get:
       tags: [users]
@@ -202,6 +352,308 @@ paths:
                 $ref: "#/components/schemas/User"
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/users/me/totp:
+    get:
+      tags: [users]
+      operationId: getTotpStatus
+      summary: The caller's two-step verification state (the Security card).
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Two-step state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TotpStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/users/me/totp/setup:
+    post:
+      tags: [users]
+      operationId: startTotpSetup
+      summary: Start (or restart) two-step verification setup.
+      description: >
+        Generates a fresh 160-bit secret and returns the manual key, the
+        otpauth URI and a server-rendered QR (the settings handoff: rendered
+        server-side from the secret, never a stored image). The pending setup
+        lives one hour; calling again before activation replaces it, which is
+        also why Cancel needs no endpoint. The account stays password-only
+        until activate. Answers carry Cache-Control: no-store.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Pending setup created or replaced.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TotpSetup"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Two-step verification is already on (code totp_already_enabled).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/users/me/totp/verify:
+    post:
+      tags: [users]
+      operationId: verifyTotpSetup
+      summary: Verify the first authenticator code (setup step 2).
+      description: >
+        Checks a six-digit code against the pending secret. A wrong code does
+        not restart setup — the secret stays valid and the client clears the
+        cells — but five wrong codes revoke the pending setup, because an
+        uncapped verifier is a brute-force oracle. On success the ten recovery
+        codes are generated and returned, shown exactly once (only argon2id
+        hashes are kept). Two-step verification is still OFF until activate.
+        Answers carry Cache-Control: no-store.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyTotpSetupRequest"
+      responses:
+        "200":
+          description: Code accepted; the recovery codes for step 3.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryCodes"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Wrong code (code invalid_totp_code); the setup survives.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >
+            No pending setup, it expired, or the attempt cap revoked it (code
+            totp_setup_expired) — start again at step 1.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/users/me/totp/activate:
+    post:
+      tags: [users]
+      operationId: activateTotp
+      summary: Turn two-step verification on (setup step 3).
+      description: >
+        The action behind the saved-the-codes acknowledgement. Only a VERIFIED
+        pending setup activates: the server never turns two-step verification
+        on for an account that has not proven its authenticator and been shown
+        its recovery codes, so closing the panel at step 3 can never strand an
+        account whose only fallback was never displayed.
+      security:
+        - sessionCookie: []
+      responses:
+        "204":
+          description: Two-step verification is on for the next sign-in.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: >
+            Nothing to activate — no pending setup, not yet verified, or
+            expired (code totp_setup_not_verified).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/users/me/totp/disable:
+    post:
+      tags: [users]
+      operationId: disableTotp
+      summary: Turn two-step verification off.
+      description: >
+        Re-asks for the password (the design's confirm dialog). Removes the
+        secret and invalidates every recovery code. Sessions are deliberately
+        NOT revoked: the threat is a hijacked session entrenching itself, and
+        revoking other families would punish only the legitimate user's
+        devices while the attacker's own session survives. The password
+        prompt, the rate limit and the audit log are the defences.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordConfirmRequest"
+      responses:
+        "204":
+          description: Two-step verification is off; recovery codes void.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Password incorrect (code invalid_current_password).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Two-step verification is not on (code totp_not_enabled).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/users/me/totp/recovery-codes:
+    post:
+      tags: [users]
+      operationId: regenerateRecoveryCodes
+      summary: Generate a fresh set of recovery codes.
+      description: >
+        Invalidates the entire previous set and returns ten new codes, shown
+        exactly once. Re-asks for the password: minting sign-in credentials
+        deserves the same posture as disabling the second factor.
+        Answers carry Cache-Control: no-store.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordConfirmRequest"
+      responses:
+        "200":
+          description: The replacement set; every previous code is void.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryCodes"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Password incorrect (code invalid_current_password).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Two-step verification is not on (code totp_not_enabled).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/users/me/sessions:
+    get:
+      tags: [users]
+      operationId: listMySessions
+      summary: Every device signed in to the caller's account.
+      description: >
+        One row per live session family — a device in the UI is a family
+        (migration 0002). Deliberately unpaged, a knowing deviation from the
+        cursor convention: the set is bounded by the thirty-day refresh TTL
+        and the artboard draws a flat list. Current family first, then
+        last_active_at descending.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: The caller's session families.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionFamilyList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/users/me/sessions/{familyId}:
+    parameters:
+      - name: familyId
+        in: path
+        required: true
+        description: A session family belonging to the caller.
+        schema: { type: string, format: uuid }
+    delete:
+      tags: [users]
+      operationId: revokeSessionFamily
+      summary: Sign one device out.
+      description: >
+        Revokes every generation of the family; its open WebSocket closes
+        within ten seconds (the ws contract). Idempotent on the caller's own
+        families. The current family refuses — the design gives that row no
+        sign-out control, and signing this device out is logout, which also
+        clears its cookies. A family that is not the caller's answers 404, so
+        a guessed id never confirms another account's session.
+      security:
+        - sessionCookie: []
+      responses:
+        "204":
+          description: The family is revoked (now, or already was).
+        "400":
+          description: >
+            That family is the one making this request (code
+            cannot_revoke_current_session) — use logout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No such session family for this caller (code session_not_found).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/users/me/sessions/revoke-others:
+    post:
+      tags: [users]
+      operationId: revokeOtherSessions
+      summary: Sign out everywhere else.
+      description: >
+        Revokes every live family except the caller's own. 204 even when
+        nothing else was signed in; the client already knows the count.
+      security:
+        - sessionCookie: []
+      responses:
+        "204":
+          description: All other families revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /api/v1/users:
     get:
@@ -1027,6 +1479,207 @@ components:
         is_admin:
           type: boolean
           default: false
+
+    InstanceInfo:
+      type: object
+      description: >
+        What a client needs before it has a session. password_min_length is
+        instance policy served with the form rather than a constant compiled
+        into the client; password_reset_available is false when no mail
+        transport is configured, so the sign-in screen can omit the link
+        instead of offering one that goes nowhere.
+      required: [password_min_length, password_reset_available]
+      properties:
+        password_min_length:
+          type: integer
+          minimum: 8
+        password_reset_available:
+          type: boolean
+
+    TwoFactorChallenge:
+      type: object
+      description: >
+        The 202 login answer for an account with two-step verification on.
+        methods lists how the challenge may be completed; totp is the only
+        method until WebAuthn arrives.
+      required: [methods]
+      properties:
+        methods:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [totp]
+
+    TotpLoginRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          minLength: 6
+          maxLength: 16
+          description: >
+            A six-digit authenticator code, or one recovery code
+            (XXXX-XXXX; case-insensitive, hyphens and spaces ignored).
+
+    PasswordResetRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+
+    PasswordResetCompleteRequest:
+      type: object
+      required: [token, new_password]
+      properties:
+        token:
+          type: string
+          description: The opaque token from the emailed link.
+          minLength: 20
+          maxLength: 128
+        new_password:
+          type: string
+          format: password
+          minLength: 12
+          maxLength: 1024
+
+    PasswordConfirmRequest:
+      description: >
+        Re-authentication for an action that changes the second factor. The
+        session alone is not enough: a hijacked session must not be able to
+        disable two-step verification or mint fresh sign-in codes.
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 1024
+
+    TotpStatus:
+      type: object
+      description: >
+        The Security card's state: off (the Set up card) or on with the
+        turned-on date and the codes-left line.
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+        activated_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When two-step verification was turned on; null while off.
+        recovery_codes_remaining:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Unused codes in the current set; null while off.
+        recovery_codes_total:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Size of the current set; null while off.
+
+    TotpSetup:
+      type: object
+      description: >
+        Setup step 1. Every field is drawn on settings-2fa-setup: the QR, the
+        always-visible manual key, and the account line beneath it. Time-based,
+        thirty-second period, six digits.
+      required: [secret, otpauth_uri, qr_svg]
+      properties:
+        secret:
+          type: string
+          description: >
+            The manual key: the 160-bit secret, base32 without padding. The
+            client renders it in groups of four.
+        otpauth_uri:
+          type: string
+          description: What the QR encodes; issuer and account back the account line.
+        qr_svg:
+          type: string
+          description: >
+            Server-rendered inline SVG of the QR. Rendered per request from
+            the secret, never stored as an image.
+
+    VerifyTotpSetupRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          pattern: "^[0-9]{6}$"
+          description: Six digits from the authenticator; recovery codes are not valid here.
+
+    RecoveryCodes:
+      type: object
+      description: >
+        Ten single-use codes in the design's XXXX-XXXX format, shown exactly
+        once — the server keeps only argon2id hashes and can never display
+        them again. Regeneration replaces the entire set.
+      required: [codes]
+      properties:
+        codes:
+          type: array
+          minItems: 10
+          maxItems: 10
+          items:
+            type: string
+            pattern: "^[A-Z0-9]{4}-[A-Z0-9]{4}$"
+
+    SessionFamily:
+      type: object
+      description: >
+        One signed-in device — a refresh-token family. Every field is one a
+        settings-sessions row draws.
+      required: [family_id, user_agent, last_active_at, current]
+      properties:
+        family_id:
+          type: string
+          format: uuid
+        user_agent:
+          type: string
+          description: >
+            Raw User-Agent of the family's newest generation; the client
+            derives the device and browser labels from it.
+        ip:
+          type: string
+          nullable: true
+          description: The newest generation's recorded address, verbatim.
+        location:
+          type: string
+          nullable: true
+          description: >
+            IP-estimated and labelled approximate in the UI. Null renders as
+            Unknown location, and stays null until a geolocation source is
+            chosen — so it can light up later without a contract change.
+        last_active_at:
+          type: string
+          format: date-time
+          description: >
+            Approximate: the newest generation's created_at. Refreshes are the
+            observable heartbeat, so precision is the access-token lifetime,
+            which is why the design labels these rows approximate.
+        current:
+          type: boolean
+          description: >
+            True for the family that authenticated this request — the row with
+            the this-device badge and no sign-out control of its own.
+
+    SessionFamilyList:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionFamily"
 
     Presence:
       type: string
