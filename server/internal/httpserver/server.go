@@ -51,7 +51,9 @@ func New(addr string, store Store) *http.Server {
 //	GET /static/*         embedded static assets (stylesheets)
 //	GET /healthz          liveness probe, 200 {"status":"ok"}
 //	GET /readyz           readiness probe (database ping + schema version)
-//	/api/v1/*             contract endpoints (Phase 1.1 identity core)
+//	/api/v1/*             contract endpoints (Phase 1.1 identity core; the
+//	                      Phase 1.2 messaging surface is routed and gated
+//	                      but still answers 501 — see messaging_stubs.go)
 //
 // Contract routes are registered by the generated api package, so the router
 // can never drift from docs/api/openapi.yaml. Every contract route runs

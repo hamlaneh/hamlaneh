@@ -89,6 +89,10 @@ func TestRegistryEntriesAreComplete(t *testing.T) {
 				t.Errorf("%s has no expectation for principal %s", op, principal)
 			}
 		}
+		if strings.Contains(e.Target(), "{") {
+			t.Errorf("%s request target %q still has a {template} segment; "+
+				"set RequestTarget to a concrete path so the harness exercises the route", op, e.Target())
+		}
 	}
 }
 

@@ -31,10 +31,14 @@ const (
 	classRefreshCookie
 	// classSessionMustChangeAllowed requires a valid session and stays
 	// reachable while must_change_password is set (the allowed trio:
-	// change-password, logout, users/me). Session routes outside the trio
-	// (none yet this slice; Phase 1.2 adds them) get their own class that
-	// the gate blocks.
+	// change-password, logout, users/me).
 	classSessionMustChangeAllowed
+	// classSession requires a valid session and is blocked while
+	// must_change_password is set: every session route outside the trio.
+	// It carries no resource-level meaning — which channel a member may
+	// read or write is an explicit authz.Can call inside the handler, not
+	// a route class.
+	classSession
 	// classAdmin requires a valid session plus an authz admin check, and
 	// is blocked while must_change_password is set.
 	classAdmin
@@ -48,9 +52,18 @@ type routePolicy struct {
 }
 
 // routePolicies is the route-level security table for every contract
-// endpoint, keyed "METHOD /path". The authz matrix harness
-// (internal/authztest) checks a matching classification for every endpoint
-// in openapi.yaml, so this table cannot silently miss one.
+// endpoint, keyed on the ServeMux pattern that matched the request
+// (http.Request.Pattern) — "METHOD /path" with the contract's {template}
+// segments left in place, exactly as the generated router registers them.
+//
+// Keying on the pattern rather than the concrete URL path is what lets
+// path-parameterised routes be classified at all: one entry covers every
+// channel id. It cannot be spoofed either, because the pattern is chosen by
+// the router after matching, not taken from the request.
+//
+// TestEveryContractRouteIsClassified walks the routes the generated api
+// package registers and fails when one has no entry here, so the table
+// cannot silently miss an endpoint the contract added.
 var routePolicies = map[string]routePolicy{
 	"GET /healthz":                      {class: classPublic},
 	"GET /readyz":                       {class: classPublic},
@@ -61,6 +74,26 @@ var routePolicies = map[string]routePolicy{
 	"GET /api/v1/users/me":              {class: classSessionMustChangeAllowed},
 	"GET /api/v1/admin/users":           {class: classAdmin, action: authz.AdminUsersList},
 	"POST /api/v1/admin/users":          {class: classAdmin, action: authz.AdminUsersCreate},
+
+	// Phase 1.2 messaging surface. Every one of these carries sessionCookie
+	// in the contract, none is admin-only, and none joins the must-change
+	// trio — a user who still owes a password change gets 403 here.
+	"GET /api/v1/users":                                        {class: classSession},
+	"GET /api/v1/channels":                                     {class: classSession},
+	"POST /api/v1/channels":                                    {class: classSession},
+	"GET /api/v1/channels/{channelId}":                         {class: classSession},
+	"PATCH /api/v1/channels/{channelId}":                       {class: classSession},
+	"GET /api/v1/channels/{channelId}/members":                 {class: classSession},
+	"POST /api/v1/channels/{channelId}/members":                {class: classSession},
+	"DELETE /api/v1/channels/{channelId}/members/{userId}":     {class: classSession},
+	"GET /api/v1/channels/{channelId}/messages":                {class: classSession},
+	"POST /api/v1/channels/{channelId}/messages":               {class: classSession},
+	"PATCH /api/v1/channels/{channelId}/messages/{messageId}":  {class: classSession},
+	"DELETE /api/v1/channels/{channelId}/messages/{messageId}": {class: classSession},
+	"PUT /api/v1/channels/{channelId}/read":                    {class: classSession},
+	"POST /api/v1/dms":                                         {class: classSession},
+	"GET /api/v1/search":                                       {class: classSession},
+	"GET /api/v1/ws":                                           {class: classSession},
 }
 
 // principal is the authenticated caller: the user plus the session that
@@ -90,13 +123,20 @@ func principalFrom(ctx context.Context) (principal, bool) {
 // the must-change-password gate, and the admin authz gate. Handlers behind
 // it receive the principal via the request context and perform only their
 // own resource-level authz.Can checks.
+//
+// The policy is looked up by the matched route pattern. A request that
+// reached a handler without one — an empty Pattern, or a pattern nobody
+// classified — is refused with 500 rather than served: unclassified means
+// unauthorized. net/http routes HEAD requests to GET patterns, so a HEAD
+// request is classified and gated exactly like the GET it matched.
 func (s *apiServer) securityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		pol, ok := routePolicies[r.Method+" "+r.URL.Path]
+		pol, ok := routePolicies[r.Pattern]
 		if !ok || pol.class == classUnclassified {
 			// A registered contract route without a security classification
 			// is a programming error; fail closed rather than open.
-			slog.Error("route has no security classification", "method", r.Method, "path", r.URL.Path)
+			slog.Error("route has no security classification",
+				"method", r.Method, "path", r.URL.Path, "pattern", r.Pattern)
 			writeError(w, r, http.StatusInternalServerError, codeInternalError, msgInternalError)
 			return
 		}

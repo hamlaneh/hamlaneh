@@ -91,7 +91,7 @@ func buildRequest(entry Entry, principal Principal, c cell) *http.Request {
 	if entry.Body != nil {
 		body = entry.Body(c.fx)
 	}
-	req := httptest.NewRequest(entry.Method, entry.Path, strings.NewReader(body))
+	req := httptest.NewRequest(entry.Method, entry.Target(), strings.NewReader(body))
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}

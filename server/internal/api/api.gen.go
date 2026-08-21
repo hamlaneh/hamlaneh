@@ -33,6 +33,45 @@ func (e AdminCreateUserRequestLocale) Valid() bool {
 	}
 }
 
+// Defines values for ChannelKind.
+const (
+	ChannelKindDm      ChannelKind = "dm"
+	ChannelKindPrivate ChannelKind = "private"
+	ChannelKindPublic  ChannelKind = "public"
+)
+
+// Valid indicates whether the value is a known member of the ChannelKind enum.
+func (e ChannelKind) Valid() bool {
+	switch e {
+	case ChannelKindDm:
+		return true
+	case ChannelKindPrivate:
+		return true
+	case ChannelKindPublic:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateChannelRequestKind.
+const (
+	CreateChannelRequestKindPrivate CreateChannelRequestKind = "private"
+	CreateChannelRequestKindPublic  CreateChannelRequestKind = "public"
+)
+
+// Valid indicates whether the value is a known member of the CreateChannelRequestKind enum.
+func (e CreateChannelRequestKind) Valid() bool {
+	switch e {
+	case CreateChannelRequestKindPrivate:
+		return true
+	case CreateChannelRequestKindPublic:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HealthStatusStatus.
 const (
 	Degraded HealthStatusStatus = "degraded"
@@ -45,6 +84,45 @@ func (e HealthStatusStatus) Valid() bool {
 	case Degraded:
 		return true
 	case Ok:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for Presence.
+const (
+	Away    Presence = "away"
+	Offline Presence = "offline"
+	Online  Presence = "online"
+)
+
+// Valid indicates whether the value is a known member of the Presence enum.
+func (e Presence) Valid() bool {
+	switch e {
+	case Away:
+		return true
+	case Offline:
+		return true
+	case Online:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SearchKind.
+const (
+	Files    SearchKind = "files"
+	Messages SearchKind = "messages"
+)
+
+// Valid indicates whether the value is a known member of the SearchKind enum.
+func (e SearchKind) Valid() bool {
+	switch e {
+	case Files:
+		return true
+	case Messages:
 		return true
 	default:
 		return false
@@ -69,6 +147,11 @@ func (e UserLocale) Valid() bool {
 	}
 }
 
+// AddChannelMemberRequest defines model for AddChannelMemberRequest.
+type AddChannelMemberRequest struct {
+	UserId openapi_types.UUID `json:"user_id"`
+}
+
 // AdminCreateUserRequest defines model for AdminCreateUserRequest.
 type AdminCreateUserRequest struct {
 	DisplayName *string                       `json:"display_name,omitempty"`
@@ -84,10 +167,103 @@ type AdminCreateUserRequest struct {
 // AdminCreateUserRequestLocale defines model for AdminCreateUserRequest.Locale.
 type AdminCreateUserRequestLocale string
 
+// Attachment A file card in the message list. Read-only on Message: attachments are created by the Phase 1.3 upload pipeline, so until that slice lands the array is always empty. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both.
+type Attachment struct {
+	// ContentType The card's short type label ("PDF", "PNG") is derived from this.
+	ContentType string             `json:"content_type"`
+	Filename    string             `json:"filename"`
+	Height      *int               `json:"height,omitempty"`
+	Id          openapi_types.UUID `json:"id"`
+	SizeBytes   int64              `json:"size_bytes"`
+
+	// ThumbnailUrl Images only — the card's preview.
+	ThumbnailUrl *string `json:"thumbnail_url,omitempty"`
+
+	// Url Download target. Served from the cookie-less files origin (Phase 1.3).
+	Url string `json:"url"`
+
+	// Width Images only — the card's "1600 × 900" line.
+	Width *int `json:"width,omitempty"`
+}
+
 // ChangePasswordRequest defines model for ChangePasswordRequest.
 type ChangePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
+}
+
+// Channel One conversation. Only members ever receive a Channel — every channel-scoped path answers 404 to everyone else.
+type Channel struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// CreatedBy Who created the channel — the empty state says "You created this channel today". Null if that account no longer exists.
+	CreatedBy *openapi_types.UUID `json:"created_by,omitempty"`
+
+	// DmPeer The other person. Present only when kind is dm.
+	DmPeer *UserSummary       `json:"dm_peer,omitempty"`
+	Id     openapi_types.UUID `json:"id"`
+
+	// Kind Flat channel kinds (ADR 001 — no org or team layer). In Phase 1.2 visibility is membership for all three; `kind` is stored so a channel directory and join flow can arrive without a schema change.
+	Kind ChannelKind `json:"kind"`
+
+	// LastMessageAt Timestamp of the newest message; null in an empty channel.
+	LastMessageAt *time.Time `json:"last_message_at,omitempty"`
+
+	// LastReadMessageId Where the "New messages" divider goes on entry. Null when the caller has never read the channel.
+	LastReadMessageId *openapi_types.UUID `json:"last_read_message_id,omitempty"`
+
+	// MemberCount The count drawn beside the channel name in the header.
+	MemberCount int `json:"member_count"`
+
+	// MentionCount The subset of unread_count that mentions the caller — the sidebar's filled "@" badge, as opposed to the outlined plain-unread count.
+	MentionCount int `json:"mention_count"`
+
+	// Slug The name the sidebar renders after "#". Unique across non-DM channels; null for a direct message, which the client labels with dm_peer.display_name instead.
+	Slug *string `json:"slug,omitempty"`
+
+	// Topic Empty string when unset — the header renders its own "No topic set" copy. Always empty for a direct message.
+	Topic string `json:"topic"`
+
+	// UnreadCount Messages after the caller's read position, excluding the caller's own messages and deleted ones.
+	UnreadCount int `json:"unread_count"`
+}
+
+// ChannelKind Flat channel kinds (ADR 001 — no org or team layer). In Phase 1.2 visibility is membership for all three; `kind` is stored so a channel directory and join flow can arrive without a schema change.
+type ChannelKind string
+
+// ChannelPage defines model for ChannelPage.
+type ChannelPage struct {
+	Channels []Channel `json:"channels"`
+
+	// NextCursor Present when another page exists.
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
+// ChannelRef Enough of a channel to label a search result — "#deploys" for a channel, the peer's display name for a direct message.
+type ChannelRef struct {
+	// DmPeer Present only when kind is dm.
+	DmPeer *UserSummary       `json:"dm_peer,omitempty"`
+	Id     openapi_types.UUID `json:"id"`
+
+	// Kind Flat channel kinds (ADR 001 — no org or team layer). In Phase 1.2 visibility is membership for all three; `kind` is stored so a channel directory and join flow can arrive without a schema change.
+	Kind ChannelKind `json:"kind"`
+	Slug *string     `json:"slug,omitempty"`
+}
+
+// CreateChannelRequest defines model for CreateChannelRequest.
+type CreateChannelRequest struct {
+	// Kind Direct messages are opened through /api/v1/dms, not here.
+	Kind  CreateChannelRequestKind `json:"kind"`
+	Slug  string                   `json:"slug"`
+	Topic *string                  `json:"topic,omitempty"`
+}
+
+// CreateChannelRequestKind Direct messages are opened through /api/v1/dms, not here.
+type CreateChannelRequestKind string
+
+// EditMessageRequest defines model for EditMessageRequest.
+type EditMessageRequest struct {
+	Content string `json:"content"`
 }
 
 // Error defines model for Error.
@@ -109,11 +285,139 @@ type HealthStatus struct {
 // HealthStatusStatus defines model for HealthStatus.Status.
 type HealthStatusStatus string
 
+// LinkPreview The link-preview card: image, title, description, and the host line the client derives from url. Read-only, and always absent until the Phase 1.3 egress preview proxy exists.
+type LinkPreview struct {
+	Description *string `json:"description,omitempty"`
+	ImageUrl    *string `json:"image_url,omitempty"`
+	Title       *string `json:"title,omitempty"`
+	Url         string  `json:"url"`
+}
+
 // LoginRequest defines model for LoginRequest.
 type LoginRequest struct {
 	// Identifier Username or email.
 	Identifier string `json:"identifier"`
 	Password   string `json:"password"`
+}
+
+// MemberPage defines model for MemberPage.
+type MemberPage struct {
+	Members []UserSummary `json:"members"`
+
+	// NextCursor Present when another page exists.
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
+// Message defines model for Message.
+type Message struct {
+	// Attachments Always empty until the Phase 1.3 upload pipeline lands.
+	Attachments []Attachment `json:"attachments"`
+
+	// Author The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
+	Author    UserSummary        `json:"author"`
+	ChannelId openapi_types.UUID `json:"channel_id"`
+
+	// ClientMsgId The sender's idempotency key, echoed back so an optimistic bubble can be reconciled with the stored message.
+	ClientMsgId openapi_types.UUID `json:"client_msg_id"`
+
+	// Content Markdown source. The client renders it through a strict sanitizer — the server never returns HTML. Empty string once the message is deleted.
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// DeletedAt Non-null renders the dashed "Message removed" placeholder. The row keeps its place in history so the conversation never reshapes.
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+
+	// EditedAt Non-null renders the "(edited)" marker.
+	EditedAt *time.Time         `json:"edited_at,omitempty"`
+	Id       openapi_types.UUID `json:"id"`
+
+	// LinkPreview Absent until the Phase 1.3 preview proxy lands.
+	LinkPreview *LinkPreview `json:"link_preview,omitempty"`
+}
+
+// MessagePage One page of history, always ordered ascending by (created_at, id). The two cursors are the handles for the next scrollback and the next forward fetch; each is absent when there is nothing more in that direction.
+type MessagePage struct {
+	// AfterCursor Pass as `after` to fetch the next (newer) page.
+	AfterCursor *string `json:"after_cursor,omitempty"`
+
+	// BeforeCursor Pass as `before` to fetch the previous (older) page.
+	BeforeCursor *string   `json:"before_cursor,omitempty"`
+	Messages     []Message `json:"messages"`
+}
+
+// OpenDirectMessageRequest defines model for OpenDirectMessageRequest.
+type OpenDirectMessageRequest struct {
+	// UserId The other person. Must not be the caller.
+	UserId openapi_types.UUID `json:"user_id"`
+}
+
+// Presence online — a live socket. away — the client reported itself idle. offline — no socket after a short grace period.
+type Presence string
+
+// SearchKind The two tabs above the results. `files` is accepted from Phase 1.2 but returns an empty page until the Phase 1.3 upload pipeline exists.
+type SearchKind string
+
+// SearchPage defines model for SearchPage.
+type SearchPage struct {
+	// Kind The two tabs above the results. `files` is accepted from Phase 1.2 but returns an empty page until the Phase 1.3 upload pipeline exists.
+	Kind SearchKind `json:"kind"`
+
+	// NextCursor Present when another page exists.
+	NextCursor *string        `json:"next_cursor,omitempty"`
+	Results    []SearchResult `json:"results"`
+
+	// Total Exact match count, counted up to 200 — the "4 results for …" line.
+	Total int `json:"total"`
+
+	// TotalCapped True when there were more than 200 matches and total is the cap.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// SearchResult One message hit: where it was said, by whom, when, and the matching run of text. The result shape for kind=files arrives with Phase 1.3.
+type SearchResult struct {
+	// Author The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
+	Author UserSummary `json:"author"`
+
+	// Channel Enough of a channel to label a search result — "#deploys" for a channel, the peer's display name for a direct message.
+	Channel   ChannelRef         `json:"channel"`
+	CreatedAt time.Time          `json:"created_at"`
+	MessageId openapi_types.UUID `json:"message_id"`
+
+	// Snippet A snippet as alternating plain and matched runs. Never HTML — the design's highlight is drawn from `match`, so a message body can never inject markup through search results.
+	Snippet SearchSnippet `json:"snippet"`
+}
+
+// SearchSnippet A snippet as alternating plain and matched runs. Never HTML — the design's highlight is drawn from `match`, so a message body can never inject markup through search results.
+type SearchSnippet struct {
+	Parts []SearchSnippetPart `json:"parts"`
+}
+
+// SearchSnippetPart defines model for SearchSnippetPart.
+type SearchSnippetPart struct {
+	// Match True for the run the query matched; the client highlights it.
+	Match bool   `json:"match"`
+	Text  string `json:"text"`
+}
+
+// SendMessageRequest defines model for SendMessageRequest.
+type SendMessageRequest struct {
+	// ClientMsgId Generated by the client once per message and reused verbatim on every retry. Unique per (channel, author).
+	ClientMsgId openapi_types.UUID `json:"client_msg_id"`
+
+	// Content Markdown as authored, with one extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name.
+	Content string `json:"content"`
+}
+
+// SetReadPositionRequest defines model for SetReadPositionRequest.
+type SetReadPositionRequest struct {
+	// MessageId The newest message the caller has seen. Must belong to this channel.
+	MessageId openapi_types.UUID `json:"message_id"`
+}
+
+// UpdateChannelRequest defines model for UpdateChannelRequest.
+type UpdateChannelRequest struct {
+	// Topic Empty string clears the topic.
+	Topic string `json:"topic"`
 }
 
 // User defines model for User.
@@ -140,11 +444,37 @@ type UserPage struct {
 	Users      []User  `json:"users"`
 }
 
+// UserSummary The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
+type UserSummary struct {
+	DisplayName string             `json:"display_name"`
+	Id          openapi_types.UUID `json:"id"`
+
+	// Presence Present only where the design shows presence — the DM peer and the user directory. Message authors carry no presence.
+	Presence *Presence `json:"presence,omitempty"`
+	Username string    `json:"username"`
+}
+
+// UserSummaryPage defines model for UserSummaryPage.
+type UserSummaryPage struct {
+	// NextCursor Present when another page exists.
+	NextCursor *string       `json:"next_cursor,omitempty"`
+	Users      []UserSummary `json:"users"`
+}
+
+// ChannelId defines model for ChannelId.
+type ChannelId = openapi_types.UUID
+
+// MessageId defines model for MessageId.
+type MessageId = openapi_types.UUID
+
 // BadRequest defines model for BadRequest.
 type BadRequest = Error
 
 // Forbidden defines model for Forbidden.
 type Forbidden = Error
+
+// NotFound defines model for NotFound.
+type NotFound = Error
 
 // RateLimited defines model for RateLimited.
 type RateLimited = Error
@@ -160,6 +490,55 @@ type AdminListUsersParams struct {
 	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
+// ListChannelsParams defines parameters for ListChannels.
+type ListChannelsParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor Opaque pagination cursor from a previous response.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ListChannelMembersParams defines parameters for ListChannelMembers.
+type ListChannelMembersParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor Opaque pagination cursor from a previous response.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ListMessagesParams defines parameters for ListMessages.
+type ListMessagesParams struct {
+	// Before Return messages older than this cursor (scrollback).
+	Before *string `form:"before,omitempty" json:"before,omitempty"`
+
+	// After Return messages newer than this cursor (reconnect backfill).
+	After *string `form:"after,omitempty" json:"after,omitempty"`
+
+	// Around Centre the page on this cursor (permalinks); limit splits either side.
+	Around *string `form:"around,omitempty" json:"around,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// SearchParams defines parameters for Search.
+type SearchParams struct {
+	Q     string      `form:"q" json:"q"`
+	Kind  *SearchKind `form:"kind,omitempty" json:"kind,omitempty"`
+	Limit *int        `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor Opaque pagination cursor from a previous response.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ListUsersParams defines parameters for ListUsers.
+type ListUsersParams struct {
+	// Q Case-insensitive filter over username and display name.
+	Q     *string `form:"q,omitempty" json:"q,omitempty"`
+	Limit *int    `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor Opaque pagination cursor from a previous response.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
 // AdminCreateUserJSONRequestBody defines body for AdminCreateUser for application/json ContentType.
 type AdminCreateUserJSONRequestBody = AdminCreateUserRequest
 
@@ -168,6 +547,27 @@ type ChangePasswordJSONRequestBody = ChangePasswordRequest
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
+
+// CreateChannelJSONRequestBody defines body for CreateChannel for application/json ContentType.
+type CreateChannelJSONRequestBody = CreateChannelRequest
+
+// UpdateChannelJSONRequestBody defines body for UpdateChannel for application/json ContentType.
+type UpdateChannelJSONRequestBody = UpdateChannelRequest
+
+// AddChannelMemberJSONRequestBody defines body for AddChannelMember for application/json ContentType.
+type AddChannelMemberJSONRequestBody = AddChannelMemberRequest
+
+// SendMessageJSONRequestBody defines body for SendMessage for application/json ContentType.
+type SendMessageJSONRequestBody = SendMessageRequest
+
+// EditMessageJSONRequestBody defines body for EditMessage for application/json ContentType.
+type EditMessageJSONRequestBody = EditMessageRequest
+
+// SetReadPositionJSONRequestBody defines body for SetReadPosition for application/json ContentType.
+type SetReadPositionJSONRequestBody = SetReadPositionRequest
+
+// OpenDirectMessageJSONRequestBody defines body for OpenDirectMessage for application/json ContentType.
+type OpenDirectMessageJSONRequestBody = OpenDirectMessageRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -189,9 +589,57 @@ type ServerInterface interface {
 	// RefreshSession Rotate the refresh token and mint a new session.
 	// (POST /api/v1/auth/refresh)
 	RefreshSession(w http.ResponseWriter, r *http.Request)
+	// ListChannels Every channel and DM the caller belongs to (the sidebar).
+	// (GET /api/v1/channels)
+	ListChannels(w http.ResponseWriter, r *http.Request, params ListChannelsParams)
+	// CreateChannel Create a public or private channel.
+	// (POST /api/v1/channels)
+	CreateChannel(w http.ResponseWriter, r *http.Request)
+	// GetChannel One channel or DM the caller belongs to.
+	// (GET /api/v1/channels/{channelId})
+	GetChannel(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// UpdateChannel Set the channel topic.
+	// (PATCH /api/v1/channels/{channelId})
+	UpdateChannel(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// ListChannelMembers Members of a channel (the count in the header).
+	// (GET /api/v1/channels/{channelId}/members)
+	ListChannelMembers(w http.ResponseWriter, r *http.Request, channelId ChannelId, params ListChannelMembersParams)
+	// AddChannelMember Invite a user into a channel.
+	// (POST /api/v1/channels/{channelId}/members)
+	AddChannelMember(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// RemoveChannelMember Leave a channel, or remove somebody from it.
+	// (DELETE /api/v1/channels/{channelId}/members/{userId})
+	RemoveChannelMember(w http.ResponseWriter, r *http.Request, channelId ChannelId, userId openapi_types.UUID)
+	// ListMessages One page of channel history.
+	// (GET /api/v1/channels/{channelId}/messages)
+	ListMessages(w http.ResponseWriter, r *http.Request, channelId ChannelId, params ListMessagesParams)
+	// SendMessage Send a message.
+	// (POST /api/v1/channels/{channelId}/messages)
+	SendMessage(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// DeleteMessage Delete a message (soft).
+	// (DELETE /api/v1/channels/{channelId}/messages/{messageId})
+	DeleteMessage(w http.ResponseWriter, r *http.Request, channelId ChannelId, messageId MessageId)
+	// EditMessage Edit your own message.
+	// (PATCH /api/v1/channels/{channelId}/messages/{messageId})
+	EditMessage(w http.ResponseWriter, r *http.Request, channelId ChannelId, messageId MessageId)
+	// SetReadPosition Move the caller's read position in a channel.
+	// (PUT /api/v1/channels/{channelId}/read)
+	SetReadPosition(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// OpenDirectMessage Open — or reuse — the 1:1 direct message with one user.
+	// (POST /api/v1/dms)
+	OpenDirectMessage(w http.ResponseWriter, r *http.Request)
+	// Search Search messages (and, from Phase 1.3, files).
+	// (GET /api/v1/search)
+	Search(w http.ResponseWriter, r *http.Request, params SearchParams)
+	// ListUsers Directory of instance users (invite and DM pickers).
+	// (GET /api/v1/users)
+	ListUsers(w http.ResponseWriter, r *http.Request, params ListUsersParams)
 	// GetCurrentUser The authenticated user.
 	// (GET /api/v1/users/me)
 	GetCurrentUser(w http.ResponseWriter, r *http.Request)
+	// ConnectWebSocket Upgrade to the realtime WebSocket.
+	// (GET /api/v1/ws)
+	ConnectWebSocket(w http.ResponseWriter, r *http.Request)
 	// GetHealthz Liveness probe (no dependencies checked).
 	// (GET /healthz)
 	GetHealthz(w http.ResponseWriter, r *http.Request)
@@ -325,11 +773,601 @@ func (siw *ServerInterfaceWrapper) RefreshSession(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// ListChannels operation middleware
+func (siw *ServerInterfaceWrapper) ListChannels(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListChannelsParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListChannels(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateChannel operation middleware
+func (siw *ServerInterfaceWrapper) CreateChannel(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateChannel(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetChannel operation middleware
+func (siw *ServerInterfaceWrapper) GetChannel(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetChannel(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateChannel operation middleware
+func (siw *ServerInterfaceWrapper) UpdateChannel(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateChannel(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListChannelMembers operation middleware
+func (siw *ServerInterfaceWrapper) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListChannelMembersParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListChannelMembers(w, r, channelId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AddChannelMember operation middleware
+func (siw *ServerInterfaceWrapper) AddChannelMember(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AddChannelMember(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RemoveChannelMember operation middleware
+func (siw *ServerInterfaceWrapper) RemoveChannelMember(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "userId" -------------
+	var userId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", r.PathValue("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "userId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RemoveChannelMember(w, r, channelId, userId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListMessages operation middleware
+func (siw *ServerInterfaceWrapper) ListMessages(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListMessagesParams
+
+	// ------------- Optional query parameter "before" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "before", r.URL.Query(), &params.Before, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "before"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "before", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "after" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after", r.URL.Query(), &params.After, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "after"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "after", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "around" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "around", r.URL.Query(), &params.Around, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "around"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "around", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMessages(w, r, channelId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SendMessage operation middleware
+func (siw *ServerInterfaceWrapper) SendMessage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SendMessage(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteMessage operation middleware
+func (siw *ServerInterfaceWrapper) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "messageId" -------------
+	var messageId MessageId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "messageId", r.PathValue("messageId"), &messageId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "messageId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteMessage(w, r, channelId, messageId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// EditMessage operation middleware
+func (siw *ServerInterfaceWrapper) EditMessage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "messageId" -------------
+	var messageId MessageId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "messageId", r.PathValue("messageId"), &messageId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "messageId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.EditMessage(w, r, channelId, messageId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetReadPosition operation middleware
+func (siw *ServerInterfaceWrapper) SetReadPosition(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetReadPosition(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// OpenDirectMessage operation middleware
+func (siw *ServerInterfaceWrapper) OpenDirectMessage(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.OpenDirectMessage(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// Search operation middleware
+func (siw *ServerInterfaceWrapper) Search(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SearchParams
+
+	// ------------- Required query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "kind" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "kind", r.URL.Query(), &params.Kind, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "kind"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "kind", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.Search(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListUsers operation middleware
+func (siw *ServerInterfaceWrapper) ListUsers(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListUsersParams
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListUsers(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetCurrentUser operation middleware
 func (siw *ServerInterfaceWrapper) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetCurrentUser(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ConnectWebSocket operation middleware
+func (siw *ServerInterfaceWrapper) ConnectWebSocket(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ConnectWebSocket(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -494,8 +1532,24 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/refresh", wrapper.RefreshSession)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/change-password", wrapper.ChangePassword)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me", wrapper.GetCurrentUser)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users", wrapper.ListUsers)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/users", wrapper.AdminListUsers)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/users", wrapper.AdminCreateUser)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels", wrapper.ListChannels)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels", wrapper.CreateChannel)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/dms", wrapper.OpenDirectMessage)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}", wrapper.GetChannel)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/channels/{channelId}", wrapper.UpdateChannel)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/members", wrapper.ListChannelMembers)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/members", wrapper.AddChannelMember)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/channels/{channelId}/members/{userId}", wrapper.RemoveChannelMember)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages", wrapper.ListMessages)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages", wrapper.SendMessage)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages/{messageId}", wrapper.DeleteMessage)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages/{messageId}", wrapper.EditMessage)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/channels/{channelId}/read", wrapper.SetReadPosition)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/search", wrapper.Search)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/ws", wrapper.ConnectWebSocket)
 
 	return m
 }

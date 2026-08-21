@@ -25,6 +25,10 @@ const (
 	codeUsernameTaken          errorCode = "username_taken"
 	codeEmailTaken             errorCode = "email_taken"
 	codeInternalError          errorCode = "internal_error"
+	// codeNotImplemented marks a contract endpoint whose behavior has not
+	// shipped yet (see messaging_stubs.go). It is never an authorization
+	// answer: route-level gates run first and answer 401/403 themselves.
+	codeNotImplemented errorCode = "not_implemented"
 )
 
 // Stable messages for codes written from more than one call site.
@@ -32,6 +36,7 @@ const (
 	msgNotAuthenticated = "authentication required"
 	msgForbidden        = "not allowed"
 	msgInternalError    = "internal server error"
+	msgNotImplemented   = "endpoint not implemented yet"
 )
 
 // errorFallbackBody answers when even marshalling the error envelope fails;
