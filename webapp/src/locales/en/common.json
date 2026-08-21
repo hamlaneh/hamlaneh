@@ -3,6 +3,9 @@
     "name": "Hamlaneh",
     "tagline": "Self-hosted team communication"
   },
+  "common": {
+    "loading": "Loading…"
+  },
   "language": {
     "label": "Language",
     "en": "English",
@@ -10,9 +13,37 @@
   },
   "login": {
     "title": "Sign in",
-    "usernameLabel": "Username",
+    "identifierLabel": "Username or email",
     "passwordLabel": "Password",
     "submit": "Sign in",
-    "notice": "Authentication is not available yet."
+    "error": {
+      "invalidCredentials": "Incorrect username/email or password.",
+      "rateLimited": "Too many attempts. Please try again later.",
+      "unexpected": "Something went wrong. Please try again."
+    }
+  },
+  "home": {
+    "title": "Home",
+    "signedInAs": "Signed in as {{name}}",
+    "changePasswordLink": "Change password",
+    "logout": "Log out"
+  },
+  "changePassword": {
+    "title": "Change password",
+    "forcedNotice": "You must set a new password before you can continue.",
+    "currentPasswordLabel": "Current password",
+    "newPasswordLabel": "New password",
+    "confirmPasswordLabel": "Confirm new password",
+    "minLengthHint": "At least 12 characters.",
+    "submit": "Change password",
+    "cancel": "Back",
+    "error": {
+      "currentRequired": "Please enter your current password.",
+      "invalidCurrentPassword": "The current password is incorrect.",
+      "tooShort": "The new password must be at least 12 characters.",
+      "mismatch": "The new passwords do not match.",
+      "unexpected": "Something went wrong. Please try again."
+    },
+    "signOut": "Sign out"
   }
 }

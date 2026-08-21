@@ -120,6 +120,18 @@ jobs:
           HAMLANEH_TEST_DSN: postgres://hamlaneh_test:ci-${{ github.run_id }}@localhost:5432/hamlaneh_test?sslmode=disable
         run: go test -race ./...
 
+      - name: Coverage floors — security-critical packages ≥95% (CLAUDE.md)
+        run: |
+          set -euo pipefail
+          for pkg in ./internal/authz ./internal/session ./internal/password ./internal/ratelimit; do
+            pct="$(go test -cover "$pkg" | grep -o 'coverage: [0-9.]*%' | grep -o '[0-9.]*' | head -n1)"
+            echo "$pkg statement coverage: ${pct}%"
+            awk -v p="$pct" 'BEGIN { exit (p+0 >= 95.0) ? 0 : 1 }' || {
+              echo "::error::coverage ${pct}% is below the 95% floor in $pkg"
+              exit 1
+            }
+          done
+
       - name: Security scan (gosec)
         run: |
           go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0

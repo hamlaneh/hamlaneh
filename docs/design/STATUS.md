@@ -8,7 +8,7 @@ Functional requirements per screen (for producing the designs): [BRIEFS.md](BRIE
 
 | Screen set | Brief | Status | Mockup |
 |---|---|---|---|
-| Login & password reset (7 artboards) | BRIEFS.md §1 | PENDING — **needed first** | — |
+| Login & password reset (7 artboards) | BRIEFS.md §1 | awaiting-design — **needed first** (unstyled plumbing built: login, forced/voluntary change-password, sign-out escape) | — |
 | Chat shell (sidebar, messages, composer) | BRIEFS.md §2 | PENDING | — |
 | Admin dashboard (users, invites, org, audit) | BRIEFS.md §3 | PENDING | — |
 | User settings (profile, security, sessions) | BRIEFS.md §4 | PENDING | — |

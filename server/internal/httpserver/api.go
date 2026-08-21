@@ -7,41 +7,79 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
+	"github.com/hamlaneh/hamlaneh/server/internal/ratelimit"
+	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
 
-// ReadinessChecker reports whether the server's dependencies (database
-// connectivity, applied schema migrations) are ready for traffic.
-// *storage.Store implements it.
-type ReadinessChecker interface {
+// Store is everything the HTTP layer needs from persistent storage.
+// *storage.Store implements it; tests substitute fakes. Phase 4's SQLite
+// driver implements the same surface (CLAUDE.md: one storage interface,
+// two drivers).
+type Store interface {
+	// Ready backs the /readyz probe.
 	Ready(ctx context.Context) error
+
+	UserByIdentifier(ctx context.Context, identifier string) (storage.User, error)
+	CreateUser(ctx context.Context, nu storage.NewUser) (storage.User, error)
+	UpdatePassword(ctx context.Context, userID uuid.UUID, passwordHash string, keepFamilyID uuid.UUID) error
+	UpdatePasswordHash(ctx context.Context, userID uuid.UUID, passwordHash string) error
+	ListUsers(ctx context.Context, params storage.ListUsersParams) ([]storage.User, error)
+
+	CreateSession(ctx context.Context, ns storage.NewSession) (storage.Session, error)
+	SessionUserByAccessHash(ctx context.Context, accessHash []byte) (storage.Session, storage.User, error)
+	RotateSession(ctx context.Context, refreshHash []byte, next storage.SessionTokens) (storage.Session, storage.RotateOutcome, error)
+	RevokeFamily(ctx context.Context, familyID uuid.UUID) error
 }
+
+// Login rate limit (Phase 1.1 security design): sliding window per client
+// IP and per lowercased identifier, each 10 failed attempts per 5 minutes.
+// Successful logins consume no budget — Login checks both keys up front and
+// records only failed authentications.
+const (
+	loginRateLimit  = 10
+	loginRateWindow = 5 * time.Minute
+)
 
 // readyzTimeout bounds the whole readiness probe: a stalled database must
 // become a fast 503, not a hung request.
 const readyzTimeout = 2 * time.Second
 
-// Response bodies are fixed literals so the handlers have no marshalling
-// error paths. Their shapes match the HealthStatus and Error contract
-// schemas (pinned by tests against the generated types).
+// Health probe bodies are fixed literals so those handlers have no
+// marshalling error paths. Their shapes match the HealthStatus contract
+// schema (pinned by tests against the generated types).
 const (
 	healthOKBody       = `{"status":"ok"}`
 	healthDegradedBody = `{"status":"degraded"}`
-	notImplementedBody = `{"error":{"code":"not_implemented","message":"endpoint not implemented yet"}}`
 )
 
-// errNoStorage is the readiness failure for a server wired without storage.
-// Production always has a store; unit tests construct storage-less handlers.
+// errNoStorage is the failure for a server wired without storage.
+// Production always has a store; some unit tests construct storage-less
+// handlers.
 var errNoStorage = errors.New("no storage configured")
 
-// apiServer implements the generated api.ServerInterface. Everything beyond
-// the health probes is a stub answering 501 until Phase 1.1 lands the real
-// handlers.
+// apiServer implements the generated api.ServerInterface. Route-level
+// security (CSRF, sessions, the must-change gate, admin) is enforced by
+// securityMiddleware before any handler runs.
 type apiServer struct {
-	ready ReadinessChecker
+	store Store
+
+	loginIPLimiter         *ratelimit.Limiter
+	loginIdentifierLimiter *ratelimit.Limiter
 }
 
 var _ api.ServerInterface = (*apiServer)(nil)
+
+// newAPIServer wires an apiServer with fresh rate limiters.
+func newAPIServer(store Store) *apiServer {
+	return &apiServer{
+		store:                  store,
+		loginIPLimiter:         ratelimit.New(loginRateLimit, loginRateWindow),
+		loginIdentifierLimiter: ratelimit.New(loginRateLimit, loginRateWindow),
+	}
+}
 
 // GetHealthz is the liveness probe: the process is up; no dependencies are
 // checked.
@@ -65,36 +103,10 @@ func (s *apiServer) GetReadyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *apiServer) checkReady(ctx context.Context) error {
-	if s.ready == nil {
+	if s.store == nil {
 		return errNoStorage
 	}
-	return s.ready.Ready(ctx)
-}
-
-// Login is a Phase 1.1 stub.
-func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) { notImplemented(w, r) }
-
-// Logout is a Phase 1.1 stub.
-func (s *apiServer) Logout(w http.ResponseWriter, r *http.Request) { notImplemented(w, r) }
-
-// RefreshSession is a Phase 1.1 stub.
-func (s *apiServer) RefreshSession(w http.ResponseWriter, r *http.Request) { notImplemented(w, r) }
-
-// GetCurrentUser is a Phase 1.1 stub.
-func (s *apiServer) GetCurrentUser(w http.ResponseWriter, r *http.Request) { notImplemented(w, r) }
-
-// AdminListUsers is a Phase 1.1 stub.
-func (s *apiServer) AdminListUsers(w http.ResponseWriter, r *http.Request, _ api.AdminListUsersParams) {
-	notImplemented(w, r)
-}
-
-// AdminCreateUser is a Phase 1.1 stub.
-func (s *apiServer) AdminCreateUser(w http.ResponseWriter, r *http.Request) { notImplemented(w, r) }
-
-// notImplemented answers a contract endpoint that has no implementation yet
-// with the contract's Error shape.
-func notImplemented(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, r, http.StatusNotImplemented, notImplementedBody)
+	return s.store.Ready(ctx)
 }
 
 // writeJSON sends a fixed JSON body with the given status.

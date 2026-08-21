@@ -17,6 +17,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -68,6 +72,7 @@ func Open(ctx context.Context, connString string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse database configuration: %w", err)
 	}
+	cfg.AfterConnect = registerCitext
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -84,7 +89,38 @@ func Open(ctx context.Context, connString string) (*Store, error) {
 		return nil, migErr
 	}
 
+	// Connections opened before the migrations ran (the readiness pings)
+	// could not register citext because the extension did not exist yet on a
+	// fresh database. Dropping them forces every future connection through
+	// registerCitext with the extension in place.
+	pool.Reset()
+
 	return &Store{pool: pool, wantVersion: wantVersion}, nil
+}
+
+// registerCitext teaches each new connection the citext extension type, so
+// username and email parameters and results round-trip as ordinary strings
+// with case-insensitive matching done by PostgreSQL. The OID is resolved by
+// hand and bound to the text codec (citext is wire-compatible with text)
+// because pgx's LoadType only handles derived types, not extension base
+// types.
+//
+// On a fresh database the type does not exist until migration 0001 runs
+// (PostgreSQL undefined_object, 42704); only that is tolerated — the
+// pre-migration connections just ping and are reset after migrating. Every
+// other failure propagates: swallowing it would leave connections silently
+// unable to bind citext columns.
+func registerCitext(ctx context.Context, conn *pgx.Conn) error {
+	var oid uint32
+	if err := conn.QueryRow(ctx, `select 'citext'::regtype::oid`).Scan(&oid); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UndefinedObject {
+			return nil
+		}
+		return fmt.Errorf("look up citext type: %w", err)
+	}
+	conn.TypeMap().RegisterType(&pgtype.Type{Name: "citext", OID: oid, Codec: pgtype.TextCodec{}})
+	return nil
 }
 
 // Close releases the connection pool.

@@ -1,0 +1,112 @@
+package httpserver
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/hamlaneh/hamlaneh/server/internal/api"
+)
+
+// errorCode is a stable machine-readable error code from the Phase 1.1
+// error contract. Clients localize by code; messages are stable English
+// and never carry internal details.
+type errorCode string
+
+const (
+	codeInvalidRequest         errorCode = "invalid_request"
+	codeInvalidCredentials     errorCode = "invalid_credentials" //nolint:gosec // error code, not a credential
+	codeNotAuthenticated       errorCode = "not_authenticated"
+	codeForbidden              errorCode = "forbidden"
+	codeCSRFFailed             errorCode = "csrf_failed"
+	codePasswordChangeRequired errorCode = "password_change_required"
+	codeInvalidCurrentPassword errorCode = "invalid_current_password"
+	codeRateLimited            errorCode = "rate_limited"
+	codeUsernameTaken          errorCode = "username_taken"
+	codeEmailTaken             errorCode = "email_taken"
+	codeInternalError          errorCode = "internal_error"
+)
+
+// Stable messages for codes written from more than one call site.
+const (
+	msgNotAuthenticated = "authentication required"
+	msgForbidden        = "not allowed"
+	msgInternalError    = "internal server error"
+)
+
+// errorFallbackBody answers when even marshalling the error envelope fails;
+// it must stay in sync with the Error contract schema.
+const errorFallbackBody = `{"error":{"code":"internal_error","message":"internal server error"}}`
+
+// writeError sends the contract's Error shape:
+// {"error":{"code":...,"message":...}}.
+func writeError(w http.ResponseWriter, r *http.Request, status int, code errorCode, message string) {
+	var body api.Error
+	body.Error.Code = string(code)
+	body.Error.Message = message
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		// Unreachable for this shape; keep the response well-formed anyway.
+		slog.Error("marshal error response", "path", r.URL.Path, "error", err)
+		status = http.StatusInternalServerError
+		data = []byte(errorFallbackBody)
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	writeBody(w, r, data)
+}
+
+// writeInvalidCredentials is the single source of the login-failure
+// response. Unknown identifier and wrong password MUST answer through this
+// one call site so the responses stay byte-identical (no account
+// enumeration).
+func writeInvalidCredentials(w http.ResponseWriter, r *http.Request) {
+	writeError(w, r, http.StatusUnauthorized, codeInvalidCredentials, "invalid credentials")
+}
+
+// internalError logs the real cause server-side and answers with the
+// generic 500 envelope; details never reach the client.
+func internalError(w http.ResponseWriter, r *http.Request, err error) {
+	slog.Error("internal error", "method", r.Method, "path", r.URL.Path, "error", err)
+	writeError(w, r, http.StatusInternalServerError, codeInternalError, msgInternalError)
+}
+
+// requestErrorHandler replaces oapi-codegen's plain-text 400 for malformed
+// request parameters with the contract's JSON Error shape. The underlying
+// error is deliberately not echoed to the client.
+func requestErrorHandler(w http.ResponseWriter, r *http.Request, _ error) {
+	writeError(w, r, http.StatusBadRequest, codeInvalidRequest, "malformed request parameters")
+}
+
+// writeJSONValue marshals v and sends it with the given status.
+func writeJSONValue(w http.ResponseWriter, r *http.Request, status int, v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	writeBody(w, r, data)
+}
+
+// decodeJSON reads a bounded JSON request body into dst. On any failure —
+// oversized body, malformed JSON, wrong field types, trailing content — it
+// answers 400 invalid_request and reports false.
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	const maxJSONBody = 64 << 10 // far above any valid request; bounds DoS
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBody)
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(dst); err != nil {
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest, "malformed request body")
+		return false
+	}
+	if dec.More() {
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest, "malformed request body")
+		return false
+	}
+	return true
+}

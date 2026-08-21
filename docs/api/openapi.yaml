@@ -98,6 +98,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "429":
@@ -129,6 +131,37 @@ paths:
           description: New session cookies set.
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/auth/change-password:
+    post:
+      tags: [auth]
+      operationId: changePassword
+      summary: Change the authenticated user's password.
+      description: >
+        Requires the current password. Allowed (and required) while
+        must_change_password is set. On success all OTHER sessions of the user
+        are revoked; the current session stays valid and the flag clears.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "204":
+          description: Password changed; other sessions revoked.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Current password incorrect (code invalid_current_password).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/users/me:
     get:
@@ -285,7 +318,7 @@ components:
 
     User:
       type: object
-      required: [id, username, display_name, locale, is_admin, created_at]
+      required: [id, username, display_name, locale, is_admin, must_change_password, created_at]
       properties:
         id:
           type: string
@@ -303,6 +336,12 @@ components:
           enum: [en, fa]
         is_admin:
           type: boolean
+        must_change_password:
+          type: boolean
+          description: >
+            True until the user replaces their admin-assigned temporary password.
+            While true, every endpoint except change-password, logout, and
+            users/me returns 403 with code password_change_required.
         created_at:
           type: string
           format: date-time
@@ -318,6 +357,21 @@ components:
         next_cursor:
           type: string
           description: Present when another page exists.
+
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 1024
+        new_password:
+          type: string
+          format: password
+          minLength: 12
+          maxLength: 1024
 
     AdminCreateUserRequest:
       type: object

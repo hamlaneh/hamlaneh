@@ -81,24 +81,31 @@ retrofit is how security fails.
 
 ### 1.1 Identity & sessions
 
-- [ ] Signup/login: argon2id, rate-limited, public registration **off by default**
+- [x] Login: argon2id (t=3, m=64MiB, p=4), rate-limited per-IP and per-identifier, identical
+      unknown-user/wrong-password responses, public registration **off by default** (no signup
+      endpoint exists at all) — *slice 1.1a, 2026-08-21*
 - [ ] Password reset: email-delivered, single-use, time-limited tokens; rate-limited; uniform
       responses (no account enumeration); completing a reset invalidates all sessions
-- [ ] Sessions: short-lived access + rotating refresh tokens **with reuse detection (family
-      revocation)**; refresh token in HttpOnly+Secure+SameSite cookie (or an explicitly
-      documented header-only scheme); CSRF defense decided and documented (SameSite + custom
-      header for mutations); device list; remote revocation; new-device login notification
+- [x] Sessions core: short-lived access (15m) + rotating refresh (30d) **with reuse detection
+      (family revocation)**, opaque tokens stored as SHA-256; HttpOnly+Secure+SameSite=Strict
+      cookies; CSRF double-submit via `X-Hamlaneh-CSRF`; change-password revokes all other
+      families; forced password change for admin-created accounts — *slice 1.1a*
+- [ ] Sessions remainder: device list UI + per-device revocation endpoints; new-device login
+      notification (needs email infra); expired-row cleanup sweep; client reacts to an
+      unrecoverable 401 mid-use by returning to sign-in; decide a short server-side grace
+      window for concurrent refresh (two tabs racing trips family revocation) — before 1.2
 - [ ] 2FA: TOTP first (attempt-limited), then WebAuthn/passkeys; org policy to enforce 2FA
-- [ ] Replace oapi-codegen's plain-text 400 for malformed params with a JSON `ErrorHandlerFunc`
-      matching the contract Error schema (noted during Phase 0 codegen wiring)
-- [ ] Handlers enforce all contract constraints server-side (lengths, patterns, ranges) —
-      oapi-codegen std-http generates models only, no validation (Phase 0 security-review note)
-- [ ] Authz matrix classifies `/api/v1/auth/refresh` deliberately (refresh-cookie-gated, not
-      "anonymous") even though the spec models no security scheme for it
-- [ ] Admin bootstrap flow (first user = admin, created via install, not open signup);
-      every later user is created from the admin dashboard or an invite link (see 1.4)
-- [ ] **Authz matrix harness** (see CLAUDE.md testing policy): table-driven, REST + WS entries,
-      completeness machine-checked against `openapi.yaml` in CI
+- [x] JSON `ErrorHandlerFunc` replaces oapi-codegen's plain-text errors everywhere — *slice 1.1a*
+- [x] Handlers enforce all contract constraints server-side (lengths, patterns, ranges, body
+      size cap 64 KiB) — *slice 1.1a*
+- [x] Authz matrix classifies `/api/v1/auth/refresh` deliberately (refresh-cookie-gated;
+      works under the must-change gate) — *slice 1.1a*
+- [x] Admin bootstrap flow: install.sh generates `HAMLANEH_ADMIN_*` into untracked `.env`;
+      server creates the first admin only while the users table is empty (must-change-password
+      set); every later user comes from the admin dashboard or an invite link (see 1.4) — *slice 1.1a*
+- [x] **Authz matrix harness**: table-driven registry, 9 endpoints × 4 principals (anonymous /
+      member / member-must-change / admin) against real server + DB; completeness gate parses
+      `openapi.yaml` and fails on unregistered endpoints (WS entries arrive with 1.2) — *slice 1.1a*
 - Tests: registration-off negative (signup returns 403 on fresh default instance);
   credential-stuffing/rate-limit tests (login, signup, reset, TOTP — assert 429/lockout);
   refresh-token replay → family revoked; no session token usable before the 2FA step completes;
@@ -108,6 +115,9 @@ retrofit is how security fails.
 
 ### 1.2 Messaging core
 
+- [ ] Rework `httpserver` route-policy keying from exact method+path to `r.Pattern` before
+      adding path-parameter routes (the table fails closed on unknown paths today — safe,
+      but every 1.2 route needs it)
 - [ ] Orgs → teams → channels (public/private) → DMs/group DMs; membership and roles
 - [ ] WebSocket gateway: message delivery, presence, typing, read receipts, reconnect/resume.
       Handshake validates Origin (CSWSH defense); auth via cookie/header or short-lived one-time

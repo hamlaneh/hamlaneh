@@ -25,5 +25,12 @@
 		-Server
 	}
 
+	# SECURITY INVARIANT — do not add trusted_proxies here without changing
+	# the Go server. With no trusted_proxies (this default), Caddy strips any
+	# client-supplied X-Forwarded-For and forwards only the true peer IP; the
+	# server's rate-limiter IP extraction (internal/httpserver clientIP)
+	# trusts the leftmost XFF value on that basis. Fronting Caddy with a CDN
+	# or another proxy requires switching the server to rightmost-untrusted
+	# parsing first, or login rate limiting becomes spoofable.
 	reverse_proxy server:8080
 }

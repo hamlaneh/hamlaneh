@@ -84,6 +84,12 @@ type AdminCreateUserRequest struct {
 // AdminCreateUserRequestLocale defines model for AdminCreateUserRequest.Locale.
 type AdminCreateUserRequestLocale string
 
+// ChangePasswordRequest defines model for ChangePasswordRequest.
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
 // Error defines model for Error.
 type Error struct {
 	Error struct {
@@ -118,7 +124,10 @@ type User struct {
 	Id          openapi_types.UUID   `json:"id"`
 	IsAdmin     bool                 `json:"is_admin"`
 	Locale      UserLocale           `json:"locale"`
-	Username    string               `json:"username"`
+
+	// MustChangePassword True until the user replaces their admin-assigned temporary password. While true, every endpoint except change-password, logout, and users/me returns 403 with code password_change_required.
+	MustChangePassword bool   `json:"must_change_password"`
+	Username           string `json:"username"`
 }
 
 // UserLocale defines model for User.Locale.
@@ -154,6 +163,9 @@ type AdminListUsersParams struct {
 // AdminCreateUserJSONRequestBody defines body for AdminCreateUser for application/json ContentType.
 type AdminCreateUserJSONRequestBody = AdminCreateUserRequest
 
+// ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
+type ChangePasswordJSONRequestBody = ChangePasswordRequest
+
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
 
@@ -165,6 +177,9 @@ type ServerInterface interface {
 	// AdminCreateUser Create a user (dashboard). adminOnly.
 	// (POST /api/v1/admin/users)
 	AdminCreateUser(w http.ResponseWriter, r *http.Request)
+	// ChangePassword Change the authenticated user's password.
+	// (POST /api/v1/auth/change-password)
+	ChangePassword(w http.ResponseWriter, r *http.Request)
 	// Login Authenticate with username/email and password.
 	// (POST /api/v1/auth/login)
 	Login(w http.ResponseWriter, r *http.Request)
@@ -245,6 +260,20 @@ func (siw *ServerInterfaceWrapper) AdminCreateUser(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.AdminCreateUser(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ChangePassword operation middleware
+func (siw *ServerInterfaceWrapper) ChangePassword(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ChangePassword(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -463,6 +492,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/login", wrapper.Login)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/logout", wrapper.Logout)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/refresh", wrapper.RefreshSession)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/change-password", wrapper.ChangePassword)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me", wrapper.GetCurrentUser)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/users", wrapper.AdminListUsers)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/users", wrapper.AdminCreateUser)

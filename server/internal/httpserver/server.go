@@ -31,13 +31,13 @@ const (
 )
 
 // New returns an *http.Server bound to addr with the Hamlaneh router and
-// hardened timeouts configured. ready backs the /readyz probe and may be nil
-// (readyz then always reports degraded). The caller owns the server's
-// lifecycle.
-func New(addr string, ready ReadinessChecker) *http.Server {
+// hardened timeouts configured. store backs everything stateful and may be
+// nil in unit tests (readyz then reports degraded and authenticated routes
+// answer 500). The caller owns the server's lifecycle.
+func New(addr string, store Store) *http.Server {
 	return &http.Server{
 		Addr:              addr,
-		Handler:           Handler(ready),
+		Handler:           Handler(store),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -51,15 +51,24 @@ func New(addr string, ready ReadinessChecker) *http.Server {
 //	GET /static/*         embedded static assets (stylesheets)
 //	GET /healthz          liveness probe, 200 {"status":"ok"}
 //	GET /readyz           readiness probe (database ping + schema version)
-//	/api/v1/*             contract endpoints (501 stubs until Phase 1.1)
+//	/api/v1/*             contract endpoints (Phase 1.1 identity core)
 //
 // Contract routes are registered by the generated api package, so the router
-// can never drift from docs/api/openapi.yaml. Anything else is a 404.
-func Handler(ready ReadinessChecker) http.Handler {
+// can never drift from docs/api/openapi.yaml. Every contract route runs
+// behind securityMiddleware (CSRF, sessions, must-change gate, admin), and
+// malformed request parameters answer with the contract's JSON Error shape
+// instead of oapi-codegen's plain-text default. Anything else is a 404.
+func Handler(store Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handleIndex)
 	mux.Handle("GET /static/", noDirListing(http.FileServerFS(staticFS)))
-	return api.HandlerFromMux(&apiServer{ready: ready}, mux)
+
+	s := newAPIServer(store)
+	return api.HandlerWithOptions(s, api.StdHTTPServerOptions{
+		BaseRouter:       mux,
+		Middlewares:      []api.MiddlewareFunc{s.securityMiddleware},
+		ErrorHandlerFunc: requestErrorHandler,
+	})
 }
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {

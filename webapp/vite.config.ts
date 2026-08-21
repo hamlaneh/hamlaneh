@@ -35,5 +35,9 @@ export default defineConfig({
     pool: "threads",
     setupFiles: ["./src/test/setup.ts"],
     css: false,
+    // userEvent-heavy auth tests can brush the 5s default on cold parallel
+    // runs; a timed-out test's still-running typing then corrupts the next
+    // test's inputs. Headroom keeps the suite deterministic.
+    testTimeout: 15000,
   },
 });

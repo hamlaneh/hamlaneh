@@ -64,7 +64,7 @@ from their admin.
 | `login-error` | Same + inline error banner: "Incorrect username or password." (deliberately generic — never reveals which was wrong) |
 | `login-rate-limited` | Same + non-dismissable notice: "Too many attempts. Try again in a few minutes." Fields disabled |
 | `login-totp` | Second step after correct password: 6-digit one-time code input (auto-advancing boxes or single field — designer's call), "Verify" button, "Back" link, note text "Enter the code from your authenticator app" |
-| `login-force-password-change` | Admin created the account with a temporary password: new password + confirm fields, inline password-strength/requirements hints, "Set password and continue" |
+| `login-force-password-change` | Admin created the account with a temporary password: new password + confirm fields, inline password-strength/requirements hints, "Set password and continue", and a low-emphasis "Sign out" escape link (for someone who signed into the wrong account) |
 | `reset-request` | "Forgot password" flow step 1: email field + "Send reset link" + back-to-login. Confirmation state text: "If that address exists, a reset link is on its way." (same message whether the account exists or not) |
 | `reset-new-password` | Flow step 2 (from the emailed link): new password + confirm + requirements hints + "Reset password" |
 

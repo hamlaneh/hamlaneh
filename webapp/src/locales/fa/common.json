@@ -3,6 +3,9 @@
     "name": "هم‌لانه",
     "tagline": "ارتباط تیمی خودمیزبان"
   },
+  "common": {
+    "loading": "در حال بارگذاری…"
+  },
   "language": {
     "label": "زبان",
     "en": "انگلیسی",
@@ -10,9 +13,37 @@
   },
   "login": {
     "title": "ورود",
-    "usernameLabel": "نام کاربری",
+    "identifierLabel": "نام کاربری یا ایمیل",
     "passwordLabel": "گذرواژه",
     "submit": "ورود",
-    "notice": "احراز هویت هنوز در دسترس نیست."
+    "error": {
+      "invalidCredentials": "نام کاربری/ایمیل یا گذرواژه نادرست است.",
+      "rateLimited": "تعداد تلاش‌ها بیش از حد مجاز است. کمی بعد دوباره امتحان کنید.",
+      "unexpected": "خطایی رخ داد. دوباره تلاش کنید."
+    }
+  },
+  "home": {
+    "title": "خانه",
+    "signedInAs": "واردشده با نام {{name}}",
+    "changePasswordLink": "تغییر گذرواژه",
+    "logout": "خروج"
+  },
+  "changePassword": {
+    "title": "تغییر گذرواژه",
+    "forcedNotice": "پیش از ادامه باید گذرواژهٔ تازه‌ای تعیین کنید.",
+    "currentPasswordLabel": "گذرواژهٔ فعلی",
+    "newPasswordLabel": "گذرواژهٔ جدید",
+    "confirmPasswordLabel": "تکرار گذرواژهٔ جدید",
+    "minLengthHint": "دست‌کم ۱۲ نویسه.",
+    "submit": "تغییر گذرواژه",
+    "cancel": "بازگشت",
+    "error": {
+      "currentRequired": "گذرواژهٔ فعلی را وارد کنید.",
+      "invalidCurrentPassword": "گذرواژهٔ فعلی نادرست است.",
+      "tooShort": "گذرواژهٔ جدید باید دست‌کم ۱۲ نویسه باشد.",
+      "mismatch": "گذرواژه‌های جدید یکسان نیستند.",
+      "unexpected": "خطایی رخ داد. دوباره تلاش کنید."
+    },
+    "signOut": "خروج از حساب"
   }
 }

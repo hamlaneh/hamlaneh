@@ -8,6 +8,9 @@
 // The server needs PostgreSQL, configured via the standard libpq environment
 // variables (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, PGSSLMODE), and
 // applies its schema migrations itself at startup — no manual migrate step.
+// On a fresh instance (empty users table), HAMLANEH_ADMIN_USERNAME and
+// HAMLANEH_ADMIN_PASSWORD (optionally HAMLANEH_ADMIN_LOCALE) create the
+// first admin account; once any user exists they are ignored.
 // The healthcheck subcommand needs neither a database nor those variables.
 //
 // The server speaks plain HTTP; TLS termination is the reverse proxy's job.
@@ -25,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hamlaneh/hamlaneh/server/internal/bootstrap"
 	"github.com/hamlaneh/hamlaneh/server/internal/healthcheck"
 	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
@@ -69,6 +73,11 @@ func run(args []string) error {
 			return err
 		}
 		defer store.Close()
+
+		adminCfg, present := bootstrap.AdminFromEnv()
+		if err := bootstrap.EnsureAdmin(ctx, store, adminCfg, present); err != nil {
+			return err
+		}
 
 		return serve(ctx, httpserver.New(listenAddr, store))
 	case args[0] == "healthcheck":

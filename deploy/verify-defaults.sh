@@ -154,6 +154,34 @@ check_nonroot_containers() {
   done
 }
 
+# Auth surface must fail closed for anonymous callers, with the contract's
+# JSON error shape and no account enumeration.
+check_auth_defaults() {
+  local code body
+  code="$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' "${CONNECT[@]}" "https://${DOMAIN}/readyz" || true)"
+  if [ "$code" = "200" ]; then
+    pass "/readyz returns 200"
+  else
+    failure "/readyz returned '${code:-000}' (expected 200)"
+  fi
+
+  code="$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' "${CONNECT[@]}" "https://${DOMAIN}/api/v1/admin/users" || true)"
+  if [ "$code" = "401" ]; then
+    pass "anonymous request to admin API is rejected (401)"
+  else
+    failure "anonymous GET /api/v1/admin/users returned '${code:-000}' (expected 401)"
+  fi
+
+  body="$(curl -sk --max-time 10 "${CONNECT[@]}" -X POST "https://${DOMAIN}/api/v1/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d '{"identifier":"no-such-user-verify-defaults","password":"definitely-wrong-password"}' || true)"
+  if printf '%s' "$body" | grep -q '"invalid_credentials"'; then
+    pass "login with bad credentials fails with the generic invalid_credentials error"
+  else
+    failure "login with bad credentials did not return the invalid_credentials contract error (got: ${body:-<empty>})"
+  fi
+}
+
 main() {
   require_tools
 
@@ -163,6 +191,7 @@ main() {
 
   check_security_headers
   check_healthz
+  check_auth_defaults
   check_db_not_exposed
   check_nonroot_containers
 

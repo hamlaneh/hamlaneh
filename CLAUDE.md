@@ -93,8 +93,8 @@ Filled/updated by the Phase 0 scaffold PR — keep this section current; every a
 
 1. **Contract first.** The orchestrator finalizes changes to `docs/api/openapi.yaml` and the
    migration files **before** spawning implementation agents. Codegen keeps everyone honest:
-   `oapi-codegen` (Go server types), `openapi-typescript` (webapp client types), MSW mocks
-   generated from the spec; CI fails if generated code drifts from the spec.
+   `oapi-codegen` (Go server types), `openapi-typescript` (webapp client types), MSW mock
+   handlers typed against the generated schema; CI fails if generated code drifts from the spec.
 2. **TDD.** Red → green → refactor (use the `tdd` skill). Tests land in the same commit as the code.
 3. **Implement** following the domain skill (see roster below).
 4. **Review gates — per slice (the branch about to merge), not per commit:**
@@ -143,6 +143,12 @@ task. Rough map:
 - Architecture, security design, auth/session/crypto code, E2EE (Phase 3), hard debugging → Fable 5 (high–max)
 - Standard feature slices (routine backend/frontend implementation) → Opus or Sonnet
 - Mechanical work (boilerplate, config tweaks, translations, doc formatting) → Sonnet or Haiku
+
+Cost optimization: the session may run on Opus for day-to-day slices while the orchestrator
+pins `model: "fable"` on individual security-critical subagents (security reviews of
+auth/crypto diffs, contract design help). The contract-first step at each slice start is
+short — a brief Fable session (or Fable subagent) followed by Opus implementation is the
+economical default.
 
 ### Testing policy (non-negotiable)
 

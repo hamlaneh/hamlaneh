@@ -95,6 +95,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/change-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change the authenticated user's password.
+         * @description Requires the current password. Allowed (and required) while must_change_password is set. On success all OTHER sessions of the user are revoked; the current session stays valid and the flag clears.
+         */
+        post: operations["changePassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/me": {
         parameters: {
             query?: never;
@@ -165,6 +185,8 @@ export interface components {
             /** @enum {string} */
             locale: "en" | "fa";
             is_admin: boolean;
+            /** @description True until the user replaces their admin-assigned temporary password. While true, every endpoint except change-password, logout, and users/me returns 403 with code password_change_required. */
+            must_change_password: boolean;
             /** Format: date-time */
             created_at: string;
         };
@@ -172,6 +194,12 @@ export interface components {
             users: components["schemas"]["User"][];
             /** @description Present when another page exists. */
             next_cursor?: string;
+        };
+        ChangePasswordRequest: {
+            /** Format: password */
+            current_password: string;
+            /** Format: password */
+            new_password: string;
         };
         AdminCreateUserRequest: {
             username: string;
@@ -308,6 +336,7 @@ export interface operations {
                     "application/json": components["schemas"]["User"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             429: components["responses"]["RateLimited"];
         };
@@ -348,6 +377,39 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    changePassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Password changed; other sessions revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Current password incorrect (code invalid_current_password). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     getCurrentUser: {
