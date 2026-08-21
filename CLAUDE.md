@@ -41,7 +41,7 @@ server/      Go backend (golang-project-layout conventions: cmd/, internal/)
 webapp/      React + TypeScript
 desktop/     Tauri wrapper
 deploy/      docker-compose.yml, Caddyfile, install.sh, verify-defaults.sh
-docs/        PLAN.md, ROADMAP.md, adr/, api/openapi.yaml, design/STATUS.md
+docs/        PLAN.md, ROADMAP.md, OVERVIEW.md, adr/, api/openapi.yaml, design/
 ```
 
 Create directories only when they receive real content.
@@ -105,6 +105,9 @@ Filled/updated by the Phase 0 scaffold PR — keep this section current; every a
      WS message type. Routine changes behind existing authz middleware don't re-trigger it.
    - `/simplify` — not a merge gate; run when a slice feels bloated, or as an end-of-phase pass.
 5. **Update docs** touched by the change (API spec, README, ROADMAP checkboxes).
+   `docs/OVERVIEW.md` is the living description of the whole project: any slice that adds or
+   removes a feature, screen, component, or dependency updates it **in the same commit** —
+   it must always match reality (the user hands it to external tools for context).
 
 ### Agent orchestration
 
@@ -235,6 +238,7 @@ skill — use their official docs and pin exact versions.
 - [ ] `gofmt`/`vet`/lint clean (Go), `tsc`/ESLint clean (TS)
 - [ ] `/code-review` and (if triggered — see workflow) `/security-review` passed
 - [ ] OpenAPI spec and affected docs updated; codegen regenerated
+- [ ] `docs/OVERVIEW.md` updated if the slice added/removed a feature, screen, component, or dependency
 - [ ] compose-smoke CI job green
 
 ## UI pipeline
@@ -243,6 +247,8 @@ skill — use their official docs and pin exact versions.
 spacing, look & feel) is produced externally in Claude Design — the user drives this and
 delivers mockups. Claude's job is faithful implementation, not design authorship.
 
+Per-screen functional requirements (what a screen must contain — content, components, states)
+live in `docs/design/BRIEFS.md`; the user feeds them to the design pipeline.
 Design status lives in `docs/design/STATUS.md` — a table of screen → mockup link or `PENDING`.
 Frontend agents check it before building a screen: mockup exists → implement it faithfully
 (review with `ui-ux-pro-max` against the mockup); `PENDING` → build **unstyled functional

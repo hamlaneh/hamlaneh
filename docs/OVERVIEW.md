@@ -1,0 +1,99 @@
+# Hamlaneh — Project Overview
+
+> **Living document.** This file describes what the project IS right now. Whenever a feature,
+> screen, component, or dependency is added or removed, this file is updated in the same
+> commit (enforced via the Definition of Done in CLAUDE.md). Strategy lives in
+> [PLAN.md](PLAN.md); task-level execution lives in [ROADMAP.md](ROADMAP.md).
+>
+> **Last updated:** 2026-08-20
+
+## What is Hamlaneh?
+
+Hamlaneh (هم‌لانه, "shared nest") is a self-hosted team communication platform: text channels,
+DMs, file sharing, 1:1 and group voice/video calls, screen sharing, and conferences. A company
+installs it on its own server with one command and owns its communication completely.
+
+**The four promises:**
+1. **Installation is the product** — fresh VPS to working instance in under 5 minutes, one command.
+2. **Secure by default** — the defaults carry the security load; nothing to harden manually.
+3. **100% open source (AGPL-3.0)** — every feature free forever, including SSO/SCIM/audit logs.
+   Revenue comes from official hosting, not feature gates.
+4. **Bilingual** — English (default) + Persian with full RTL, from the first screen.
+
+## Current state (what actually works today)
+
+**Phase 0 — walking skeleton, running and verified:**
+
+- `docker compose up` (from `deploy/`) boots a hardened 3-container stack:
+  **Caddy** (auto-TLS + strict security headers: HSTS, CSP, nosniff) →
+  **Go server** (distroless, non-root, read-only FS) →
+  **PostgreSQL 17** (internal-only network, never exposed).
+- The Go server serves a placeholder login page, `/healthz` (liveness) and `/readyz`
+  (DB + schema readiness), connects to Postgres via pgx, and **runs embedded migrations
+  automatically at startup** (migration 0001: `users` table).
+- The API contract lives in [`docs/api/openapi.yaml`](api/openapi.yaml) — health, auth
+  (login/logout/refresh), current user, and admin user-management endpoints. Both sides
+  generate code from it (oapi-codegen for Go, openapi-typescript for the webapp); CI fails
+  if generated code drifts. Endpoints beyond health are 501 stubs until Phase 1.1.
+- The React webapp scaffold has working en/fa i18n with RTL switching, a locale key-parity
+  check, a typed API client, and MSW mocks generated from the contract (off by default).
+- `deploy/install.sh` v0 (OS detect, Docker install, secret generation) and
+  `deploy/verify-defaults.sh` (11 secure-default checks, all passing).
+- CI pipeline (GitHub Actions, SHA-pinned): Go build/vet/lint/race-tests/gosec/govulncheck,
+  webapp typecheck/lint/tests/build, gitleaks, codegen drift checks, compose smoke test.
+  Activates when the GitHub remote exists.
+
+**Not yet built:** real authentication, messaging, files, the admin dashboard UI, calls,
+E2EE — see the phase list below.
+
+## What's next
+
+**Phase 1.1 — Identity & sessions:** argon2id login, rotating sessions with reuse detection,
+password reset, TOTP 2FA, admin bootstrap (first user created at install), and the authz
+matrix test harness. After that: 1.2 messaging (WebSockets), 1.3 files/search, 1.4 admin
+dashboard, 1.5 full bilingual UI + PWA baseline, 1.6 SSO/SCIM.
+
+## Architecture at a glance
+
+| Component | Technology | Role |
+|---|---|---|
+| `server/` | Go (stdlib-first, pgx, golang-migrate) | Single static binary: API, WebSockets, auth |
+| `webapp/` | React + TypeScript + Vite + Tailwind + i18next | Web UI, bilingual en/fa with RTL |
+| `desktop/` | Tauri v2 (planned, Phase 4) | Native desktop wrapper around the web UI |
+| `deploy/` | Docker Compose + Caddy + install.sh | The one-command install; Caddy owns TLS |
+| Database | PostgreSQL (server) / SQLite (home mode, Phase 4) | One storage interface, two drivers |
+| Calls | LiveKit SFU + TURN (Phase 2) | Voice/video/screen share |
+| E2EE | MLS via audited library (Phase 3) | Compromised server sees only ciphertext |
+
+Request flow: browser → Caddy (TLS, headers) → Go server (:8080) → Postgres (internal network).
+
+## The admin dashboard (first-class, decided Aug 2026)
+
+Ships inside the same install — same stack, zero extra setup. Public registration is off by
+default, so the dashboard is **the** way users are created, permissions are granted, and the
+org is customized (name, logo, default locale, 2FA enforcement, session policy). First admin
+is created at install time; everyone else comes from the dashboard or invite links.
+
+## How this project is built
+
+- **Contract-first:** `docs/api/openapi.yaml` changes before any implementation; codegen keeps
+  both sides honest. Migrations are finalized with the contract.
+- **TDD + review gates:** no untested code merges; every slice passes code review, and
+  security-sensitive slices pass a security review. Phase gates in ROADMAP.md are measurable.
+- **Agent orchestration:** Claude orchestrates parallel backend/frontend agents (disjoint
+  directories) plus a security review agent; rules in CLAUDE.md.
+- **Design pipeline:** Claude never invents visual design. The user delivers mockups from
+  Claude Design; status per screen in [design/STATUS.md](design/STATUS.md), requirements per
+  screen in [design/BRIEFS.md](design/BRIEFS.md).
+
+## Key documents
+
+| Document | What it holds |
+|---|---|
+| [PLAN.md](PLAN.md) | Vision, market, security plan, business model, decisions log |
+| [ROADMAP.md](ROADMAP.md) | Executable phases with measurable test gates |
+| [CLAUDE.md](../CLAUDE.md) | Engineering rules: stack, workflow, testing, git, CI |
+| [api/openapi.yaml](api/openapi.yaml) | The API contract (source of truth for codegen) |
+| [design/STATUS.md](design/STATUS.md) | Which screens have delivered designs |
+| [design/BRIEFS.md](design/BRIEFS.md) | Functional design requirements per screen |
+| [../SECURITY.md](../SECURITY.md) | Threat model, non-goals, disclosure policy |
