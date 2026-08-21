@@ -7,6 +7,7 @@ future contributors) do not depend on external access.
 |---|---|
 | `Hamlaneh Chat.dc.html` | Chat shell, delivered 2026-08-21. Nine artboards plus `chat-components`, on the existing tokens (this set adds none). Written contract: [../CHAT_HANDOFF.md](../CHAT_HANDOFF.md). |
 | `Hamlaneh Admin.dc.html` | Admin dashboard, delivered 2026-08-21. Eight artboards plus `admin-components`. Written contract: [../ADMIN_HANDOFF.md](../ADMIN_HANDOFF.md). |
+| `Hamlaneh Settings.dc.html` | User settings, delivered 2026-08-21. Six artboards plus `settings-components`. Written contract: [../SETTINGS_HANDOFF.md](../SETTINGS_HANDOFF.md). |
 | `Hamlaneh Auth.dc.html` | Login & password reset, delivered 2026-08-21. Ten screen artboards at 1440×900, a live shell, and the `auth-foundations-and-components` sheet (tokens, type, every component state, behaviour, Persian reference, font/icon plan). Written contract: [../LOGIN_HANDOFF.md](../LOGIN_HANDOFF.md). |
 
 Read these as plain HTML — every artboard is inline markup and inline styles, so the design is

@@ -8,8 +8,9 @@ These briefs define **what each screen must contain and do** (content, component
 Visual identity — layout, color, typography, spacing, mood — is entirely the designer's
 territory. Where a brief mentions a component, the designer decides what it looks like.
 
-**Priority order:** ~~§1 Login~~, ~~§2 Chat shell~~, ~~§3 Admin dashboard~~ (**all delivered
-2026-08-21**) → §4 User settings (**needed next**, Phase 1.3–1.5) → §5 Calls (Phase 2).
+**Priority order:** ~~§1 Login~~, ~~§2 Chat shell~~, ~~§3 Admin dashboard~~, ~~§4 User settings~~
+(**all delivered 2026-08-21**) → §5 Calls (Phase 2, not yet needed) → the three chat screens the
+chat set omitted (create channel, invite picker, DM picker — see STATUS.md).
 
 ---
 
@@ -147,7 +148,7 @@ guidance to create the first users), `admin-create-user` (modal open), `admin-in
 
 ---
 
-## 4. User settings — PRIORITY 1 (needed next, Phase 1.3–1.5)
+## 4. User settings — DELIVERED (2026-08-21; see SETTINGS_HANDOFF.md)
 
 **Purpose:** personal preferences and self-service security. Reached from the sidebar footer.
 
