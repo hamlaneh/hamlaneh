@@ -8,9 +8,8 @@ These briefs define **what each screen must contain and do** (content, component
 Visual identity — layout, color, typography, spacing, mood — is entirely the designer's
 territory. Where a brief mentions a component, the designer decides what it looks like.
 
-**Priority order:** ~~§1 Login~~ (**delivered 2026-08-21**) → §2 Chat shell (**needed next**,
-Phase 1.2) → §3 Admin dashboard (Phase 1.4) → §4 User settings (Phase 1.3–1.5) → §5 Calls
-(Phase 2, not yet needed).
+**Priority order:** ~~§1 Login~~, ~~§2 Chat shell~~, ~~§3 Admin dashboard~~ (**all delivered
+2026-08-21**) → §4 User settings (**needed next**, Phase 1.3–1.5) → §5 Calls (Phase 2).
 
 ---
 
@@ -85,7 +84,7 @@ without breaking the layout when absent.
 
 ---
 
-## 2. Chat shell (main app) — PRIORITY 1 (needed next, Phase 1.2)
+## 2. Chat shell (main app) — DELIVERED (2026-08-21; see CHAT_HANDOFF.md)
 
 **Purpose:** where people live all day. One screen, three permanent regions + one overlay.
 
@@ -118,7 +117,7 @@ becomes drawer).
 
 ---
 
-## 3. Admin dashboard — Phase 1.4
+## 3. Admin dashboard — DELIVERED (2026-08-21; see ADMIN_HANDOFF.md)
 
 **Purpose:** the control room. Installed with the product, reached from the app on a separate
 path, admin-only. Because public registration is off, **every user is born here** (or via an
@@ -148,7 +147,7 @@ guidance to create the first users), `admin-create-user` (modal open), `admin-in
 
 ---
 
-## 4. User settings — Phase 1.3–1.5
+## 4. User settings — PRIORITY 1 (needed next, Phase 1.3–1.5)
 
 **Purpose:** personal preferences and self-service security. Reached from the sidebar footer.
 

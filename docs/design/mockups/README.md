@@ -5,10 +5,16 @@ future contributors) do not depend on external access.
 
 | File | What it is |
 |---|---|
+| `Hamlaneh Chat.dc.html` | Chat shell, delivered 2026-08-21. Nine artboards plus `chat-components`, on the existing tokens (this set adds none). Written contract: [../CHAT_HANDOFF.md](../CHAT_HANDOFF.md). |
+| `Hamlaneh Admin.dc.html` | Admin dashboard, delivered 2026-08-21. Eight artboards plus `admin-components`. Written contract: [../ADMIN_HANDOFF.md](../ADMIN_HANDOFF.md). |
 | `Hamlaneh Auth.dc.html` | Login & password reset, delivered 2026-08-21. Ten screen artboards at 1440×900, a live shell, and the `auth-foundations-and-components` sheet (tokens, type, every component state, behaviour, Persian reference, font/icon plan). Written contract: [../LOGIN_HANDOFF.md](../LOGIN_HANDOFF.md). |
 
 Read these as plain HTML — every artboard is inline markup and inline styles, so the design is
 fully readable from the file itself.
+
+The chat and admin files exceed the design tool's 256 KB fetch cap, so they were delivered as a
+project export instead of fetched file-by-file. Verified complete on import (each carries its
+closing `</x-dc>`), and the auth file in that export is byte-identical to the one fetched earlier.
 
 To view one rendered, open the canvas:
 <https://claude.ai/design/p/185f4552-36fc-489e-a9b1-c012ab74f6d6>. The `support.js` the file

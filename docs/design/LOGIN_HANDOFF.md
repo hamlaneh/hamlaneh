@@ -96,12 +96,14 @@ no passkeys, no marketing copy, no security claims. The only supporting line is
 
 ### Open questions back to the designer (implementation deviated only where forced)
 
-1. **Banner space is not reserved.** The foundation sheet reserves a 46px collapsed block for
-   the notice banner; `login-default` is drawn without that gap. The artboards were followed,
-   so the form column shifts ~35px when an error appears.
-2. **Strength meter not built.** `login-force-password-change` draws four segments plus the
-   label "Strong", but no scoring scale and no other level labels are defined anywhere in the
-   mockup. Inventing them would be design authorship, so the meter is absent pending an answer.
+1. ~~**Banner space is not reserved.**~~ **RESOLVED 2026-08-21 — artboard wins.** The foundation
+   sheet reserves a 46px collapsed block; `login-default` is drawn without it. Decision: follow
+   the artboard; the form may shift ~35px when an error appears. Update the foundation sheet.
+2. **Strength meter — RESOLVED 2026-08-21:** the drawn visual (four segments + text label) is
+   the design; the missing pieces are scoring logic and the three unnamed labels, which the
+   design owner delegated to implementation. Built with a transparent length-and-variety
+   heuristic and four labels; it is a rough guide, never a security claim (CLAUDE.md principle 4).
+   If the designer later specifies a scale, it replaces this one.
 3. **Requirements list reduced to one item.** "Not one of your last 3 passwords" and "Different
    from your username" are not enforced by the server and the first is not client-checkable;
    rendering them would be a false claim. Only "At least 12 characters" ships. The component
@@ -122,7 +124,6 @@ no passkeys, no marketing copy, no security claims. The only supporting line is
    literally leaves the form permanently dead until a page reload. Implemented: the notice and the
    disabled submit are kept, the fields stay editable, and touching either field clears the notice.
    Update the artboard annotation or bless the deviation.
-9. **Persian pages render Latin runs in Vazirmatn's own Latin**, not Inter, because the delivered
-   `--font-ui-fa` stack lists Vazirmatn first and its Latin face claims those codepoints. Faithful
-   to the token, but it costs ~49 KB on Persian pages and changes mixed-script typography. Confirm,
-   or reorder the stack in the token sheet.
+9. ~~**Persian pages render Latin runs in Vazirmatn's own Latin.**~~ **RESOLVED 2026-08-21 —
+   stay faithful to the token.** Latin runs inside Persian pages keep Vazirmatn, matching the
+   delivered `--font-ui-fa` stack, at a cost of ~49 KB per Persian page. Do not reorder the stack.
