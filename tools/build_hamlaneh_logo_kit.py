@@ -306,32 +306,45 @@ def create_symbol_path(source: Image.Image) -> str:
     return " ".join(filter(None, (loop_to_bezier(loop) for loop in loops)))
 
 
-def symbol_svg(path_data: str, mode: str, background: bool) -> str:
+def symbol_svg(path_data: str, mode: str, background: bool, flat: bool = False) -> str:
     if mode not in {"light", "dark"}:
         raise ValueError(mode)
 
     background_markup = ""
     if background:
         if mode == "light":
-            background_markup = '<rect width="260" height="260" rx="28" fill="#FFFFFF"/>'
+            background_markup = '<rect width="260" height="260" rx="28" fill="#F7F6F2"/>'
         else:
             background_markup = (
                 '<rect width="260" height="260" rx="28" fill="url(#dark-bg)"/>'
             )
 
-    fill = "url(#brand-gradient)" if mode == "light" else "#FFFFFF"
+    if flat:
+        fill = "#235C55" if mode == "light" else "#81C9BD"
+    else:
+        fill = "url(#brand-gradient)"
+
+    if mode == "light":
+        gradient_stops = '''
+      <stop offset="0" stop-color="#123F39"/>
+      <stop offset="0.52" stop-color="#194941"/>
+      <stop offset="1" stop-color="#235C55"/>'''
+    else:
+        gradient_stops = '''
+      <stop offset="0" stop-color="#6FB5AA"/>
+      <stop offset="0.52" stop-color="#81C9BD"/>
+      <stop offset="1" stop-color="#9ADACF"/>'''
+
     return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 260" role="img" aria-labelledby="title desc">
   <title id="title">Hamlaneh symbol — {mode} theme</title>
   <desc id="desc">Interwoven communication loops surrounding a speech bubble with three dots.</desc>
   <defs>
     <linearGradient id="brand-gradient" x1="22" y1="20" x2="240" y2="242" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#4F46E5"/>
-      <stop offset="0.52" stop-color="#3B82F6"/>
-      <stop offset="1" stop-color="#14B8A6"/>
+{gradient_stops}
     </linearGradient>
     <linearGradient id="dark-bg" x1="0" y1="0" x2="260" y2="260" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#0F172A"/>
-      <stop offset="1" stop-color="#06152B"/>
+      <stop offset="0" stop-color="#111615"/>
+      <stop offset="1" stop-color="#18201E"/>
     </linearGradient>
   </defs>
   {background_markup}
@@ -414,8 +427,10 @@ def write_full_png_variants(source: Image.Image, output: Path) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: build_hamlaneh_logo_kit.py SOURCE_PNG OUTPUT_DIR")
+    if len(sys.argv) not in {3, 4} or (len(sys.argv) == 4 and sys.argv[3] != "--symbol-only"):
+        raise SystemExit(
+            "usage: build_hamlaneh_logo_kit.py SOURCE_PNG OUTPUT_DIR [--symbol-only]"
+        )
 
     source_path = Path(sys.argv[1])
     output = Path(sys.argv[2])
@@ -423,7 +438,9 @@ def main() -> None:
 
     path_data = create_symbol_path(source)
     svg_dir = output / "svg" / "symbol"
+    flat_svg_dir = output / "svg" / "symbol-flat"
     svg_dir.mkdir(parents=True, exist_ok=True)
+    flat_svg_dir.mkdir(parents=True, exist_ok=True)
     variants = [
         ("light", False, "hamlaneh-symbol-light-transparent.svg"),
         ("light", True, "hamlaneh-symbol-light-background.svg"),
@@ -434,11 +451,17 @@ def main() -> None:
         (svg_dir / name).write_text(
             symbol_svg(path_data, mode, has_background), encoding="utf-8"
         )
+        (flat_svg_dir / name).write_text(
+            symbol_svg(path_data, mode, has_background, flat=True), encoding="utf-8"
+        )
 
-    write_full_png_variants(source, output)
+    symbol_only = len(sys.argv) == 4
+    if not symbol_only:
+        write_full_png_variants(source, output)
     print(f"Vector path length: {len(path_data):,} characters")
-    print(f"SVG variants: {len(variants)}")
-    print("Full-lockup PNG variants: 4")
+    print(f"SVG variants: {len(variants) * 2} (gradient + flat)")
+    if not symbol_only:
+        print("Full-lockup PNG variants: 4")
 
 
 if __name__ == "__main__":

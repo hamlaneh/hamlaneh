@@ -129,6 +129,61 @@ Other decisions worth knowing:
 Persian digit shaping remains unresolved (open question 3 below). The addendum contains no
 human-facing numbers and must not be read as choosing Latin or Persian digits.
 
+## Addendum 2 — Channel actions and Account menu
+
+Eleven further `chat-addendum-*` artboards on the same canvas. Both surfaces are **anchored
+non-modal dialogs, not ARIA menus** — Channel actions holds a form and Account holds a radio
+group, so `role="dialog"` + `aria-modal="false"`, triggers carrying `aria-haspopup="dialog"`,
+and no scrim or desktop focus trap.
+
+| Artboard | Notes |
+|---|---|
+| `chat-addendum-channel-menu-light` / `-dark` / `-rtl-fa` | Anchored under the header ellipsis. |
+| `chat-addendum-account-menu-light` / `-dark` / `-rtl-fa` | Anchored above the identity trigger. |
+| `chat-addendum-channel-menu-mobile` | 375, trigger restored beside search, Topic above the keyboard. |
+| `chat-addendum-account-menu-mobile` | Drawer open, popover inside it, drawer's own scrim reused. |
+| `chat-addendum-channel-menu-states` | 11 named states + dark set. |
+| `chat-addendum-account-menu-states` | 11 named states + dark set. |
+| `chat-addendum-menu-components` | Anatomy, anchors, collision, focus, keyboard, locked corrections, locale keys. |
+
+### Locked corrections applied to the earlier canvas
+
+- **Responsive tiers** are now `≥1280` / `900–1279` / `≤899`. The 1024 row on `chat-components`
+  was corrected; there is no separate 1024 behaviour.
+- **Numerals**: Persian UI uses ASCII `0–9` for every app-generated number. The previous
+  "digit policy unresolved" annotation is removed from the canvas and the Persian invite
+  backdrop now shows ASCII timestamps and file size.
+- **Rendered mentions** are inline text in the deep brand step at weight 500 — no pill, chip,
+  background or border. Documented on `chat-addendum-menu-components` §04.
+- **The Channel actions trigger grows from 34×34 to 44×44.** The ten earlier chat artboards
+  still show the delivered 34px ellipsis; the component sheet is the value to build.
+
+### Structural changes to the shell
+
+- The sidebar **identity block becomes a 44px disclosure button** named `Open account menu`.
+  The gear beside it stays a separate `Settings` button opening the delivered Settings panel
+  directly, and Admin stays separate. Settings and Admin are never nested inside the identity
+  button, and there is no redundant Settings row inside Account.
+- **Channel actions renders only for an active channel.** In a DM and the no-channel state it is
+  absent from the DOM — not disabled, and never a popover that exists to say nothing is here.
+
+### Contracts worth not guessing
+
+- **Topic**: max 250, empty deliberately clears, authored value never trimmed or normalised,
+  Save disabled while the draft equals the current topic, returning to the original restores
+  pristine. Counter is ASCII and `aria-live="off"`. Success announces `Topic saved.` politely;
+  failure preserves the exact draft and allows retry. Closing mid-request does not cancel it.
+- **Dirty drafts never vanish**: any dismissal path turns the same anchored surface into the
+  discard confirmation. `Keep editing` returns to the editor; `Discard changes` completes the
+  original destination. Hierarchy and copy, never accent red — red stays reserved for message
+  deletion.
+- **Log out** is neutral, unconfirmed and duplicate-safe, with no error state: the local session
+  clears even if the server request fails.
+- **Language** applies immediately, keeps the popover open and anchored, and leaves focus on the
+  selected radio. Direction changes atomically.
+
+Eleven new bilingual strings are listed on `chat-addendum-menu-components` §05.
+
 ## Not in scope
 
 Threads, reactions, pinned messages, voice/video calls, notification preferences,
@@ -140,38 +195,32 @@ channel-member management. None are in §2.
 | Chat shell (9 artboards) | BRIEFS.md §2 | DESIGNED | Hamlaneh Chat.dc.html |
 ```
 
-## Open questions back to the designer (implementation deviated only where forced)
+## Questions raised during implementation — status after addendum 2
 
-Recorded 2026-08-21 during implementation. Nothing below was invented to fill a gap.
+**Answered by the designer's locked corrections (2026-08-21), no action outstanding:**
 
-1. **Mentions have no drawn treatment.** `@Ava` appears in message bodies but the artboards never
-   specify how a mention should look. Rendered with the set's existing emphasis pair (brand tone,
-   weight 500) as the least-invented option available.
-2. **Code is set in IBM Plex Mono on the artboards**, which is not in the delivered token sheet and
-   would be a new self-hosted font. The platform monospace stack is used instead. Either add the
-   font (and a token) or bless the substitution.
-3. **Persian digit shaping is inconsistent on the artboard**: times, member counts and badges use
-   Latin digits, one file size uses Persian digits. Implemented exactly as drawn — times and counts
-   pinned to Latin in `fa`, file sizes following the locale — which is almost certainly not intended
-   as a rule. Needs one decision applied consistently.
-4. **Undrawn but required by the flow**, built as unstyled plumbing (STATUS.md: `awaiting-design`):
-   create-channel dialog, people picker (serves both *Invite people* and *New direct message*),
-   mention picker, channel menu, account menu.
-5. **Smaller silences**, each resolved by reusing something already drawn: initial history load
-   reuses the scrollback skeleton; the delete confirmation is centred over the conversation (its
-   placement is undrawn); day separators older than "Yesterday" use the locale long date; an
-   unresolvable mention renders as a localized "@unknown"; a permalinked message scrolls into view
-   without a highlight (none is drawn); "no conversations at all" gets one plain sentence plus the
-   drawn create-channel control.
-6. **Breakpoints**: the component sheet names 1280 / 1024 / <900 / 375 but only 1440 and 375 are
-   drawn. Read as two tiers — search becomes an overlay at ≤1279, the full mobile set applies at
-   ≤899. Confirm.
+- *Mention treatment* — inline text in the deep brand step at weight 500, no pill or background.
+  The implementation had guessed the same emphasis pair; it is now the specified value.
+- *Persian numerals* — ASCII `0–9` for every app-generated number in the Persian UI. This
+  supersedes the artboard inconsistency implementation had copied (Latin times and counts,
+  Persian file size); file sizes must switch to ASCII.
+- *Responsive tiers* — `≥1280` / `900–1279` / `≤899`, with no separate 1024 behaviour. Matches
+  the two-tier reading implementation had flagged as an assumption.
+- *Channel menu and account menu* — both designed in addendum 2; the unstyled plumbing built for
+  them is now a reskin, and the sidebar identity block becomes a 44px disclosure button.
 
-## Deliberate deviations from the drawn chrome, for honesty
+**Still open:**
 
-- The **attach control** is drawn enabled, but uploads arrive in Phase 1.3. It renders disabled
-  with its reason, following the component sheet's own rule that "the reason always travels with
-  the disabled state".
-- The **admin-dashboard shield** in the user footer is not rendered at all: the admin surface does
-  not exist yet, and a control that goes nowhere is worse than an absent one. Restore it with the
-  admin slice.
+1. **Code blocks are set in IBM Plex Mono on the artboards**, which is not in the token sheet and
+   would be a new self-hosted font. The platform monospace stack is used instead — add the font
+   and a token, or bless the substitution.
+2. **The `fa` markdown hint** renders `> نقل‌قول` with a bidi-mirroring `>` that displays as `<`.
+   Faithful to the artboard, so it is a design question rather than a defect.
+
+**Deliberate deviations from the drawn chrome, for honesty (unchanged):**
+
+- The **attach control** is drawn enabled, but uploads arrive in Phase 1.3, so it renders disabled
+  with its reason — following the component sheet's own rule that the reason travels with the
+  disabled state.
+- The **admin-dashboard shield** is not rendered: the admin surface does not exist yet, and a
+  control that goes nowhere is worse than an absent one. Restore it with the admin slice.

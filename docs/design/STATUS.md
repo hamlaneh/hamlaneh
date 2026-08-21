@@ -14,26 +14,28 @@ Functional requirements per screen (for producing the designs): [BRIEFS.md](BRIE
 | User settings (6 artboards + components) | BRIEFS.md §4 | **DESIGNED** — delivered 2026-08-21 | `Hamlaneh Settings.dc.html` (handoff: [SETTINGS_HANDOFF.md](SETTINGS_HANDOFF.md)) |
 | Call / meeting view | BRIEFS.md §5 | PENDING — do not design yet (Phase 2) | — |
 | Chat overlays — create channel, people picker (invite + new DM), mention picker | BRIEFS.md §2 addendum | **DESIGNED** — delivered 2026-08-21 as 13 `chat-addendum-*` artboards; plumbing exists and awaits the reskin | `Hamlaneh Chat.dc.html` (handoff: [CHAT_HANDOFF.md](CHAT_HANDOFF.md)) |
-| Channel menu, account menu | BRIEFS.md §2 (implied, not drawn) | **awaiting-design** — unstyled plumbing; not covered by the addendum | — |
+| Channel menu, account menu | BRIEFS.md §2 addendum 2 | **DESIGNED** — delivered 2026-08-21 as 11 further `chat-addendum-*` artboards; plumbing exists and awaits the reskin | `Hamlaneh Chat.dc.html` (handoff: [CHAT_HANDOFF.md](CHAT_HANDOFF.md)) |
 
 ## Brand assets
 
 The symbol SVGs live in `webapp/public/brand/` (the 4096px PNG renders and the kit zip are
 deliberately not committed — derived artefacts, and git history is not rewritable).
 
-**Open — the logo and the UI are currently two different palettes.** The kit declares its brand
+**RESOLVED 2026-08-21 — the design does not change and the logo is not recoloured.** The symbol
+is a project-level brand asset: it identifies the repository and the product (README, favicon,
+anywhere outside the delivered screens), and serves as the fallback wherever a logo is needed but
+none exists. It is deliberately **not** inserted into the delivered UI, which draws the product
+name as text and has no slot for a symbol.
+
+Recorded for the future, since the two palettes do differ: The kit declares its brand
 colours as Indigo `#4F46E5`, Blue `#3B82F6`, Teal `#14B8A6` on a Slate `#0F172A` dark backdrop.
 The delivered design system uses none of them: brand `#235C55`/`#81C9BD` on a warm `#F7F6F2`
 light ground and a near-black-green `#111615` dark ground. Placed together they read as two
 products, and the dark tile clashes hardest (navy vs green-black).
 
-Not resolved in implementation, because recolouring a logo is design authorship. Three things
-need a decision:
+the kit is indigo/blue/teal on navy, the interface is green-teal on a warm ground. They are not
+placed next to each other today, so nothing is broken; if a future screen ever puts the symbol
+beside the interface chrome, that is the moment to revisit it.
 
-1. Which is the brand — the kit or Quiet Nest? (Implementation has assumed Quiet Nest, since it
-   is implemented across four delivered screen sets, but that is an assumption, not a decision.)
-2. Where does the symbol appear in the product? The login artboard draws the product name as
-   **text**, with no symbol anywhere — so the mark has no designed home yet.
-3. The full lockup exists only as PNG; an SVG is needed for the README and any future site.
-
-A recolour brief with the exact token values is ready to hand to the design pipeline.
+Still missing: the full lockup (symbol + wordmark) exists only as PNG. An SVG would be needed for
+the README and any future site.

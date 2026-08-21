@@ -3,13 +3,14 @@
   <desc id="desc">Interwoven communication loops surrounding a speech bubble with three dots.</desc>
   <defs>
     <linearGradient id="brand-gradient" x1="22" y1="20" x2="240" y2="242" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#4F46E5"/>
-      <stop offset="0.52" stop-color="#3B82F6"/>
-      <stop offset="1" stop-color="#14B8A6"/>
+
+      <stop offset="0" stop-color="#123F39"/>
+      <stop offset="0.52" stop-color="#194941"/>
+      <stop offset="1" stop-color="#235C55"/>
     </linearGradient>
     <linearGradient id="dark-bg" x1="0" y1="0" x2="260" y2="260" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#0F172A"/>
-      <stop offset="1" stop-color="#06152B"/>
+      <stop offset="0" stop-color="#111615"/>
+      <stop offset="1" stop-color="#18201E"/>
     </linearGradient>
   </defs>
   

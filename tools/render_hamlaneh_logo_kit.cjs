@@ -86,10 +86,10 @@ function labelSvg(text, width) {
   `);
 }
 
-async function makeTile(imagePath, label, size = 1000) {
+async function makeTile(imagePath, label, size = 1000, background = '#FFFFFF') {
   const art = await sharp(imagePath).resize(size, size, { fit: 'contain' }).png().toBuffer();
   return sharp({
-    create: { width: size, height: size, channels: 4, background: '#FFFFFF' },
+    create: { width: size, height: size, channels: 4, background },
   })
     .composite([
       { input: art, left: 0, top: 0 },
@@ -101,12 +101,18 @@ async function makeTile(imagePath, label, size = 1000) {
 
 async function main() {
   const output = process.argv[2];
-  if (!output) throw new Error('usage: render_hamlaneh_logo_kit.cjs OUTPUT_DIR');
+  const symbolOnly = process.argv.includes('--symbol-only');
+  if (!output) {
+    throw new Error('usage: render_hamlaneh_logo_kit.cjs OUTPUT_DIR [--symbol-only]');
+  }
 
   const svgDir = path.join(output, 'svg', 'symbol');
+  const flatSvgDir = path.join(output, 'svg', 'symbol-flat');
   const pngDir = path.join(output, 'png', 'symbol');
+  const flatPngDir = path.join(output, 'png', 'symbol-flat');
   const previewDir = path.join(output, 'preview');
   fs.mkdirSync(pngDir, { recursive: true });
+  fs.mkdirSync(flatPngDir, { recursive: true });
   fs.mkdirSync(previewDir, { recursive: true });
 
   const variants = [
@@ -118,6 +124,36 @@ async function main() {
 
   for (const [svgName, pngName] of variants) {
     await renderSvg(path.join(svgDir, svgName), path.join(pngDir, pngName));
+    await renderSvg(path.join(flatSvgDir, svgName), path.join(flatPngDir, pngName));
+  }
+
+  if (symbolOnly) {
+    const tileSize = 520;
+    const tiles = await Promise.all([
+      makeTile(path.join(pngDir, variants[0][1]), 'GRADIENT · LIGHT · TRANSPARENT', tileSize, '#F7F6F2'),
+      makeTile(path.join(pngDir, variants[1][1]), 'GRADIENT · LIGHT · TILE', tileSize, '#D7DEDA'),
+      makeTile(path.join(pngDir, variants[2][1]), 'GRADIENT · DARK · TRANSPARENT', tileSize, '#111615'),
+      makeTile(path.join(pngDir, variants[3][1]), 'GRADIENT · DARK · TILE', tileSize, '#D7DEDA'),
+      makeTile(path.join(flatPngDir, variants[0][1]), 'FLAT · LIGHT · TRANSPARENT', tileSize, '#F7F6F2'),
+      makeTile(path.join(flatPngDir, variants[1][1]), 'FLAT · LIGHT · TILE', tileSize, '#D7DEDA'),
+      makeTile(path.join(flatPngDir, variants[2][1]), 'FLAT · DARK · TRANSPARENT', tileSize, '#111615'),
+      makeTile(path.join(flatPngDir, variants[3][1]), 'FLAT · DARK · TILE', tileSize, '#D7DEDA'),
+    ]);
+
+    await sharp({
+      create: { width: 2160, height: 1120, channels: 4, background: '#E5E7EB' },
+    })
+      .composite(tiles.map((input, index) => ({
+        input,
+        left: 40 + (index % 4) * tileSize,
+        top: 40 + Math.floor(index / 4) * tileSize,
+      })))
+      .png({ compressionLevel: 9 })
+      .toFile(path.join(previewDir, 'hamlaneh-symbol-quiet-nest-preview.png'));
+
+    console.log(`Symbol PNG variants: ${variants.length * 2} (gradient + flat)`);
+    console.log('Preview: hamlaneh-symbol-quiet-nest-preview.png');
+    return;
   }
 
   await upgradeFullLockup(output, 'light');
@@ -143,7 +179,7 @@ async function main() {
     .png({ compressionLevel: 9 })
     .toFile(path.join(previewDir, 'hamlaneh-logo-kit-preview.png'));
 
-  console.log(`Symbol PNG variants: ${variants.length}`);
+  console.log(`Symbol PNG variants: ${variants.length * 2} (gradient + flat)`);
   console.log('Preview: hamlaneh-logo-kit-preview.png');
 }
 
