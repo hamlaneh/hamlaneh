@@ -239,8 +239,12 @@ skill — use their official docs and pin exact versions.
 
 ## UI pipeline
 
-UI designs are produced externally in Claude Design (the user drives this) and delivered as
-mockups. Design status lives in `docs/design/STATUS.md` — a table of screen → mockup link or
-`PENDING`. Frontend agents check it before building a screen: mockup exists → implement it
-faithfully (review with `ui-ux-pro-max`); `PENDING` → build unstyled functional UI with plain
-components and mark the row `awaiting-design`. Do not invent visual designs for pending screens.
+**Claude never invents visual design. Ever.** All visual design (layout, colors, typography,
+spacing, look & feel) is produced externally in Claude Design — the user drives this and
+delivers mockups. Claude's job is faithful implementation, not design authorship.
+
+Design status lives in `docs/design/STATUS.md` — a table of screen → mockup link or `PENDING`.
+Frontend agents check it before building a screen: mockup exists → implement it faithfully
+(review with `ui-ux-pro-max` against the mockup); `PENDING` → build **unstyled functional
+plumbing only** (plain semantic HTML, no custom styling beyond structure) and mark the row
+`awaiting-design`. When the design lands later, the screen is reskinned to match it exactly.
