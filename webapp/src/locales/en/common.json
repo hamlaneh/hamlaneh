@@ -45,7 +45,8 @@
       "invalidCredentials": "Incorrect username or password.",
       "rateLimited": "Too many attempts. Try again in a few minutes.",
       "networkError": "We could not reach the server. Try again.",
-      "unexpected": "Something went wrong. Try again."
+      "unexpected": "Something went wrong. Try again.",
+      "twoStepRequired": "This account uses two-step verification, which is not available yet."
     }
   },
   "changePassword": {

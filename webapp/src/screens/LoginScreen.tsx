@@ -14,6 +14,7 @@ type User = components["schemas"]["User"];
 
 type LoginError =
   | "none"
+  | "twoStepRequired"
   | "invalidCredentials"
   | "rateLimited"
   | "networkError"
@@ -89,7 +90,14 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
         body: { identifier, password },
       });
       if (data !== undefined) {
-        onAuthenticated(data);
+        if (response.status === 202) {
+          // Password accepted, but the account has two-step verification on:
+          // there is no session yet. The code screen lands with slice 1.1b —
+          // until then, say so rather than pretending the sign-in worked.
+          fail("twoStepRequired");
+          return;
+        }
+        onAuthenticated(data as User);
         return;
       }
       // Only 401 means the credentials were wrong — its body is identical for

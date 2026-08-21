@@ -20,6 +20,7 @@ import { api } from "./client";
 import type { components } from "./schema";
 
 type User = components["schemas"]["User"];
+type TwoFactorChallenge = components["schemas"]["TwoFactorChallenge"];
 type ApiError = components["schemas"]["Error"];
 
 const CSRF_COOKIE = "hamlaneh_csrf";
@@ -71,7 +72,10 @@ describe("api client against the contract mocks", () => {
 
     expect(response.status).toBe(200);
     expect(error).toBeUndefined();
-    expectTypeOf(data).toExtend<User | undefined>();
+    // Login's success union now includes the 202 two-step challenge, so the
+    // typed data is User | TwoFactorChallenge | undefined. A 200 narrows it
+    // to the user, which is exactly what the runtime assertion below pins.
+    expectTypeOf(data).toExtend<User | TwoFactorChallenge | undefined>();
     expect(data).toEqual(FIXTURE_ADMIN);
   });
 });
