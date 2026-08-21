@@ -4,6 +4,10 @@ import { createRoot } from "react-dom/client";
 import "./i18n";
 import "./index.css";
 import App from "./App";
+import { initTheme } from "./theme";
+
+// Follow the OS light/dark preference unless an explicit choice is stored.
+initTheme();
 
 // API mocks are OFF by default. For backend-less development run
 // `VITE_API_MOCK=1 npm run dev` to serve the contract mocks in src/mocks/.

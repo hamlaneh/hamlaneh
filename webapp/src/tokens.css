@@ -1,0 +1,142 @@
+/* Hamlaneh — design tokens ("Quiet Nest")
+ * Source of truth: "Hamlaneh Auth.dc.html" → auth-foundations-and-components
+ * (delivered design, handoff/auth-tokens.css). Do not invent values here;
+ * changes come from the design pipeline.
+ * Logical properties only — the RTL mirror is the same component with dir="rtl".
+ */
+
+@theme {
+  /* type */
+  --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-ui-fa: "Vazirmatn", "Inter", system-ui, sans-serif;
+
+  --text-caption: 12px;
+  --text-body: 14px;
+  --text-control: 16px;
+  --text-subhead: 20px;
+  --text-heading: 28px;
+  --text-wordmark: 36px;
+
+  /* spacing — 4px base */
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-6: 24px;
+  --spacing-8: 32px;
+  --spacing-12: 48px;
+  --spacing-16: 64px;
+  --spacing-24: 96px;
+
+  /* radius */
+  --radius-sm: 8px;   /* segmented cells, icon buttons */
+  --radius-md: 10px;  /* inputs, buttons, banners */
+  --radius-lg: 12px;  /* inline panels */
+  --radius-xl: 22px;  /* large containing surfaces */
+
+  /* elevation */
+  --shadow-raised: 0 1px 2px rgb(28 39 36 / 0.06);
+  --shadow-overlay: 0 8px 24px rgb(28 39 36 / 0.10);
+
+  /* icon + control sizing */
+  --size-icon: 20px;
+  --size-target: 44px;
+  --size-control: 48px;
+  --size-otp-cell-w: 60px;
+  --size-otp-cell-h: 60px;
+  --size-form-column: 424px;
+
+  /* motion */
+  --ease-out: cubic-bezier(0.2, 0, 0.2, 1);
+  --duration-press: 100ms;
+  --duration-state: 180ms;
+  --duration-max: 300ms;
+}
+
+:root {
+  --color-canvas: #f7f6f2;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #eef2ef;
+  --color-surface-elevated: #ffffff;
+  --color-text-primary: #1c2724;
+  --color-text-secondary: #5c6965;
+  --color-border-subtle: #d7deda;   /* decorative separators only */
+  --color-border-control: #71807a;  /* meaningful boundaries, >= 3:1 */
+  --color-brand-primary: #235c55;
+  --color-brand-hover: #194941;
+  --color-brand-pressed: #123f39;
+  --color-on-brand: #ffffff;
+  --color-brand-soft: #ddece7;
+  --color-accent-warm: #a65332;     /* never a competing CTA */
+  --color-danger: #b42318;
+  --color-danger-soft: #fef0ed;
+  --color-warning: #8a5b12;
+  --color-warning-soft: #fff4d6;
+  --color-success: #237a57;
+  --color-success-soft: #e4f4ec;
+  --color-info: #27657a;
+  --color-info-soft: #e7f3f6;
+  --color-focus: #2f7d72;
+
+  /* derived, used on the artboards */
+  --color-border-disabled: #9ba8a2;
+  --color-surface-disabled: #e4e9e6;
+  --color-border-control-hover: #4c5a55;
+  --color-warning-text: #7a4f0f;    /* warning copy on warning-soft */
+  --color-motif: #c7d1cc;
+}
+
+:root[data-theme="dark"] {
+  --color-canvas: #111615;
+  --color-surface: #18201e;
+  --color-surface-subtle: #1d2924;
+  --color-surface-elevated: #202a27;
+  --color-text-primary: #f2f5f4;
+  --color-text-secondary: #abb7b3;
+  --color-border-subtle: #34413d;
+  --color-border-control: #6c7c76;
+  --color-brand-primary: #81c9bd;
+  --color-brand-hover: #9adacf;
+  --color-brand-pressed: #6fb5aa;
+  --color-on-brand: #0b2722;
+  --color-brand-soft: #193a34;
+  --color-accent-warm: #e3a17e;
+  --color-danger: #ffb4ab;
+  --color-danger-soft: #3b1d1b;
+  --color-warning: #ebcb7a;
+  --color-warning-soft: #332a13;
+  --color-success: #75d0a4;
+  --color-success-soft: #173329;
+  --color-info: #8bcbdb;
+  --color-info-soft: #173039;
+  --color-focus: #9adacf;
+
+  --color-border-disabled: #4a5852;
+  --color-surface-disabled: #202a27;
+  --color-border-control-hover: #8b9a94;
+  --color-warning-text: #ebcb7a;
+  --color-motif: #26332f;
+}
+
+/* Focus: 3px ring, 2px offset, never removed. */
+:where(a, button, input, select, [tabindex]):focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Autofill: override the UA yellow, keep the token palette. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--color-text-primary);
+  box-shadow: inset 0 0 0 100px var(--color-brand-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -34,10 +34,16 @@ function persistLanguage(language: Language): void {
   }
 }
 
-/** Reflects the active language on <html>: `lang` plus `dir` (rtl for Persian). */
+/**
+ * Reflects the active language on <html>: `lang`, `dir` (rtl for Persian) and
+ * the UI font stack, which switches to Vazirmatn for Persian. Both stacks are
+ * design tokens; this only chooses between them.
+ */
 export function applyDocumentLanguage(language: Language): void {
-  document.documentElement.lang = language;
-  document.documentElement.dir = language === "fa" ? "rtl" : "ltr";
+  const root = document.documentElement;
+  root.lang = language;
+  root.dir = language === "fa" ? "rtl" : "ltr";
+  root.style.setProperty("--hm-font-ui", language === "fa" ? "var(--font-ui-fa)" : "var(--font-ui)");
 }
 
 void i18n.use(initReactI18next).init({

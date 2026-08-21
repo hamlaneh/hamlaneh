@@ -1,0 +1,1299 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Vazirmatn:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; background: #DEDCD6; font-family: Inter, system-ui, sans-serif; }
+  a { color: #235C55; text-decoration: none; }
+  a:hover { color: #194941; }
+  @keyframes hspin { to { transform: rotate(360deg); } }
+</style>
+</helmet>
+
+<div style="padding:56px 64px 0;display:flex;flex-direction:column;gap:56px;background:#DEDCD6">
+
+<div style="display:flex;flex-direction:column;gap:14px;max-width:900px">
+  <div style="font:500 12px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#6B6F6C">Hamlaneh · authentication · quiet nest</div>
+  <div style="font:600 40px/1.1 Inter,sans-serif;letter-spacing:-.025em;color:#1C2724">Login &amp; password reset</div>
+  <div style="font:400 15px/1.6 Inter,sans-serif;color:#4E5450;max-width:660px">One resolved direction. Ten screen artboards at 1440 × 900 plus the foundation and component sheet, in review order. The live shell below is a working version of <span style="font-family:'IBM Plex Mono',monospace;font-size:13px">login-default</span> — type, submit, toggle theme and language.</div>
+</div>
+
+<!-- ── live shell ─────────────────────────────────────────── -->
+<div style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;align-items:baseline;gap:14px">
+    <div style="font:500 13px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#1C2724">live-shell</div>
+    <div style="font:400 12px/1 Inter,sans-serif;color:#7A7E7A">interactive · submit twice to reach two-step verification</div>
+  </div>
+  <div style="width:1440px;border:1px solid #C8C5BE;overflow:hidden">
+    <div dir="{{ dir }}" style="{{ shellStyle }}">
+      <div style="width:576px;flex:0 0 576px;background:var(--c-subtle);border-inline-end:1px solid var(--c-bsub);padding:64px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden">
+        <svg aria-hidden="true" viewBox="0 0 400 400" style="position:absolute;inset-inline-start:-70px;bottom:-140px;width:520px;height:520px"><g fill="none" stroke="var(--c-motif)" stroke-width="1.5"><path d="M40 340a160 160 0 0 1 320 0"/><path d="M92 340a108 108 0 0 1 216 0"/><path d="M144 340a56 56 0 0 1 112 0"/></g></svg>
+        <div style="position:relative">
+          <div style="font:600 36px/1.15 var(--f-ui);letter-spacing:-.02em;color:var(--c-text)">{{ s.brand }}</div>
+          <div style="margin-top:10px;font:400 14px/1.55 var(--f-ui);color:var(--c-text2)">{{ s.tagline }}</div>
+        </div>
+      </div>
+      <div style="flex:1;background:var(--c-canvas);position:relative;display:flex;align-items:center;justify-content:center;padding:64px;box-sizing:border-box">
+        <div style="position:absolute;top:26px;inset-inline-end:30px;display:flex;align-items:center;gap:10px">
+          <button type="button" onClick="{{ toggleTheme }}" aria-label="Toggle theme" style="width:50px;height:50px;display:flex;align-items:center;justify-content:center;background:transparent;border:1px solid var(--c-bsub);border-radius:10px;color:var(--c-text2);cursor:pointer">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+          </button>
+          <div role="group" aria-label="Language" style="display:inline-flex;align-items:center;border:1px solid var(--c-bsub);border-radius:10px;background:var(--c-surface);padding:2px;gap:2px">
+            <button type="button" onClick="{{ setEn }}" style="{{ enStyle }}">EN</button>
+            <button type="button" onClick="{{ setFa }}" style="{{ faStyle }}">فا</button>
+          </div>
+        </div>
+        <div style="width:424px;margin-bottom:44px">
+          <sc-if value="{{ isLogin }}" hint-placeholder-val="{{ true }}">
+            <form onSubmit="{{ submit }}" style="display:flex;flex-direction:column;gap:24px">
+              <div>
+                <h2 style="margin:0;font:600 28px/1.2 var(--f-ui);letter-spacing:-.02em;color:var(--c-text)">{{ s.signIn }}</h2>
+                <p style="margin:10px 0 0;font:400 14px/1.6 var(--f-ui);color:var(--c-text2)">{{ s.helper }}</p>
+              </div>
+              <sc-if value="{{ err }}" hint-placeholder-val="{{ false }}">
+                <div role="alert" style="display:flex;gap:10px;padding:12px 14px;background:var(--c-dangersoft);border:1px solid var(--c-danger);border-radius:10px">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--c-danger)" stroke-width="1.75" stroke-linecap="round" style="flex:0 0 18px;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+                  <span style="font:400 14px/1.5 var(--f-ui);color:var(--c-danger)">{{ s.badCreds }}</span>
+                </div>
+              </sc-if>
+              <div style="display:flex;flex-direction:column;gap:20px">
+                <div style="display:flex;flex-direction:column;gap:7px">
+                  <label for="ls-id" style="font:500 14px/1.4 var(--f-ui);color:var(--c-text)">{{ s.idLabel }}</label>
+                  <input id="ls-id" type="text" dir="auto" autoComplete="username" value="{{ idVal }}" onChange="{{ onId }}" style="width:100%;height:48px;box-sizing:border-box;padding-inline:14px;background:var(--c-surface);border:1px solid var(--c-bctl);border-radius:10px;font:400 16px/1 var(--f-ui);color:var(--c-text);outline:none"/>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:7px">
+                  <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px">
+                    <label for="ls-pw" style="font:500 14px/1.4 var(--f-ui);color:var(--c-text)">{{ s.pwLabel }}</label>
+                    <a href="#reset-request" style="font:500 14px/1.4 var(--f-ui);color:var(--c-brand);text-decoration:underline;text-underline-offset:3px">{{ s.forgot }}</a>
+                  </div>
+                  <div style="position:relative;display:flex;align-items:center">
+                    <input id="ls-pw" type="{{ pwType }}" autoComplete="current-password" value="{{ pwVal }}" onChange="{{ onPw }}" style="width:100%;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;background:var(--c-surface);border:1px solid var(--c-bctl);border-radius:10px;font:400 16px/1 var(--f-ui);color:var(--c-text);outline:none"/>
+                    <button type="button" onClick="{{ toggleShow }}" aria-label="{{ s.showPw }}" title="{{ s.showPw }}" style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;background:transparent;border:0;border-radius:8px;color:var(--c-text2);cursor:pointer">
+                      {{ eyeIcon }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <button type="submit" style="{{ primaryStyle }}">{{ submitLabel }}</button>
+            </form>
+          </sc-if>
+          <sc-if value="{{ isTotp }}" hint-placeholder-val="{{ false }}">
+            <form onSubmit="{{ verify }}" style="display:flex;flex-direction:column;gap:24px">
+              <div>
+                <h2 style="margin:0;font:600 28px/1.2 var(--f-ui);letter-spacing:-.02em;color:var(--c-text)">{{ s.totpTitle }}</h2>
+                <p style="margin:10px 0 0;font:400 14px/1.6 var(--f-ui);color:var(--c-text2)">{{ s.totpHelp }}</p>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <label style="font:500 14px/1.4 var(--f-ui);color:var(--c-text)">{{ s.otpLabel }}</label>
+                <div dir="ltr" style="display:flex;gap:8px">
+                  <sc-for list="{{ cells }}" as="cell" hint-placeholder-count="6">
+                    <input id="{{ cell.id }}" inputMode="numeric" autoComplete="one-time-code" maxLength="1" value="{{ cell.v }}" onChange="{{ cell.onInput }}" onKeyDown="{{ cell.onKey }}" onPaste="{{ cell.onPaste }}" style="width:60px;height:60px;box-sizing:border-box;text-align:center;background:var(--c-surface);border:1px solid var(--c-bctl);border-radius:10px;font:600 20px/1 var(--f-ui);color:var(--c-text);outline:none;font-variant-numeric:tabular-nums"/>
+                  </sc-for>
+                </div>
+              </div>
+              <button type="submit" style="{{ primaryStyle }}">{{ verifyLabel }}</button>
+              <button type="button" onClick="{{ back }}" style="align-self:flex-start;display:flex;align-items:center;gap:7px;height:44px;padding-inline:2px;background:transparent;border:0;font:500 14px/1 var(--f-ui);color:var(--c-brand);cursor:pointer">
+                {{ backIcon }}<span>{{ s.back }}</span>
+              </button>
+            </form>
+          </sc-if>
+          <sc-if value="{{ isDone }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:18px">
+              <div style="display:flex;gap:10px;padding:14px;background:var(--c-bsoft);border:1px solid var(--c-brand);border-radius:10px">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--c-brand)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 18px;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+                <span style="font:400 14px/1.5 var(--f-ui);color:var(--c-text)">{{ s.verified }}</span>
+              </div>
+              <button type="button" onClick="{{ reset }}" style="align-self:flex-start;height:44px;padding-inline:2px;background:transparent;border:0;font:500 14px/1 var(--f-ui);color:var(--c-brand);cursor:pointer;text-decoration:underline;text-underline-offset:3px">{{ s.restart }}</button>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div style="padding:56px 64px 0;display:flex;flex-direction:column;gap:56px;background:#DEDCD6">
+
+<!-- 1 · login-default -->
+<div style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;align-items:baseline;gap:14px">
+    <div style="font:500 13px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#1C2724">login-default</div>
+    <div style="font:400 12px/1 Inter,sans-serif;color:#7A7E7A">1440 × 900 · LTR · light · organization slot collapsed</div>
+  </div>
+  <div dir="ltr" style="width:1440px;height:900px;box-sizing:border-box;border:1px solid #C8C5BE;display:flex;overflow:hidden;background:#F7F6F2">
+    <div style="width:576px;flex:0 0 576px;background:#EEF2EF;border-inline-end:1px solid #D7DEDA;padding:64px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden">
+      <svg aria-hidden="true" viewBox="0 0 400 400" style="position:absolute;inset-inline-start:-70px;bottom:-140px;width:520px;height:520px"><g fill="none" stroke="#C7D1CC" stroke-width="1.5"><path d="M40 340a160 160 0 0 1 320 0"/><path d="M92 340a108 108 0 0 1 216 0"/><path d="M144 340a56 56 0 0 1 112 0"/></g></svg>
+      <div style="position:relative">
+        <div style="font:600 36px/1.15 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Hamlaneh</div>
+        <div style="margin-top:10px;font:400 14px/1.55 Inter,sans-serif;color:#5C6965">Self-hosted team communication</div>
+      </div>
+    </div>
+    <div style="flex:1;background:#F7F6F2;position:relative;display:flex;align-items:center;justify-content:center;padding:64px;box-sizing:border-box">
+      <div style="position:absolute;top:26px;inset-inline-end:30px;display:inline-flex;align-items:center;border:1px solid #D7DEDA;border-radius:10px;background:#FFFFFF;padding:2px;gap:2px">
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;background:#235C55;color:#FFFFFF;font:600 13px/1 Inter,sans-serif">EN</span>
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;color:#5C6965;font:600 13px/1 Vazirmatn,sans-serif">فا</span>
+      </div>
+      <div style="width:424px;margin-bottom:44px;display:flex;flex-direction:column;gap:24px">
+        <div>
+          <h2 style="margin:0;font:600 28px/1.2 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Sign in</h2>
+          <p style="margin:10px 0 0;font:400 14px/1.6 Inter,sans-serif;color:#5C6965">Use the account provided by your administrator.</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <label for="ab1-id" style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Username or email</label>
+            <input id="ab1-id" type="text" dir="auto" autoComplete="username" style="width:100%;height:48px;box-sizing:border-box;padding-inline:14px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724;outline:none"/>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px">
+              <label for="ab1-pw" style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Password</label>
+              <a href="#" style="font:500 14px/1.4 Inter,sans-serif;color:#235C55;text-decoration:underline;text-underline-offset:3px">Forgot password?</a>
+            </div>
+            <div style="position:relative;display:flex;align-items:center">
+              <input id="ab1-pw" type="password" autoComplete="current-password" style="width:100%;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724;outline:none"/>
+              <span role="button" aria-label="Show password" style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#5C6965">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></svg>
+              </span>
+            </div>
+          </div>
+        </div>
+        <button type="button" style="width:100%;height:48px;border:0;border-radius:10px;background:#235C55;color:#FFFFFF;font:600 16px/1 Inter,sans-serif;cursor:pointer">Sign in</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 2 · login-error -->
+<div style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;align-items:baseline;gap:14px">
+    <div style="font:500 13px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#1C2724">login-error</div>
+    <div style="font:400 12px/1 Inter,sans-serif;color:#7A7E7A">identifier preserved · generic message · neither field marked as the cause</div>
+  </div>
+  <div dir="ltr" style="width:1440px;height:900px;box-sizing:border-box;border:1px solid #C8C5BE;display:flex;overflow:hidden;background:#F7F6F2">
+    <div style="width:576px;flex:0 0 576px;background:#EEF2EF;border-inline-end:1px solid #D7DEDA;padding:64px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden">
+      <svg aria-hidden="true" viewBox="0 0 400 400" style="position:absolute;inset-inline-start:-70px;bottom:-140px;width:520px;height:520px"><g fill="none" stroke="#C7D1CC" stroke-width="1.5"><path d="M40 340a160 160 0 0 1 320 0"/><path d="M92 340a108 108 0 0 1 216 0"/><path d="M144 340a56 56 0 0 1 112 0"/></g></svg>
+      <div style="position:relative">
+        <div style="font:600 36px/1.15 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Hamlaneh</div>
+        <div style="margin-top:10px;font:400 14px/1.55 Inter,sans-serif;color:#5C6965">Self-hosted team communication</div>
+      </div>
+    </div>
+    <div style="flex:1;background:#F7F6F2;position:relative;display:flex;align-items:center;justify-content:center;padding:64px;box-sizing:border-box">
+      <div style="position:absolute;top:26px;inset-inline-end:30px;display:inline-flex;align-items:center;border:1px solid #D7DEDA;border-radius:10px;background:#FFFFFF;padding:2px;gap:2px">
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;background:#235C55;color:#FFFFFF;font:600 13px/1 Inter,sans-serif">EN</span>
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;color:#5C6965;font:600 13px/1 Vazirmatn,sans-serif">فا</span>
+      </div>
+      <div style="width:424px;margin-bottom:44px;display:flex;flex-direction:column;gap:24px">
+        <div>
+          <h2 style="margin:0;font:600 28px/1.2 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Sign in</h2>
+          <p style="margin:10px 0 0;font:400 14px/1.6 Inter,sans-serif;color:#5C6965">Use the account provided by your administrator.</p>
+        </div>
+        <div role="alert" style="display:flex;gap:10px;padding:12px 14px;background:#FEF0ED;border:1px solid #B42318;border-radius:10px">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#B42318" stroke-width="1.75" stroke-linecap="round" style="flex:0 0 18px;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+          <span style="font:400 14px/1.5 Inter,sans-serif;color:#B42318">Incorrect username or password.</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <label for="ab2-id" style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Username or email</label>
+            <input id="ab2-id" type="text" dir="auto" defaultValue="a.jones" autoComplete="username" style="width:100%;height:48px;box-sizing:border-box;padding-inline:14px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724;outline:none"/>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px">
+              <label for="ab2-pw" style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Password</label>
+              <a href="#" style="font:500 14px/1.4 Inter,sans-serif;color:#235C55;text-decoration:underline;text-underline-offset:3px">Forgot password?</a>
+            </div>
+            <div style="position:relative;display:flex;align-items:center">
+              <input id="ab2-pw" type="password" autoComplete="current-password" style="width:100%;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;background:#FFFFFF;border:1px solid #2F7D72;border-radius:10px;box-shadow:0 0 0 3px rgba(47,125,114,.26);font:400 16px/1 Inter,sans-serif;color:#1C2724;outline:none"/>
+              <span role="button" aria-label="Show password" style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#5C6965">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></svg>
+              </span>
+            </div>
+          </div>
+        </div>
+        <button type="button" style="width:100%;height:48px;border:0;border-radius:10px;background:#235C55;color:#FFFFFF;font:600 16px/1 Inter,sans-serif;cursor:pointer">Sign in</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 3 · login-rate-limited -->
+<div style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;align-items:baseline;gap:14px">
+    <div style="font:500 13px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#1C2724">login-rate-limited</div>
+    <div style="font:400 12px/1 Inter,sans-serif;color:#7A7E7A">non-dismissable · no close control · fields, toggle and button disabled · switcher stays live</div>
+  </div>
+  <div dir="ltr" style="width:1440px;height:900px;box-sizing:border-box;border:1px solid #C8C5BE;display:flex;overflow:hidden;background:#F7F6F2">
+    <div style="width:576px;flex:0 0 576px;background:#EEF2EF;border-inline-end:1px solid #D7DEDA;padding:64px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden">
+      <svg aria-hidden="true" viewBox="0 0 400 400" style="position:absolute;inset-inline-start:-70px;bottom:-140px;width:520px;height:520px"><g fill="none" stroke="#C7D1CC" stroke-width="1.5"><path d="M40 340a160 160 0 0 1 320 0"/><path d="M92 340a108 108 0 0 1 216 0"/><path d="M144 340a56 56 0 0 1 112 0"/></g></svg>
+      <div style="position:relative">
+        <div style="font:600 36px/1.15 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Hamlaneh</div>
+        <div style="margin-top:10px;font:400 14px/1.55 Inter,sans-serif;color:#5C6965">Self-hosted team communication</div>
+      </div>
+    </div>
+    <div style="flex:1;background:#F7F6F2;position:relative;display:flex;align-items:center;justify-content:center;padding:64px;box-sizing:border-box">
+      <div style="position:absolute;top:26px;inset-inline-end:30px;display:inline-flex;align-items:center;border:1px solid #D7DEDA;border-radius:10px;background:#FFFFFF;padding:2px;gap:2px">
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;background:#235C55;color:#FFFFFF;font:600 13px/1 Inter,sans-serif">EN</span>
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;color:#5C6965;font:600 13px/1 Vazirmatn,sans-serif">فا</span>
+      </div>
+      <div style="width:424px;margin-bottom:44px;display:flex;flex-direction:column;gap:24px">
+        <div>
+          <h2 style="margin:0;font:600 28px/1.2 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Sign in</h2>
+          <p style="margin:10px 0 0;font:400 14px/1.6 Inter,sans-serif;color:#5C6965">Use the account provided by your administrator.</p>
+        </div>
+        <div role="status" style="display:flex;gap:10px;padding:12px 14px;background:#FFF4D6;border:1px solid #8A5B12;border-radius:10px">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#8A5B12" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 18px;margin-top:1px"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+          <span style="font:400 14px/1.5 Inter,sans-serif;color:#7A4F0F">Too many attempts. Try again in a few minutes.</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <label for="ab3-id" style="font:500 14px/1.4 Inter,sans-serif;color:#5C6965">Username or email</label>
+            <input id="ab3-id" type="text" disabled="disabled" defaultValue="a.jones" style="width:100%;height:48px;box-sizing:border-box;padding-inline:14px;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#5C6965;outline:none"/>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px">
+              <label for="ab3-pw" style="font:500 14px/1.4 Inter,sans-serif;color:#5C6965">Password</label>
+              <a href="#" style="font:500 14px/1.4 Inter,sans-serif;color:#235C55;text-decoration:underline;text-underline-offset:3px">Forgot password?</a>
+            </div>
+            <div style="position:relative;display:flex;align-items:center">
+              <input id="ab3-pw" type="password" disabled="disabled" defaultValue="••••••••••" style="width:100%;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#5C6965;outline:none"/>
+              <span aria-hidden="true" style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#9BA8A2">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></svg>
+              </span>
+            </div>
+          </div>
+        </div>
+        <button type="button" disabled="disabled" style="width:100%;height:48px;border:1px dashed #9BA8A2;border-radius:10px;background:#E4E9E6;color:#5C6965;font:600 16px/1 Inter,sans-serif;cursor:not-allowed">Sign in</button>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+<div style="padding:56px 64px 0;display:flex;flex-direction:column;gap:56px;background:#DEDCD6">
+
+<!-- 4 · login-totp -->
+<div style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;align-items:baseline;gap:14px">
+    <div style="font:500 13px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#1C2724">login-totp</div>
+    <div style="font:400 12px/1 Inter,sans-serif;color:#7A7E7A">second step · six cells, always logical LTR · no resend action</div>
+  </div>
+  <div dir="ltr" style="width:1440px;height:900px;box-sizing:border-box;border:1px solid #C8C5BE;display:flex;overflow:hidden;background:#F7F6F2">
+    <div style="width:576px;flex:0 0 576px;background:#EEF2EF;border-inline-end:1px solid #D7DEDA;padding:64px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden">
+      <svg aria-hidden="true" viewBox="0 0 400 400" style="position:absolute;inset-inline-start:-70px;bottom:-140px;width:520px;height:520px"><g fill="none" stroke="#C7D1CC" stroke-width="1.5"><path d="M40 340a160 160 0 0 1 320 0"/><path d="M92 340a108 108 0 0 1 216 0"/><path d="M144 340a56 56 0 0 1 112 0"/></g></svg>
+      <div style="position:relative">
+        <div style="font:600 36px/1.15 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Hamlaneh</div>
+        <div style="margin-top:10px;font:400 14px/1.55 Inter,sans-serif;color:#5C6965">Self-hosted team communication</div>
+      </div>
+    </div>
+    <div style="flex:1;background:#F7F6F2;position:relative;display:flex;align-items:center;justify-content:center;padding:64px;box-sizing:border-box">
+      <div style="position:absolute;top:26px;inset-inline-end:30px;display:inline-flex;align-items:center;border:1px solid #D7DEDA;border-radius:10px;background:#FFFFFF;padding:2px;gap:2px">
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;background:#235C55;color:#FFFFFF;font:600 13px/1 Inter,sans-serif">EN</span>
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;color:#5C6965;font:600 13px/1 Vazirmatn,sans-serif">فا</span>
+      </div>
+      <div style="width:424px;margin-bottom:44px;display:flex;flex-direction:column;gap:24px">
+        <div>
+          <h2 style="margin:0;font:600 28px/1.2 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Two-step verification</h2>
+          <p style="margin:10px 0 0;font:400 14px/1.6 Inter,sans-serif;color:#5C6965">Enter the code from your authenticator app</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:9px">
+          <label for="ab4-otp-1" style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">One-time code</label>
+          <div dir="ltr" style="display:flex;gap:8px">
+            <input id="ab4-otp-1" inputMode="numeric" autoComplete="one-time-code" maxLength="1" defaultValue="4" style="width:60px;height:60px;box-sizing:border-box;text-align:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:600 20px/1 Inter,sans-serif;color:#1C2724;outline:none;font-variant-numeric:tabular-nums"/>
+            <input inputMode="numeric" maxLength="1" defaultValue="8" style="width:60px;height:60px;box-sizing:border-box;text-align:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:600 20px/1 Inter,sans-serif;color:#1C2724;outline:none;font-variant-numeric:tabular-nums"/>
+            <input inputMode="numeric" maxLength="1" defaultValue="2" style="width:60px;height:60px;box-sizing:border-box;text-align:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:600 20px/1 Inter,sans-serif;color:#1C2724;outline:none;font-variant-numeric:tabular-nums"/>
+            <input inputMode="numeric" maxLength="1" defaultValue="1" style="width:60px;height:60px;box-sizing:border-box;text-align:center;background:#FFFFFF;border:1px solid #2F7D72;border-radius:10px;box-shadow:0 0 0 3px rgba(47,125,114,.26);font:600 20px/1 Inter,sans-serif;color:#1C2724;outline:none;font-variant-numeric:tabular-nums"/>
+            <input inputMode="numeric" maxLength="1" style="width:60px;height:60px;box-sizing:border-box;text-align:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:600 20px/1 Inter,sans-serif;color:#1C2724;outline:none;font-variant-numeric:tabular-nums"/>
+            <input inputMode="numeric" maxLength="1" style="width:60px;height:60px;box-sizing:border-box;text-align:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:600 20px/1 Inter,sans-serif;color:#1C2724;outline:none;font-variant-numeric:tabular-nums"/>
+          </div>
+        </div>
+        <button type="button" style="width:100%;height:48px;border:0;border-radius:10px;background:#235C55;color:#FFFFFF;font:600 16px/1 Inter,sans-serif;cursor:pointer">Verify</button>
+        <span role="button" style="align-self:flex-start;display:flex;align-items:center;gap:7px;height:44px;font:500 14px/1 Inter,sans-serif;color:#235C55">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>Back
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 5 · login-force-password-change -->
+<div style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;align-items:baseline;gap:14px">
+    <div style="font:500 13px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#1C2724">login-force-password-change</div>
+    <div style="font:400 12px/1 Inter,sans-serif;color:#7A7E7A">temporary password replacement · minimum length is instance policy, not a product constant</div>
+  </div>
+  <div dir="ltr" style="width:1440px;height:900px;box-sizing:border-box;border:1px solid #C8C5BE;display:flex;overflow:hidden;background:#F7F6F2">
+    <div style="width:576px;flex:0 0 576px;background:#EEF2EF;border-inline-end:1px solid #D7DEDA;padding:64px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden">
+      <svg aria-hidden="true" viewBox="0 0 400 400" style="position:absolute;inset-inline-start:-70px;bottom:-140px;width:520px;height:520px"><g fill="none" stroke="#C7D1CC" stroke-width="1.5"><path d="M40 340a160 160 0 0 1 320 0"/><path d="M92 340a108 108 0 0 1 216 0"/><path d="M144 340a56 56 0 0 1 112 0"/></g></svg>
+      <div style="position:relative">
+        <div style="font:600 36px/1.15 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Hamlaneh</div>
+        <div style="margin-top:10px;font:400 14px/1.55 Inter,sans-serif;color:#5C6965">Self-hosted team communication</div>
+      </div>
+    </div>
+    <div style="flex:1;background:#F7F6F2;position:relative;display:flex;align-items:center;justify-content:center;padding:64px;box-sizing:border-box">
+      <div style="position:absolute;top:26px;inset-inline-end:30px;display:inline-flex;align-items:center;border:1px solid #D7DEDA;border-radius:10px;background:#FFFFFF;padding:2px;gap:2px">
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;background:#235C55;color:#FFFFFF;font:600 13px/1 Inter,sans-serif">EN</span>
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;color:#5C6965;font:600 13px/1 Vazirmatn,sans-serif">فا</span>
+      </div>
+      <div style="width:424px;margin-bottom:16px;display:flex;flex-direction:column;gap:24px">
+        <div>
+          <h2 style="margin:0;font:600 28px/1.2 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Set a new password</h2>
+          <p style="margin:10px 0 0;font:400 14px/1.6 Inter,sans-serif;color:#5C6965">Your temporary password must be replaced before you continue.</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <label for="ab5-new" style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">New password</label>
+            <div style="position:relative;display:flex;align-items:center">
+              <input id="ab5-new" type="text" autoComplete="new-password" defaultValue="quiet-nest-2026" style="width:100%;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724;outline:none"/>
+              <span role="button" aria-label="Hide password" style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#235C55">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10.7 5.1a10.7 10.7 0 0 1 11.2 6.6 1 1 0 0 1 0 .6 10.7 10.7 0 0 1-1.4 2.5"/><path d="M14.1 14.2a3 3 0 0 1-4.3-4.3"/><path d="M17.5 17.5A10.8 10.8 0 0 1 2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 4.4-5.2"/><path d="m2 2 20 20"/></svg>
+              </span>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+              <span style="font:500 13px/1.4 Inter,sans-serif;color:#5C6965">Strength</span>
+              <span style="font:600 13px/1.4 Inter,sans-serif;color:#1C2724">Strong</span>
+            </div>
+            <div style="display:flex;gap:5px">
+              <div style="flex:1;height:5px;border-radius:3px;background:#235C55"></div>
+              <div style="flex:1;height:5px;border-radius:3px;background:#235C55"></div>
+              <div style="flex:1;height:5px;border-radius:3px;background:#235C55"></div>
+              <div style="flex:1;height:5px;border-radius:3px;background:#D7DEDA"></div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;padding:14px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:12px">
+            <div style="font:500 13px/1.4 Inter,sans-serif;color:#5C6965">Password requirements</div>
+            <div style="display:flex;align-items:center;gap:9px">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#237A57" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 17px"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+              <span style="font:400 14px/1.5 Inter,sans-serif;color:#1C2724">At least 12 characters</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#237A57" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 17px"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+              <span style="font:400 14px/1.5 Inter,sans-serif;color:#1C2724">Not one of your last 3 passwords</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#71807A" stroke-width="1.75" style="flex:0 0 17px"><circle cx="12" cy="12" r="10"/></svg>
+              <span style="font:400 14px/1.5 Inter,sans-serif;color:#5C6965">Different from your username</span>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <label for="ab5-conf" style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Confirm new password</label>
+            <div style="position:relative;display:flex;align-items:center">
+              <input id="ab5-conf" type="password" autoComplete="new-password" defaultValue="••••••••••••" style="width:100%;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724;outline:none"/>
+              <span role="button" aria-label="Show password" style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#5C6965">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></svg>
+              </span>
+            </div>
+          </div>
+        </div>
+        <button type="button" style="width:100%;height:48px;border:0;border-radius:10px;background:#235C55;color:#FFFFFF;font:600 16px/1 Inter,sans-serif;cursor:pointer">Set password and continue</button>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+<div style="padding:56px 64px 0;display:flex;flex-direction:column;gap:56px;background:#DEDCD6">
+
+<!-- 6 · reset-request -->
+<div style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;align-items:baseline;gap:14px">
+    <div style="font:500 13px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#1C2724">reset-request</div>
+    <div style="font:400 12px/1 Inter,sans-serif;color:#7A7E7A">same shell · same form position · autocomplete=&quot;email&quot;</div>
+  </div>
+  <div dir="ltr" style="width:1440px;height:900px;box-sizing:border-box;border:1px solid #C8C5BE;display:flex;overflow:hidden;background:#F7F6F2">
+    <div style="width:576px;flex:0 0 576px;background:#EEF2EF;border-inline-end:1px solid #D7DEDA;padding:64px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden">
+      <svg aria-hidden="true" viewBox="0 0 400 400" style="position:absolute;inset-inline-start:-70px;bottom:-140px;width:520px;height:520px"><g fill="none" stroke="#C7D1CC" stroke-width="1.5"><path d="M40 340a160 160 0 0 1 320 0"/><path d="M92 340a108 108 0 0 1 216 0"/><path d="M144 340a56 56 0 0 1 112 0"/></g></svg>
+      <div style="position:relative">
+        <div style="font:600 36px/1.15 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Hamlaneh</div>
+        <div style="margin-top:10px;font:400 14px/1.55 Inter,sans-serif;color:#5C6965">Self-hosted team communication</div>
+      </div>
+    </div>
+    <div style="flex:1;background:#F7F6F2;position:relative;display:flex;align-items:center;justify-content:center;padding:64px;box-sizing:border-box">
+      <div style="position:absolute;top:26px;inset-inline-end:30px;display:inline-flex;align-items:center;border:1px solid #D7DEDA;border-radius:10px;background:#FFFFFF;padding:2px;gap:2px">
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;background:#235C55;color:#FFFFFF;font:600 13px/1 Inter,sans-serif">EN</span>
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;color:#5C6965;font:600 13px/1 Vazirmatn,sans-serif">فا</span>
+      </div>
+      <div style="width:424px;margin-bottom:44px;display:flex;flex-direction:column;gap:24px">
+        <div>
+          <h2 style="margin:0;font:600 28px/1.2 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Reset your password</h2>
+          <p style="margin:10px 0 0;font:400 14px/1.6 Inter,sans-serif;color:#5C6965">Enter the email address associated with your account.</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:7px">
+          <label for="ab6-em" style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Email address</label>
+          <input id="ab6-em" type="email" dir="ltr" autoComplete="email" style="width:100%;height:48px;box-sizing:border-box;padding-inline:14px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724;outline:none"/>
+        </div>
+        <button type="button" style="width:100%;height:48px;border:0;border-radius:10px;background:#235C55;color:#FFFFFF;font:600 16px/1 Inter,sans-serif;cursor:pointer">Send reset link</button>
+        <span role="button" style="align-self:flex-start;display:flex;align-items:center;gap:7px;height:44px;font:500 14px/1 Inter,sans-serif;color:#235C55">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>Back to sign in
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 7 · reset-request-confirmation -->
+<div style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;align-items:baseline;gap:14px">
+    <div style="font:500 13px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#1C2724">reset-request-confirmation</div>
+    <div style="font:400 12px/1 Inter,sans-serif;color:#7A7E7A">enumeration-safe · no identity shown · identical whether or not the account exists</div>
+  </div>
+  <div dir="ltr" style="width:1440px;height:900px;box-sizing:border-box;border:1px solid #C8C5BE;display:flex;overflow:hidden;background:#F7F6F2">
+    <div style="width:576px;flex:0 0 576px;background:#EEF2EF;border-inline-end:1px solid #D7DEDA;padding:64px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden">
+      <svg aria-hidden="true" viewBox="0 0 400 400" style="position:absolute;inset-inline-start:-70px;bottom:-140px;width:520px;height:520px"><g fill="none" stroke="#C7D1CC" stroke-width="1.5"><path d="M40 340a160 160 0 0 1 320 0"/><path d="M92 340a108 108 0 0 1 216 0"/><path d="M144 340a56 56 0 0 1 112 0"/></g></svg>
+      <div style="position:relative">
+        <div style="font:600 36px/1.15 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Hamlaneh</div>
+        <div style="margin-top:10px;font:400 14px/1.55 Inter,sans-serif;color:#5C6965">Self-hosted team communication</div>
+      </div>
+    </div>
+    <div style="flex:1;background:#F7F6F2;position:relative;display:flex;align-items:center;justify-content:center;padding:64px;box-sizing:border-box">
+      <div style="position:absolute;top:26px;inset-inline-end:30px;display:inline-flex;align-items:center;border:1px solid #D7DEDA;border-radius:10px;background:#FFFFFF;padding:2px;gap:2px">
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;background:#235C55;color:#FFFFFF;font:600 13px/1 Inter,sans-serif">EN</span>
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;color:#5C6965;font:600 13px/1 Vazirmatn,sans-serif">فا</span>
+      </div>
+      <div style="width:424px;margin-bottom:44px;display:flex;flex-direction:column;gap:24px">
+        <div>
+          <h2 style="margin:0;font:600 28px/1.2 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Reset your password</h2>
+        </div>
+        <div role="status" style="display:flex;gap:11px;padding:14px;background:#E4F4EC;border:1px solid #237A57;border-radius:10px">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#237A57" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 18px;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+          <span style="font:400 14px/1.55 Inter,sans-serif;color:#1C2724">If that address exists, a reset link is on its way.</span>
+        </div>
+        <p style="margin:0;font:400 14px/1.6 Inter,sans-serif;color:#5C6965">The link is valid for one hour. Check your spam folder if it does not arrive.</p>
+        <span role="button" style="align-self:flex-start;display:flex;align-items:center;gap:7px;height:44px;font:500 14px/1 Inter,sans-serif;color:#235C55">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>Back to sign in
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 8 · reset-new-password -->
+<div style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;align-items:baseline;gap:14px">
+    <div style="font:500 13px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#1C2724">reset-new-password</div>
+    <div style="font:400 12px/1 Inter,sans-serif;color:#7A7E7A">reached from the emailed link · same requirement treatment as the forced change</div>
+  </div>
+  <div dir="ltr" style="width:1440px;height:900px;box-sizing:border-box;border:1px solid #C8C5BE;display:flex;overflow:hidden;background:#F7F6F2">
+    <div style="width:576px;flex:0 0 576px;background:#EEF2EF;border-inline-end:1px solid #D7DEDA;padding:64px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden">
+      <svg aria-hidden="true" viewBox="0 0 400 400" style="position:absolute;inset-inline-start:-70px;bottom:-140px;width:520px;height:520px"><g fill="none" stroke="#C7D1CC" stroke-width="1.5"><path d="M40 340a160 160 0 0 1 320 0"/><path d="M92 340a108 108 0 0 1 216 0"/><path d="M144 340a56 56 0 0 1 112 0"/></g></svg>
+      <div style="position:relative">
+        <div style="font:600 36px/1.15 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Hamlaneh</div>
+        <div style="margin-top:10px;font:400 14px/1.55 Inter,sans-serif;color:#5C6965">Self-hosted team communication</div>
+      </div>
+    </div>
+    <div style="flex:1;background:#F7F6F2;position:relative;display:flex;align-items:center;justify-content:center;padding:64px;box-sizing:border-box">
+      <div style="position:absolute;top:26px;inset-inline-end:30px;display:inline-flex;align-items:center;border:1px solid #D7DEDA;border-radius:10px;background:#FFFFFF;padding:2px;gap:2px">
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;background:#235C55;color:#FFFFFF;font:600 13px/1 Inter,sans-serif">EN</span>
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;color:#5C6965;font:600 13px/1 Vazirmatn,sans-serif">فا</span>
+      </div>
+      <div style="width:424px;margin-bottom:24px;display:flex;flex-direction:column;gap:24px">
+        <div>
+          <h2 style="margin:0;font:600 28px/1.2 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Create a new password</h2>
+          <p style="margin:10px 0 0;font:400 14px/1.6 Inter,sans-serif;color:#5C6965">Choose a password you have not used on this instance before.</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <label for="ab8-new" style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">New password</label>
+            <div style="position:relative;display:flex;align-items:center">
+              <input id="ab8-new" type="password" autoComplete="new-password" style="width:100%;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724;outline:none"/>
+              <span role="button" aria-label="Show password" style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#5C6965">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></svg>
+              </span>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;padding:14px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:12px">
+            <div style="font:500 13px/1.4 Inter,sans-serif;color:#5C6965">Password requirements</div>
+            <div style="display:flex;align-items:center;gap:9px">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#71807A" stroke-width="1.75" style="flex:0 0 17px"><circle cx="12" cy="12" r="10"/></svg>
+              <span style="font:400 14px/1.5 Inter,sans-serif;color:#5C6965">At least 12 characters</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#71807A" stroke-width="1.75" style="flex:0 0 17px"><circle cx="12" cy="12" r="10"/></svg>
+              <span style="font:400 14px/1.5 Inter,sans-serif;color:#5C6965">Not one of your last 3 passwords</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#71807A" stroke-width="1.75" style="flex:0 0 17px"><circle cx="12" cy="12" r="10"/></svg>
+              <span style="font:400 14px/1.5 Inter,sans-serif;color:#5C6965">Different from your username</span>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <label for="ab8-conf" style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Confirm new password</label>
+            <div style="position:relative;display:flex;align-items:center">
+              <input id="ab8-conf" type="password" autoComplete="new-password" style="width:100%;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724;outline:none"/>
+              <span role="button" aria-label="Show password" style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#5C6965">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></svg>
+              </span>
+            </div>
+          </div>
+        </div>
+        <button type="button" style="width:100%;height:48px;border:0;border-radius:10px;background:#235C55;color:#FFFFFF;font:600 16px/1 Inter,sans-serif;cursor:pointer">Reset password</button>
+        <span role="button" style="align-self:flex-start;display:flex;align-items:center;gap:7px;height:44px;font:500 14px/1 Inter,sans-serif;color:#235C55">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>Back to sign in
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+<div style="padding:56px 64px 0;display:flex;flex-direction:column;gap:56px;background:#DEDCD6">
+
+<!-- 9 · login-default-dark -->
+<div style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;align-items:baseline;gap:14px">
+    <div style="font:500 13px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#1C2724">login-default-dark</div>
+    <div style="font:400 12px/1 Inter,sans-serif;color:#7A7E7A">token-mapped counterpart · identical geometry · brand becomes the light tone, ink becomes the fill</div>
+  </div>
+  <div dir="ltr" style="width:1440px;height:900px;box-sizing:border-box;border:1px solid #C8C5BE;display:flex;overflow:hidden;background:#111615">
+    <div style="width:576px;flex:0 0 576px;background:#1D2924;border-inline-end:1px solid #34413D;padding:64px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden">
+      <svg aria-hidden="true" viewBox="0 0 400 400" style="position:absolute;inset-inline-start:-70px;bottom:-140px;width:520px;height:520px"><g fill="none" stroke="#2F3E39" stroke-width="1.5"><path d="M40 340a160 160 0 0 1 320 0"/><path d="M92 340a108 108 0 0 1 216 0"/><path d="M144 340a56 56 0 0 1 112 0"/></g></svg>
+      <div style="position:relative">
+        <div style="font:600 36px/1.15 Inter,sans-serif;letter-spacing:-.02em;color:#F2F5F4">Hamlaneh</div>
+        <div style="margin-top:10px;font:400 14px/1.55 Inter,sans-serif;color:#ABB7B3">Self-hosted team communication</div>
+      </div>
+    </div>
+    <div style="flex:1;background:#111615;position:relative;display:flex;align-items:center;justify-content:center;padding:64px;box-sizing:border-box">
+      <div style="position:absolute;top:26px;inset-inline-end:30px;display:inline-flex;align-items:center;border:1px solid #34413D;border-radius:10px;background:#18201E;padding:2px;gap:2px">
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;background:#81C9BD;color:#0B2722;font:600 13px/1 Inter,sans-serif">EN</span>
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;color:#ABB7B3;font:600 13px/1 Vazirmatn,sans-serif">فا</span>
+      </div>
+      <div style="width:424px;margin-bottom:44px;display:flex;flex-direction:column;gap:24px">
+        <div>
+          <h2 style="margin:0;font:600 28px/1.2 Inter,sans-serif;letter-spacing:-.02em;color:#F2F5F4">Sign in</h2>
+          <p style="margin:10px 0 0;font:400 14px/1.6 Inter,sans-serif;color:#ABB7B3">Use the account provided by your administrator.</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <label for="ab9-id" style="font:500 14px/1.4 Inter,sans-serif;color:#F2F5F4">Username or email</label>
+            <input id="ab9-id" type="text" dir="auto" autoComplete="username" style="width:100%;height:48px;box-sizing:border-box;padding-inline:14px;background:#18201E;border:1px solid #6C7C76;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#F2F5F4;outline:none"/>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px">
+              <label for="ab9-pw" style="font:500 14px/1.4 Inter,sans-serif;color:#F2F5F4">Password</label>
+              <a href="#" style="font:500 14px/1.4 Inter,sans-serif;color:#81C9BD;text-decoration:underline;text-underline-offset:3px">Forgot password?</a>
+            </div>
+            <div style="position:relative;display:flex;align-items:center">
+              <input id="ab9-pw" type="password" autoComplete="current-password" style="width:100%;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;background:#18201E;border:1px solid #6C7C76;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#F2F5F4;outline:none"/>
+              <span role="button" aria-label="Show password" style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#ABB7B3">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></svg>
+              </span>
+            </div>
+          </div>
+        </div>
+        <button type="button" style="width:100%;height:48px;border:0;border-radius:10px;background:#81C9BD;color:#0B2722;font:600 16px/1 Inter,sans-serif;cursor:pointer">Sign in</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 10 · login-rtl-fa -->
+<div style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;align-items:baseline;gap:14px">
+    <div style="font:500 13px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#1C2724">login-rtl-fa</div>
+    <div style="font:400 12px/1 Inter,sans-serif;color:#7A7E7A">full spatial mirror · Vazirmatn · body line-height 1.7 · identifier is dir=&quot;auto&quot;</div>
+  </div>
+  <div dir="rtl" style="width:1440px;height:900px;box-sizing:border-box;border:1px solid #C8C5BE;display:flex;overflow:hidden;background:#F7F6F2">
+    <div style="width:576px;flex:0 0 576px;background:#EEF2EF;border-inline-end:1px solid #D7DEDA;padding:64px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden">
+      <svg aria-hidden="true" viewBox="0 0 400 400" style="position:absolute;inset-inline-start:-70px;bottom:-140px;width:520px;height:520px;transform:scaleX(-1)"><g fill="none" stroke="#C7D1CC" stroke-width="1.5"><path d="M40 340a160 160 0 0 1 320 0"/><path d="M92 340a108 108 0 0 1 216 0"/><path d="M144 340a56 56 0 0 1 112 0"/></g></svg>
+      <div style="position:relative">
+        <div style="font:600 36px/1.35 Vazirmatn,sans-serif;color:#1C2724">هم‌لانه</div>
+        <div style="margin-top:10px;font:400 14px/1.7 Vazirmatn,sans-serif;color:#5C6965">ارتباط تیمی خودمیزبان</div>
+      </div>
+    </div>
+    <div style="flex:1;background:#F7F6F2;position:relative;display:flex;align-items:center;justify-content:center;padding:64px;box-sizing:border-box">
+      <div style="position:absolute;top:26px;inset-inline-end:30px;display:inline-flex;align-items:center;border:1px solid #D7DEDA;border-radius:10px;background:#FFFFFF;padding:2px;gap:2px">
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;color:#5C6965;font:600 13px/1 Inter,sans-serif">EN</span>
+        <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;background:#235C55;color:#FFFFFF;font:600 13px/1 Vazirmatn,sans-serif">فا</span>
+      </div>
+      <div style="width:424px;margin-bottom:44px;display:flex;flex-direction:column;gap:24px">
+        <div>
+          <h2 style="margin:0;font:600 28px/1.4 Vazirmatn,sans-serif;color:#1C2724">ورود</h2>
+          <p style="margin:10px 0 0;font:400 14px/1.7 Vazirmatn,sans-serif;color:#5C6965">با حسابی که مدیر سامانه برای شما ساخته است وارد شوید.</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <label for="ab10-id" style="font:500 14px/1.7 Vazirmatn,sans-serif;color:#1C2724">نام کاربری یا ایمیل</label>
+            <input id="ab10-id" type="text" dir="auto" autoComplete="username" defaultValue="a.jones@sanjab.coop" style="width:100%;height:48px;box-sizing:border-box;padding-inline:14px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Vazirmatn,sans-serif;color:#1C2724;outline:none"/>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px">
+              <label for="ab10-pw" style="font:500 14px/1.7 Vazirmatn,sans-serif;color:#1C2724">گذرواژه</label>
+              <a href="#" style="font:500 14px/1.7 Vazirmatn,sans-serif;color:#235C55;text-decoration:underline;text-underline-offset:3px">گذرواژه را فراموش کرده‌اید؟</a>
+            </div>
+            <div style="position:relative;display:flex;align-items:center">
+              <input id="ab10-pw" type="password" autoComplete="current-password" style="width:100%;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Vazirmatn,sans-serif;color:#1C2724;outline:none"/>
+              <span role="button" aria-label="نمایش گذرواژه" style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#5C6965">
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></svg>
+              </span>
+            </div>
+          </div>
+        </div>
+        <button type="button" style="width:100%;height:48px;border:0;border-radius:10px;background:#235C55;color:#FFFFFF;font:600 16px/1.7 Vazirmatn,sans-serif;cursor:pointer">ورود</button>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+<div style="padding:56px 64px 120px;display:flex;flex-direction:column;gap:56px;background:#DEDCD6">
+<div style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;align-items:baseline;gap:14px">
+    <div style="font:500 13px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#1C2724">auth-foundations-and-components</div>
+    <div style="font:400 12px/1 Inter,sans-serif;color:#7A7E7A">tokens · type · component states · composed async frames · behaviour and handoff notes</div>
+  </div>
+  <div dir="ltr" style="width:2936px;box-sizing:border-box;background:#F7F6F2;border:1px solid #C8C5BE;padding:64px;display:flex;flex-direction:column;gap:48px">
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#8A9490">01 · colour</div>
+      <div style="font:600 24px/1.25 Inter,sans-serif;letter-spacing:-.015em;color:#1C2724">Semantic tokens</div>
+      <div style="font:400 14px/1.6 Inter,sans-serif;color:#5C6965;max-width:720px">Roles, not colour names. Both themes are verified independently; dark is a re-mapping, never an inversion. <span style="font-family:'IBM Plex Mono',monospace;font-size:13px">border.subtle</span> is decorative only — every meaningful control boundary uses <span style="font-family:'IBM Plex Mono',monospace;font-size:13px">border.control</span> at ≥ 3:1.</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:48px">
+      <div style="display:flex;flex-direction:column;gap:20px;padding:28px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:16px">
+        <div style="font:600 16px/1 Inter,sans-serif;color:#1C2724">Light theme</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px 24px">
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#F7F6F2;border:1px solid #D7DEDA"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">canvas</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#F7F6F2</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#FFFFFF;border:1px solid #D7DEDA"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">surface</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#FFFFFF</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#EEF2EF;border:1px solid #D7DEDA"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">surface.subtle</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#EEF2EF</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#1C2724"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">text.primary</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#1C2724</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#5C6965"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">text.secondary</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#5C6965</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#D7DEDA"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">border.subtle</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#D7DEDA</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#71807A"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">border.control</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#71807A</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#235C55"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">brand.primary</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#235C55</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#194941"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">brand.hover</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#194941</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#123F39"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">brand.pressed</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#123F39</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#DDECE7;border:1px solid #D7DEDA"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">brand.soft</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#DDECE7</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#A65332"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">accent.warm</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#A65332</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#B42318"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">danger</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#B42318</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#FEF0ED;border:1px solid #D7DEDA"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">danger.soft</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#FEF0ED</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#8A5B12"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">warning</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#8A5B12</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#FFF4D6;border:1px solid #D7DEDA"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">warning.soft</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#FFF4D6</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#237A57"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">success</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#237A57</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#E4F4EC;border:1px solid #D7DEDA"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">success.soft</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#E4F4EC</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#27657A"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">info</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#27657A</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#E7F3F6;border:1px solid #D7DEDA"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">info.soft</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#E7F3F6</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#2F7D72"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">focus</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#2F7D72</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#FFFFFF;border:1px solid #D7DEDA"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#1C2724">on-brand</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#5C6965">#FFFFFF</div></div></div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:20px;padding:28px;background:#18201E;border:1px solid #34413D;border-radius:16px">
+        <div style="font:600 16px/1 Inter,sans-serif;color:#F2F5F4">Dark theme</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px 24px">
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#111615;border:1px solid #34413D"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">canvas</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#111615</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#18201E;border:1px solid #34413D"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">surface</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#18201E</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#1D2924;border:1px solid #34413D"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">surface.subtle</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#1D2924</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#202A27;border:1px solid #34413D"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">surface.elevated</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#202A27</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#F2F5F4"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">text.primary</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#F2F5F4</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#ABB7B3"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">text.secondary</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#ABB7B3</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#34413D"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">border.subtle</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#34413D</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#6C7C76"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">border.control</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#6C7C76</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#81C9BD"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">brand.primary</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#81C9BD</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#9ADACF"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">brand.hover</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#9ADACF</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#6FB5AA"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">brand.pressed</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#6FB5AA</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#193A34;border:1px solid #34413D"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">brand.soft</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#193A34</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#E3A17E"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">accent.warm</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#E3A17E</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#FFB4AB"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">danger</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#FFB4AB</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#3B1D1B;border:1px solid #34413D"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">danger.soft</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#3B1D1B</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#EBCB7A"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">warning</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#EBCB7A</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#332A13;border:1px solid #34413D"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">warning.soft</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#332A13</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#75D0A4"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">success</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#75D0A4</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#173329;border:1px solid #34413D"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">success.soft</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#173329</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#8BCBDB"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">info</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#8BCBDB</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#173039;border:1px solid #34413D"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">info.soft</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#173039</div></div></div>
+          <div style="display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:0 0 40px;border-radius:8px;background:#0B2722;border:1px solid #34413D"></div><div><div style="font:500 13px/1.35 Inter,sans-serif;color:#F2F5F4">on-brand</div><div style="font:400 12px/1.35 'IBM Plex Mono',monospace;color:#ABB7B3">#0B2722</div></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div style="font:600 16px/1 Inter,sans-serif;color:#1C2724">Verified pairings</div>
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:16px">
+        <div style="padding:18px;border-radius:12px;background:#F7F6F2;border:1px solid #D7DEDA"><div style="font:400 15px/1.4 Inter,sans-serif;color:#1C2724">Body text</div><div style="margin-top:8px;font:400 12px/1.4 'IBM Plex Mono',monospace;color:#5C6965">text.primary / canvas · 13.3:1</div></div>
+        <div style="padding:18px;border-radius:12px;background:#235C55"><div style="font:600 15px/1.4 Inter,sans-serif;color:#FFFFFF">Sign in</div><div style="margin-top:8px;font:400 12px/1.4 'IBM Plex Mono',monospace;color:#DDECE7">on-brand / brand · 7.6:1</div></div>
+        <div style="padding:18px;border-radius:12px;background:#FEF0ED;border:1px solid #B42318"><div style="font:400 15px/1.4 Inter,sans-serif;color:#B42318">Error text</div><div style="margin-top:8px;font:400 12px/1.4 'IBM Plex Mono',monospace;color:#8E1C13">danger / danger.soft · 5.9:1</div></div>
+        <div style="padding:18px;border-radius:12px;background:#EEF2EF"><div style="font:400 15px/1.4 Inter,sans-serif;color:#5C6965">Helper text</div><div style="margin-top:8px;font:400 12px/1.4 'IBM Plex Mono',monospace;color:#5C6965">text.secondary / subtle · 5.1:1</div></div>
+        <div style="padding:18px;border-radius:12px;background:#111615;border:1px solid #34413D"><div style="font:400 15px/1.4 Inter,sans-serif;color:#F2F5F4">Body text</div><div style="margin-top:8px;font:400 12px/1.4 'IBM Plex Mono',monospace;color:#ABB7B3">dark text.primary · 16.6:1</div></div>
+        <div style="padding:18px;border-radius:12px;background:#81C9BD"><div style="font:600 15px/1.4 Inter,sans-serif;color:#0B2722">Sign in</div><div style="margin-top:8px;font:400 12px/1.4 'IBM Plex Mono',monospace;color:#0B2722">dark on-brand / brand · 8.3:1</div></div>
+      </div>
+      <div style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Control boundaries: <span style="font-family:'IBM Plex Mono',monospace">border.control</span> on <span style="font-family:'IBM Plex Mono',monospace">surface</span> is 4.1:1 light and 3.8:1 dark — both clear of the 3:1 floor for interactive boundaries.</div>
+    </div>
+
+    <div style="height:1px;background:#D7DEDA"></div>
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#8A9490">02 · type</div>
+      <div style="font:600 24px/1.25 Inter,sans-serif;letter-spacing:-.015em;color:#1C2724">Type styles</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:48px">
+      <div style="display:flex;flex-direction:column;gap:22px;padding:28px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:16px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between"><div style="font:600 16px/1 Inter,sans-serif;color:#1C2724">Latin — Inter</div><div style="font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965">line-height 1.45–1.6</div></div>
+        <div style="display:flex;flex-direction:column;gap:18px">
+          <div><div style="font:600 36px/1.15 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Hamlaneh</div><div style="margin-top:5px;font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965">wordmark · 36 / 600 / −2%</div></div>
+          <div><div style="font:600 28px/1.2 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Two-step verification</div><div style="margin-top:5px;font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965">heading · 28 / 600 / −2%</div></div>
+          <div><div style="font:400 20px/1.4 Inter,sans-serif;color:#1C2724">Set a new password</div><div style="margin-top:5px;font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965">subhead · 20 / 400</div></div>
+          <div><div style="font:400 16px/1.5 Inter,sans-serif;color:#1C2724">a.jones@sanjab.coop</div><div style="margin-top:5px;font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965">input value · 16 / 400</div></div>
+          <div><div style="font:400 14px/1.6 Inter,sans-serif;color:#5C6965">Use the account provided by your administrator.</div><div style="margin-top:5px;font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965">body · 14 / 400 / 1.6</div></div>
+          <div><div style="font:500 12px/1.5 Inter,sans-serif;color:#5C6965">Password requirements</div><div style="margin-top:5px;font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965">caption · 12 / 500</div></div>
+        </div>
+      </div>
+      <div dir="rtl" style="display:flex;flex-direction:column;gap:22px;padding:28px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:16px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between"><div style="font:600 16px/1 Inter,sans-serif;color:#1C2724">Persian — Vazirmatn</div><div style="font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965">line-height 1.65–1.75</div></div>
+        <div style="display:flex;flex-direction:column;gap:18px">
+          <div><div style="font:600 36px/1.35 Vazirmatn,sans-serif;color:#1C2724">هم‌لانه</div><div style="margin-top:5px;font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965" dir="ltr">wordmark · 36 / 600 / 1.35 · no negative tracking</div></div>
+          <div><div style="font:600 28px/1.4 Vazirmatn,sans-serif;color:#1C2724">تأیید دومرحله‌ای</div><div style="margin-top:5px;font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965" dir="ltr">heading · 28 / 600 / 1.4</div></div>
+          <div><div style="font:400 20px/1.65 Vazirmatn,sans-serif;color:#1C2724">تعیین گذرواژهٔ جدید</div><div style="margin-top:5px;font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965" dir="ltr">subhead · 20 / 400 / 1.65</div></div>
+          <div><div style="font:400 16px/1.7 Vazirmatn,sans-serif;color:#1C2724">نام کاربری یا ایمیل</div><div style="margin-top:5px;font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965" dir="ltr">input value · 16 / 400 / 1.7</div></div>
+          <div><div style="font:400 14px/1.7 Vazirmatn,sans-serif;color:#5C6965">با حسابی که مدیر سامانه برای شما ساخته است وارد شوید.</div><div style="margin-top:5px;font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965" dir="ltr">body · 14 / 400 / 1.7</div></div>
+          <div><div style="font:500 12px/1.75 Vazirmatn,sans-serif;color:#5C6965">شرایط گذرواژه</div><div style="margin-top:5px;font:400 12px/1 'IBM Plex Mono',monospace;color:#5C6965" dir="ltr">caption · 12 / 500 / 1.75</div></div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:16px;padding:18px 22px;background:#EEF2EF;border-radius:12px">
+      <span style="font:500 13px/1.6 Inter,sans-serif;color:#1C2724">Mixed baseline check</span>
+      <span style="width:1px;height:22px;background:#D7DEDA"></span>
+      <span style="display:inline-flex;align-items:baseline;gap:10px"><span style="font:600 16px/1 Inter,sans-serif;color:#1C2724">EN</span><span style="font:600 16px/1 Vazirmatn,sans-serif;color:#1C2724">فا</span></span>
+      <span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Switcher labels are set at identical optical size; the Persian label uses Vazirmatn at line-height 1 with the same 44 px cell so baselines land together.</span>
+    </div>
+
+    <div style="height:1px;background:#D7DEDA"></div>
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#8A9490">03 · scales</div>
+      <div style="font:600 24px/1.25 Inter,sans-serif;letter-spacing:-.015em;color:#1C2724">Spacing, radius, border, elevation, icon, focus, motion</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:32px">
+      <div style="padding:24px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:16px;display:flex;flex-direction:column;gap:16px">
+        <div style="font:600 15px/1 Inter,sans-serif;color:#1C2724">Spacing · 4 px base</div>
+        <div style="display:flex;align-items:flex-end;gap:8px">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div style="width:4px;height:4px;background:#235C55"></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">4</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div style="width:8px;height:8px;background:#235C55"></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">8</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div style="width:12px;height:12px;background:#235C55"></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">12</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div style="width:16px;height:16px;background:#235C55"></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">16</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div style="width:24px;height:24px;background:#235C55"></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">24</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div style="width:32px;height:32px;background:#235C55"></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">32</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div style="width:48px;height:48px;background:#235C55"></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">48</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div style="width:64px;height:64px;background:#235C55"></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">64</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div style="width:96px;height:96px;background:#235C55"></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">96</span></div>
+        </div>
+      </div>
+      <div style="padding:24px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:16px;display:flex;flex-direction:column;gap:16px">
+        <div style="font:600 15px/1 Inter,sans-serif;color:#1C2724">Radius &amp; border</div>
+        <div style="display:flex;align-items:flex-end;gap:18px">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div style="width:56px;height:56px;background:#EEF2EF;border:1px solid #71807A;border-radius:8px"></div><span style="font:400 11px/1.4 'IBM Plex Mono',monospace;color:#5C6965;text-align:center">sm · 8<br/>toggle</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div style="width:56px;height:56px;background:#EEF2EF;border:1px solid #71807A;border-radius:10px"></div><span style="font:400 11px/1.4 'IBM Plex Mono',monospace;color:#5C6965;text-align:center">md · 10<br/>controls</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div style="width:56px;height:56px;background:#EEF2EF;border:1px solid #71807A;border-radius:12px"></div><span style="font:400 11px/1.4 'IBM Plex Mono',monospace;color:#5C6965;text-align:center">lg · 12<br/>panels</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div style="width:56px;height:56px;background:#EEF2EF;border:1px solid #71807A;border-radius:22px"></div><span style="font:400 11px/1.4 'IBM Plex Mono',monospace;color:#5C6965;text-align:center">xl · 22<br/>surfaces</span></div>
+        </div>
+        <div style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Border width is 1 px everywhere. Nothing is pill-shaped.</div>
+      </div>
+      <div style="padding:24px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:16px;display:flex;flex-direction:column;gap:16px">
+        <div style="font:600 15px/1 Inter,sans-serif;color:#1C2724">Elevation</div>
+        <div style="display:flex;align-items:center;gap:20px">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:10px"><div style="width:70px;height:52px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:12px"></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">base</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:10px"><div style="width:70px;height:52px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:12px;box-shadow:0 1px 2px rgba(28,39,36,.06)"></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">raised</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:10px"><div style="width:70px;height:52px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:12px;box-shadow:0 8px 24px rgba(28,39,36,.10)"></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">overlay</span></div>
+        </div>
+        <div style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">The auth region uses <span style="font-family:'IBM Plex Mono',monospace">base</span> only — the shell separates by tone and a 1 px rule, not by shadow.</div>
+      </div>
+      <div style="padding:24px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:16px;display:flex;flex-direction:column;gap:16px">
+        <div style="font:600 15px/1 Inter,sans-serif;color:#1C2724">Icons · Lucide, 1.75 stroke</div>
+        <div style="display:flex;align-items:center;gap:20px;color:#1C2724">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10.7 5.1a10.7 10.7 0 0 1 11.2 6.6 1 1 0 0 1 0 .6 10.7 10.7 0 0 1-1.4 2.5"/><path d="M14.1 14.2a3 3 0 0 1-4.3-4.3"/><path d="M17.5 17.5A10.8 10.8 0 0 1 2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 4.4-5.2"/><path d="m2 2 20 20"/></svg>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+        </div>
+        <div style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">eye · eye-off · circle-alert · triangle-alert · circle-check · info · arrow-left · check · loader-circle · moon. 20 px glyph in a 44 × 44 target. Only <span style="font-family:'IBM Plex Mono',monospace">arrow-left</span> mirrors in RTL.</div>
+      </div>
+      <div style="padding:24px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:16px;display:flex;flex-direction:column;gap:16px">
+        <div style="font:600 15px/1 Inter,sans-serif;color:#1C2724">Focus ring</div>
+        <div style="display:flex;align-items:center;gap:24px;padding-block:6px">
+          <div style="width:150px;height:48px;background:#FFFFFF;border:1px solid #2F7D72;border-radius:10px;box-shadow:0 0 0 3px rgba(47,125,114,.26)"></div>
+          <div style="height:48px;padding-inline:20px;display:flex;align-items:center;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 15px/1 Inter,sans-serif;box-shadow:0 0 0 3px #F7F6F2,0 0 0 6px rgba(47,125,114,.55)">Sign in</div>
+        </div>
+        <div style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">3 px ring in <span style="font-family:'IBM Plex Mono',monospace">focus</span>, 2 px offset against the canvas. Never removed, never clipped — the auth region has no <span style="font-family:'IBM Plex Mono',monospace">overflow:hidden</span> on the form column.</div>
+      </div>
+      <div style="padding:24px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:16px;display:flex;flex-direction:column;gap:14px">
+        <div style="font:600 15px/1 Inter,sans-serif;color:#1C2724">Motion</div>
+        <div style="display:flex;flex-direction:column;gap:9px;font:400 13px/1.55 Inter,sans-serif;color:#1C2724">
+          <div style="display:flex;justify-content:space-between;gap:16px"><span>press feedback</span><span style="font-family:'IBM Plex Mono',monospace;color:#5C6965">≤ 100 ms</span></div>
+          <div style="display:flex;justify-content:space-between;gap:16px"><span>state transition</span><span style="font-family:'IBM Plex Mono',monospace;color:#5C6965">150–220 ms · ease-out</span></div>
+          <div style="display:flex;justify-content:space-between;gap:16px"><span>banner enter</span><span style="font-family:'IBM Plex Mono',monospace;color:#5C6965">180 ms · opacity + 4 px translateY</span></div>
+          <div style="display:flex;justify-content:space-between;gap:16px"><span>ceiling</span><span style="font-family:'IBM Plex Mono',monospace;color:#5C6965">300 ms</span></div>
+        </div>
+        <div style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Opacity and transform only — never height or width. No error shake. <span style="font-family:'IBM Plex Mono',monospace">prefers-reduced-motion</span> drops to a 1-frame opacity swap. Animation never blocks input.</div>
+      </div>
+    </div>
+
+    <div style="height:1px;background:#D7DEDA"></div>
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#8A9490">04 · shell</div>
+      <div style="font:600 24px/1.25 Inter,sans-serif;letter-spacing:-.015em;color:#1C2724">AuthShell anatomy, identity, organization slot, switcher</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:48px">
+      <div style="padding:28px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:16px;display:flex;flex-direction:column;gap:18px">
+        <div style="font:600 15px/1 Inter,sans-serif;color:#1C2724">Geometry · 1440 × 900</div>
+        <div style="position:relative;width:720px;height:450px;display:flex;border:1px solid #71807A;border-radius:8px;overflow:hidden">
+          <div style="width:288px;flex:0 0 288px;background:#EEF2EF;border-inline-end:1px solid #D7DEDA;position:relative">
+            <div style="position:absolute;top:12px;inset-inline-start:12px;font:400 11px/1.4 'IBM Plex Mono',monospace;color:#5C6965">InstanceIdentity<br/>576 px · 40%</div>
+          </div>
+          <div style="flex:1;background:#F7F6F2;position:relative;display:flex;align-items:center;justify-content:center">
+            <div style="position:absolute;top:12px;inset-inline-start:12px;font:400 11px/1.4 'IBM Plex Mono',monospace;color:#5C6965">AuthForm region<br/>864 px · 60%</div>
+            <div style="position:absolute;top:13px;inset-inline-end:15px;width:70px;height:25px;border:1px dashed #71807A;border-radius:5px"></div>
+            <div style="width:212px;height:230px;margin-bottom:22px;border:1px dashed #235C55;border-radius:6px;display:flex;align-items:flex-end;justify-content:center;padding-bottom:8px">
+              <span style="font:400 11px/1.4 'IBM Plex Mono',monospace;color:#235C55;text-align:center">424 px column<br/>−44 px optical rise</span>
+            </div>
+          </div>
+        </div>
+        <div style="font:400 13px/1.65 Inter,sans-serif;color:#5C6965">Every state reuses this geometry: the 424 px column stays at the same optical position so switching states never moves the page. Padding is expressed as <span style="font-family:'IBM Plex Mono',monospace">padding-inline-start / -end</span>, never left/right, so the RTL mirror is the same component with <span style="font-family:'IBM Plex Mono',monospace">dir="rtl"</span>. The language switcher sits 26 px from the top and 30 px from the logical end edge.</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:24px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">OrganizationLogoSlot · present</div>
+            <div style="height:230px;padding:28px;background:#EEF2EF;border:1px solid #D7DEDA;border-radius:12px;display:flex;flex-direction:column;justify-content:center;gap:26px">
+              <div style="display:flex;align-items:center;gap:11px">
+                <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true"><rect x="2" y="2" width="17" height="17" rx="4" fill="#A65332"/><rect x="13" y="13" width="17" height="17" rx="4" fill="none" stroke="#235C55" stroke-width="2"/></svg>
+                <span style="font:500 14px/1.3 Inter,sans-serif;color:#1C2724">Sanjab Cooperative</span>
+              </div>
+              <div>
+                <div style="font:600 28px/1.15 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Hamlaneh</div>
+                <div style="margin-top:8px;font:400 13px/1.5 Inter,sans-serif;color:#5C6965">Self-hosted team communication</div>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">absent · slot collapses</div>
+            <div style="height:230px;padding:28px;background:#EEF2EF;border:1px solid #D7DEDA;border-radius:12px;display:flex;flex-direction:column;justify-content:center">
+              <div>
+                <div style="font:600 28px/1.15 Inter,sans-serif;letter-spacing:-.02em;color:#1C2724">Hamlaneh</div>
+                <div style="margin-top:8px;font:400 13px/1.5 Inter,sans-serif;color:#5C6965">Self-hosted team communication</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="font:400 13px/1.65 Inter,sans-serif;color:#5C6965">The slot renders nothing when the instance has no logo — no box, no reserved height, no residual gap; the block is simply absent from the flow. Mark height is capped at 32 px and width at 200 px with <span style="font-family:'IBM Plex Mono',monospace">object-fit:contain</span>, so a wide or square upload changes neither the panel nor the 424 px form column.</div>
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:24px">
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">LanguageSwitcher · EN</div>
+            <div style="display:inline-flex;align-items:center;border:1px solid #D7DEDA;border-radius:10px;background:#FFFFFF;padding:2px;gap:2px;width:max-content">
+              <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;background:#235C55;color:#FFFFFF;font:600 13px/1 Inter,sans-serif">EN</span>
+              <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;color:#5C6965;font:600 13px/1 Vazirmatn,sans-serif">فا</span>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">فا selected</div>
+            <div style="display:inline-flex;align-items:center;border:1px solid #D7DEDA;border-radius:10px;background:#FFFFFF;padding:2px;gap:2px;width:max-content">
+              <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;color:#5C6965;font:600 13px/1 Inter,sans-serif">EN</span>
+              <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;background:#235C55;color:#FFFFFF;font:600 13px/1 Vazirmatn,sans-serif">فا</span>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">keyboard focus</div>
+            <div style="display:inline-flex;align-items:center;border:1px solid #D7DEDA;border-radius:10px;background:#FFFFFF;padding:2px;gap:2px;width:max-content">
+              <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;background:#235C55;color:#FFFFFF;font:600 13px/1 Inter,sans-serif">EN</span>
+              <span style="display:flex;align-items:center;justify-content:center;min-width:56px;height:44px;border-radius:8px;color:#5C6965;font:600 13px/1 Vazirmatn,sans-serif;box-shadow:0 0 0 3px rgba(47,125,114,.45)">فا</span>
+            </div>
+          </div>
+        </div>
+        <div style="font:400 13px/1.65 Inter,sans-serif;color:#5C6965">Two options, no flags, no country names — a radio group with <span style="font-family:'IBM Plex Mono',monospace">aria-label="Language"</span>. Selection is carried by fill and weight, not colour alone. Switching applies immediately: <span style="font-family:'IBM Plex Mono',monospace">lang</span>, <span style="font-family:'IBM Plex Mono',monospace">dir</span>, the mirrored shell, and typed values are preserved.</div>
+      </div>
+    </div>
+
+    <div style="height:1px;background:#D7DEDA"></div>
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#8A9490">05 · fields</div>
+      <div style="font:600 24px/1.25 Inter,sans-serif;letter-spacing:-.015em;color:#1C2724">TextField and PasswordField</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:28px">
+      <div style="display:flex;flex-direction:column;gap:8px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">empty</span><label style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Username or email</label><div style="height:48px;box-sizing:border-box;padding-inline:14px;display:flex;align-items:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724"></div></div>
+      <div style="display:flex;flex-direction:column;gap:8px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">hover</span><label style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Username or email</label><div style="height:48px;box-sizing:border-box;padding-inline:14px;display:flex;align-items:center;background:#FFFFFF;border:1px solid #4C5A55;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724"></div></div>
+      <div style="display:flex;flex-direction:column;gap:8px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">focus</span><label style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Username or email</label><div style="height:48px;box-sizing:border-box;padding-inline:14px;display:flex;align-items:center;background:#FFFFFF;border:1px solid #2F7D72;border-radius:10px;box-shadow:0 0 0 3px rgba(47,125,114,.26);font:400 16px/1 Inter,sans-serif;color:#1C2724"><span style="width:1px;height:20px;background:#1C2724"></span></div></div>
+      <div style="display:flex;flex-direction:column;gap:8px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">filled</span><label style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Username or email</label><div style="height:48px;box-sizing:border-box;padding-inline:14px;display:flex;align-items:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724">a.jones</div></div>
+      <div style="display:flex;flex-direction:column;gap:8px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">autofill</span><label style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Username or email</label><div style="height:48px;box-sizing:border-box;padding-inline:14px;display:flex;align-items:center;background:#DDECE7;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724">a.jones@sanjab.coop</div><span style="font:400 12px/1.5 Inter,sans-serif;color:#5C6965">UA yellow is overridden with an inset shadow in <span style="font-family:'IBM Plex Mono',monospace">brand.soft</span>; text colour is forced to <span style="font-family:'IBM Plex Mono',monospace">text.primary</span>.</span></div>
+      <div style="display:flex;flex-direction:column;gap:8px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">error</span><label style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Email address</label><div style="height:48px;box-sizing:border-box;padding-inline:14px;display:flex;align-items:center;background:#FFFFFF;border:1px solid #B42318;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724">jones@</div><span style="display:flex;align-items:center;gap:6px;font:400 13px/1.5 Inter,sans-serif;color:#B42318"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>Enter a complete email address.</span></div>
+      <div style="display:flex;flex-direction:column;gap:8px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">disabled</span><label style="font:500 14px/1.4 Inter,sans-serif;color:#5C6965">Username or email</label><div style="height:48px;box-sizing:border-box;padding-inline:14px;display:flex;align-items:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#5C6965">a.jones</div><span style="font:400 12px/1.5 Inter,sans-serif;color:#5C6965">Dashed boundary carries the state without colour.</span></div>
+      <div style="display:flex;flex-direction:column;gap:8px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">read-only</span><label style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Email address</label><div style="height:48px;box-sizing:border-box;padding-inline:14px;display:flex;align-items:center;background:#EEF2EF;border:1px solid #D7DEDA;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724">a.jones@sanjab.coop</div><span style="font:400 12px/1.5 Inter,sans-serif;color:#5C6965">Solid subtle border, full-contrast value, still focusable.</span></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:28px">
+      <div style="display:flex;flex-direction:column;gap:8px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">concealed</span><label style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Password</label><div style="position:relative;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;display:flex;align-items:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724">••••••••••<span style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;color:#5C6965"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></svg></span></div><span style="font:400 12px/1.5 Inter,sans-serif;color:#5C6965">Accessible name: “Show password”.</span></div>
+      <div style="display:flex;flex-direction:column;gap:8px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">revealed</span><label style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Password</label><div style="position:relative;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;display:flex;align-items:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724">quiet-nest<span style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;color:#235C55"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10.7 5.1a10.7 10.7 0 0 1 11.2 6.6 1 1 0 0 1 0 .6 10.7 10.7 0 0 1-1.4 2.5"/><path d="M14.1 14.2a3 3 0 0 1-4.3-4.3"/><path d="M17.5 17.5A10.8 10.8 0 0 1 2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 4.4-5.2"/><path d="m2 2 20 20"/></svg></span></div><span style="font:400 12px/1.5 Inter,sans-serif;color:#5C6965">Name becomes “Hide password”; focus stays on the toggle.</span></div>
+      <div style="display:flex;flex-direction:column;gap:8px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">focused</span><label style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Password</label><div style="position:relative;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;display:flex;align-items:center;background:#FFFFFF;border:1px solid #2F7D72;border-radius:10px;box-shadow:0 0 0 3px rgba(47,125,114,.26);font:400 16px/1 Inter,sans-serif;color:#1C2724">••••••<span style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;color:#5C6965"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></svg></span></div></div>
+      <div style="display:flex;flex-direction:column;gap:8px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">error</span><label style="font:500 14px/1.4 Inter,sans-serif;color:#1C2724">Confirm new password</label><div style="position:relative;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;display:flex;align-items:center;background:#FFFFFF;border:1px solid #B42318;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#1C2724">••••••••<span style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;color:#5C6965"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></svg></span></div><span style="display:flex;align-items:center;gap:6px;font:400 13px/1.5 Inter,sans-serif;color:#B42318"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>Both passwords must match.</span></div>
+      <div style="display:flex;flex-direction:column;gap:8px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">disabled</span><label style="font:500 14px/1.4 Inter,sans-serif;color:#5C6965">Password</label><div style="position:relative;height:48px;box-sizing:border-box;padding-inline-start:14px;padding-inline-end:54px;display:flex;align-items:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px;font:400 16px/1 Inter,sans-serif;color:#5C6965">••••••••••<span style="position:absolute;inset-inline-end:2px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;color:#9BA8A2"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></svg></span></div><span style="font:400 12px/1.5 Inter,sans-serif;color:#5C6965">Toggle disabled too, and removed from the tab order.</span></div>
+    </div>
+
+    <div style="height:1px;background:#D7DEDA"></div>
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#8A9490">06 · actions</div>
+      <div style="font:600 24px/1.25 Inter,sans-serif;letter-spacing:-.015em;color:#1C2724">PrimaryButton, BackLink, NoticeBanner</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:24px">
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">default</span><div style="height:48px;display:flex;align-items:center;justify-content:center;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 16px/1 Inter,sans-serif">Sign in</div></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">hover</span><div style="height:48px;display:flex;align-items:center;justify-content:center;background:#194941;color:#FFFFFF;border-radius:10px;font:600 16px/1 Inter,sans-serif">Sign in</div></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">pressed</span><div style="height:48px;display:flex;align-items:center;justify-content:center;background:#123F39;color:#FFFFFF;border-radius:10px;font:600 16px/1 Inter,sans-serif">Sign in</div></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">keyboard focus</span><div style="height:48px;display:flex;align-items:center;justify-content:center;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 16px/1 Inter,sans-serif;box-shadow:0 0 0 3px #F7F6F2,0 0 0 6px rgba(47,125,114,.55)">Sign in</div></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">disabled</span><div style="height:48px;display:flex;align-items:center;justify-content:center;background:#E4E9E6;color:#5C6965;border:1px dashed #9BA8A2;box-sizing:border-box;border-radius:10px;font:600 16px/1 Inter,sans-serif">Sign in</div></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">loading</span><div style="height:48px;display:flex;align-items:center;justify-content:center;gap:9px;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 16px/1 Inter,sans-serif;opacity:.75"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="animation:hspin 900ms linear infinite"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>Signing in…</div></div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">stable loading widths</span>
+        <div style="display:flex;gap:12px">
+          <div style="width:190px;height:48px;display:flex;align-items:center;justify-content:center;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 15px/1 Inter,sans-serif">Verify</div>
+          <div style="width:190px;height:48px;display:flex;align-items:center;justify-content:center;gap:8px;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 15px/1 Inter,sans-serif;opacity:.75"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="animation:hspin 900ms linear infinite"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>Verifying…</div>
+        </div>
+        <span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965;max-width:400px">The button reserves the width of the longer of its two labels, so the busy label never resizes it. Loading labels: Signing in… · Verifying… · Setting password… · Sending… · Resetting…</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">links · default / hover / focus / disabled</span>
+        <div style="display:flex;align-items:center;gap:26px;height:44px">
+          <span style="font:500 14px/1.4 Inter,sans-serif;color:#235C55;text-decoration:underline;text-underline-offset:3px">Forgot password?</span>
+          <span style="font:500 14px/1.4 Inter,sans-serif;color:#123F39;text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:2px">Forgot password?</span>
+          <span style="font:500 14px/1.4 Inter,sans-serif;color:#235C55;text-decoration:underline;text-underline-offset:3px;border-radius:6px;box-shadow:0 0 0 3px rgba(47,125,114,.45)">Forgot password?</span>
+          <span style="font:500 14px/1.4 Inter,sans-serif;color:#8A9490;text-decoration:underline;text-underline-offset:3px">Forgot password?</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;height:44px;font:500 14px/1 Inter,sans-serif;color:#235C55"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>Back to sign in<span style="margin-inline-start:16px;font:400 13px/1.5 Inter,sans-serif;color:#5C6965">BackLink — the arrow is the one glyph that mirrors in RTL.</span></div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:24px">
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">error · role="alert"</span><div style="display:flex;gap:10px;padding:12px 14px;background:#FEF0ED;border:1px solid #B42318;border-radius:10px"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#B42318" stroke-width="1.75" stroke-linecap="round" style="flex:0 0 18px;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span style="font:400 14px/1.5 Inter,sans-serif;color:#B42318">Incorrect username or password.</span></div></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">warning · non-dismissable</span><div style="display:flex;gap:10px;padding:12px 14px;background:#FFF4D6;border:1px solid #8A5B12;border-radius:10px"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#8A5B12" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 18px;margin-top:1px"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><span style="font:400 14px/1.5 Inter,sans-serif;color:#7A4F0F">Too many attempts. Try again in a few minutes.</span></div></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">success · role="status"</span><div style="display:flex;gap:10px;padding:12px 14px;background:#E4F4EC;border:1px solid #237A57;border-radius:10px"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#237A57" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 18px;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><span style="font:400 14px/1.5 Inter,sans-serif;color:#1C2724">If that address exists, a reset link is on its way.</span></div></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">information</span><div style="display:flex;gap:10px;padding:12px 14px;background:#E7F3F6;border:1px solid #27657A;border-radius:10px"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#27657A" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 18px;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg><span style="font:400 14px/1.5 Inter,sans-serif;color:#1C2724">This reset link expires in one hour.</span></div></div>
+    </div>
+    <div style="font:400 13px/1.65 Inter,sans-serif;color:#5C6965;max-width:1100px">Every banner carries an icon plus text, so meaning never rests on colour. The sign-in form reserves the banner's 46 px block height (collapsed to zero opacity) so the error does not push the fields down when it appears.</div>
+
+    <div style="height:1px;background:#D7DEDA"></div>
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#8A9490">07 · code &amp; policy</div>
+      <div style="font:600 24px/1.25 Inter,sans-serif;letter-spacing:-.015em;color:#1C2724">OtpInput and PasswordRequirements</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:28px">
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">empty</span><div dir="ltr" style="display:flex;gap:6px"><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px"></div><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px"></div><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px"></div><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px"></div><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px"></div><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px"></div></div></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">focused · first cell</span><div dir="ltr" style="display:flex;gap:6px"><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #2F7D72;border-radius:10px;box-shadow:0 0 0 3px rgba(47,125,114,.26)"></div><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px"></div><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px"></div><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px"></div><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px"></div><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px"></div></div></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">partially filled</span><div dir="ltr" style="display:flex;gap:6px"><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">4</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">8</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">2</div><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #2F7D72;border-radius:10px;box-shadow:0 0 0 3px rgba(47,125,114,.26)"></div><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px"></div><div style="width:44px;height:52px;background:#FFFFFF;border:1px solid #71807A;border-radius:10px"></div></div></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">complete</span><div dir="ltr" style="display:flex;gap:6px"><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #235C55;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">4</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #235C55;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">8</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #235C55;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">2</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #235C55;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">1</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #235C55;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">9</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #235C55;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">5</div></div></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">error</span><div dir="ltr" style="display:flex;gap:6px"><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #B42318;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">4</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #B42318;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">8</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #B42318;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">2</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #B42318;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">1</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #B42318;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">9</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#FFFFFF;border:1px solid #B42318;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">5</div></div><span style="display:flex;align-items:center;gap:6px;font:400 13px/1.5 Inter,sans-serif;color:#B42318"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>That code is not valid. Check the app and try again.</span></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">disabled</span><div dir="ltr" style="display:flex;gap:6px"><div style="width:44px;height:52px;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px"></div><div style="width:44px;height:52px;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px"></div><div style="width:44px;height:52px;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px"></div><div style="width:44px;height:52px;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px"></div><div style="width:44px;height:52px;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px"></div><div style="width:44px;height:52px;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px"></div></div></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">paste · 6 digits at once</span><div dir="ltr" style="display:flex;gap:6px;position:relative"><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#DDECE7;border:1px solid #235C55;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">4</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#DDECE7;border:1px solid #235C55;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">8</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#DDECE7;border:1px solid #235C55;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">2</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#DDECE7;border:1px solid #235C55;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">1</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#DDECE7;border:1px solid #235C55;border-radius:10px;font:600 19px/1 Inter,sans-serif;color:#1C2724">9</div><div style="width:44px;height:52px;display:flex;align-items:center;justify-content:center;background:#DDECE7;border:1px solid #2F7D72;border-radius:10px;box-shadow:0 0 0 3px rgba(47,125,114,.26);font:600 19px/1 Inter,sans-serif;color:#1C2724">5</div></div><span style="font:400 12px/1.5 Inter,sans-serif;color:#5C6965">A paste into any cell distributes across all six and lands focus on the last one. Non-digits are dropped.</span></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span style="font:500 12px/1 'IBM Plex Mono',monospace;color:#5C6965">requirement items</span>
+        <div style="display:flex;flex-direction:column;gap:9px;padding:14px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:12px">
+          <div style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#71807A" stroke-width="1.75" style="flex:0 0 17px"><circle cx="12" cy="12" r="10"/></svg><span style="font:400 14px/1.5 Inter,sans-serif;color:#5C6965">Unmet — hollow ring, secondary text</span></div>
+          <div style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#237A57" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 17px"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><span style="font:400 14px/1.5 Inter,sans-serif;color:#1C2724">Met — check glyph, primary text</span></div>
+          <div style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#71807A" stroke-width="1.75" style="flex:0 0 17px"><circle cx="12" cy="12" r="10"/></svg><span style="font:400 14px/1.5 Inter,sans-serif;color:#5C6965">At least <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#A65332">{minimum}</span> characters</span></div>
+        </div>
+        <span style="font:400 12px/1.55 Inter,sans-serif;color:#5C6965">The minimum is instance policy, served with the form — 12 in these artboards is example data, not a product constant. Glyph shape, not colour, carries met/unmet.</span>
+      </div>
+    </div>
+
+    <div style="height:1px;background:#D7DEDA"></div>
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#8A9490">08 · async</div>
+      <div style="font:600 24px/1.25 Inter,sans-serif;letter-spacing:-.015em;color:#1C2724">Composed frames — every async form, busy and recoverable</div>
+      <div style="font:400 14px/1.6 Inter,sans-serif;color:#5C6965;max-width:820px">Each pair shows the submitting state (duplicate submission blocked, stable label) and the recoverable failure. Failure copy never enumerates accounts and always leaves an edit-and-retry path.</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:24px">
+      <div style="padding:20px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:14px;display:flex;flex-direction:column;gap:16px">
+        <div style="font:600 14px/1 Inter,sans-serif;color:#1C2724">Sign in</div>
+        <div style="display:flex;flex-direction:column;gap:9px"><div style="height:40px;padding-inline:12px;display:flex;align-items:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px;font:400 14px/1 Inter,sans-serif;color:#5C6965">a.jones</div><div style="height:40px;padding-inline:12px;display:flex;align-items:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px;font:400 14px/1 Inter,sans-serif;color:#5C6965">••••••••</div><div style="height:42px;display:flex;align-items:center;justify-content:center;gap:8px;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 14px/1 Inter,sans-serif;opacity:.75"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="animation:hspin 900ms linear infinite"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>Signing in…</div></div>
+        <div style="height:1px;background:#EEF2EF"></div>
+        <div style="display:flex;flex-direction:column;gap:9px"><div style="display:flex;gap:8px;padding:10px 11px;background:#FEF0ED;border:1px solid #B42318;border-radius:10px"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#B42318" stroke-width="1.75" stroke-linecap="round" style="flex:0 0 15px;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span style="font:400 13px/1.45 Inter,sans-serif;color:#B42318">Incorrect username or password.</span></div><div style="height:40px;padding-inline:12px;display:flex;align-items:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 14px/1 Inter,sans-serif;color:#1C2724">a.jones</div><div style="height:42px;display:flex;align-items:center;justify-content:center;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 14px/1 Inter,sans-serif">Sign in</div><span style="font:400 12px/1.5 Inter,sans-serif;color:#5C6965">Identifier preserved; focus moves to the alert.</span></div>
+      </div>
+      <div style="padding:20px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:14px;display:flex;flex-direction:column;gap:16px">
+        <div style="font:600 14px/1 Inter,sans-serif;color:#1C2724">TOTP verification</div>
+        <div style="display:flex;flex-direction:column;gap:9px"><div dir="ltr" style="display:flex;gap:4px"><div style="flex:1;height:40px;display:flex;align-items:center;justify-content:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:8px;font:600 14px/1 Inter,sans-serif;color:#5C6965">4</div><div style="flex:1;height:40px;display:flex;align-items:center;justify-content:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:8px;font:600 14px/1 Inter,sans-serif;color:#5C6965">8</div><div style="flex:1;height:40px;display:flex;align-items:center;justify-content:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:8px;font:600 14px/1 Inter,sans-serif;color:#5C6965">2</div><div style="flex:1;height:40px;display:flex;align-items:center;justify-content:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:8px;font:600 14px/1 Inter,sans-serif;color:#5C6965">1</div><div style="flex:1;height:40px;display:flex;align-items:center;justify-content:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:8px;font:600 14px/1 Inter,sans-serif;color:#5C6965">9</div><div style="flex:1;height:40px;display:flex;align-items:center;justify-content:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:8px;font:600 14px/1 Inter,sans-serif;color:#5C6965">5</div></div><div style="height:42px;display:flex;align-items:center;justify-content:center;gap:8px;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 14px/1 Inter,sans-serif;opacity:.75"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="animation:hspin 900ms linear infinite"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>Verifying…</div></div>
+        <div style="height:1px;background:#EEF2EF"></div>
+        <div style="display:flex;flex-direction:column;gap:9px"><div style="display:flex;gap:8px;padding:10px 11px;background:#FEF0ED;border:1px solid #B42318;border-radius:10px"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#B42318" stroke-width="1.75" stroke-linecap="round" style="flex:0 0 15px;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span style="font:400 13px/1.45 Inter,sans-serif;color:#B42318">That code is not valid. Check the app and try again.</span></div><div dir="ltr" style="display:flex;gap:4px"><div style="flex:1;height:40px;background:#FFFFFF;border:1px solid #2F7D72;border-radius:8px;box-shadow:0 0 0 3px rgba(47,125,114,.26)"></div><div style="flex:1;height:40px;background:#FFFFFF;border:1px solid #71807A;border-radius:8px"></div><div style="flex:1;height:40px;background:#FFFFFF;border:1px solid #71807A;border-radius:8px"></div><div style="flex:1;height:40px;background:#FFFFFF;border:1px solid #71807A;border-radius:8px"></div><div style="flex:1;height:40px;background:#FFFFFF;border:1px solid #71807A;border-radius:8px"></div><div style="flex:1;height:40px;background:#FFFFFF;border:1px solid #71807A;border-radius:8px"></div></div><span style="font:400 12px/1.5 Inter,sans-serif;color:#5C6965">Cells clear, focus returns to the first. No resend — codes live in the app.</span></div>
+      </div>
+      <div style="padding:20px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:14px;display:flex;flex-direction:column;gap:16px">
+        <div style="font:600 14px/1 Inter,sans-serif;color:#1C2724">Forced password change</div>
+        <div style="display:flex;flex-direction:column;gap:9px"><div style="height:40px;padding-inline:12px;display:flex;align-items:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px;font:400 14px/1 Inter,sans-serif;color:#5C6965">••••••••••••</div><div style="height:40px;padding-inline:12px;display:flex;align-items:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px;font:400 14px/1 Inter,sans-serif;color:#5C6965">••••••••••••</div><div style="height:42px;display:flex;align-items:center;justify-content:center;gap:8px;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 13px/1 Inter,sans-serif;opacity:.75"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="animation:hspin 900ms linear infinite"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>Setting password…</div></div>
+        <div style="height:1px;background:#EEF2EF"></div>
+        <div style="display:flex;flex-direction:column;gap:9px"><div style="height:40px;padding-inline:12px;display:flex;align-items:center;background:#FFFFFF;border:1px solid #B42318;border-radius:10px;font:400 14px/1 Inter,sans-serif;color:#1C2724">••••••••••••</div><span style="display:flex;align-items:center;gap:6px;font:400 12px/1.45 Inter,sans-serif;color:#B42318"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>Both passwords must match.</span><div style="display:flex;align-items:center;gap:8px"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#71807A" stroke-width="1.75"><circle cx="12" cy="12" r="10"/></svg><span style="font:400 12px/1.45 Inter,sans-serif;color:#5C6965">At least 12 characters</span></div><div style="height:42px;display:flex;align-items:center;justify-content:center;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 13px/1 Inter,sans-serif">Set password and continue</div></div>
+      </div>
+      <div style="padding:20px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:14px;display:flex;flex-direction:column;gap:16px">
+        <div style="font:600 14px/1 Inter,sans-serif;color:#1C2724">Reset request</div>
+        <div style="display:flex;flex-direction:column;gap:9px"><div style="height:40px;padding-inline:12px;display:flex;align-items:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px;font:400 14px/1 Inter,sans-serif;color:#5C6965">a.jones@sanjab.coop</div><div style="height:42px;display:flex;align-items:center;justify-content:center;gap:8px;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 14px/1 Inter,sans-serif;opacity:.75"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="animation:hspin 900ms linear infinite"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>Sending…</div></div>
+        <div style="height:1px;background:#EEF2EF"></div>
+        <div style="display:flex;flex-direction:column;gap:9px"><div style="display:flex;gap:8px;padding:10px 11px;background:#FEF0ED;border:1px solid #B42318;border-radius:10px"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#B42318" stroke-width="1.75" stroke-linecap="round" style="flex:0 0 15px;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span style="font:400 13px/1.45 Inter,sans-serif;color:#B42318">We could not reach the server. Try again.</span></div><div style="height:40px;padding-inline:12px;display:flex;align-items:center;background:#FFFFFF;border:1px solid #71807A;border-radius:10px;font:400 14px/1 Inter,sans-serif;color:#1C2724">a.jones@sanjab.coop</div><div style="height:42px;display:flex;align-items:center;justify-content:center;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 14px/1 Inter,sans-serif">Send reset link</div><span style="font:400 12px/1.5 Inter,sans-serif;color:#5C6965">Transport failure is distinguishable from the enumeration-safe success.</span></div>
+      </div>
+      <div style="padding:20px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:14px;display:flex;flex-direction:column;gap:16px">
+        <div style="font:600 14px/1 Inter,sans-serif;color:#1C2724">New password from link</div>
+        <div style="display:flex;flex-direction:column;gap:9px"><div style="height:40px;padding-inline:12px;display:flex;align-items:center;background:#EEF2EF;border:1px dashed #9BA8A2;border-radius:10px;font:400 14px/1 Inter,sans-serif;color:#5C6965">••••••••••••</div><div style="height:42px;display:flex;align-items:center;justify-content:center;gap:8px;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 14px/1 Inter,sans-serif;opacity:.75"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="animation:hspin 900ms linear infinite"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>Resetting…</div></div>
+        <div style="height:1px;background:#EEF2EF"></div>
+        <div style="display:flex;flex-direction:column;gap:11px"><div style="display:flex;gap:8px;padding:10px 11px;background:#FFF4D6;border:1px solid #8A5B12;border-radius:10px"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#8A5B12" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 15px;margin-top:1px"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><span style="font:400 13px/1.45 Inter,sans-serif;color:#7A4F0F">This link has expired.</span></div><div style="height:42px;display:flex;align-items:center;justify-content:center;background:#235C55;color:#FFFFFF;border-radius:10px;font:600 14px/1 Inter,sans-serif">Request a new link</div><span style="font:400 12px/1.5 Inter,sans-serif;color:#5C6965">Invalid or expired link replaces the form rather than leaving a dead one — never a blank screen.</span></div>
+      </div>
+    </div>
+
+    <div style="height:1px;background:#D7DEDA"></div>
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#8A9490">09 · behaviour</div>
+      <div style="font:600 24px/1.25 Inter,sans-serif;letter-spacing:-.015em;color:#1C2724">Interaction, accessibility, responsive</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:32px">
+      <div style="display:flex;flex-direction:column;gap:14px;padding:24px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:14px">
+        <div style="font:600 15px/1 Inter,sans-serif;color:#1C2724">Forms</div>
+        <div style="display:flex;flex-direction:column;gap:10px;font:400 13px/1.6 Inter,sans-serif;color:#1C2724">
+          <div>Enter submits the active form.</div>
+          <div>Validate on blur and again on submit — never on every keystroke.</div>
+          <div>Submission disables the control and blocks duplicate requests; the label swaps to the stable busy string.</div>
+          <div>After an invalid submission focus moves to the first invalid field, or to the alert when the failure is form-level.</div>
+          <div>The identifier survives a failed sign-in; the password field clears.</div>
+          <div>Credential errors are announced through <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">role="alert"</span>; the reset confirmation through <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">role="status"</span>, which does not steal focus.</div>
+          <div>Autocomplete: identifier <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">username</span> · sign-in password <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">current-password</span> · new passwords <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">new-password</span> · reset email <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">email</span> · code <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">one-time-code</span>.</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;padding:24px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:14px">
+        <div style="font:600 15px/1 Inter,sans-serif;color:#1C2724">Accessibility</div>
+        <div style="display:flex;flex-direction:column;gap:10px;font:400 13px/1.6 Inter,sans-serif;color:#1C2724">
+          <div>Normal text ≥ 4.5:1, large text and control boundaries ≥ 3:1, both themes verified separately.</div>
+          <div>Visible labels always present, including on filled fields; placeholders are examples, never labels.</div>
+          <div>Every target is at least 44 × 44 px — above the 40 px product floor.</div>
+          <div>Tab order equals visual reading order in LTR and RTL alike; the RTL DOM order is the RTL reading order.</div>
+          <div>Icon-only controls carry accessible names and tooltips; the password toggle's name flips between Show and Hide while keeping focus.</div>
+          <div>Error, warning, success, selected and disabled are all carried by glyph, weight or border style as well as colour.</div>
+          <div>Survives 200% zoom and text scaling: the column reflows, the page scrolls, no control shrinks below its accessible size, no focus ring is clipped.</div>
+          <div>Language switching stays available before authentication and never uses flags.</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:16px;padding:24px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:14px">
+        <div style="font:600 15px/1 Inter,sans-serif;color:#1C2724">Responsive</div>
+        <div style="display:flex;align-items:flex-end;gap:14px">
+          <div style="display:flex;flex-direction:column;gap:7px;align-items:center"><div style="width:132px;height:83px;display:flex;border:1px solid #71807A;border-radius:5px;overflow:hidden"><div style="width:53px;background:#EEF2EF;border-inline-end:1px solid #D7DEDA"></div><div style="flex:1;background:#F7F6F2;display:flex;align-items:center;justify-content:center"><div style="width:40px;height:44px;border:1px dashed #235C55;border-radius:3px"></div></div></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">1440</span></div>
+          <div style="display:flex;flex-direction:column;gap:7px;align-items:center"><div style="width:100px;height:78px;display:flex;border:1px solid #71807A;border-radius:5px;overflow:hidden"><div style="width:36px;background:#EEF2EF;border-inline-end:1px solid #D7DEDA"></div><div style="flex:1;background:#F7F6F2;display:flex;align-items:center;justify-content:center"><div style="width:38px;height:42px;border:1px dashed #235C55;border-radius:3px"></div></div></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">1024</span></div>
+          <div style="display:flex;flex-direction:column;gap:7px;align-items:center"><div style="width:70px;height:88px;display:flex;flex-direction:column;border:1px solid #71807A;border-radius:5px;overflow:hidden"><div style="height:22px;background:#EEF2EF;border-bottom:1px solid #D7DEDA"></div><div style="flex:1;background:#F7F6F2;display:flex;align-items:center;justify-content:center"><div style="width:48px;height:44px;border:1px dashed #235C55;border-radius:3px"></div></div></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">768</span></div>
+          <div style="display:flex;flex-direction:column;gap:7px;align-items:center"><div style="width:44px;height:92px;display:flex;flex-direction:column;border:1px solid #71807A;border-radius:5px;overflow:hidden"><div style="height:18px;background:#EEF2EF;border-bottom:1px solid #D7DEDA"></div><div style="flex:1;background:#F7F6F2;padding:5px;display:flex;align-items:center"><div style="width:100%;height:52px;border:1px dashed #235C55;border-radius:3px"></div></div></div><span style="font:400 11px/1 'IBM Plex Mono',monospace;color:#5C6965">375</span></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;font:400 13px/1.6 Inter,sans-serif;color:#1C2724">
+          <div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">≥ 1280</span> — shell as drawn, 40 / 60 split.</div>
+          <div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">1024</span> — identity panel narrows to 34%, form column holds 424 px.</div>
+          <div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">&lt; 900</span> — panel collapses into a brand header: wordmark, tagline, organization mark if present, switcher on the same row. Brand context is never dropped entirely.</div>
+          <div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px">375</span> — 24 px inline gutters, full-width form, <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">min-height:100dvh</span> with safe-area top and bottom padding. No horizontal scroll; the page scrolls when the keyboard opens rather than compressing controls. Tauri window chrome never overlaps the switcher.</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="height:1px;background:#D7DEDA"></div>
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#8A9490">10 · localization</div>
+      <div style="font:600 24px/1.25 Inter,sans-serif;letter-spacing:-.015em;color:#1C2724">Persian reference for the remaining states</div>
+      <div style="font:400 14px/1.6 Inter,sans-serif;color:#5C6965;max-width:820px">Live text, half-spaces and Persian punctuation preserved, so the RTL counterparts of every state can be produced without guessing.</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 48px;padding:24px 28px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:14px">
+      <div style="display:flex;flex-direction:column">
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Incorrect username or password.</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">نام کاربری یا گذرواژه نادرست است.</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Too many attempts. Try again in a few minutes.</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">تلاش‌های زیادی انجام شده است. چند دقیقهٔ دیگر دوباره امتحان کنید.</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Two-step verification</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">تأیید دومرحله‌ای</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Enter the code from your authenticator app</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">کد برنامهٔ احراز هویت را وارد کنید.</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">One-time code</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">کد یک‌بارمصرف</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Verify</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">تأیید</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Back</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">بازگشت</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Set a new password</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">تعیین گذرواژهٔ جدید</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Your temporary password must be replaced before you continue.</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">گذرواژهٔ موقت شما باید پیش از ادامه تغییر کند.</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">New password</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">گذرواژهٔ جدید</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Confirm new password</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">تکرار گذرواژهٔ جدید</span></div>
+      </div>
+      <div style="display:flex;flex-direction:column">
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Password requirements</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">شرایط گذرواژه</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">At least {minimum} characters</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">دست‌کم {minimum} نویسه</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Set password and continue</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">تعیین گذرواژه و ادامه</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Reset your password</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">بازنشانی گذرواژه</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Email address</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">نشانی ایمیل</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Send reset link</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">ارسال پیوند بازنشانی</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Back to sign in</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">بازگشت به صفحهٔ ورود</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">If that address exists, a reset link is on its way.</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">اگر این نشانی وجود داشته باشد، پیوند بازنشانی برای آن ارسال می‌شود.</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Create a new password</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">ساخت گذرواژهٔ جدید</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px;border-bottom:1px solid #EEF2EF"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Reset password</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">بازنشانی گذرواژه</span></div>
+        <div style="display:flex;justify-content:space-between;gap:24px;padding-block:9px"><span style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Request a new link</span><span style="font:400 14px/1.75 Vazirmatn,sans-serif;color:#1C2724;text-align:end" dir="rtl">درخواست پیوند جدید</span></div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;padding:22px 26px;background:#EEF2EF;border-radius:12px;font:400 13px/1.65 Inter,sans-serif;color:#1C2724">
+      <div style="font:600 14px/1 Inter,sans-serif;color:#1C2724">Bidi rules</div>
+      <div>Email addresses, URLs and one-time codes are isolated LTR runs inside the RTL page; the identifier field is <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">dir="auto"</span> because it accepts either. Latin characters, digits and punctuation are never reversed. The OTP row keeps <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">dir="ltr"</span> so the first digit typed is always the leftmost cell. Only <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">arrow-left</span> mirrors; eye, eye-off, alert, check and info do not.</div>
+    </div>
+
+    <div style="height:1px;background:#D7DEDA"></div>
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="font:500 11px/1 'IBM Plex Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#8A9490">11 · handoff</div>
+      <div style="font:600 24px/1.25 Inter,sans-serif;letter-spacing:-.015em;color:#1C2724">Components, fonts, icons</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:32px">
+      <div style="display:flex;flex-direction:column;gap:14px;padding:24px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:14px">
+        <div style="font:600 15px/1 Inter,sans-serif;color:#1C2724">Component tree</div>
+        <div style="font:400 13px/1.9 'IBM Plex Mono',monospace;color:#1C2724">AuthShell<br/>├ InstanceIdentity<br/>│ ├ OrganizationLogoSlot<br/>│ └ ProductWordmark<br/>├ LanguageSwitcher<br/>└ AuthForm<br/>&nbsp;&nbsp;├ NoticeBanner<br/>&nbsp;&nbsp;├ TextField<br/>&nbsp;&nbsp;├ PasswordField<br/>&nbsp;&nbsp;├ OtpInput<br/>&nbsp;&nbsp;├ PasswordRequirements<br/>&nbsp;&nbsp;├ PrimaryButton<br/>&nbsp;&nbsp;└ BackLink</div>
+        <div style="font:400 13px/1.6 Inter,sans-serif;color:#5C6965">Every state on this canvas is a variant of these thirteen — no detached one-offs. Token names map straight to CSS variables and Tailwind 4 <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">@theme</span> keys.</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;padding:24px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:14px">
+        <div style="font:600 15px/1 Inter,sans-serif;color:#1C2724">Fonts — self-hosted, no CDN</div>
+        <div style="display:flex;flex-direction:column;gap:10px;font:400 13px/1.6 Inter,sans-serif;color:#1C2724">
+          <div><span style="font-weight:500">Inter</span> — rsms/inter, SIL Open Font License 1.1. Ship <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">InterVariable.woff2</span> (weight axis 100–900) plus the static 400/500/600 as fallback; subset to <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">latin + latin-ext</span>.</div>
+          <div><span style="font-weight:500">Vazirmatn</span> — rastikerdar/vazirmatn, SIL Open Font License 1.1. Ship <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">Vazirmatn[wght].woff2</span> plus static 400/500/600; keep <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">arabic</span> + Persian digits in the subset.</div>
+          <div>Both live in <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">webapp/public/fonts/</span>, declared with <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">@font-face</span> and <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">font-display:swap</span>. Weight mapping: body 400, labels and links 500, headings and buttons 600, 700 unused in this scope.</div>
+          <div>Fallback stack: <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">system-ui, -apple-system, "Segoe UI", sans-serif</span>. The canvas above renders from web fonts for review only.</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;padding:24px;background:#FFFFFF;border:1px solid #D7DEDA;border-radius:14px">
+        <div style="font:600 15px/1 Inter,sans-serif;color:#1C2724">Icons</div>
+        <div style="display:flex;flex-direction:column;gap:10px;font:400 13px/1.6 Inter,sans-serif;color:#1C2724">
+          <div>Lucide, ISC license. Ten glyphs in this scope: eye, eye-off, circle-alert, triangle-alert, circle-check, circle, info, arrow-left, check, loader-circle (plus moon for the theme control if a theme toggle ships here later).</div>
+          <div>Inline SVG only — no icon font, no sprite fetch. If <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">lucide-react</span> is not taken as a dependency, the paths as drawn on this sheet are the source of truth; they are plain <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">stroke</span> paths on a 24 × 24 viewBox at 1.75 stroke width, <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">currentColor</span>, round caps and joins.</div>
+          <div>Pin one exact version in <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">package.json</span> and record it here when the dependency lands; the drawn paths track Lucide 0.4x.</div>
+          <div>Decorative art — the nested-arc motif — is an editable inline SVG, <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">aria-hidden</span>, and removable: delete it and the panel still reads as finished.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- reference · current implementation -->
+<div style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;align-items:baseline;gap:14px">
+    <div style="font:500 13px/1 'IBM Plex Mono',monospace;letter-spacing:.06em;color:#1C2724">reference · current-implementation</div>
+    <div style="font:400 12px/1 Inter,sans-serif;color:#7A7E7A">what ships today · webapp/src/screens/LoginScreen.tsx + App.tsx, unstyled by design while STATUS.md reads PENDING</div>
+  </div>
+  <div dir="ltr" style="width:1440px;box-sizing:border-box;border:1px solid #C8C5BE;background:#FFFFFF;padding:24px">
+    <div style="max-inline-size:40rem;margin-inline:auto;padding-inline:16px;padding-block:16px;font-family:'Times New Roman',Times,serif;color:#000000">
+      <h1 style="font:bold 32px/1.15 'Times New Roman',Times,serif;margin:21px 0">Hamlaneh</h1>
+      <p style="font:16px/1.2 'Times New Roman',Times,serif;margin:16px 0">Self-hosted team communication</p>
+      <label style="font:16px/1.2 'Times New Roman',Times,serif">Language<select style="font:13.33px Arial,sans-serif;margin-inline-start:2px"><option>English</option></select></label>
+      <h2 style="font:bold 24px/1.15 'Times New Roman',Times,serif;margin:20px 0">Sign in</h2>
+      <p style="font:16px/1.2 'Times New Roman',Times,serif;margin:16px 0">Authentication is not available yet.</p>
+      <div style="margin-bottom:2px"><label style="font:16px/1.2 'Times New Roman',Times,serif">Username</label><input type="text" style="font:13.33px Arial,sans-serif;padding:1px 2px;border:2px inset #767676;margin-inline-start:4px"/></div>
+      <div style="margin-bottom:8px"><label style="font:16px/1.2 'Times New Roman',Times,serif">Password</label><input type="password" style="font:13.33px Arial,sans-serif;padding:1px 2px;border:2px inset #767676;margin-inline-start:4px"/></div>
+      <button style="font:13.33px Arial,sans-serif;padding:1px 6px;border:2px outset #767676;background:#EFEFEF">Sign in</button>
+    </div>
+  </div>
+  <div style="font:400 13px/1.65 Inter,sans-serif;color:#4E5450;max-width:900px">Recreated from the repository as the before-state. The live screen has no styling at all — one <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">#root</span> column at <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">max-inline-size:40rem</span>, browser default type and controls, a <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">&lt;select&gt;</span> language switcher, a single <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">Username</span> field, and copy that still says authentication is unavailable. Three deltas the implementation will need: the identifier label becomes <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">Username or email</span>, the Phase 0 notice is replaced by the administrator helper line, and the <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">&lt;select&gt;</span> becomes the two-option switcher.</div>
+</div>
+</div></x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1600,&quot;height&quot;:1100}}">
+const LIGHT = {canvas:'#F7F6F2',surface:'#FFFFFF',subtle:'#EEF2EF',text:'#1C2724',text2:'#5C6965',bsub:'#D7DEDA',bctl:'#71807A',brand:'#235C55',bhover:'#194941',onbrand:'#FFFFFF',bsoft:'#DDECE7',danger:'#B42318',dangersoft:'#FEF0ED',focus:'#2F7D72',motif:'#C7D1CC'};
+const DARK = {canvas:'#111615',surface:'#18201E',subtle:'#1D2924',text:'#F2F5F4',text2:'#ABB7B3',bsub:'#34413D',bctl:'#6C7C76',brand:'#81C9BD',bhover:'#9ADACF',onbrand:'#0B2722',bsoft:'#193A34',danger:'#FFB4AB',dangersoft:'#3B1D1B',focus:'#9ADACF',motif:'#26332F'};
+const EN = {brand:'Hamlaneh',tagline:'Self-hosted team communication',signIn:'Sign in',helper:'Use the account provided by your administrator.',idLabel:'Username or email',pwLabel:'Password',forgot:'Forgot password?',showPw:'Show password',hidePw:'Hide password',submit:'Sign in',submitting:'Signing in…',badCreds:'Incorrect username or password.',totpTitle:'Two-step verification',totpHelp:'Enter the code from your authenticator app',otpLabel:'One-time code',verify:'Verify',verifying:'Verifying…',back:'Back',verified:'Verified. This is where the workspace would load.',restart:'Start over'};
+const FA = {brand:'هم‌لانه',tagline:'ارتباط تیمی خودمیزبان',signIn:'ورود',helper:'با حسابی که مدیر سامانه برای شما ساخته است وارد شوید.',idLabel:'نام کاربری یا ایمیل',pwLabel:'گذرواژه',forgot:'گذرواژه را فراموش کرده‌اید؟',showPw:'نمایش گذرواژه',hidePw:'پنهان کردن گذرواژه',submit:'ورود',submitting:'در حال ورود…',badCreds:'نام کاربری یا گذرواژه نادرست است.',totpTitle:'تأیید دومرحله‌ای',totpHelp:'کد برنامهٔ احراز هویت را وارد کنید.',otpLabel:'کد یک‌بارمصرف',verify:'تأیید',verifying:'در حال تأیید…',back:'بازگشت',verified:'تأیید شد. فضای کاری از این‌جا بارگذاری می‌شود.',restart:'شروع دوباره'};
+
+class Component extends DCLogic {
+  state = {lang:'en',theme:'light',step:'login',id:'a.jones',pw:'',show:false,loading:false,err:false,attempts:0,code:['','','','','','']};
+
+  colors(){ return this.state.theme === 'dark' ? DARK : LIGHT; }
+  strings(){ return this.state.lang === 'fa' ? FA : EN; }
+  font(){ return this.state.lang === 'fa' ? "Vazirmatn, Inter, sans-serif" : "Inter, system-ui, sans-serif"; }
+
+  icon(paths, size){
+    const s = size || 19;
+    return React.createElement('svg', {viewBox:'0 0 24 24', width:s, height:s, fill:'none', stroke:'currentColor', strokeWidth:1.75, strokeLinecap:'round', strokeLinejoin:'round'},
+      paths.map((d,i)=>React.createElement('path',{key:i,d:d})));
+  }
+
+  submit = (e) => {
+    e.preventDefault();
+    if (this.state.loading) return;
+    this.setState({loading:true, err:false});
+    setTimeout(()=>{
+      const first = this.state.attempts === 0;
+      this.setState({loading:false, attempts:this.state.attempts+1, err:first, step: first ? 'login' : 'totp', pw: first ? this.state.pw : ''});
+    }, 850);
+  };
+
+  verify = (e) => {
+    e.preventDefault();
+    if (this.state.loading) return;
+    this.setState({loading:true});
+    setTimeout(()=>this.setState({loading:false, step:'done'}), 850);
+  };
+
+  focusCell(i){
+    const el = document.getElementById('ls-otp-' + i);
+    if (el) el.focus();
+  }
+
+  renderVals(){
+    const c = this.colors(), s = this.strings(), st = this.state;
+    const cells = st.code.map((v,i)=>({
+      v: v,
+      id: 'ls-otp-' + i,
+      onInput: (e)=>{
+        const d = (e.target.value||'').replace(/\D/g,'').slice(-1);
+        const next = st.code.slice(); next[i] = d;
+        this.setState({code:next});
+        if (d && i < 5) setTimeout(()=>this.focusCell(i+1), 0);
+      },
+      onKey: (e)=>{
+        if (e.key === 'Backspace' && !st.code[i] && i > 0) this.focusCell(i-1);
+      },
+      onPaste: (e)=>{
+        e.preventDefault();
+        const digits = (e.clipboardData.getData('text')||'').replace(/\D/g,'').slice(0,6).split('');
+        const next = ['','','','','',''];
+        digits.forEach((d,k)=>next[k]=d);
+        this.setState({code:next});
+        setTimeout(()=>this.focusCell(Math.min(digits.length,5)), 0);
+      }
+    }));
+    const seg = (on)=>({display:'flex',alignItems:'center',justifyContent:'center',minWidth:'56px',height:'44px',border:0,borderRadius:'8px',cursor:'pointer',
+      background: on ? c.brand : 'transparent', color: on ? c.onbrand : c.text2, font:'600 13px/1 ' + this.font()});
+    return {
+      s: s,
+      dir: st.lang === 'fa' ? 'rtl' : 'ltr',
+      shellStyle: {display:'flex',width:'1440px',height:'900px',boxSizing:'border-box',background:c.canvas,
+        '--c-canvas':c.canvas,'--c-surface':c.surface,'--c-subtle':c.subtle,'--c-text':c.text,'--c-text2':c.text2,
+        '--c-bsub':c.bsub,'--c-bctl':c.bctl,'--c-brand':c.brand,'--c-onbrand':c.onbrand,'--c-bsoft':c.bsoft,
+        '--c-danger':c.danger,'--c-dangersoft':c.dangersoft,'--c-motif':c.motif,'--f-ui':this.font()},
+      isLogin: st.step === 'login',
+      isTotp: st.step === 'totp',
+      isDone: st.step === 'done',
+      err: st.err,
+      idVal: st.id,
+      pwVal: st.pw,
+      pwType: st.show ? 'text' : 'password',
+      onId: (e)=>this.setState({id:e.target.value}),
+      onPw: (e)=>this.setState({pw:e.target.value}),
+      toggleShow: ()=>this.setState({show:!st.show}),
+      eyeIcon: st.show
+        ? this.icon(['M10.7 5.1a10.7 10.7 0 0 1 11.2 6.6 1 1 0 0 1 0 .6 10.7 10.7 0 0 1-1.4 2.5','M14.1 14.2a3 3 0 0 1-4.3-4.3','M17.5 17.5A10.8 10.8 0 0 1 2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 4.4-5.2','m2 2 20 20'])
+        : React.createElement('svg',{viewBox:'0 0 24 24',width:19,height:19,fill:'none',stroke:'currentColor',strokeWidth:1.75,strokeLinecap:'round'},
+            React.createElement('path',{key:'a',d:'M2.1 12.3a1 1 0 0 1 0-.6 10.8 10.8 0 0 1 19.8 0 1 1 0 0 1 0 .6 10.8 10.8 0 0 1-19.8 0'}),
+            React.createElement('circle',{key:'b',cx:12,cy:12,r:3})),
+      backIcon: this.icon(st.lang === 'fa' ? ['m12 5 7 7-7 7','M5 12h14'] : ['m12 19-7-7 7-7','M19 12H5'], 18),
+      cells: cells,
+      submitLabel: st.loading ? s.submitting : s.submit,
+      verifyLabel: st.loading ? s.verifying : s.verify,
+      primaryStyle: {width:'100%',height:'48px',border:0,borderRadius:'10px',background:c.brand,color:c.onbrand,
+        font:'600 16px/1 ' + this.font(),cursor: st.loading ? 'default' : 'pointer',opacity: st.loading ? 0.75 : 1},
+      enStyle: seg(st.lang === 'en'),
+      faStyle: seg(st.lang === 'fa'),
+      toggleTheme: ()=>this.setState({theme: st.theme === 'dark' ? 'light' : 'dark'}),
+      setEn: ()=>this.setState({lang:'en'}),
+      setFa: ()=>this.setState({lang:'fa'}),
+      back: ()=>this.setState({step:'login', code:['','','','','','']}),
+      reset: ()=>this.setState({step:'login', attempts:0, err:false, pw:'', code:['','','','','','']})
+    };
+  }
+}
+</script>
+</body>
+</html>

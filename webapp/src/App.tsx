@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api } from "./api/client";
 import type { components } from "./api/schema";
-import { LanguageSwitcher } from "./components/LanguageSwitcher";
+import { AuthShell } from "./components/auth/AuthShell";
 import { ChangePasswordScreen } from "./screens/ChangePasswordScreen";
 import { HomeScreen } from "./screens/HomeScreen";
 import { LoginScreen } from "./screens/LoginScreen";
@@ -33,7 +32,8 @@ async function fetchSession(): Promise<Session> {
 
 /**
  * Session bootstrap and screen routing by conditional render (no router
- * dependency — two screens do not justify one).
+ * dependency — three screens do not justify one). Each pre-authentication
+ * screen brings its own AuthShell.
  */
 function App() {
   const { t } = useTranslation();
@@ -75,23 +75,34 @@ function App() {
     refreshSession();
   };
 
-  let content: ReactNode;
   if (session.status === "loading") {
-    content = <p role="status">{t("common.loading")}</p>;
-  } else if (session.status === "unauthenticated") {
-    content = <LoginScreen onAuthenticated={handleAuthenticated} />;
-  } else if (session.user.must_change_password) {
+    return (
+      <AuthShell>
+        <p className="hm-form__helper" role="status">
+          {t("common.loading")}
+        </p>
+      </AuthShell>
+    );
+  }
+
+  if (session.status === "unauthenticated") {
+    return <LoginScreen onAuthenticated={handleAuthenticated} />;
+  }
+
+  if (session.user.must_change_password) {
     // Forced mode: while the flag is set this branch always wins — the only
     // exits are completing the change or signing out (wrong account).
-    content = (
+    return (
       <ChangePasswordScreen
         mode="forced"
         onSuccess={handlePasswordChanged}
         onSignOut={handleLogout}
       />
     );
-  } else if (showChangePassword) {
-    content = (
+  }
+
+  if (showChangePassword) {
+    return (
       <ChangePasswordScreen
         mode="voluntary"
         onSuccess={handlePasswordChanged}
@@ -100,27 +111,16 @@ function App() {
         }}
       />
     );
-  } else {
-    content = (
-      <HomeScreen
-        user={session.user}
-        onLogout={handleLogout}
-        onChangePassword={() => {
-          setShowChangePassword(true);
-        }}
-      />
-    );
   }
 
   return (
-    <>
-      <header>
-        <h1>{t("app.name")}</h1>
-        <p>{t("app.tagline")}</p>
-        <LanguageSwitcher />
-      </header>
-      <main>{content}</main>
-    </>
+    <HomeScreen
+      user={session.user}
+      onLogout={handleLogout}
+      onChangePassword={() => {
+        setShowChangePassword(true);
+      }}
+    />
   );
 }
 

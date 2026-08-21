@@ -8,7 +8,10 @@ sharing, voice/video calls, screen share, and conferencing. One-line install, se
 - `docs/PLAN.md` — master plan: vision, architecture, security plan, business model. Strategy lives there.
 - `docs/ROADMAP.md` — executable phases with test gates. Execution lives there.
 
-**Current status:** Phase 0 (Foundation). Nothing is built yet.
+**Current status:** Phase 1.1 in progress. Phase 0 is complete (hardened compose stack,
+contract-first codegen, CI); slice 1.1a shipped the identity core (argon2id, rotating sessions
+with reuse detection, CSRF, authz matrix harness). Next: 1.1b (password reset, TOTP).
+`docs/OVERVIEW.md` always carries the current picture — read it, not this line, for detail.
 
 ## Tech stack (decided — see "Changing a decision" below for the only way to relitigate)
 
@@ -255,6 +258,13 @@ delivers mockups. Claude's job is faithful implementation, not design authorship
 
 Per-screen functional requirements (what a screen must contain — content, components, states)
 live in `docs/design/BRIEFS.md`; the user feeds them to the design pipeline.
+
+**When a design is delivered, the orchestrator mirrors it into the repo before spawning any
+implementation agent** — the mockup file into `docs/design/mockups/` and its written handoff
+into `docs/design/`, with delivered token sheets copied verbatim into `webapp/src/tokens.css`.
+Subagents cannot reach the design canvas; a mockup that lives only online blocks them, and an
+agent that cannot see the design must stop and report rather than invent one.
+
 Design status lives in `docs/design/STATUS.md` — a table of screen → mockup link or `PENDING`.
 Frontend agents check it before building a screen: mockup exists → implement it faithfully
 (review with `ui-ux-pro-max` against the mockup); `PENDING` → build **unstyled functional

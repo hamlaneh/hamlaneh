@@ -85,7 +85,9 @@ retrofit is how security fails.
       unknown-user/wrong-password responses, public registration **off by default** (no signup
       endpoint exists at all) — *slice 1.1a, 2026-08-21*
 - [ ] Password reset: email-delivered, single-use, time-limited tokens; rate-limited; uniform
-      responses (no account enumeration); completing a reset invalidates all sessions
+      responses (no account enumeration); completing a reset invalidates all sessions.
+      UI is already designed — build the `reset-request`, `reset-request-confirmation` and
+      `reset-new-password` artboards plus the `BackLink` component (design/LOGIN_HANDOFF.md)
 - [x] Sessions core: short-lived access (15m) + rotating refresh (30d) **with reuse detection
       (family revocation)**, opaque tokens stored as SHA-256; HttpOnly+Secure+SameSite=Strict
       cookies; CSRF double-submit via `X-Hamlaneh-CSRF`; change-password revokes all other
@@ -94,7 +96,13 @@ retrofit is how security fails.
       notification (needs email infra); expired-row cleanup sweep; client reacts to an
       unrecoverable 401 mid-use by returning to sign-in; decide a short server-side grace
       window for concurrent refresh (two tabs racing trips family revocation) — before 1.2
-- [ ] 2FA: TOTP first (attempt-limited), then WebAuthn/passkeys; org policy to enforce 2FA
+- [ ] Login 429 carries `Retry-After` (contract + server), so the sign-in form can show a real
+      countdown instead of clearing its rate-limited state on the next edit (1.1a review finding)
+- [ ] Password-policy endpoint feeding the requirements list and `PASSWORD_MIN_LENGTH`, so the
+      minimum is served with the form as instance policy rather than a client constant
+- [ ] 2FA: TOTP first (attempt-limited), then WebAuthn/passkeys; org policy to enforce 2FA.
+      UI is already designed — build the `login-totp` artboard plus the `OtpInput` component
+      (six 60×60 cells, paste distributes, backspace walks back — design/LOGIN_HANDOFF.md)
 - [x] JSON `ErrorHandlerFunc` replaces oapi-codegen's plain-text errors everywhere — *slice 1.1a*
 - [x] Handlers enforce all contract constraints server-side (lengths, patterns, ranges, body
       size cap 64 KiB) — *slice 1.1a*

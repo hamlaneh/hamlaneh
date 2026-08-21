@@ -8,9 +8,9 @@ These briefs define **what each screen must contain and do** (content, component
 Visual identity — layout, color, typography, spacing, mood — is entirely the designer's
 territory. Where a brief mentions a component, the designer decides what it looks like.
 
-**Priority order:** §1 Login (needed now, Phase 1.1 is starting) → §2 Chat shell (Phase 1.2)
-→ §3 Admin dashboard (Phase 1.4) → §4 User settings (Phase 1.3–1.5) → §5 Calls (Phase 2, not
-yet needed).
+**Priority order:** ~~§1 Login~~ (**delivered 2026-08-21**) → §2 Chat shell (**needed next**,
+Phase 1.2) → §3 Admin dashboard (Phase 1.4) → §4 User settings (Phase 1.3–1.5) → §5 Calls
+(Phase 2, not yet needed).
 
 ---
 
@@ -21,6 +21,15 @@ platform (chat + calls), open source, installed by companies on their own server
 neighbors: Slack, Mattermost, Rocket.Chat — but Hamlaneh's identity is *calm, trustworthy,
 owned-by-you*; it should not read as a corporate SaaS clone. The name means "shared nest" in
 Persian — warmth and belonging are on-brand.
+
+**The design system already exists — build on it, do not restart it.** The auth set was
+delivered on 2026-08-21 as the *Quiet Nest* system: tokens (colour, type scale, spacing,
+radius, elevation, motion) live in `webapp/src/tokens.css`, the written contract in
+[LOGIN_HANDOFF.md](LOGIN_HANDOFF.md), and the canvas at
+<https://claude.ai/design/p/185f4552-36fc-489e-a9b1-c012ab74f6d6>. Every new screen set reuses
+those tokens, the same Inter/Vazirmatn pairing, the same focus and disabled treatments, and
+extends the existing component vocabulary rather than inventing a parallel one. Feed the
+tokens file and the handoff to the design pipeline along with the section below.
 
 **Hard requirements every screen must satisfy:**
 
@@ -50,7 +59,7 @@ state (e.g. `login-default`, `login-error`, `login-totp`, `chat-default-dark`, `
 
 ---
 
-## 1. Login — PRIORITY 1 (needed now)
+## 1. Login — DELIVERED (2026-08-21; see LOGIN_HANDOFF.md)
 
 **Purpose:** the front door of a company's private instance. Calm, minimal, instills trust.
 There is **no self-registration** (it's off by default) — no "Sign up" link. Users get accounts
@@ -76,7 +85,7 @@ without breaking the layout when absent.
 
 ---
 
-## 2. Chat shell (main app) — Phase 1.2
+## 2. Chat shell (main app) — PRIORITY 1 (needed next, Phase 1.2)
 
 **Purpose:** where people live all day. One screen, three permanent regions + one overlay.
 

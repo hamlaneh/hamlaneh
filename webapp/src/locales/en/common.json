@@ -9,17 +9,31 @@
   "language": {
     "label": "Language",
     "en": "English",
-    "fa": "Persian"
+    "fa": "Persian",
+    "shortEn": "EN",
+    "shortFa": "فا"
+  },
+  "password": {
+    "show": "Show password",
+    "hide": "Hide password",
+    "requirementsTitle": "Password requirements",
+    "minLength": "At least {{minimum, number}} characters",
+    "requirementMet": "Met",
+    "requirementUnmet": "Not met"
   },
   "login": {
     "title": "Sign in",
+    "helper": "Use the account provided by your administrator.",
     "identifierLabel": "Username or email",
     "passwordLabel": "Password",
+    "forgotPassword": "Forgot password?",
     "submit": "Sign in",
+    "submitting": "Signing in…",
     "error": {
-      "invalidCredentials": "Incorrect username/email or password.",
-      "rateLimited": "Too many attempts. Please try again later.",
-      "unexpected": "Something went wrong. Please try again."
+      "invalidCredentials": "Incorrect username or password.",
+      "rateLimited": "Too many attempts. Try again in a few minutes.",
+      "networkError": "We could not reach the server. Try again.",
+      "unexpected": "Something went wrong. Try again."
     }
   },
   "home": {
@@ -29,21 +43,22 @@
     "logout": "Log out"
   },
   "changePassword": {
-    "title": "Change password",
-    "forcedNotice": "You must set a new password before you can continue.",
+    "title": "Set a new password",
+    "forcedNotice": "Your temporary password must be replaced before you continue.",
     "currentPasswordLabel": "Current password",
     "newPasswordLabel": "New password",
     "confirmPasswordLabel": "Confirm new password",
-    "minLengthHint": "At least 12 characters.",
-    "submit": "Change password",
+    "submit": "Set password and continue",
+    "submitting": "Setting password…",
     "cancel": "Back",
+    "signOut": "Sign out",
     "error": {
       "currentRequired": "Please enter your current password.",
       "invalidCurrentPassword": "The current password is incorrect.",
-      "tooShort": "The new password must be at least 12 characters.",
-      "mismatch": "The new passwords do not match.",
-      "unexpected": "Something went wrong. Please try again."
-    },
-    "signOut": "Sign out"
+      "tooShort": "The new password must be at least {{minimum, number}} characters.",
+      "mismatch": "Both passwords must match.",
+      "networkError": "We could not reach the server. Try again.",
+      "unexpected": "The password could not be changed. Try again."
+    }
   }
 }

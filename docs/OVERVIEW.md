@@ -44,12 +44,19 @@ installs it on its own server with one command and owns its communication comple
   users. A central `internal/authz` package is the single permission choke point, and an
   authz matrix harness (9 endpoints × 4 principals, completeness machine-checked against
   the OpenAPI spec) guards it in CI.
-- The React webapp scaffold has working en/fa i18n with RTL switching, a locale key-parity
-  check, a typed API client, MSW mock handlers typed against the generated schema (off by
-  default), and unstyled functional screens for the full auth flow: login → forced/voluntary
-  password change → home placeholder → logout (awaiting delivered designs).
+- **The auth screens carry their delivered design** ("Quiet Nest", delivered 2026-08-21):
+  sign-in, credential-error, rate-limited and forced-password-change states, in light and dark
+  themes and in a true RTL Persian mirror. Built from eleven design components (`AuthShell`,
+  `InstanceIdentity`, `OrganizationLogoSlot`, `ProductWordmark`, `LanguageSwitcher`, `AuthForm`,
+  `TextField`, `PasswordField`, `PrimaryButton`, `NoticeBanner`, `PasswordRequirements`) over
+  the token sheet in `webapp/src/tokens.css`. Fonts (Inter, Vazirmatn) are self-hosted via
+  `@fontsource` — no CDN, as the strict CSP requires. Mockup and handoff are mirrored into
+  `docs/design/`.
+- The React webapp also has working en/fa i18n with RTL switching, a locale key-parity check,
+  a typed API client with CSRF and transparent session refresh, and MSW mock handlers typed
+  against the generated schema (off by default).
 - `deploy/install.sh` v0 (OS detect, Docker install, secret generation) and
-  `deploy/verify-defaults.sh` (11 secure-default checks, all passing).
+  `deploy/verify-defaults.sh` (14 secure-default checks, all passing).
 - CI pipeline (GitHub Actions, SHA-pinned): Go build/vet/lint/race-tests/gosec/govulncheck,
   webapp typecheck/lint/tests/build, gitleaks, codegen drift checks, compose smoke test.
   Activates when the GitHub remote exists.
@@ -106,4 +113,5 @@ is created at install time; everyone else comes from the dashboard or invite lin
 | [api/openapi.yaml](api/openapi.yaml) | The API contract (source of truth for codegen) |
 | [design/STATUS.md](design/STATUS.md) | Which screens have delivered designs |
 | [design/BRIEFS.md](design/BRIEFS.md) | Functional design requirements per screen |
+| [design/LOGIN_HANDOFF.md](design/LOGIN_HANDOFF.md) | The delivered auth design contract (mockup in `design/mockups/`) |
 | [../SECURITY.md](../SECURITY.md) | Threat model, non-goals, disclosure policy |

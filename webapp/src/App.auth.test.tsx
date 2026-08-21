@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -12,7 +12,9 @@ import {
 } from "vitest";
 
 import { api } from "./api/client";
+import { PASSWORD_MIN_LENGTH } from "./auth/passwordPolicy";
 import App from "./App";
+import { AuthShell } from "./components/auth/AuthShell";
 import en from "./locales/en/common.json";
 import {
   expireMockAccess,
@@ -42,6 +44,40 @@ afterAll(() => {
 
 function signedInAs(name: string): string {
   return en.home.signedInAs.replace("{{name}}", name);
+}
+
+/**
+ * The minimum length is instance policy, so its copy is interpolated — and
+ * localized: the placeholder runs through i18next's `number` formatter, which
+ * is what puts Persian digits in the `fa` copy (asserted in App.test.tsx).
+ */
+function tooShortMessage(): string {
+  return en.changePassword.error.tooShort.replace(
+    "{{minimum, number}}",
+    new Intl.NumberFormat("en").format(PASSWORD_MIN_LENGTH),
+  );
+}
+
+/** The requirements checklist, scoped so more than one requirement can exist. */
+function requirementItems(): HTMLElement[] {
+  return within(screen.getByRole("list")).getAllByRole("listitem");
+}
+
+/** The single requirement item whose visible label matches `label`. */
+function requirementItem(label: string): HTMLElement {
+  const match = requirementItems().find((item) => item.textContent.includes(label));
+  if (match === undefined) {
+    throw new Error(`no password requirement labelled "${label}"`);
+  }
+  return match;
+}
+
+/** `password.minLength` as rendered in English, for the given minimum. */
+function minLengthLabel(): string {
+  return en.password.minLength.replace(
+    "{{minimum, number}}",
+    new Intl.NumberFormat("en").format(PASSWORD_MIN_LENGTH),
+  );
 }
 
 /** Renders App and waits for the session bootstrap to settle on the login screen. */
@@ -94,11 +130,17 @@ async function submitChangePassword(
   );
 }
 
-/** Counts every request MSW sees until stop() — for asserting client-side-only validation. */
-function trackRequests(): { count: () => number; stop: () => void } {
+/**
+ * Counts requests MSW sees until stop() — every request, or only those to
+ * `pathname`. Used to assert client-side-only validation and blocked
+ * duplicate submissions.
+ */
+function trackRequests(pathname?: string): { count: () => number; stop: () => void } {
   let calls = 0;
-  const onStart = () => {
-    calls += 1;
+  const onStart = ({ request }: { request: Request }) => {
+    if (pathname === undefined || new URL(request.url).pathname === pathname) {
+      calls += 1;
+    }
   };
   server.events.on("request:start", onStart);
   return {
@@ -159,8 +201,32 @@ describe("login", () => {
 
     await submitLogin(user, FIXTURE_RATELIMITED_IDENTIFIER, "any-password");
 
+    // Non-urgent by design: the rate-limit notice is announced politely.
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent(en.login.error.rateLimited);
+  });
+
+  it("never blames the password for a server fault", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post("/api/v1/auth/login", () =>
+        HttpResponse.json(
+          { error: { code: "internal_error", message: "boom" } },
+          { status: 500 },
+        ),
+      ),
+    );
+    await renderAppAtLogin();
+
+    await submitLogin(
+      user,
+      FIXTURE_CREDENTIALS.identifier,
+      FIXTURE_CREDENTIALS.password,
+    );
+
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(en.login.error.rateLimited);
+    expect(alert).toHaveTextContent(en.login.error.unexpected);
+    expect(alert).not.toHaveTextContent(en.login.error.invalidCredentials);
   });
 });
 
@@ -270,6 +336,10 @@ describe("forced password change", () => {
       const alert = await screen.findByRole("alert");
       expect(alert).toHaveTextContent(en.changePassword.error.currentRequired);
       expect(requests.count()).toBe(0);
+      // Delivered behaviour: focus moves to the first invalid field.
+      expect(
+        screen.getByLabelText(en.changePassword.currentPasswordLabel),
+      ).toHaveFocus();
     } finally {
       requests.stop();
     }
@@ -288,8 +358,9 @@ describe("forced password change", () => {
       });
 
       const alert = await screen.findByRole("alert");
-      expect(alert).toHaveTextContent(en.changePassword.error.tooShort);
+      expect(alert).toHaveTextContent(tooShortMessage());
       expect(requests.count()).toBe(0);
+      expect(screen.getByLabelText(en.changePassword.newPasswordLabel)).toHaveFocus();
     } finally {
       requests.stop();
     }
@@ -321,7 +392,8 @@ describe("forced password change", () => {
     });
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(en.changePassword.error.tooShort);
+    expect(alert).toHaveTextContent(tooShortMessage());
+    expect(screen.getByLabelText(en.changePassword.newPasswordLabel)).toHaveFocus();
   });
 
   it("shows the mismatch error before any request when confirmation differs", async () => {
@@ -336,6 +408,9 @@ describe("forced password change", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(en.changePassword.error.mismatch);
+    expect(
+      screen.getByLabelText(en.changePassword.confirmPasswordLabel),
+    ).toHaveFocus();
   });
 
   it("shows the invalid-current-password error on 403", async () => {
@@ -350,6 +425,51 @@ describe("forced password change", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(en.changePassword.error.invalidCurrentPassword);
+    // The server decided this one, but focus still lands on the field at fault.
+    expect(
+      screen.getByLabelText(en.changePassword.currentPasswordLabel),
+    ).toHaveFocus();
+  });
+
+  it("does not claim the server was unreachable when it answered 500", async () => {
+    const user = userEvent.setup();
+    await loginAsNewhire(user);
+    server.use(
+      http.post("/api/v1/auth/change-password", () =>
+        HttpResponse.json(
+          { error: { code: "internal_error", message: "Something broke." } },
+          { status: 500 },
+        ),
+      ),
+    );
+
+    await submitChangePassword(user, {
+      current: FIXTURE_NEWHIRE_CREDENTIALS.password,
+      next: VALID_NEW_PASSWORD,
+      confirm: VALID_NEW_PASSWORD,
+    });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(en.changePassword.error.unexpected);
+    expect(alert).not.toHaveTextContent(en.changePassword.error.networkError);
+    // A form-level failure takes focus itself.
+    expect(alert).toHaveFocus();
+  });
+
+  it("says the server was unreachable only when the request actually failed", async () => {
+    const user = userEvent.setup();
+    await loginAsNewhire(user);
+    server.use(http.post("/api/v1/auth/change-password", () => HttpResponse.error()));
+
+    await submitChangePassword(user, {
+      current: FIXTURE_NEWHIRE_CREDENTIALS.password,
+      next: VALID_NEW_PASSWORD,
+      confirm: VALID_NEW_PASSWORD,
+    });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(en.changePassword.error.networkError);
+    expect(alert).toHaveFocus();
   });
 
   it("lands on Home with the flag cleared after a successful change", async () => {
@@ -441,5 +561,160 @@ describe("logout", () => {
     expect(
       screen.queryByRole("heading", { name: en.home.title }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("delivered design behaviour", () => {
+  it("disables submit and keeps the switcher live when rate limited", async () => {
+    const user = userEvent.setup();
+    await renderAppAtLogin();
+
+    await submitLogin(user, FIXTURE_RATELIMITED_IDENTIFIER, "any-password");
+    await screen.findByRole("status");
+
+    expect(screen.getByRole("button", { name: en.login.submit })).toBeDisabled();
+    // The switcher stays live, so the notice can still be read in either
+    // language while the form is blocked.
+    expect(screen.getByRole("radio", { name: en.language.shortFa })).toBeEnabled();
+    // The fields stay editable: the 429 carries no Retry-After yet, so the
+    // edit-and-retry path is the only exit that is not an invented timer.
+    expect(screen.getByLabelText(en.login.identifierLabel)).toBeEnabled();
+    expect(screen.getByLabelText(en.login.passwordLabel)).toBeEnabled();
+  });
+
+  it("recovers from a rate limit as soon as the identifier is edited", async () => {
+    const user = userEvent.setup();
+    await renderAppAtLogin();
+
+    await submitLogin(user, FIXTURE_RATELIMITED_IDENTIFIER, "any-password");
+    await screen.findByRole("status");
+
+    const identifier = screen.getByLabelText(en.login.identifierLabel);
+    await user.clear(identifier);
+    await user.type(identifier, FIXTURE_CREDENTIALS.identifier);
+
+    // The notice goes with the state it described, and submit comes back.
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.login.submit })).toBeEnabled();
+
+    const requests = trackRequests("/api/v1/auth/login");
+    try {
+      await user.type(
+        screen.getByLabelText(en.login.passwordLabel),
+        FIXTURE_CREDENTIALS.password,
+      );
+      await user.click(screen.getByRole("button", { name: en.login.submit }));
+
+      expect(
+        await screen.findByRole("heading", { name: en.home.title }),
+      ).toBeInTheDocument();
+      // The retry actually reached the network — the screen is not inert.
+      expect(requests.count()).toBe(1);
+    } finally {
+      requests.stop();
+    }
+  });
+
+  it("marks the not-yet-available reset link as a disabled link, not prose", async () => {
+    await renderAppAtLogin();
+
+    const link = screen.getByText(en.login.forgotPassword);
+    expect(link).toHaveAttribute("role", "link");
+    expect(link).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("keeps the identifier, clears the password and moves focus to the alert", async () => {
+    const user = userEvent.setup();
+    await renderAppAtLogin();
+
+    await submitLogin(user, FIXTURE_CREDENTIALS.identifier, "wrong-password");
+
+    const alert = await screen.findByRole("alert");
+    expect(screen.getByLabelText(en.login.identifierLabel)).toHaveValue(
+      FIXTURE_CREDENTIALS.identifier,
+    );
+    expect(screen.getByLabelText(en.login.passwordLabel)).toHaveValue("");
+    expect(alert).toHaveFocus();
+  });
+
+  it("shows the busy label during submission and blocks a duplicate submit", async () => {
+    const user = userEvent.setup();
+    await renderAppAtLogin();
+    // The busy window is held open by the test, not by wall-clock delay: the
+    // handler answers only once `releaseLogin` is called, so a loaded runner
+    // can never miss the busy label.
+    let releaseLogin: (() => void) | undefined;
+    const loginGate = new Promise<void>((resolve) => {
+      releaseLogin = resolve;
+    });
+    server.use(
+      http.post("/api/v1/auth/login", async () => {
+        await loginGate;
+        return HttpResponse.json(
+          { error: { code: "invalid_credentials", message: "Invalid credentials." } },
+          { status: 401 },
+        );
+      }),
+    );
+    const requests = trackRequests("/api/v1/auth/login");
+
+    try {
+      await submitLogin(user, FIXTURE_CREDENTIALS.identifier, "wrong-password");
+
+      const busy = await screen.findByRole("button", { name: en.login.submitting });
+      expect(busy).toBeDisabled();
+      await user.click(busy);
+
+      releaseLogin?.();
+      await screen.findByRole("alert");
+      expect(requests.count()).toBe(1);
+    } finally {
+      // Never leave the handler (and therefore the request) hanging if an
+      // assertion above threw.
+      releaseLogin?.();
+      requests.stop();
+    }
+  });
+
+  it("reflects the typed password in the requirements checklist", async () => {
+    const user = userEvent.setup();
+    await loginAsNewhire(user);
+    const newPassword = screen.getByLabelText(en.changePassword.newPasswordLabel);
+    const minLength = minLengthLabel();
+
+    expect(requirementItem(minLength)).toHaveTextContent(en.password.requirementUnmet);
+
+    await user.type(newPassword, "short");
+    expect(requirementItem(minLength)).toHaveTextContent(en.password.requirementUnmet);
+
+    await user.clear(newPassword);
+    await user.type(newPassword, VALID_NEW_PASSWORD);
+    expect(requirementItem(minLength)).toHaveTextContent(en.password.requirementMet);
+  });
+
+  it("renders the organization mark when the instance has one", () => {
+    const logoUrl = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E";
+    const { container } = render(
+      <AuthShell organization={{ name: "Sanjab Cooperative", logoUrl }}>
+        <p>form</p>
+      </AuthShell>,
+    );
+
+    expect(screen.getByText("Sanjab Cooperative")).toBeInTheDocument();
+    const logo = container.querySelector(".hm-identity__logo");
+    expect(logo).toHaveAttribute("src", logoUrl);
+    // Decorative: the name beside it carries the accessible text.
+    expect(logo).toHaveAttribute("alt", "");
+  });
+
+  it("renders no organization block at all when the instance has none", () => {
+    const { container } = render(
+      <AuthShell>
+        <p>form</p>
+      </AuthShell>,
+    );
+
+    // No box, no reserved height, no residual gap — the slot is simply absent.
+    expect(container.querySelector(".hm-identity__organization")).toBeNull();
   });
 });

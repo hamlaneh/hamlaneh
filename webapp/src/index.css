@@ -1,13 +1,54 @@
 @import "tailwindcss";
+@import "./tokens.css";
+@import "./components/auth/auth.css";
+
+/* Self-hosted, no CDN (strict CSP): only the weights the design uses —
+ * 400 body, 500 labels and links, 600 headings and buttons. Inter carries
+ * Latin, Vazirmatn carries Persian (its arabic subset holds Persian digits,
+ * U+06F0–06F9). Both are SIL OFL 1.1 and are bundled by Vite.
+ *
+ * These are the full-weight entrypoints on purpose: they declare one
+ * @font-face per subset WITH `unicode-range`, so the browser fetches only the
+ * subsets a page actually renders. The per-subset entrypoints
+ * (`inter/latin-400.css` and friends) omit `unicode-range`, which makes every
+ * face claim the whole codepoint space and forces all of them over the wire.
+ * The build emits more files; a visit downloads far fewer. */
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/vazirmatn/400.css";
+@import "@fontsource/vazirmatn/500.css";
+@import "@fontsource/vazirmatn/600.css";
 
 /* Custom CSS must use logical properties only (RTL rule — see CLAUDE.md). */
-body {
-  margin: 0;
+
+:root {
+  color-scheme: light;
 }
 
-#root {
-  max-inline-size: 40rem;
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-text-primary);
+  /* --hm-font-ui is set from the active language (src/i18n). */
+  font-family: var(--hm-font-ui, var(--font-ui));
+}
+
+/* Undesigned placeholder screens (see docs/design/STATUS.md) — tokens only,
+ * no visual design of their own. */
+.hm-placeholder {
+  max-inline-size: var(--size-form-column);
   margin-inline: auto;
-  padding-inline: 1rem;
-  padding-block: 1rem;
+  padding-inline: 24px;
+  padding-block: 48px;
+}
+
+.hm-placeholder__actions {
+  display: flex;
+  gap: 24px;
+  margin-block-start: 24px;
 }

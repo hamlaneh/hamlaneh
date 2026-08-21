@@ -1,0 +1,583 @@
+/* Auth surface — implementation of the delivered "Quiet Nest" design
+ * (docs/design/mockups/Hamlaneh Auth.dc.html + docs/design/LOGIN_HANDOFF.md).
+ * Values here are transcribed from the artboards; colours are only ever
+ * referenced through the tokens in tokens.css, never re-declared.
+ * Logical properties only — the RTL mirror is the same markup with dir="rtl".
+ *
+ * Type and spacing go through the delivered --text-* / --spacing-* scales
+ * wherever the artboard value sits on them. Artboard values that fall between
+ * steps are written as literals and marked "off-scale" so nobody rounds them
+ * to the nearest token — they are the design's, not ours.
+ */
+
+/* ── shell ─────────────────────────────────────────────────────────── */
+
+.hm-auth {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-block-size: 100dvh;
+  background: var(--color-canvas);
+  padding-block-start: env(safe-area-inset-top);
+  padding-block-end: env(safe-area-inset-bottom);
+
+  /* Switcher footprint, shared by the switcher itself and by the brand
+   * header that must stay clear of it below 900px. Derived from the drawn
+   * control — two options plus its 2px gap, 2px padding and 1px borders —
+   * so resizing an option can never let the switcher cover the wordmark. */
+  --hm-switcher-option-inline-size: 56px;
+  --hm-switcher-inline-size: calc(2 * var(--hm-switcher-option-inline-size) + 8px);
+  --hm-switcher-inset-inline: var(--spacing-6);
+}
+
+.hm-auth__identity {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-surface-subtle);
+  border-block-end: 1px solid var(--color-border-subtle);
+  padding-block: 20px; /* off-scale (artboard) */
+  /* The inline-end padding keeps the header row clear of the switcher,
+   * which is positioned over it below 900px. */
+  padding-inline: var(--spacing-6)
+    calc(
+      var(--hm-switcher-inset-inline) + var(--hm-switcher-inline-size) + var(--spacing-1)
+    );
+}
+
+.hm-identity__motif {
+  /* Artboard coordinates — off-scale by nature. */
+  position: absolute;
+  inset-inline-start: -70px;
+  inset-block-end: -140px;
+  inline-size: 520px;
+  block-size: 520px;
+  /* Decorative only; the panel reads as finished without it. */
+  display: none;
+}
+
+[dir="rtl"] .hm-identity__motif {
+  transform: scaleX(-1);
+}
+
+.hm-identity__content {
+  position: relative;
+}
+
+.hm-identity__organization {
+  display: flex;
+  align-items: center;
+  gap: 11px; /* off-scale (artboard) */
+  margin-block-end: 26px; /* off-scale (artboard) */
+}
+
+.hm-identity__logo {
+  max-block-size: 32px;
+  max-inline-size: 200px;
+  object-fit: contain;
+}
+
+.hm-identity__organization-name {
+  font: 500 var(--text-body) / 1.3 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+}
+
+.hm-wordmark {
+  margin: 0;
+  font: 600 var(--text-heading) / 1.15 var(--hm-font-ui, var(--font-ui));
+  letter-spacing: -0.02em;
+  color: var(--color-text-primary);
+}
+
+.hm-wordmark:lang(fa) {
+  line-height: 1.35;
+  letter-spacing: normal;
+}
+
+.hm-tagline {
+  margin: var(--spacing-2) 0 0;
+  font: 400 13px / 1.5 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-tagline:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-auth__region {
+  flex: 1;
+  display: flex;
+  /* Two declarations on purpose — not a duplicate to tidy away. `safe center`
+   * is what stops a form taller than the viewport from having its top clipped
+   * and unreachable; the plain `center` above it is the fallback an engine
+   * without the `safe` keyword falls back to, because it drops the second
+   * declaration as invalid. (The minifier removes the fallback when every
+   * target browser supports `safe`, so keeping it here costs nothing.) */
+  align-items: center;
+  align-items: safe center;
+  justify-content: center;
+  padding-inline: var(--spacing-6);
+  padding-block: var(--spacing-8);
+}
+
+.hm-auth__column {
+  flex: 0 0 auto;
+  inline-size: 100%;
+  max-inline-size: var(--size-form-column);
+}
+
+.hm-auth__switcher {
+  position: absolute;
+  inset-block-start: var(--spacing-4);
+  inset-inline-end: var(--hm-switcher-inset-inline);
+  z-index: 1;
+}
+
+@media (min-width: 900px) {
+  .hm-auth {
+    flex-direction: row;
+    --hm-switcher-inset-inline: 30px; /* off-scale (artboard) */
+  }
+
+  .hm-auth__identity {
+    flex: 0 0 34%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    /* The panel no longer shares a row with the switcher, so the mobile
+     * clearance reservation goes with it. */
+    padding: var(--spacing-16);
+    border-block-end: 0;
+    border-inline-end: 1px solid var(--color-border-subtle);
+  }
+
+  .hm-identity__motif {
+    display: block;
+  }
+
+  .hm-wordmark {
+    font-size: var(--text-wordmark);
+  }
+
+  .hm-tagline {
+    margin-block-start: 10px; /* off-scale (artboard) */
+    font-size: var(--text-body);
+    line-height: 1.55;
+  }
+
+  .hm-tagline:lang(fa) {
+    line-height: 1.7;
+  }
+
+  .hm-auth__region {
+    padding: var(--spacing-16);
+  }
+
+  .hm-auth__column {
+    /* Optical rise above the mathematical centre, per artboard. */
+    margin-block-end: var(--hm-optical-rise, 44px);
+  }
+
+  .hm-auth__switcher {
+    inset-block-start: 26px; /* off-scale (artboard) */
+  }
+}
+
+@media (min-width: 1280px) {
+  .hm-auth__identity {
+    flex: 0 0 40%;
+  }
+}
+
+/* ── form ──────────────────────────────────────────────────────────── */
+
+.hm-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+}
+
+.hm-form__title {
+  margin: 0;
+  font: 600 var(--text-heading) / 1.2 var(--hm-font-ui, var(--font-ui));
+  letter-spacing: -0.02em;
+  color: var(--color-text-primary);
+}
+
+.hm-form__title:lang(fa) {
+  line-height: 1.4;
+  letter-spacing: normal;
+}
+
+.hm-form__helper {
+  margin: 10px 0 0; /* off-scale (artboard) */
+  font: 400 var(--text-body) / 1.6 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+}
+
+.hm-form__helper:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-form__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 20px; /* off-scale (artboard) */
+}
+
+/* ── fields ────────────────────────────────────────────────────────── */
+
+.hm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px; /* off-scale (artboard) */
+}
+
+.hm-field__label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-4);
+}
+
+.hm-label {
+  font: 500 var(--text-body) / 1.4 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+}
+
+.hm-label:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-label[data-disabled="true"] {
+  color: var(--color-text-secondary);
+}
+
+.hm-field__control {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.hm-input {
+  inline-size: 100%;
+  block-size: var(--size-control);
+  padding-inline: 14px; /* off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+  font: 400 var(--text-control) / 1 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+  transition: border-color var(--duration-state) var(--ease-out);
+}
+
+.hm-input--with-toggle {
+  padding-inline-end: 54px; /* off-scale (artboard) */
+}
+
+.hm-input:hover:not(:disabled) {
+  border-color: var(--color-border-control-hover);
+}
+
+/* The focus ring is not removed — it is replaced by the drawn treatment:
+ * the boundary takes the focus tone and carries a 3px ring. */
+.hm-input:focus-visible {
+  outline: none;
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 26%, transparent);
+}
+
+.hm-input[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.hm-input:disabled {
+  background: var(--color-surface-subtle);
+  border: 1px dashed var(--color-border-disabled);
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
+}
+
+.hm-field__toggle {
+  position: absolute;
+  inset-inline-end: 2px;
+  inline-size: var(--size-target);
+  block-size: var(--size-target);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.hm-field__toggle[data-revealed="true"] {
+  color: var(--color-brand-primary);
+}
+
+.hm-field__toggle:disabled {
+  color: var(--color-border-disabled);
+  cursor: not-allowed;
+}
+
+.hm-field__error {
+  display: flex;
+  align-items: center;
+  gap: 6px; /* off-scale (artboard) */
+  font: 400 13px / 1.5 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-danger);
+}
+
+.hm-field__error:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-field__error-icon {
+  flex: 0 0 15px;
+}
+
+/* ── actions ───────────────────────────────────────────────────────── */
+
+.hm-button {
+  inline-size: 100%;
+  block-size: var(--size-control);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px; /* off-scale (artboard) */
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-brand-primary);
+  color: var(--color-on-brand);
+  font: 600 var(--text-control) / 1 var(--hm-font-ui, var(--font-ui));
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--duration-press) var(--ease-out);
+}
+
+.hm-button:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-button:hover:not(:disabled) {
+  background: var(--color-brand-hover);
+}
+
+.hm-button:active:not(:disabled) {
+  background: var(--color-brand-pressed);
+}
+
+.hm-button[data-busy="true"] {
+  opacity: 0.75;
+  cursor: default;
+}
+
+/* Disabled is carried by the dashed boundary and tone, never colour alone. */
+.hm-button:disabled:not([data-busy="true"]) {
+  background: var(--color-surface-disabled);
+  border: 1px dashed var(--color-border-disabled);
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
+}
+
+.hm-spinner {
+  animation: hm-spin 900ms linear infinite;
+}
+
+@keyframes hm-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hm-link,
+.hm-text-button {
+  font: 500 var(--text-body) / 1.4 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-brand-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.hm-link:lang(fa),
+.hm-text-button:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-link:hover,
+.hm-text-button:hover {
+  color: var(--color-brand-pressed);
+  text-decoration-thickness: 2px;
+}
+
+.hm-link[data-disabled="true"] {
+  color: var(--color-border-disabled);
+  text-decoration-thickness: auto;
+  cursor: default;
+}
+
+.hm-text-button {
+  align-self: flex-start;
+  block-size: var(--size-target);
+  padding-inline: 2px; /* off-scale (artboard) */
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+/* ── banners ───────────────────────────────────────────────────────── */
+
+.hm-banner {
+  display: flex;
+  gap: 10px; /* off-scale (artboard) */
+  padding: var(--spacing-3) 14px; /* 14px off-scale (artboard) */
+  border: 1px solid;
+  border-radius: var(--radius-md);
+  animation: hm-banner-enter var(--duration-state) var(--ease-out);
+}
+
+.hm-banner--danger {
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.hm-banner--warning {
+  background: var(--color-warning-soft);
+  border-color: var(--color-warning);
+  color: var(--color-warning-text);
+}
+
+.hm-banner__icon {
+  flex: 0 0 18px;
+  margin-block-start: 1px;
+}
+
+.hm-banner--warning .hm-banner__icon {
+  color: var(--color-warning);
+}
+
+.hm-banner__text {
+  font: 400 var(--text-body) / 1.5 var(--hm-font-ui, var(--font-ui));
+}
+
+.hm-banner__text:lang(fa) {
+  line-height: 1.7;
+}
+
+@keyframes hm-banner-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* ── password requirements ─────────────────────────────────────────── */
+
+.hm-requirements {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: 14px; /* off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.hm-requirements__title {
+  font: 500 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-requirements__title:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-requirements__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hm-requirement {
+  display: flex;
+  align-items: center;
+  gap: 9px; /* off-scale (artboard) */
+  font: 400 var(--text-body) / 1.5 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+}
+
+.hm-requirement:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-requirement[data-met="true"] {
+  color: var(--color-text-primary);
+}
+
+.hm-requirement__icon {
+  flex: 0 0 17px;
+  color: var(--color-border-control);
+}
+
+.hm-requirement[data-met="true"] .hm-requirement__icon {
+  color: var(--color-success);
+}
+
+/* ── language switcher ─────────────────────────────────────────────── */
+
+/* The 2px gap, 2px padding and 1px borders below are the +8px that
+ * --hm-switcher-inline-size adds to the two option widths. */
+.hm-language {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px; /* off-scale (artboard) */
+  padding: 2px; /* off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.hm-language__option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: var(--hm-switcher-option-inline-size, 56px);
+  block-size: var(--size-target);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font: 600 13px / 1 var(--font-ui); /* 13px off-scale (artboard) */
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--duration-state) var(--ease-out);
+}
+
+.hm-language__option--fa {
+  font-family: var(--font-ui-fa);
+}
+
+.hm-language__input:checked + .hm-language__option {
+  background: var(--color-brand-primary);
+  color: var(--color-on-brand);
+}
+
+.hm-language__input:focus-visible + .hm-language__option {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 45%, transparent);
+}
+
+/* Visually hidden but focusable: the radio drives selection and keyboard
+ * navigation; the sibling span carries the drawn appearance. */
+.hm-language__input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

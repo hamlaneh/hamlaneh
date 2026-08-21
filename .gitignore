@@ -55,3 +55,7 @@ Thumbs.db
 *.log
 tmp/
 scratch/
+
+# Claude Code local state (launch.json is shared on purpose)
+.claude/worktrees/
+.claude/settings.local.json
