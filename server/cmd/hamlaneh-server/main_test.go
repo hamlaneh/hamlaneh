@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
 )
 
 // TestRunHealthcheckSubcommand exercises the healthcheck subcommand end to
@@ -57,7 +59,7 @@ func TestServeShutsDownOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(ctx, "127.0.0.1:0")
+		done <- serve(ctx, httpserver.New("127.0.0.1:0", nil))
 	}()
 
 	// Give the server a moment to start, then request shutdown.
@@ -80,7 +82,7 @@ func TestServeInvalidAddress(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if err := serve(ctx, "127.0.0.1:99999"); err == nil {
+	if err := serve(ctx, httpserver.New("127.0.0.1:99999", nil)); err == nil {
 		t.Error("serve() with an invalid port returned nil, want error")
 	}
 }

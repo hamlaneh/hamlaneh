@@ -1,0 +1,14 @@
+# Normalize everything to LF in the index and working tree, on every OS.
+# The CI codegen drift checks (`git diff --exit-code` after regeneration)
+# depend on committed files matching generator output byte-for-byte.
+* text=auto eol=lf
+
+# Binary assets — never normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary

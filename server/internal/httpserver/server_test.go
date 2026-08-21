@@ -75,9 +75,23 @@ func TestHandlerRoutes(t *testing.T) {
 			path:       "/",
 			wantStatus: http.StatusMethodNotAllowed,
 		},
+		{
+			name:            "readyz without storage is degraded",
+			method:          http.MethodGet,
+			path:            "/readyz",
+			wantStatus:      http.StatusServiceUnavailable,
+			wantContentType: "application/json",
+			wantBodyContain: `"degraded"`,
+		},
+		{
+			name:       "wrong method on readyz is 405",
+			method:     http.MethodPost,
+			path:       "/readyz",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
 	}
 
-	handler := httpserver.Handler()
+	handler := httpserver.Handler(nil)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -107,7 +121,7 @@ func TestHealthzBody(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
-	httpserver.Handler().ServeHTTP(rec, req)
+	httpserver.Handler(nil).ServeHTTP(rec, req)
 
 	var got map[string]string
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
@@ -125,7 +139,7 @@ func TestLoginPageCSPCompliance(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	httpserver.Handler().ServeHTTP(rec, req)
+	httpserver.Handler(nil).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
 	if strings.Contains(body, "<script") {
@@ -151,7 +165,7 @@ func TestLoginPageCSPCompliance(t *testing.T) {
 func TestNewSetsTimeouts(t *testing.T) {
 	t.Parallel()
 
-	srv := httpserver.New(":8080")
+	srv := httpserver.New(":8080", nil)
 	if srv.Addr != ":8080" {
 		t.Errorf("got addr %q, want %q", srv.Addr, ":8080")
 	}

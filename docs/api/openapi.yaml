@@ -1,0 +1,349 @@
+# Hamlaneh API contract — source of truth for backend and frontend codegen.
+#
+# OpenAPI 3.0.3 (not 3.1): oapi-codegen builds on kin-openapi, whose 3.1
+# support is incomplete; 3.0.3 is the version both toolchains fully support.
+#
+# Change process (CLAUDE.md): only the orchestrator edits this file, before
+# implementation agents are spawned. Codegen output must never drift (CI-checked):
+#   server: go generate ./...            -> server/internal/api/*.gen.go
+#   webapp: npm run api:gen              -> webapp/src/api/schema.d.ts
+#
+# Auth model (decided in Phase 1.1 design):
+#   - Session and refresh tokens travel ONLY in HttpOnly+Secure+SameSite=Strict
+#     cookies; they never appear in response bodies or URLs.
+#   - State-changing requests additionally require the X-Hamlaneh-CSRF custom
+#     header (double-submit defense; SameSite is the first line).
+#   - Endpoints marked with the `sessionCookie` security scheme require a
+#     valid session; `adminOnly: true` in the description means the authz
+#     matrix must cover anonymous/member/admin for it.
+openapi: 3.0.3
+info:
+  title: Hamlaneh API
+  description: >
+    Self-hosted team communication platform API. Phase 1.1 surface: health,
+    authentication, current user, and the admin user-management endpoints that
+    back the dashboard (public registration is off by default; users are
+    created from the admin dashboard or via invite links).
+  version: 0.1.0
+  license:
+    name: AGPL-3.0
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: /
+    description: Same-origin deployment behind Caddy.
+
+tags:
+  - name: system
+    description: Liveness/readiness — no auth, no session.
+  - name: auth
+    description: Login, logout, session refresh.
+  - name: users
+    description: The authenticated user's own resources.
+  - name: admin
+    description: Dashboard endpoints — admin role required, authz-matrix covered.
+
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      operationId: getHealthz
+      summary: Liveness probe (no dependencies checked).
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /readyz:
+    get:
+      tags: [system]
+      operationId: getReadyz
+      summary: Readiness probe (database reachable, migrations applied).
+      responses:
+        "200":
+          description: Ready to serve traffic.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+        "503":
+          description: A dependency is not ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Authenticate with username/email and password.
+      description: >
+        Rate-limited. On success sets the session and refresh cookies and
+        returns the authenticated user. Responses for unknown user and wrong
+        password are identical (no account enumeration).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated; session cookies set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: End the current session and clear cookies.
+      security:
+        - sessionCookie: []
+      responses:
+        "204":
+          description: Session revoked; cookies cleared.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [auth]
+      operationId: refreshSession
+      summary: Rotate the refresh token and mint a new session.
+      description: >
+        Presenting an already-rotated refresh token revokes the whole token
+        family (reuse detection) and returns 401.
+      responses:
+        "204":
+          description: New session cookies set.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/users/me:
+    get:
+      tags: [users]
+      operationId: getCurrentUser
+      summary: The authenticated user.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Current user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/admin/users:
+    get:
+      tags: [admin]
+      operationId: adminListUsers
+      summary: List users (dashboard). adminOnly.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          description: Opaque pagination cursor from a previous response.
+          schema: { type: string }
+      responses:
+        "200":
+          description: One page of users.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [admin]
+      operationId: adminCreateUser
+      summary: Create a user (dashboard). adminOnly.
+      description: >
+        The primary way users come into existence — public registration is off
+        by default. Audit-logged.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminCreateUserRequest"
+      responses:
+        "201":
+          description: User created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Username or email already taken.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: hamlaneh_session
+      description: >
+        HttpOnly+Secure+SameSite=Strict session cookie. Mutating requests must
+        also send the X-Hamlaneh-CSRF header.
+
+  responses:
+    BadRequest:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing, expired, or invalid session/credentials.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Authenticated but not allowed (authz denied).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RateLimited:
+      description: Too many attempts; retry later.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable machine-readable code (e.g. invalid_credentials).
+            message:
+              type: string
+              description: Human-readable English message; clients localize by code.
+
+    LoginRequest:
+      type: object
+      required: [identifier, password]
+      properties:
+        identifier:
+          type: string
+          description: Username or email.
+          minLength: 1
+          maxLength: 320
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 1024
+
+    User:
+      type: object
+      required: [id, username, display_name, locale, is_admin, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+          nullable: true
+        display_name:
+          type: string
+        locale:
+          type: string
+          enum: [en, fa]
+        is_admin:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    UserPage:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        next_cursor:
+          type: string
+          description: Present when another page exists.
+
+    AdminCreateUserRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 32
+          pattern: "^[a-z0-9][a-z0-9_.-]*$"
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+          maxLength: 120
+        password:
+          type: string
+          format: password
+          description: Initial password; the user is forced to change it on first login.
+          minLength: 12
+          maxLength: 1024
+        locale:
+          type: string
+          enum: [en, fa]
+          default: en
+        is_admin:
+          type: boolean
+          default: false

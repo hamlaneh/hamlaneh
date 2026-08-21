@@ -31,10 +31,11 @@ that later phases depend on already exists and can turn red.
 - [x] Monorepo scaffold: `server/` (Go module, `cmd/hamlaneh-server`, `internal/`),
       `webapp/` (Vite + React + TS + Tailwind, strict mode), `deploy/`; fill CLAUDE.md
       "Commands & toolchain" with the real values
-- [ ] API contract bootstrap: `docs/api/openapi.yaml` skeleton (`/healthz` + auth endpoint stubs);
+- [x] API contract bootstrap: `docs/api/openapi.yaml` skeleton (`/healthz` + auth endpoint stubs);
       codegen wired — `oapi-codegen` (Go types/handlers), `openapi-typescript` (webapp client),
-      MSW mocks from spec; CI fails on codegen drift
-- [ ] Migrations: `golang-migrate` wired; `server/internal/storage/migrations/` with migration 0001
+      MSW mocks from spec; CI fails on codegen drift (both directions verified deterministic)
+- [x] Migrations: `golang-migrate` wired (embedded, auto-run at startup); migration 0001 (users)
+      applied + verified against live Postgres, 2026-08-20
 - [x] i18n scaffold in webapp: i18next (or equivalent), `en`/`fa` locale files, RTL switching,
       locale key-parity CI check — before the first real screen exists
 - [x] `deploy/docker-compose.yml`: Caddy (auto-TLS) → Go server → Postgres. Hardening baked in:
@@ -88,7 +89,14 @@ retrofit is how security fails.
       documented header-only scheme); CSRF defense decided and documented (SameSite + custom
       header for mutations); device list; remote revocation; new-device login notification
 - [ ] 2FA: TOTP first (attempt-limited), then WebAuthn/passkeys; org policy to enforce 2FA
-- [ ] Admin bootstrap flow (first user = admin, created via install, not open signup)
+- [ ] Replace oapi-codegen's plain-text 400 for malformed params with a JSON `ErrorHandlerFunc`
+      matching the contract Error schema (noted during Phase 0 codegen wiring)
+- [ ] Handlers enforce all contract constraints server-side (lengths, patterns, ranges) —
+      oapi-codegen std-http generates models only, no validation (Phase 0 security-review note)
+- [ ] Authz matrix classifies `/api/v1/auth/refresh` deliberately (refresh-cookie-gated, not
+      "anonymous") even though the spec models no security scheme for it
+- [ ] Admin bootstrap flow (first user = admin, created via install, not open signup);
+      every later user is created from the admin dashboard or an invite link (see 1.4)
 - [ ] **Authz matrix harness** (see CLAUDE.md testing policy): table-driven, REST + WS entries,
       completeness machine-checked against `openapi.yaml` in CI
 - Tests: registration-off negative (signup returns 403 on fresh default instance);
@@ -133,16 +141,26 @@ retrofit is how security fails.
   redirect-to-private, DNS rebinding). Search authz (results never leak channels the user
   can't see)
 
-### 1.4 Admin panel & org policies
+### 1.4 Admin dashboard & org policies
 
-- [ ] Admin panel on separate path, optional IP allow-list; org settings (2FA enforcement,
-      session lifetime, password policy, registration mode)
+The dashboard is a first-class product surface (decided Aug 2026): it ships **inside the same
+install** — same webapp, same binary, same compose stack, zero extra setup — and, because
+public registration is off by default, it is **the** way users come into existence.
+
+- [ ] Admin dashboard on separate path, optional IP allow-list
+- [ ] User lifecycle from the dashboard: create users, generate invite links, deactivate/
+      offboard (kills all sessions + sockets), unlock/reset access
+- [ ] Role & permission management from the dashboard (org admin/member now; channel-level
+      roles from 1.2 surface here)
+- [ ] Org customization from the dashboard: org name, logo, default locale (`en`/`fa`),
+      org-wide policies (2FA enforcement, session lifetime, password policy, registration mode)
 - [ ] Tamper-evident audit log (hash-chained/HMAC; logins, admin actions, exports) — schema
       designed now, SIEM export later
 - Tests: every admin mutation appears in the audit log; directly mutating an audit row in the
   DB → chain verification fails and reports the break; with allow-listing on, admin request
   from a non-allowed IP rejected even with a valid admin session; non-admin cannot reach any
-  admin route (matrix)
+  admin route or dashboard API (matrix); invite link is single-use and expires; deactivated
+  user's live WS socket dies ≤10s
 
 ### 1.5 Bilingual UI + PWA baseline
 
@@ -311,6 +329,7 @@ First self-serve customer signs up, pays, and gets a working instance with zero 
 | Question | Decide by |
 |---|---|
 | Jalali (Shamsi) calendar support for `fa` locale — dates/date-pickers | Phase 1.5 |
+| Dedicated non-superuser Postgres runtime role (app connects as superuser today; extension creation needs owner split) | Phase 1, before 1.2 ships |
 | Mobile push architecture (metadata minimization) | Phase 3 spike |
 | Opt-in version telemetry design | Phase 4 |
 | Company formation timing/structure | Before first paying customer (Managed pre-sales, Phase 4) |

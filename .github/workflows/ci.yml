@@ -49,9 +49,11 @@ jobs:
           filters: |
             server:
               - 'server/**'
+              - 'docs/api/**'
               - '.github/workflows/ci.yml'
             webapp:
               - 'webapp/**'
+              - 'docs/api/**'
               - '.github/workflows/ci.yml'
             deploy:
               - 'server/**'
@@ -67,6 +69,22 @@ jobs:
     defaults:
       run:
         working-directory: server
+    services:
+      postgres:
+        # Throwaway CI database for storage integration tests; the password is
+        # per-run and gates nothing outside this ephemeral runner.
+        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+        env:
+          POSTGRES_USER: hamlaneh_test
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}
+          POSTGRES_DB: hamlaneh_test
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U hamlaneh_test -d hamlaneh_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -80,6 +98,11 @@ jobs:
       - name: Verify module checksums
         run: go mod verify
 
+      - name: Check generated code is in sync with docs/api/openapi.yaml
+        run: |
+          go generate ./...
+          git diff --exit-code
+
       - name: Build
         run: go build ./...
 
@@ -92,7 +115,9 @@ jobs:
           version: v2.13.0
           working-directory: server
 
-      - name: Test (race detector)
+      - name: Test (race detector + storage integration)
+        env:
+          HAMLANEH_TEST_DSN: postgres://hamlaneh_test:ci-${{ github.run_id }}@localhost:5432/hamlaneh_test?sslmode=disable
         run: go test -race ./...
 
       - name: Security scan (gosec)
@@ -128,6 +153,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Check generated API types are in sync with docs/api/openapi.yaml
+        run: |
+          npm run api:gen
+          git diff --exit-code
 
       - name: Typecheck
         run: npm run typecheck

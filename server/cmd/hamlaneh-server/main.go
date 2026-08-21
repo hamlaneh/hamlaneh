@@ -5,6 +5,11 @@
 //	hamlaneh-server              start the server on :8080
 //	hamlaneh-server healthcheck  probe /healthz of a local instance; exit 0 if healthy, 1 otherwise
 //
+// The server needs PostgreSQL, configured via the standard libpq environment
+// variables (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, PGSSLMODE), and
+// applies its schema migrations itself at startup — no manual migrate step.
+// The healthcheck subcommand needs neither a database nor those variables.
+//
 // The server speaks plain HTTP; TLS termination is the reverse proxy's job.
 // It shuts down gracefully on SIGINT/SIGTERM.
 package main
@@ -22,12 +27,18 @@ import (
 
 	"github.com/hamlaneh/hamlaneh/server/internal/healthcheck"
 	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
+	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
 
 const (
 	listenAddr         = ":8080"
 	shutdownTimeout    = 10 * time.Second
 	healthcheckTimeout = 5 * time.Second
+
+	// dbStartupTimeout caps how long startup waits for the database to
+	// accept connections and for migrations to apply; "docker compose up"
+	// starts both containers together and PostgreSQL needs a few seconds.
+	dbStartupTimeout = 60 * time.Second
 )
 
 // healthcheckURL is where the healthcheck subcommand probes the local
@@ -52,7 +63,14 @@ func run(args []string) error {
 	case len(args) == 0:
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		return serve(ctx, listenAddr)
+
+		store, err := openStorage(ctx)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+
+		return serve(ctx, httpserver.New(listenAddr, store))
 	case args[0] == "healthcheck":
 		if len(args) > 1 {
 			return fmt.Errorf("healthcheck takes no arguments\n%s", usage)
@@ -65,16 +83,30 @@ func run(args []string) error {
 	}
 }
 
-// serve runs the HTTP server on addr until ctx is canceled, then shuts it
-// down gracefully within shutdownTimeout.
-func serve(ctx context.Context, addr string) error {
-	srv := httpserver.New(addr)
+// openStorage connects to PostgreSQL (configured via the standard libpq
+// environment variables) and applies pending schema migrations, waiting up
+// to dbStartupTimeout for a database that is still starting.
+func openStorage(ctx context.Context) (*storage.Store, error) {
+	slog.Info("connecting to database and applying migrations")
+	dbCtx, cancel := context.WithTimeout(ctx, dbStartupTimeout)
+	defer cancel()
 
+	store, err := storage.Open(dbCtx, "")
+	if err != nil {
+		return nil, fmt.Errorf("open storage: %w", err)
+	}
+	slog.Info("database ready")
+	return store, nil
+}
+
+// serve runs srv until ctx is canceled, then shuts it down gracefully within
+// shutdownTimeout.
+func serve(ctx context.Context, srv *http.Server) error {
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- srv.ListenAndServe()
 	}()
-	slog.Info("hamlaneh-server listening", "addr", addr)
+	slog.Info("hamlaneh-server listening", "addr", srv.Addr)
 
 	select {
 	case err := <-serveErr:

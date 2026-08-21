@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/hamlaneh/hamlaneh/server/internal/api"
 )
 
 //go:embed index.html
@@ -18,10 +20,6 @@ var indexPage []byte
 
 //go:embed static
 var staticFS embed.FS
-
-// healthzBody is the exact /healthz response body. It is a fixed literal so
-// the handler has no marshalling error path.
-const healthzBody = `{"status":"ok"}`
 
 // Server timeouts guard against slow-client (slowloris-style) resource
 // exhaustion. Values are generous for Phase 0 and can tighten later.
@@ -33,11 +31,13 @@ const (
 )
 
 // New returns an *http.Server bound to addr with the Hamlaneh router and
-// hardened timeouts configured. The caller owns the server's lifecycle.
-func New(addr string) *http.Server {
+// hardened timeouts configured. ready backs the /readyz probe and may be nil
+// (readyz then always reports degraded). The caller owns the server's
+// lifecycle.
+func New(addr string, ready ReadinessChecker) *http.Server {
 	return &http.Server{
 		Addr:              addr,
-		Handler:           Handler(),
+		Handler:           Handler(ready),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -45,24 +45,21 @@ func New(addr string) *http.Server {
 	}
 }
 
-// Handler returns the root HTTP handler with every Phase 0 route registered:
+// Handler returns the root HTTP handler with every route registered:
 //
-//	GET /healthz          liveness probe, 200 {"status":"ok"}
 //	GET /                 embedded static login page
 //	GET /static/*         embedded static assets (stylesheets)
+//	GET /healthz          liveness probe, 200 {"status":"ok"}
+//	GET /readyz           readiness probe (database ping + schema version)
+//	/api/v1/*             contract endpoints (501 stubs until Phase 1.1)
 //
-// Anything else is a 404.
-func Handler() http.Handler {
+// Contract routes are registered by the generated api package, so the router
+// can never drift from docs/api/openapi.yaml. Anything else is a 404.
+func Handler(ready ReadinessChecker) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /{$}", handleIndex)
 	mux.Handle("GET /static/", noDirListing(http.FileServerFS(staticFS)))
-	return mux
-}
-
-func handleHealthz(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	writeBody(w, r, []byte(healthzBody))
+	return api.HandlerFromMux(&apiServer{ready: ready}, mux)
 }
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {

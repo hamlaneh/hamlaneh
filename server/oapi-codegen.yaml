@@ -1,0 +1,14 @@
+# oapi-codegen configuration for the Hamlaneh server.
+#
+# Generates contract types and a net/http (std-lib ServeMux) server interface
+# from docs/api/openapi.yaml into internal/api/api.gen.go.
+#
+# Canonical entry point: `go generate ./...` from server/. The //go:generate
+# directive lives in internal/api/generate.go, so oapi-codegen runs with that
+# directory as its working directory — `output` below is relative to it.
+# CI regenerates and fails on diff, so the committed file never drifts.
+package: api
+output: api.gen.go
+generate:
+  models: true
+  std-http-server: true
