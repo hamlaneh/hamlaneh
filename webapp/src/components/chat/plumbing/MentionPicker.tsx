@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api } from "../../../api/client";
@@ -23,14 +23,30 @@ export function MentionPicker({ channelId, onInsert }: MentionPickerProps) {
   const [open, setOpen] = useState(false);
   const [members, setMembers] = useState<UserSummary[]>([]);
 
+  // One in-flight member request at a time; a reopen or an unmount cancels it.
+  const inFlight = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      inFlight.current?.abort();
+    },
+    [],
+  );
+
   const load = () => {
+    inFlight.current?.abort();
+    const controller = new AbortController();
+    inFlight.current = controller;
     void (async () => {
       try {
         const { data } = await api.GET("/api/v1/channels/{channelId}/members", {
           params: { path: { channelId }, query: { limit: 100 } },
+          signal: controller.signal,
         });
         setMembers(data?.members ?? []);
       } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
         console.warn("Could not load channel members:", error);
         setMembers([]);
       }

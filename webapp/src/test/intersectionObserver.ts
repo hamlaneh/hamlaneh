@@ -49,6 +49,15 @@ export function installIntersectionObserverStub(): void {
     StubIntersectionObserver as unknown as typeof IntersectionObserver;
 }
 
+/**
+ * Drops every registration. The map is module-level, so without this a test
+ * that unmounts without disconnecting leaves an entry that the next test's
+ * `scrollIntoIntersection` would fire into a dead callback.
+ */
+export function resetIntersectionObserverStub(): void {
+  observed.clear();
+}
+
 /** Fires an intersection for one observed element, as scrolling to it would. */
 export function scrollIntoIntersection(target: Element): void {
   const callback = observed.get(target);

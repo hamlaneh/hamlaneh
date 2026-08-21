@@ -33,6 +33,31 @@ afterAll(() => {
 /** Fast backoff so the reconnect path does not spend real seconds waiting. */
 const FAST_RETRY = { retryDelayMs: () => 5 };
 
+/**
+ * A locale template with `{{seconds}}` widened to any number.
+ *
+ * The countdown ticks on a real one-second interval, so pinning the exact
+ * number would make the assertion a race against the wall clock. What is being
+ * asserted is that the schedule is shown at all, which does not tick.
+ */
+function withAnyCount(template: string, placeholder: string): RegExp {
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const [head = "", tail = ""] = template.split(placeholder);
+  return new RegExp(`${escape(head)}\\d+${escape(tail)}`);
+}
+
+/**
+ * `#general` carries sixty messages, and reaching one means a channel-list
+ * fetch, a redirect, a history fetch and sixty markdown bodies rendered — 900 ms
+ * on an idle runner, which findBy's 1 s default has no headroom over, and
+ * several seconds once a dozen jsdom workers are competing for memory.
+ *
+ * The budget is a wait, not an assertion: what is asserted is unchanged, and a
+ * genuinely broken render still fails, on `testTimeout` (15 s) instead. A
+ * budget shorter than the work only buys flakes.
+ */
+const LONG_HISTORY = { timeout: 10_000 };
+
 function renderChat(path = "/", realtime: { retryDelayMs: () => number } = FAST_RETRY) {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -73,7 +98,7 @@ function messageWith(text: string | RegExp): HTMLElement {
 async function openDeploys(
   realtime: { retryDelayMs: () => number } = FAST_RETRY,
 ): Promise<UserEvent> {
-  const user = userEvent.setup();
+  const user = userEvent.setup({ delay: null });
   renderChat(`/c/${CHAT_CHANNELS.deploys}`, realtime);
   await screen.findByText("Rolling to canary in ten minutes.");
   return user;
@@ -109,7 +134,9 @@ describe("sidebar", () => {
 
   it("opens the first conversation when the app is entered without one", async () => {
     renderChat("/");
-    expect(await screen.findByText("Backlog note 60")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Backlog note 60", undefined, LONG_HISTORY),
+    ).toBeInTheDocument();
   });
 });
 
@@ -156,6 +183,37 @@ describe("opening a channel", () => {
     // Honest copy: nothing here promises a browsable public channel.
     expect(screen.getByText(en.chat.empty.onlyYou)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: en.chat.empty.invite })).toBeInTheDocument();
+  });
+});
+
+describe("a permalink", () => {
+  it("opens the message a search result links to", async () => {
+    const target = mockMessages(CHAT_CHANNELS.deploys)[0];
+    renderChat(`/c/${CHAT_CHANNELS.deploys}/m/${String(target?.id)}`);
+
+    expect(await screen.findByText("Rolling to canary in ten minutes.")).toBeInTheDocument();
+  });
+
+  it("ignores an id that is not a uuid instead of taking the app down", async () => {
+    // A crafted id used to reach a CSS attribute selector, where `"]` throws a
+    // SyntaxError — and an uncaught throw here unmounts the whole React root.
+    renderChat(`/c/${CHAT_CHANNELS.deploys}/m/${encodeURIComponent('x"] , *')}`);
+
+    expect(await screen.findByText("Rolling to canary in ten minutes.")).toBeInTheDocument();
+    expect(screen.queryByText(en.app.error.title)).not.toBeInTheDocument();
+  });
+});
+
+describe("the composer", () => {
+  it("announces why attaching is unavailable, not only in a tooltip", async () => {
+    await openDeploys();
+
+    // aria-label wins over title for the accessible name, and a disabled
+    // button shows no tooltip in Firefox: the reason has to be in the name.
+    const attach = screen.getByRole("button", {
+      name: en.chat.composer.attachUnavailableLabel,
+    });
+    expect(attach).toBeDisabled();
   });
 });
 
@@ -239,12 +297,37 @@ describe("message actions", () => {
       within(placeholder ?? conversation()).getByText(en.chat.messages.removed),
     ).toBeInTheDocument();
   });
+
+  it("hands focus to the confirmation and gives it back on cancel", async () => {
+    const user = await openDeploys();
+
+    const target = messageWith("Nice. I'll watch the error rate.");
+    const opener = within(target).getByRole("button", { name: en.chat.messages.actions.delete });
+    await user.click(opener);
+
+    const dialog = await screen.findByRole("dialog", {
+      name: en.chat.messages.deleteConfirm.title,
+    });
+    // The dialog claims aria-modal, so focus starts inside it...
+    expect(
+      within(dialog).getByRole("button", { name: en.chat.messages.deleteConfirm.confirm }),
+    ).toHaveFocus();
+
+    await user.click(
+      within(dialog).getByRole("button", { name: en.chat.messages.deleteConfirm.cancel }),
+    );
+
+    // ...and comes back to the control that opened it, not to the document.
+    await waitFor(() => {
+      expect(opener).toHaveFocus();
+    });
+  });
 });
 
 describe("scrollback", () => {
   it("fetches the previous page when the top of the history comes into view", async () => {
     renderChat(`/c/${CHAT_CHANNELS.general}`);
-    await screen.findByText("Backlog note 60");
+    await screen.findByText("Backlog note 60", undefined, LONG_HISTORY);
     expect(screen.queryByText("Backlog note 1")).not.toBeInTheDocument();
 
     // The sentinel is rendered a beat before its observer is attached.
@@ -252,7 +335,9 @@ describe("scrollback", () => {
       scrollIntoIntersection(screen.getByTestId("hm-history-sentinel"));
     });
 
-    expect(await screen.findByText("Backlog note 1")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Backlog note 1", undefined, LONG_HISTORY),
+    ).toBeInTheDocument();
     // The older page is prepended, not swapped in.
     expect(screen.getByText("Backlog note 60")).toBeInTheDocument();
   });
@@ -310,7 +395,7 @@ describe("the reconnect path", () => {
     expect(screen.getByText(en.chat.composer.disconnected)).toBeInTheDocument();
     // ...and the banner counts the retry down rather than hiding the schedule.
     expect(
-      screen.getByText(en.chat.connection.offline.replace("{{seconds}}", "60")),
+      screen.getByText(withAnyCount(en.chat.connection.offline, "{{seconds}}")),
     ).toBeInTheDocument();
   });
 });

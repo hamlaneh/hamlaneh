@@ -94,7 +94,20 @@ export type ChatAction =
       focusMessageId?: string | null;
     }
   | { type: "history/failed"; channelId: string }
-  | { type: "message/upsert"; channelId: string; message: Message; currentUserId: string }
+  | { type: "channel/enter"; channelId: string; currentUserId: string }
+  | {
+      type: "message/upsert";
+      channelId: string;
+      message: Message;
+      currentUserId: string;
+      /**
+       * True only for a `message_created` frame. An edit or a delete carries
+       * the same upsert but must never raise the unread badge, and a
+       * duplicated create (ws-protocol.md §5 says one WILL arrive) is caught
+       * separately by the id already being known.
+       */
+      created: boolean;
+    }
   | { type: "pending/add"; channelId: string; pending: PendingMessage }
   | { type: "pending/queue"; channelId: string; clientMsgId: string }
   | { type: "pending/sending"; channelId: string; clientMsgId: string }
@@ -201,12 +214,16 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
     case "history/loaded": {
       const channel = state.channels.find((entry) => entry.id === action.channelId);
+      // Only the entry load places the divider. A background backfill (a
+      // resync arriving for a channel nobody is looking at) must leave the
+      // position untouched, or entering that channel later finds it "placed"
+      // at nothing and never draws it.
+      const entering = action.mode === "replace";
       return withView(state, action.channelId, (view) => {
-        const messages =
-          action.mode === "replace"
-            ? mergeMessages([], action.page.messages)
-            : mergeMessages(view.messages, action.page.messages);
-        const placed = view.dividerPlaced || action.mode !== "replace";
+        const messages = entering
+          ? mergeMessages([], action.page.messages)
+          : mergeMessages(view.messages, action.page.messages);
+        const keepDivider = view.dividerPlaced || !entering;
         return {
           ...view,
           status: "ready",
@@ -219,14 +236,37 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             action.mode === "newer" ? view.beforeCursor : (action.page.before_cursor ?? null),
           afterCursor:
             action.mode === "older" ? view.afterCursor : (action.page.after_cursor ?? null),
-          dividerBeforeId: placed
+          dividerBeforeId: keepDivider
             ? view.dividerBeforeId
             : computeDividerAnchor(messages, channel, action.currentUserId),
-          dividerPlaced: true,
+          dividerPlaced: view.dividerPlaced || entering,
           focusMessageId:
             action.focusMessageId === undefined ? view.focusMessageId : action.focusMessageId,
         };
       });
+    }
+
+    case "channel/enter": {
+      // Entering a channel whose history is already loaded: no request goes
+      // out, so this is the only chance to place the divider.
+      //
+      // An empty view is left alone rather than marked placed-at-nothing: it
+      // means an entry load is still in flight (or the channel really is
+      // empty), and that load is the one that gets to decide.
+      const channel = state.channels.find((entry) => entry.id === action.channelId);
+      return withView(state, action.channelId, (view) =>
+        view.dividerPlaced || view.messages.length === 0
+          ? view
+          : {
+              ...view,
+              dividerBeforeId: computeDividerAnchor(
+                view.messages,
+                channel,
+                action.currentUserId,
+              ),
+              dividerPlaced: true,
+            },
+      );
     }
 
     case "history/failed":
@@ -237,6 +277,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }));
 
     case "message/upsert": {
+      const known =
+        state.views[action.channelId]?.messages.some((entry) => entry.id === action.message.id) ??
+        false;
       const next = withView(state, action.channelId, (view) => ({
         ...view,
         messages: mergeMessages(view.messages, [action.message]),
@@ -246,7 +289,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           (entry) => entry.clientMsgId !== action.message.client_msg_id,
         ),
       }));
-      if (action.message.author.id === action.currentUserId) {
+      // The badge counts arrivals exactly once (ws-protocol.md §5): only a
+      // creation counts, only somebody else's, and only the first time that id
+      // is seen — a replayed or re-broadcast create must not count twice.
+      if (!action.created || known || action.message.author.id === action.currentUserId) {
         return next;
       }
       // Somebody else's message in a channel we are not reading raises the

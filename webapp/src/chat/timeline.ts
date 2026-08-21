@@ -11,7 +11,7 @@ import type { Message, PendingMessage, UserSummary } from "./types";
  * breaks a run — the artboards redraw the avatar after both.
  */
 
-export const GROUP_WINDOW_MS = 5 * 60 * 1000;
+const GROUP_WINDOW_MS = 5 * 60 * 1000;
 
 export type TimelineEntry =
   | { kind: "message"; id: string; message: Message }
@@ -87,8 +87,12 @@ export function buildTimeline(input: BuildTimelineInput): TimelineItem[] {
   for (const candidate of candidates(input)) {
     let broken = false;
 
+    // Separators only ever move forward. Unconfirmed messages are carried at
+    // the end regardless of when they were composed, so one queued before
+    // midnight would otherwise emit a second, backwards-dated separator; it
+    // stays under the day already open instead.
     const day = dayKey(candidate.createdAt);
-    if (day !== previousDay) {
+    if (previousDay === null || day > previousDay) {
       items.push({ kind: "day", key: `day-${day}`, iso: candidate.createdAt });
       previousDay = day;
       broken = true;

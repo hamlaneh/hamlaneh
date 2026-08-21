@@ -71,7 +71,7 @@ describe("App", () => {
   });
 
   it("switching to Persian sets RTL, the Persian font stack and the designer's copy", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
 
     await user.click(languageOption("fa"));
@@ -95,7 +95,7 @@ describe("App", () => {
   });
 
   it("renders an interpolated number in Persian digits, not Latin ones", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
     await user.click(languageOption("fa"));
 
@@ -128,7 +128,7 @@ describe("App", () => {
   });
 
   it("persists the chosen language in localStorage", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
 
     await user.click(languageOption("fa"));
@@ -137,7 +137,7 @@ describe("App", () => {
   });
 
   it("switching back to English restores LTR", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
 
     await user.click(languageOption("fa"));
@@ -149,7 +149,7 @@ describe("App", () => {
   });
 
   it("keeps a typed identifier when the language changes", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
 
     await user.type(screen.getByLabelText(en.login.identifierLabel), "a.jones");

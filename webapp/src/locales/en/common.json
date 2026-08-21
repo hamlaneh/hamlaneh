@@ -1,7 +1,12 @@
 {
   "app": {
     "name": "Hamlaneh",
-    "tagline": "Self-hosted team communication"
+    "tagline": "Self-hosted team communication",
+    "error": {
+      "title": "Something went wrong",
+      "body": "The page stopped working. Reloading usually fixes it; nothing you sent was lost.",
+      "reload": "Reload the page"
+    }
   },
   "common": {
     "loading": "Loading…"
@@ -130,7 +135,6 @@
     },
     "composer": {
       "placeholder": "Message {{target}}",
-      "attach": "Attach a file",
       "attachUnavailable": "File sharing is not available yet.",
       "send": "Send",
       "mention": "Mention someone",
@@ -140,7 +144,9 @@
       "hintQuote": "> quote",
       "hintSend": "Enter to send · Shift+Enter for a new line",
       "hintCompact": "**bold** · *italic* · `code`",
-      "disconnected": "Disconnected. Your message is kept and sends itself when the connection returns."
+      "disconnected": "Disconnected. Your message is kept and sends itself when the connection returns.",
+      "attachUnavailableLabel": "Attach a file — file sharing is not available yet",
+      "closed": "The connection was closed. Reload the page to send again."
     },
     "connection": {
       "reconnecting": "Reconnecting…",

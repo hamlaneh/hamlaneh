@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router";
 
 import { isolateAuto, isolateLtr } from "../../chat/format";
+import { PRESENCE_LABEL_KEY } from "../../chat/presence";
 import type { SearchKind } from "../../chat/store";
-import type { User, UserSummary } from "../../chat/types";
+import type { Presence, User, UserSummary } from "../../chat/types";
 import { useChat } from "../../chat/useChat";
 import type { RealtimeOverrides } from "../../chat/useChat";
+import { isUuid } from "../../chat/uuid";
 import { ChatHeader } from "./ChatHeader";
 import { Composer } from "./Composer";
 import { ConnectionBanner } from "./ConnectionBanner";
@@ -55,10 +57,18 @@ export function ChatShell({
   const [overlay, setOverlay] = useState<Overlay>("none");
   const [query, setQuery] = useState("");
 
+  const me = useMemo(() => summarize(currentUser), [currentUser]);
+
+  /* The permalink id comes from the address bar. It reaches a request path and
+   * a DOM lookup, so anything that is not a uuid is discarded here rather than
+   * carried into either. */
+  const focusMessageId =
+    params.messageId !== undefined && isUuid(params.messageId) ? params.messageId : undefined;
+
   const chat = useChat({
-    currentUser: summarize(currentUser),
+    currentUser: me,
     channelId: params.channelId,
-    focusMessageId: params.messageId,
+    focusMessageId,
     ...(realtime === undefined ? {} : { realtime }),
   });
 
@@ -100,6 +110,12 @@ export function ChatShell({
     connection.status === "offline" ||
     connection.status === "reconnecting" ||
     connection.status === "closed";
+  // No further attempt is scheduled, so nothing is "waiting for the
+  // connection to return" — the composer has to say something else.
+  const givenUp = connection.status === "closed";
+  // The only presence this client can honestly assert about its own user is
+  // whether its socket is up. Away is a server signal that does not exist yet.
+  const myPresence: Presence = connection.status === "online" ? "online" : "offline";
 
   const isDm = activeChannel?.kind === "dm";
   const channelTitle =
@@ -125,6 +141,8 @@ export function ChatShell({
       <Sidebar
         channels={state.channels}
         currentUser={currentUser}
+        presence={myPresence}
+        presenceLabel={t(PRESENCE_LABEL_KEY[myPresence])}
         organizationName={organizationName ?? t("app.name")}
         open={drawerOpen}
         onDismiss={() => {
@@ -230,7 +248,7 @@ export function ChatShell({
             channelId={activeChannel.id}
             messages={view.messages}
             pending={view.pending}
-            currentUser={summarize(currentUser)}
+            currentUser={me}
             canModerate={currentUser.is_admin}
             resolveMention={chat.resolveMention}
             loading={view.status === "loading"}
@@ -250,7 +268,13 @@ export function ChatShell({
             channelId={activeChannel.id}
             target={composerTarget}
             disabled={disconnected}
-            disabledReason={disconnected ? t("chat.composer.disconnected") : null}
+            disabledReason={
+              givenUp
+                ? t("chat.composer.closed")
+                : disconnected
+                  ? t("chat.composer.disconnected")
+                  : null
+            }
             onSend={chat.sendMessage}
           />
         )}

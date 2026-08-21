@@ -5,7 +5,6 @@ import type { components } from "../api/schema";
  * schema (npm run api:gen) stays the single source of truth.
  */
 export type Channel = components["schemas"]["Channel"];
-export type ChannelKind = components["schemas"]["ChannelKind"];
 export type ChannelRef = components["schemas"]["ChannelRef"];
 export type Message = components["schemas"]["Message"];
 export type MessagePage = components["schemas"]["MessagePage"];
@@ -42,7 +41,3 @@ export type ConnectionState =
   | { status: "offline"; retryInSeconds: number; lastConnectedAt: string | null }
   /** Session revoked or a deliberate close: no further attempts. */
   | { status: "closed"; reason: "revoked" | "normal" };
-
-export function isConnected(connection: ConnectionState): boolean {
-  return connection.status === "online";
-}

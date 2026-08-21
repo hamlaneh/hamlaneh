@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { daySeparatorLabel, formatTime, isolateAuto, isolateLtr } from "../../chat/format";
@@ -176,8 +176,40 @@ export function MessageList({
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  const items = buildTimeline({ messages, pending, currentUser, dividerBeforeId });
+  // Rebuilt only when the conversation actually changes: every message body
+  // below renders through the markdown pipeline, so a fresh timeline on every
+  // parent render re-renders all of them.
+  const items = useMemo(
+    () => buildTimeline({ messages, pending, currentUser, dividerBeforeId }),
+    [messages, pending, currentUser, dividerBeforeId],
+  );
   const lastKey = `${channelId}:${String(messages.length)}:${String(pending.length)}`;
+
+  /* Scrollback keeps its place: an older page prepended above the reader must
+   * not move what the reader is looking at. The height is captured before the
+   * loader is inserted, so the skeleton's own height is compensated too.
+   *
+   * Deliberately dependency-free: the captured height has to be the last one
+   * that was actually true, and the list's height moves for reasons that are
+   * not in any dependency array (a resize, a card finishing layout). */
+  const heightBeforeOlder = useRef(0);
+  const wasLoadingOlder = useRef(false);
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (element === null) {
+      return;
+    }
+    if (loadingOlder) {
+      // Hold the height measured before the loader went in.
+      wasLoadingOlder.current = true;
+      return;
+    }
+    if (wasLoadingOlder.current) {
+      wasLoadingOlder.current = false;
+      element.scrollTop += element.scrollHeight - heightBeforeOlder.current;
+    }
+    heightBeforeOlder.current = element.scrollHeight;
+  });
 
   /* Follow the conversation: jump to the newest message on entry, and keep
    * following only while the reader is already near the bottom. */
@@ -195,13 +227,29 @@ export function MessageList({
     }
   }, [channelId, lastKey]);
 
-  /* A permalink lands on its message rather than at the bottom. */
+  /* A permalink lands on its message rather than at the bottom — once. The id
+   * stays set until the channel is left, so without this the viewport would be
+   * yanked back on every later arrival, including the reader's own send. */
+  const scrolledTo = useRef<string | null>(null);
   useEffect(() => {
     if (focusMessageId === null) {
+      scrolledTo.current = null;
       return;
     }
-    const target = scrollRef.current?.querySelector(`[data-message-id="${focusMessageId}"]`);
-    target?.scrollIntoView({ block: "center" });
+    if (scrolledTo.current === focusMessageId) {
+      return;
+    }
+    // Matched by attribute rather than by building a selector: the id is a
+    // route parameter, and an interpolated one would let `"]` throw here.
+    const target = [...(scrollRef.current?.querySelectorAll("[data-message-id]") ?? [])].find(
+      (element) => element.getAttribute("data-message-id") === focusMessageId,
+    );
+    if (target === undefined) {
+      // The page carrying it has not arrived yet; try again when it does.
+      return;
+    }
+    scrolledTo.current = focusMessageId;
+    target.scrollIntoView({ block: "center" });
   }, [focusMessageId, lastKey]);
 
   /* Scrollback: the top sentinel asks for the previous page as it comes into
@@ -231,43 +279,47 @@ export function MessageList({
         : isolateLtr(`#${channel.slug ?? ""}`);
 
   return (
-    <div
-      className="hm-messages"
-      ref={scrollRef}
-      role="log"
-      aria-label={t("chat.messages.listLabel", { channel: channelName })}
-      data-dimmed={dimmed}
-    >
-      {hasMoreOlder ? <div ref={sentinelRef} data-testid="hm-history-sentinel" /> : null}
+    <>
+      <div
+        className="hm-messages"
+        ref={scrollRef}
+        role="log"
+        aria-label={t("chat.messages.listLabel", { channel: channelName })}
+        data-dimmed={dimmed}
+      >
+        {hasMoreOlder ? <div ref={sentinelRef} data-testid="hm-history-sentinel" /> : null}
 
-      {loadingOlder || loading ? (
-        <>
-          <p className="hm-history-loader">
-            <LoaderCircleIcon size={16} strokeWidth={2} className="hm-spin" />
-            {t("chat.messages.loadingOlder")}
-          </p>
-          <HistorySkeleton />
-        </>
-      ) : null}
+        {loadingOlder || loading ? (
+          <>
+            <p className="hm-history-loader">
+              <LoaderCircleIcon size={16} strokeWidth={2} className="hm-spin" />
+              {t("chat.messages.loadingOlder")}
+            </p>
+            <HistorySkeleton />
+          </>
+        ) : null}
 
-      {items.map((item) =>
-        item.kind === "day" ? (
-          <DaySeparator key={item.key} iso={item.iso} />
-        ) : item.kind === "unread" ? (
-          <UnreadDivider key={item.key} />
-        ) : (
-          <MessageGroupView
-            key={item.key}
-            group={item}
-            channelId={channelId}
-            canModerate={canModerate}
-            resolveMention={resolveMention}
-            onEdit={onEdit}
-            onRequestDelete={setConfirmDeleteId}
-          />
-        ),
-      )}
+        {items.map((item) =>
+          item.kind === "day" ? (
+            <DaySeparator key={item.key} iso={item.iso} />
+          ) : item.kind === "unread" ? (
+            <UnreadDivider key={item.key} />
+          ) : (
+            <MessageGroupView
+              key={item.key}
+              group={item}
+              channelId={channelId}
+              canModerate={canModerate}
+              resolveMention={resolveMention}
+              onEdit={onEdit}
+              onRequestDelete={setConfirmDeleteId}
+            />
+          ),
+        )}
+      </div>
 
+      {/* Outside the log region on purpose: opening a dialog is not a message
+          arrival, and inside it every screen reader would announce it as one. */}
       {confirmDeleteId === null ? null : (
         <DeleteConfirmation
           channelName={channelName}
@@ -281,7 +333,7 @@ export function MessageList({
           }}
         />
       )}
-    </div>
+    </>
   );
 }
 
@@ -295,10 +347,36 @@ interface DeleteConfirmationProps {
 function DeleteConfirmation({ channelName, onCancel, onConfirm }: DeleteConfirmationProps) {
   const { t } = useTranslation();
   const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
+    // Focus goes into the dialog and comes back to whatever opened it, which
+    // is the delete action inside a message.
+    const opener = document.activeElement;
     confirmRef.current?.focus();
+    return () => {
+      if (opener instanceof HTMLElement && opener.isConnected) {
+        opener.focus();
+      }
+    };
   }, []);
+
+  /** aria-modal="true" claims focus is contained, so contain it. */
+  const trapTab = (event: React.KeyboardEvent) => {
+    if (event.key !== "Tab") {
+      return;
+    }
+    const first = confirmRef.current;
+    const last = cancelRef.current;
+    if (first === null || last === null) {
+      return;
+    }
+    const edge = event.shiftKey ? first : last;
+    if (document.activeElement === edge) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    }
+  };
 
   return (
     <div className="hm-confirm-layer">
@@ -310,7 +388,9 @@ function DeleteConfirmation({ channelName, onCancel, onConfirm }: DeleteConfirma
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             onCancel();
+            return;
           }
+          trapTab(event);
         }}
       >
         <h2 className="hm-confirm__title" id="hm-delete-title">
@@ -328,7 +408,12 @@ function DeleteConfirmation({ channelName, onCancel, onConfirm }: DeleteConfirma
           >
             {t("chat.messages.deleteConfirm.confirm")}
           </button>
-          <button type="button" className="hm-compact-button" onClick={onCancel}>
+          <button
+            ref={cancelRef}
+            type="button"
+            className="hm-compact-button"
+            onClick={onCancel}
+          >
             {t("chat.messages.deleteConfirm.cancel")}
           </button>
         </div>

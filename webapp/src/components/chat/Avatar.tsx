@@ -15,7 +15,6 @@ interface AvatarProps {
    * is not announced twice.
    */
   presenceLabel?: string | null;
-  className?: string;
 }
 
 /**
@@ -30,7 +29,6 @@ export function Avatar({
   typeSize,
   presence,
   presenceLabel,
-  className,
 }: AvatarProps) {
   const style = {
     "--hm-avatar-size": `${String(size)}px`,
@@ -38,7 +36,7 @@ export function Avatar({
   } as React.CSSProperties;
 
   return (
-    <span className={`hm-avatar${className === undefined ? "" : ` ${className}`}`} data-tint={avatarTint(userId)} style={style}>
+    <span className="hm-avatar" data-tint={avatarTint(userId)} style={style}>
       <span className="hm-avatar__initial" aria-hidden="true">
         {avatarInitial(displayName)}
       </span>

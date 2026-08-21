@@ -2,6 +2,8 @@ import { http, HttpResponse } from "msw";
 
 import type { components } from "../api/schema";
 
+type Attachment = components["schemas"]["Attachment"];
+type LinkPreview = components["schemas"]["LinkPreview"];
 type Channel = components["schemas"]["Channel"];
 type ChannelPage = components["schemas"]["ChannelPage"];
 type Message = components["schemas"]["Message"];
@@ -67,6 +69,43 @@ export const CHAT_CHANNELS = {
 
 /** Fixed instant so day separators and grouping are deterministic in tests. */
 const TODAY = "2026-08-21";
+
+/**
+ * What the three cards on the component sheet render from. The real API
+ * returns no attachments until the Phase 1.3 upload pipeline and no previews
+ * until the Phase 1.3 egress proxy, so these fixtures are what the card code
+ * is exercised against in the meantime.
+ */
+export const FIXTURE_FILE: Attachment = {
+  id: "00000000-0000-4000-8000-0000000000f1",
+  filename: "rollout-checklist.pdf",
+  content_type: "application/pdf",
+  size_bytes: 248 * 1024,
+  url: "https://files.example.test/rollout-checklist.pdf",
+};
+
+/**
+ * No `thumbnail_url`: the deployed CSP is `img-src 'self'` (deploy/Caddyfile)
+ * while the files origin is deliberately a separate, cookie-less one, so where
+ * thumbnails may be loaded from is a Phase 1.3 decision. The card draws its
+ * designed no-preview glyph until then, which is a real drawn state rather
+ * than a broken image.
+ */
+export const FIXTURE_IMAGE: Attachment = {
+  id: "00000000-0000-4000-8000-0000000000f2",
+  filename: "latency-canary.png",
+  content_type: "image/png",
+  size_bytes: 1_260_000,
+  width: 1600,
+  height: 900,
+  url: "https://files.example.test/latency-canary.png",
+};
+
+export const FIXTURE_LINK_PREVIEW: LinkPreview = {
+  url: "https://status.example.test/incidents/482",
+  title: "Canary latency writeup",
+  description: "p99 held flat across the canary window.",
+};
 
 function at(time: string): string {
   return `${TODAY}T${time}:00.000Z`;
@@ -179,10 +218,16 @@ function seedState(): ChatState {
     message(deploys, nasrin, "Staging is green. Tag is `v1.2.0-rc3`", at("09:12")),
     message(deploys, nasrin, "Rolling to canary in ten minutes.", at("09:13")),
     message(deploys, me, "Nice. I'll watch the error rate.", at("09:14")),
+    // The file card the chat-default artboard draws. Attachments are always
+    // empty from the real API until the Phase 1.3 upload pipeline lands; the
+    // fixture carries one so the drawn card has a data source to render from.
     message(deploys, omid, "Checklist for the rollout", at("09:20"), {
       edited_at: at("09:21"),
+      attachments: [FIXTURE_FILE],
     }),
-    message(deploys, parisa, "Latency held flat through the canary — writeup here.", at("09:31")),
+    message(deploys, parisa, "Latency held flat through the canary — writeup here.", at("09:31"), {
+      link_preview: FIXTURE_LINK_PREVIEW,
+    }),
     message(deploys, omid, "", at("09:33"), { deleted_at: at("09:34") }),
   ];
   // The unread divider sits before the first message after this one.
@@ -194,7 +239,10 @@ function seedState(): ChatState {
 
   const dm = CHAT_CHANNELS.dmParisa;
   const dmMessages: Message[] = [
-    message(dm, parisa, "Sent you the latency capture from the canary window.", at("07:02")),
+    // The image card the chat-dm artboard draws.
+    message(dm, parisa, "Sent you the latency capture from the canary window.", at("07:02"), {
+      attachments: [FIXTURE_IMAGE],
+    }),
     message(dm, me, "That is the flattest I have seen it. Adding it to the rollout note.", at("07:20")),
     message(dm, me, "Thank you.", at("07:21")),
   ];

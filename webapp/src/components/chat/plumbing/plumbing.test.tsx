@@ -43,7 +43,7 @@ function renderChat(path: string) {
 }
 
 async function openDeploys() {
-  const user = userEvent.setup();
+  const user = userEvent.setup({ delay: null });
   renderChat(`/c/${CHAT_CHANNELS.deploys}`);
   await screen.findByText("Rolling to canary in ten minutes.");
   return user;
@@ -65,8 +65,10 @@ describe("create channel", () => {
     // Creating closes the dialog, the router lands in the new channel, and its
     // (empty) history loads — three chained awaits, which outrun findBy's default
     // 1s budget on a loaded runner (observed flake, so the budget is explicit).
+    // Widened again after 5 s was still outrun with the whole suite in parallel;
+    // a genuinely broken create still fails on testTimeout.
     expect(
-      await screen.findByText(en.chat.empty.onlyYou, undefined, { timeout: 5000 }),
+      await screen.findByText(en.chat.empty.onlyYou, undefined, { timeout: 10_000 }),
     ).toBeInTheDocument();
     // Landing in the channel also means the dialog is gone.
     expect(

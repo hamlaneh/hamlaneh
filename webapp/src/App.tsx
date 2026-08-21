@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router";
 
 import { api } from "./api/client";
 import type { components } from "./api/schema";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AuthShell } from "./components/auth/AuthShell";
 import { ChangePasswordScreen } from "./screens/ChangePasswordScreen";
 import { ChatApp } from "./screens/ChatApp";
@@ -29,6 +30,32 @@ async function fetchSession(): Promise<Session> {
     console.warn("Session lookup failed:", requestError);
     return { status: "unauthenticated" };
   }
+}
+
+/**
+ * UNDESIGNED SURFACE — no artboard draws a crash state, so this is plain
+ * semantic HTML with no styling beyond structure.
+ *
+ * It says what happened and offers the one recovery that is honestly
+ * available, and it never shows the error text: that can carry message
+ * content or an id, and it belongs in the console, not on the page.
+ */
+function CrashFallback() {
+  const { t } = useTranslation();
+  return (
+    <div role="alert">
+      <h1>{t("app.error.title")}</h1>
+      <p>{t("app.error.body")}</p>
+      <button
+        type="button"
+        onClick={() => {
+          window.location.reload();
+        }}
+      >
+        {t("app.error.reload")}
+      </button>
+    </div>
+  );
 }
 
 /**
@@ -116,17 +143,20 @@ function App() {
   }
 
   // The chat shell is the authenticated app; only it needs a URL, so the
-  // router starts here.
+  // router starts here. The boundary wraps it because this is the surface a
+  // hostile link reaches: without one, a single throw blanks the page.
   return (
-    <BrowserRouter>
-      <ChatApp
-        currentUser={session.user}
-        onLogout={handleLogout}
-        onChangePassword={() => {
-          setShowChangePassword(true);
-        }}
-      />
-    </BrowserRouter>
+    <ErrorBoundary fallback={<CrashFallback />}>
+      <BrowserRouter>
+        <ChatApp
+          currentUser={session.user}
+          onLogout={handleLogout}
+          onChangePassword={() => {
+            setShowChangePassword(true);
+          }}
+        />
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }
 

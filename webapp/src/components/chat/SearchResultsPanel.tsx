@@ -97,12 +97,14 @@ export function SearchResultsPanel({ search, onClose, onSelectKind }: SearchResu
         </button>
       </div>
 
-      <div className="hm-search-panel__tabs" role="tablist" aria-label={t("chat.search.kindLabel")}>
+      {/* Two filters over one list, not tabs: a tablist promises arrow-key
+          navigation and a tabpanel this panel does not have. A labelled group
+          of toggles is the complete pattern for what this actually is. */}
+      <div className="hm-search-panel__tabs" role="group" aria-label={t("chat.search.kindLabel")}>
         <button
           type="button"
-          role="tab"
           className="hm-search-tab"
-          aria-selected={search.kind === "messages"}
+          aria-pressed={search.kind === "messages"}
           onClick={() => {
             onSelectKind("messages");
           }}
@@ -111,9 +113,8 @@ export function SearchResultsPanel({ search, onClose, onSelectKind }: SearchResu
         </button>
         <button
           type="button"
-          role="tab"
           className="hm-search-tab"
-          aria-selected={search.kind === "files"}
+          aria-pressed={search.kind === "files"}
           onClick={() => {
             onSelectKind("files");
           }}

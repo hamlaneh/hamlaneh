@@ -1,9 +1,16 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import "../../i18n";
 import en from "../../locales/en/common.json";
 import { ConnectionBanner } from "./ConnectionBanner";
+
+// Restored here, not at the end of the case that installs them: a failure
+// before that line would otherwise leave fake timers installed for the rest
+// of the file.
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /**
  * The three connection states the design draws (chat-components -> connection)
@@ -56,7 +63,6 @@ describe("ConnectionBanner", () => {
 
     vi.advanceTimersByTime(3000);
     expect(onSettled).toHaveBeenCalledTimes(1);
-    vi.useRealTimers();
   });
 
   it("says nothing at all while the connection is healthy", () => {

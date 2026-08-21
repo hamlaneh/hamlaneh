@@ -51,12 +51,14 @@ export function Composer({ channelId, target, disabled, disabledReason, onSend }
     >
       <div className="hm-composer__box" data-disabled={disabled}>
         {/* Uploads arrive with the Phase 1.3 pipeline; the control is drawn
-            but has nothing behind it yet, so it carries its reason. */}
+            but has nothing behind it yet, so it carries its reason. The reason
+            is in the accessible NAME, not only the tooltip: aria-label wins
+            over title, and a disabled button shows no tooltip in Firefox. */}
         <button
           type="button"
           className="hm-icon-button"
           disabled
-          aria-label={t("chat.composer.attach")}
+          aria-label={t("chat.composer.attachUnavailableLabel")}
           title={t("chat.composer.attachUnavailable")}
         >
           <PaperclipIcon size={18} />
@@ -90,7 +92,9 @@ export function Composer({ channelId, target, disabled, disabledReason, onSend }
           disabled={!ready}
           aria-label={t("chat.composer.send")}
         >
-          <SendIcon size={18} strokeWidth={1.85} />
+          {/* Send is one of the three directional glyphs that mirror in RTL
+              (chat-components -> Bidi); attach and search do not. */}
+          <SendIcon size={18} strokeWidth={1.85} className="hm-mirror-glyph" />
         </button>
       </div>
 

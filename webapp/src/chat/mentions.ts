@@ -18,13 +18,13 @@ const MENTION_PATTERN = new RegExp(`<@(${UUID})>`, "g");
 /** Elements whose text is literal by definition — a mention inside a code span stays a token. */
 const LITERAL_ELEMENTS = new Set(["code", "pre"]);
 
-export interface MentionSegment {
+interface MentionSegment {
   kind: "text" | "mention";
   value: string;
 }
 
 /** Splits a string into plain runs and mention tokens (the user id is the value). */
-export function splitMentions(text: string): MentionSegment[] {
+function splitMentions(text: string): MentionSegment[] {
   const segments: MentionSegment[] = [];
   let cursor = 0;
   // A fresh regex per call: a shared /g regex carries lastIndex between calls.

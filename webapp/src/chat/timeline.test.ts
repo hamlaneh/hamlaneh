@@ -56,6 +56,35 @@ describe("buildTimeline", () => {
     expect(groups(items)).toHaveLength(2);
   });
 
+  it("keeps a run together at exactly five minutes", () => {
+    // The rule is "within five minutes", so the boundary itself groups.
+    const items = buildTimeline({
+      messages: [
+        message("a", other, "2026-08-21T09:00:00Z"),
+        message("b", other, "2026-08-21T09:05:00Z"),
+      ],
+      pending: [],
+      currentUser: me,
+      dividerBeforeId: null,
+    });
+
+    expect(groups(items)).toHaveLength(1);
+  });
+
+  it("breaks a run one millisecond past five minutes", () => {
+    const items = buildTimeline({
+      messages: [
+        message("a", other, "2026-08-21T09:00:00.000Z"),
+        message("b", other, "2026-08-21T09:05:00.001Z"),
+      ],
+      pending: [],
+      currentUser: me,
+      dividerBeforeId: null,
+    });
+
+    expect(groups(items)).toHaveLength(2);
+  });
+
   it("breaks a run when the author changes", () => {
     const items = buildTimeline({
       messages: [
@@ -122,5 +151,32 @@ describe("buildTimeline", () => {
     expect(runs).toHaveLength(2);
     expect(runs[1]?.own).toBe(true);
     expect(runs[1]?.entries[0]).toEqual({ kind: "pending", id: "p1", pending });
+  });
+
+  it("does not open a backwards-dated day for a message queued across midnight", () => {
+    // Unconfirmed messages are carried at the end whatever their timestamp, so
+    // one composed before midnight must not re-open yesterday below today.
+    // Midday instants exactly a day apart, so the two messages land on
+    // different local days whatever the runner's time zone is.
+    const pending: PendingMessage = {
+      clientMsgId: "p1",
+      content: "queued last night",
+      createdAt: "2026-08-20T12:30:00Z",
+      status: "queued",
+    };
+    const items = buildTimeline({
+      messages: [
+        message("a", other, "2026-08-20T12:00:00Z"),
+        message("b", other, "2026-08-21T12:00:00Z"),
+      ],
+      pending: [pending],
+      currentUser: me,
+      dividerBeforeId: null,
+    });
+
+    const days = items.filter((item) => item.kind === "day");
+    expect(days).toHaveLength(2);
+    // ...and the queued message is still the last thing drawn.
+    expect(items.at(-1)).toMatchObject({ kind: "group", own: true });
   });
 });

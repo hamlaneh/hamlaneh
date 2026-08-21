@@ -18,6 +18,9 @@ interface PeoplePickerProps {
   onClose: () => void;
 }
 
+/** One directory request per pause in typing, not per keystroke. */
+const QUERY_DEBOUNCE_MS = 200;
+
 export function PeoplePicker({ title, actionLabel, onPick, onClose }: PeoplePickerProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
@@ -26,24 +29,31 @@ export function PeoplePicker({ title, actionLabel, onPick, onClose }: PeoplePick
   const queryId = useId();
 
   useEffect(() => {
-    const run = { cancelled: false };
-    void (async () => {
-      try {
-        const { data } = await api.GET("/api/v1/users", {
-          params: { query: { limit: 50, ...(query.trim() === "" ? {} : { q: query.trim() }) } },
-        });
-        if (!run.cancelled && data !== undefined) {
-          setPeople(data.users);
-        }
-      } catch (error) {
-        console.warn("Could not load the user directory:", error);
-        if (!run.cancelled) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const { data } = await api.GET("/api/v1/users", {
+            params: { query: { limit: 50, ...(query.trim() === "" ? {} : { q: query.trim() }) } },
+            signal: controller.signal,
+          });
+          if (data !== undefined) {
+            setPeople(data.users);
+          }
+        } catch (error) {
+          if (controller.signal.aborted) {
+            // Superseded by a newer query, or the picker closed.
+            return;
+          }
+          console.warn("Could not load the user directory:", error);
           setPeople([]);
         }
-      }
-    })();
+      })();
+    }, QUERY_DEBOUNCE_MS);
+
     return () => {
-      run.cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
     };
   }, [query]);
 

@@ -23,7 +23,7 @@ import (
 // Environment variables the installer sets.
 const (
 	EnvUsername = "HAMLANEH_ADMIN_USERNAME"
-	EnvPassword = "HAMLANEH_ADMIN_PASSWORD" //nolint:gosec // variable name, not a credential
+	EnvPassword = "HAMLANEH_ADMIN_PASSWORD" // #nosec G101 -- the environment variable's NAME; its value is never in the repo
 	EnvLocale   = "HAMLANEH_ADMIN_LOCALE"
 )
 

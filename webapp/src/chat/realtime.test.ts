@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CLOSE_HEARTBEAT_TIMEOUT,
+  CLOSE_PROTOCOL_ERROR,
   CLOSE_SESSION_REVOKED,
   fullJitterDelay,
   parseServerFrame,
@@ -67,13 +68,20 @@ interface Harness {
   statuses: ConnectionState[];
   frames: string[];
   resyncs: string[];
+  /** The attempt number handed to the backoff, once per scheduled retry. */
+  attempts: number[];
 }
 
-function harness(): Harness {
+interface HarnessOptions {
+  onFrame?: (type: string) => void;
+}
+
+function harness(options: HarnessOptions = {}): Harness {
   const sockets: FakeSocket[] = [];
   const statuses: ConnectionState[] = [];
   const frames: string[] = [];
   const resyncs: string[] = [];
+  const attempts: number[] = [];
   const client = new RealtimeClient({
     url: "ws://localhost/api/v1/ws",
     socketFactory: () => {
@@ -81,12 +89,23 @@ function harness(): Harness {
       sockets.push(socket);
       return socket as unknown as WebSocket;
     },
-    retryDelayMs: () => 0,
-    onFrame: (frame) => frames.push(frame.type),
+    retryDelayMs: (attempt) => {
+      attempts.push(attempt);
+      return 0;
+    },
+    onFrame: (frame) => {
+      frames.push(frame.type);
+      options.onFrame?.(frame.type);
+    },
     onStatus: (status) => statuses.push(status),
     onResync: (channelId) => resyncs.push(channelId),
   });
-  return { client, sockets, statuses, frames, resyncs };
+  return { client, sockets, statuses, frames, resyncs, attempts };
+}
+
+/** The `type` of every frame the client has sent on a socket. */
+function sentTypes(socket: FakeSocket | undefined): string[] {
+  return (socket?.sent ?? []).map((raw) => (JSON.parse(raw) as { type: string }).type);
 }
 
 function helloOk(extra: Record<string, unknown> = {}) {
@@ -134,8 +153,58 @@ describe("RealtimeClient handshake", () => {
     socket?.deliver(helloOk());
     socket?.deliver({ type: "ping", ts: "2026-08-21T09:00:30Z", data: {} });
 
-    const types = (socket?.sent ?? []).map((raw) => (JSON.parse(raw) as { type: string }).type);
-    expect(types).toContain("pong");
+    expect(sentTypes(sockets[0])).toContain("pong");
+    client.close();
+  });
+
+  it("re-subscribes every channel it was following on the new socket", () => {
+    vi.useFakeTimers();
+    const { client, sockets } = harness();
+    client.connect();
+    sockets[0]?.open();
+    sockets[0]?.deliver(helloOk());
+    client.subscribe("chan-a");
+    client.subscribe("chan-b");
+
+    sockets[0]?.drop(CLOSE_HEARTBEAT_TIMEOUT);
+    vi.advanceTimersByTime(1);
+    sockets[1]?.open();
+    sockets[1]?.deliver(helloOk());
+
+    // hello first, then one subscribe per channel: a reconnect that forgot to
+    // re-subscribe would look connected and deliver nothing.
+    expect(sentTypes(sockets[1])).toEqual(["hello", "subscribe", "subscribe"]);
+    const channels = (sockets[1]?.sent ?? [])
+      .map((raw) => (JSON.parse(raw) as { chan?: string }).chan)
+      .filter((chan) => chan !== undefined);
+    expect(channels).toEqual(["chan-a", "chan-b"]);
+    client.close();
+  });
+
+  it("stops resuming a channel it no longer follows", () => {
+    vi.useFakeTimers();
+    const { client, sockets } = harness();
+    client.connect();
+    sockets[0]?.open();
+    sockets[0]?.deliver(helloOk());
+    client.subscribe("chan-a");
+    sockets[0]?.deliver({
+      type: "message_created",
+      chan: "chan-a",
+      seq: 12,
+      ts: "2026-08-21T09:01:00Z",
+      data: { message: { id: "m1" } },
+    });
+    client.unsubscribe("chan-a");
+
+    sockets[0]?.drop(CLOSE_HEARTBEAT_TIMEOUT);
+    vi.advanceTimersByTime(1);
+    sockets[1]?.open();
+
+    const hello = JSON.parse(sockets[1]?.sent[0] ?? "{}") as {
+      data: { resume?: unknown };
+    };
+    expect(hello.data.resume).toBeUndefined();
     client.close();
   });
 
@@ -176,6 +245,101 @@ describe("RealtimeClient handshake", () => {
     expect(resyncs).toEqual(["chan-b"]);
     client.close();
   });
+
+  it("drops the resume cursor when a resync arrives mid-socket", () => {
+    vi.useFakeTimers();
+    const { client, sockets, resyncs } = harness();
+    client.connect();
+    sockets[0]?.open();
+    sockets[0]?.deliver(helloOk());
+    sockets[0]?.deliver({
+      type: "message_created",
+      chan: "chan-a",
+      seq: 77,
+      ts: "2026-08-21T09:01:00Z",
+      data: { message: { id: "m1" } },
+    });
+    sockets[0]?.deliver({ type: "resync", chan: "chan-a", ts: "2026-08-21T09:02:00Z", data: {} });
+
+    expect(resyncs).toEqual(["chan-a"]);
+    // A resync means the buffer fell short, so resuming from the old seq
+    // would silently skip whatever REST is about to fetch.
+    sockets[0]?.drop(CLOSE_HEARTBEAT_TIMEOUT);
+    vi.advanceTimersByTime(1);
+    sockets[1]?.open();
+    const hello = JSON.parse(sockets[1]?.sent[0] ?? "{}") as { data: { resume?: unknown } };
+    expect(hello.data.resume).toBeUndefined();
+    client.close();
+  });
+
+  it("does not mark a seq processed when the handler throws", () => {
+    vi.useFakeTimers();
+    const { client, sockets } = harness({
+      onFrame: (type) => {
+        if (type === "message_created") {
+          throw new Error("the reducer blew up");
+        }
+      },
+    });
+    client.connect();
+    sockets[0]?.open();
+    sockets[0]?.deliver(helloOk());
+    expect(() => {
+      sockets[0]?.deliver({
+        type: "message_created",
+        chan: "chan-a",
+        seq: 500,
+        ts: "2026-08-21T09:01:00Z",
+        data: { message: { id: "m1" } },
+      });
+    }).toThrow();
+
+    // Resuming from 500 would tell the server the client has it, which it
+    // does not — the frame never made it into the store.
+    sockets[0]?.drop(CLOSE_HEARTBEAT_TIMEOUT);
+    vi.advanceTimersByTime(1);
+    sockets[1]?.open();
+    const hello = JSON.parse(sockets[1]?.sent[0] ?? "{}") as { data: { resume?: unknown } };
+    expect(hello.data.resume).toBeUndefined();
+    client.close();
+  });
+});
+
+describe("RealtimeClient watchdog", () => {
+  it("drops a socket that went quiet for two and a half heartbeats", () => {
+    vi.useFakeTimers();
+    const { client, sockets, statuses } = harness();
+    client.connect();
+    sockets[0]?.open();
+    sockets[0]?.deliver(helloOk());
+    expect(statuses.at(-1)).toEqual({ status: "online" });
+
+    // A socket through a dead proxy stays "open" indefinitely; only silence
+    // gives it away.
+    vi.advanceTimersByTime(30 * 2.5 * 1000);
+    expect(statuses.at(-1)).toMatchObject({ status: "offline" });
+
+    vi.advanceTimersByTime(1);
+    expect(sockets).toHaveLength(2);
+    client.close();
+  });
+
+  it("is re-armed by every frame, so a live socket is never dropped", () => {
+    vi.useFakeTimers();
+    const { client, sockets, statuses } = harness();
+    client.connect();
+    sockets[0]?.open();
+    sockets[0]?.deliver(helloOk());
+
+    for (let tick = 0; tick < 4; tick += 1) {
+      vi.advanceTimersByTime(30_000);
+      sockets[0]?.deliver({ type: "ping", ts: "2026-08-21T09:00:30Z", data: {} });
+    }
+
+    expect(statuses.at(-1)).toEqual({ status: "online" });
+    expect(sockets).toHaveLength(1);
+    client.close();
+  });
 });
 
 describe("RealtimeClient reconnect", () => {
@@ -209,6 +373,54 @@ describe("RealtimeClient reconnect", () => {
     // A retry after a previous success is "reconnecting", and it remembers when.
     expect(statuses.at(-1)).toMatchObject({ status: "reconnecting" });
     expect(sockets).toHaveLength(2);
+    client.close();
+  });
+
+  it("escalates the backoff while the handshake keeps failing", () => {
+    vi.useFakeTimers();
+    const { client, sockets, attempts } = harness();
+    client.connect();
+
+    // A transport that opens and is then closed before hello_ok is exactly
+    // the 4429 / 4400 shape: resetting on "open" would retry from zero forever.
+    for (let round = 0; round < 3; round += 1) {
+      sockets[round]?.open();
+      sockets[round]?.drop(CLOSE_HEARTBEAT_TIMEOUT);
+      vi.advanceTimersByTime(1);
+    }
+
+    expect(attempts).toEqual([0, 1, 2]);
+    client.close();
+  });
+
+  it("resets the backoff only once the handshake has succeeded", () => {
+    vi.useFakeTimers();
+    const { client, sockets, attempts } = harness();
+    client.connect();
+    sockets[0]?.open();
+    sockets[0]?.drop(CLOSE_HEARTBEAT_TIMEOUT);
+    vi.advanceTimersByTime(1);
+
+    sockets[1]?.open();
+    sockets[1]?.deliver(helloOk());
+    sockets[1]?.drop(CLOSE_HEARTBEAT_TIMEOUT);
+    vi.advanceTimersByTime(1);
+
+    expect(attempts).toEqual([0, 0]);
+    client.close();
+  });
+
+  it("jumps the backoff to its ceiling on a protocol error rather than hammering", () => {
+    vi.useFakeTimers();
+    const { client, sockets, attempts } = harness();
+    client.connect();
+    sockets[0]?.open();
+    sockets[0]?.deliver(helloOk());
+    // 4400 is a client bug (ws-protocol.md §8): never blind-retried.
+    sockets[0]?.drop(CLOSE_PROTOCOL_ERROR);
+
+    expect(attempts).toEqual([5]);
+    expect(fullJitterDelay(attempts[0] ?? 0, () => 1)).toBe(30_000);
     client.close();
   });
 

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
@@ -91,8 +91,14 @@ interface MessageContentProps {
 /**
  * A message body. `dir="auto"` per the handoff: a Persian message in an
  * English workspace still reads correctly, and vice versa.
+ *
+ * Memoized: parsing markdown and running the plugin pipeline is by far the
+ * most expensive thing the conversation does per render.
  */
-export function MessageContent({ content, resolveMention }: MessageContentProps) {
+export const MessageContent = memo(function MessageContent({
+  content,
+  resolveMention,
+}: MessageContentProps) {
   const { t } = useTranslation();
   const unknownLabel = t("chat.messages.unknownMember");
 
@@ -159,4 +165,4 @@ export function MessageContent({ content, resolveMention }: MessageContentProps)
       </Markdown>
     </div>
   );
-}
+});

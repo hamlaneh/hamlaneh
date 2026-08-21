@@ -4,13 +4,16 @@ import { NavLink } from "react-router";
 
 import { formatCount } from "../../chat/format";
 import { PRESENCE_LABEL_KEY } from "../../chat/presence";
-import type { Channel, User } from "../../chat/types";
+import type { Channel, Presence, User } from "../../chat/types";
 import { HashIcon, LockIcon, NestMark, PlusIcon, SettingsIcon, XIcon } from "../icons";
 import { Avatar } from "./Avatar";
 
 interface SidebarProps {
   channels: readonly Channel[];
   currentUser: User;
+  /** The caller's own presence, driven by the realtime connection state. */
+  presence: Presence;
+  presenceLabel: string;
   organizationName: string;
   open: boolean;
   onDismiss: () => void;
@@ -73,6 +76,8 @@ function ConversationRow({ channel, label, onDismiss, children }: ConversationRo
 export function Sidebar({
   channels,
   currentUser,
+  presence,
+  presenceLabel,
   organizationName,
   open,
   onDismiss,
@@ -186,13 +191,13 @@ export function Sidebar({
           displayName={currentUser.display_name}
           size={32}
           typeSize={13}
-          presence="online"
+          presence={presence}
           presenceLabel={null}
         />
         <div className="hm-sidebar__me">
           <span className="hm-sidebar__me-name">{currentUser.display_name}</span>
           {/* The visible label that keeps the dot from carrying state alone. */}
-          <span className="hm-sidebar__me-presence">{t("chat.presence.online")}</span>
+          <span className="hm-sidebar__me-presence">{presenceLabel}</span>
         </div>
         <button
           type="button"

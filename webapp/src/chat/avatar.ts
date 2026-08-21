@@ -4,7 +4,7 @@
  * The design fixes the palette at four; do not add a fifth here.
  */
 
-export const AVATAR_TINTS = ["brand", "warm", "info", "success"] as const;
+const AVATAR_TINTS = ["brand", "warm", "info", "success"] as const;
 export type AvatarTint = (typeof AVATAR_TINTS)[number];
 
 /**

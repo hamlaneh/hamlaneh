@@ -15,7 +15,7 @@ type errorCode string
 
 const (
 	codeInvalidRequest         errorCode = "invalid_request"
-	codeInvalidCredentials     errorCode = "invalid_credentials" //nolint:gosec // error code, not a credential
+	codeInvalidCredentials     errorCode = "invalid_credentials" // #nosec G101 -- a stable error code in the API contract, not a credential
 	codeNotAuthenticated       errorCode = "not_authenticated"
 	codeForbidden              errorCode = "forbidden"
 	codeCSRFFailed             errorCode = "csrf_failed"

@@ -10,11 +10,10 @@ import type { Channel, ConnectionState, Message, Presence, UserSummary } from ".
  * delivery path (§4). Sending, editing, deleting and read positions are REST.
  */
 
-export const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 1;
 
 /** ws-protocol.md §8. */
 export const CLOSE_NORMAL = 1000;
-export const CLOSE_GOING_AWAY = 1001;
 export const CLOSE_PROTOCOL_ERROR = 4400;
 export const CLOSE_SESSION_REVOKED = 4401;
 export const CLOSE_HEARTBEAT_TIMEOUT = 4408;
@@ -22,6 +21,12 @@ export const CLOSE_HEARTBEAT_TIMEOUT = 4408;
 const DEFAULT_HEARTBEAT_SECONDS = 30;
 /** ws-protocol.md §6: two missed pings (~75 s) is a dead socket. */
 const HEARTBEAT_MISS_FACTOR = 2.5;
+/**
+ * The attempt number at which full jitter already saturates the 30 s ceiling.
+ * A 4400 is a client bug (ws-protocol.md §8): it must not be blind-retried, so
+ * the next attempt starts at the far end of the backoff rather than at zero.
+ */
+const SATURATED_ATTEMPT = 5;
 
 interface ResumeCursor {
   chan: string;
@@ -267,6 +272,9 @@ export class RealtimeClient {
 
   unsubscribe(channelId: string): void {
     this.subscriptions.delete(channelId);
+    // Nothing will resume a channel this client no longer follows, and a map
+    // that only ever grows is a slow leak for a long-lived tab.
+    this.seqByChannel.delete(channelId);
     this.send({ type: "unsubscribe", chan: channelId });
   }
 
@@ -299,7 +307,9 @@ export class RealtimeClient {
   }
 
   private readonly handleOpen = (): void => {
-    this.attempt = 0;
+    // The backoff is NOT reset here: a transport that opens and is then closed
+    // by the server (4400, 4429) would otherwise retry from zero forever. It
+    // resets on hello_ok, the point at which the connection actually worked.
     const resume = [...this.seqByChannel.entries()].map(([chan, seq]) => ({ chan, seq }));
     this.send({
       type: "hello",
@@ -332,6 +342,8 @@ export class RealtimeClient {
     }
 
     if (frame.type === "hello_ok") {
+      // The handshake completed, so this connection is genuinely good.
+      this.attempt = 0;
       this.heartbeatSeconds = frame.data.heartbeat_interval_seconds;
       this.lastConnectedAt = new Date().toISOString();
       this.armWatchdog();
@@ -353,10 +365,12 @@ export class RealtimeClient {
       return;
     }
 
+    // Handled first, recorded second: a seq marked processed before the
+    // handler ran would silently open a resume gap if the handler threw.
+    this.options.onFrame(frame);
     if ("seq" in frame) {
       this.recordSeq(frame.chan, frame.seq);
     }
-    this.options.onFrame(frame);
   };
 
   private readonly handleError = (): void => {
@@ -383,8 +397,10 @@ export class RealtimeClient {
       return;
     }
     if (event.code === CLOSE_PROTOCOL_ERROR) {
-      // A client bug. Log it and back off hard rather than hammering.
+      // §8: a client bug, never blind-retried. Log it, and jump the backoff to
+      // its ceiling so a persistent one costs the server nothing.
       console.warn("Realtime socket closed on a protocol error (4400).");
+      this.attempt = Math.max(this.attempt, SATURATED_ATTEMPT);
     }
     this.scheduleRetry();
   };

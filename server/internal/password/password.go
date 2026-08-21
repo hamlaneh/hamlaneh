@@ -80,7 +80,7 @@ func Verify(password, encodedHash string) (ok, needsRehash bool, err error) {
 	}
 
 	// parsePHC bounds the key length, so the conversion cannot overflow.
-	got := argon2.IDKey([]byte(password), salt, params.time, params.memoryKiB, params.threads, uint32(len(want))) //nolint:gosec
+	got := argon2.IDKey([]byte(password), salt, params.time, params.memoryKiB, params.threads, uint32(len(want))) // #nosec G115 -- parsePHC bounds the key length; the conversion cannot overflow
 	ok = subtle.ConstantTimeCompare(got, want) == 1
 
 	needsRehash = params.time != timeCost ||

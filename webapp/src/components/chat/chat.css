@@ -46,6 +46,18 @@
   white-space: nowrap;
 }
 
+/* Only directional glyphs mirror (chat-components -> Bidi): send, reply and
+ * back. Attach, search, download and the hash keep the direction they were
+ * drawn in, so the flip is opted into per glyph rather than applied to every
+ * icon under [dir="rtl"]. */
+.hm-mirror-glyph {
+  transform: scaleX(var(--hm-mirror, 1));
+}
+
+[dir="rtl"] .hm-mirror-glyph {
+  --hm-mirror: -1;
+}
+
 /* ── sidebar ───────────────────────────────────────────────────────── */
 
 .hm-sidebar {
@@ -466,6 +478,10 @@
   flex: 1;
   min-block-size: 0;
   overflow-y: auto;
+  /* Scrollback restores its own position when an older page is prepended
+     (MessageList). Browser scroll anchoring would compete with that, and
+     Safari does not implement it at all, so the list does the arithmetic. */
+  overflow-anchor: none;
   padding: var(--hm-list-padding-block) var(--hm-list-padding-inline);
   display: flex;
   flex-direction: column;
@@ -1386,7 +1402,7 @@
   cursor: pointer;
 }
 
-.hm-search-tab[aria-selected="true"] {
+.hm-search-tab[aria-pressed="true"] {
   background: var(--color-brand-primary);
   border-color: var(--color-brand-primary);
   color: var(--color-on-brand);

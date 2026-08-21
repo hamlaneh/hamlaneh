@@ -60,6 +60,8 @@ installs it on its own server with one command and owns its communication comple
   reconnecting, DM, dark, Persian-RTL and 375px mobile states. The RTL mirror comes from `dir`
   alone — there is no RTL-specific CSS. Message markdown renders through an allowlist sanitizer
   with raw HTML never parsed.
+- An `ErrorBoundary` wraps the authenticated app, so a render fault shows a recovery message
+  instead of a blank page.
 - **Realtime client** implementing `docs/api/ws-protocol.md`: handshake, per-channel subscribe,
   message/presence/read events, heartbeat, bounded reconnect backoff, and `resync` fallback to
   REST backfill. It talks to mocks today — the server gateway is the next backend slice.

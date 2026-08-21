@@ -22,7 +22,6 @@ linters:
     - bodyclose
     - noctx
     # security
-    - gosec
     # style / maintainability
     - revive
     - misspell
@@ -62,11 +61,12 @@ linters:
   exclusions:
     generated: lax
     rules:
-      # Tests may use fixed test URLs, ignore some hardening rules, and
-      # exercise error paths in ways gosec flags as suspicious.
+      # Tests may use fixed test URLs and exercise error paths in ways the
+      # hardening linters flag as suspicious. (gosec itself is not run here —
+      # it runs standalone in CI so suppressions can be per-rule `#nosec Gxxx`
+      # rather than golangci-lint's blunt line-wide `//nolint:gosec`.)
       - path: _test\.go
         linters:
-          - gosec
           - noctx
 
 formatters:

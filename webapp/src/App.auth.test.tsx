@@ -180,7 +180,7 @@ function trackRequests(pathname?: string): { count: () => number; stop: () => vo
 
 describe("login", () => {
   it("lands on Home showing the display name after a successful login", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
 
     await submitLogin(
@@ -202,7 +202,7 @@ describe("login", () => {
   });
 
   it("shows the generic error for a wrong password", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
 
     await submitLogin(user, FIXTURE_CREDENTIALS.identifier, "wrong-password");
@@ -212,7 +212,7 @@ describe("login", () => {
   });
 
   it("shows the identical generic error for an unknown user", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
 
     await submitLogin(user, "no.such.user", "irrelevant-password");
@@ -224,7 +224,7 @@ describe("login", () => {
   });
 
   it("shows the rate-limit message on 429", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
 
     await submitLogin(user, FIXTURE_RATELIMITED_IDENTIFIER, "any-password");
@@ -235,7 +235,7 @@ describe("login", () => {
   });
 
   it("never blames the password for a server fault", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     server.use(
       http.post("/api/v1/auth/login", () =>
         HttpResponse.json(
@@ -318,7 +318,7 @@ describe("session bootstrap", () => {
 
 describe("forced password change", () => {
   it("routes a must-change user to the forced screen where sign-out is the only escape", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await loginAsNewhire(user);
 
     expect(screen.getByText(en.changePassword.forcedNotice)).toBeInTheDocument();
@@ -334,7 +334,7 @@ describe("forced password change", () => {
   });
 
   it("returns to the login screen when the forced user signs out", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await loginAsNewhire(user);
 
     await user.click(
@@ -350,7 +350,7 @@ describe("forced password change", () => {
   });
 
   it("shows the current-password-required error without any request when current is empty", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await loginAsNewhire(user);
     const requests = trackRequests();
 
@@ -374,7 +374,7 @@ describe("forced password change", () => {
   });
 
   it("shows the too-short error client-side without any request for a short new password", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await loginAsNewhire(user);
     const requests = trackRequests();
 
@@ -395,7 +395,7 @@ describe("forced password change", () => {
   });
 
   it("falls back to the too-short message when the server answers 400", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await loginAsNewhire(user);
     // A password that passes the client-side checks but a stricter server
     // policy rejects: the 400 fallback mapping must still show something apt.
@@ -425,7 +425,7 @@ describe("forced password change", () => {
   });
 
   it("shows the mismatch error before any request when confirmation differs", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await loginAsNewhire(user);
 
     await submitChangePassword(user, {
@@ -442,7 +442,7 @@ describe("forced password change", () => {
   });
 
   it("shows the invalid-current-password error on 403", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await loginAsNewhire(user);
 
     await submitChangePassword(user, {
@@ -460,7 +460,7 @@ describe("forced password change", () => {
   });
 
   it("does not claim the server was unreachable when it answered 500", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await loginAsNewhire(user);
     server.use(
       http.post("/api/v1/auth/change-password", () =>
@@ -485,7 +485,7 @@ describe("forced password change", () => {
   });
 
   it("says the server was unreachable only when the request actually failed", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await loginAsNewhire(user);
     server.use(http.post("/api/v1/auth/change-password", () => HttpResponse.error()));
 
@@ -501,7 +501,7 @@ describe("forced password change", () => {
   });
 
   it("lands on Home with the flag cleared after a successful change", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await loginAsNewhire(user);
 
     await submitChangePassword(user, {
@@ -540,7 +540,7 @@ describe("voluntary password change", () => {
   }
 
   it("opens from Home without the forced notice and can be cancelled", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await openFromHome(user);
 
     expect(
@@ -557,7 +557,7 @@ describe("voluntary password change", () => {
   });
 
   it("returns to Home after a successful voluntary change", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await openFromHome(user);
 
     await submitChangePassword(user, {
@@ -574,7 +574,7 @@ describe("voluntary password change", () => {
 
 describe("logout", () => {
   it("returns to the login screen", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
     await submitLogin(
       user,
@@ -597,7 +597,7 @@ describe("logout", () => {
 
 describe("delivered design behaviour", () => {
   it("disables submit and keeps the switcher live when rate limited", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
 
     await submitLogin(user, FIXTURE_RATELIMITED_IDENTIFIER, "any-password");
@@ -614,7 +614,7 @@ describe("delivered design behaviour", () => {
   });
 
   it("recovers from a rate limit as soon as the identifier is edited", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
 
     await submitLogin(user, FIXTURE_RATELIMITED_IDENTIFIER, "any-password");
@@ -655,7 +655,7 @@ describe("delivered design behaviour", () => {
   });
 
   it("keeps the identifier, clears the password and moves focus to the alert", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
 
     await submitLogin(user, FIXTURE_CREDENTIALS.identifier, "wrong-password");
@@ -669,7 +669,7 @@ describe("delivered design behaviour", () => {
   });
 
   it("shows the busy label during submission and blocks a duplicate submit", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
     // The busy window is held open by the test, not by wall-clock delay: the
     // handler answers only once `releaseLogin` is called, so a loaded runner
@@ -708,7 +708,7 @@ describe("delivered design behaviour", () => {
   });
 
   it("reflects the typed password in the requirements checklist", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await loginAsNewhire(user);
     const newPassword = screen.getByLabelText(en.changePassword.newPasswordLabel);
     const minLength = minLengthLabel();
@@ -724,7 +724,7 @@ describe("delivered design behaviour", () => {
   });
 
   it("reflects the typed password in the strength meter", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await loginAsNewhire(user);
     const newPassword = screen.getByLabelText(en.changePassword.newPasswordLabel);
 
@@ -742,7 +742,7 @@ describe("delivered design behaviour", () => {
   });
 
   it("never blocks submission on a password the meter calls weak", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await loginAsNewhire(user);
     // Weakest reading the meter has, but it clears the instance minimum —
     // which is the only rule that gates the form.

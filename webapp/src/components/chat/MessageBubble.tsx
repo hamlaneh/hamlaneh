@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { messageLink } from "../../chat/links";
@@ -21,7 +21,12 @@ interface MessageBubbleProps {
   onDelete: (messageId: string) => void;
 }
 
-export function MessageBubble({
+/**
+ * Memoized: a channel holds up to fifty of these, each one rendering markdown
+ * through a plugin pipeline. Without this every reducer action — including the
+ * one-per-second offline countdown — re-renders the whole conversation.
+ */
+export const MessageBubble = memo(function MessageBubble({
   message,
   first,
   own,
@@ -163,7 +168,7 @@ export function MessageBubble({
       )}
     </div>
   );
-}
+});
 
 interface PendingBubbleProps {
   pending: PendingMessage;

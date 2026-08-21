@@ -161,7 +161,7 @@ func csrfCookie(value string, maxAge int) *http.Cookie {
 	// frontend to read this cookie and echo it in CSRFHeader. The cookie
 	// carries no session authority — the HttpOnly access and refresh
 	// cookies do.
-	return &http.Cookie{ //nolint:gosec // see comment above: double-submit cookie must be JS-readable
+	return &http.Cookie{ // #nosec G124 -- deliberate: the double-submit CSRF cookie must be readable by JS
 		Name:     CSRFCookie,
 		Value:    value,
 		Path:     "/",

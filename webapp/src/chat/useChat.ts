@@ -177,6 +177,7 @@ export function useChat({
             channelId: frame.chan,
             message: frame.message,
             currentUserId,
+            created: frame.type === "message_created",
           });
           break;
         case "channel_created":
@@ -274,12 +275,17 @@ export function useChat({
         existing.status === "idle" ||
         existing.status === "error" ||
         (focusMessageId !== undefined && existing.focusMessageId !== focusMessageId);
-      const page = needsLoad
-        ? await loadHistory(channelId, {
-            mode: "replace",
-            ...(focusMessageId === undefined ? {} : { around: focusMessageId }),
-          })
-        : null;
+      let page = null;
+      if (needsLoad) {
+        page = await loadHistory(channelId, {
+          mode: "replace",
+          ...(focusMessageId === undefined ? {} : { around: focusMessageId }),
+        });
+      } else {
+        // History is already here, so no `replace` page will arrive to place
+        // the unread divider — place it from what is loaded.
+        dispatch({ type: "channel/enter", channelId, currentUserId });
+      }
       const newest = (page?.messages ?? stateRef.current.views[channelId]?.messages ?? []).at(-1);
       if (newest !== undefined) {
         await markReadFor(channelId, newest.id);
@@ -290,7 +296,7 @@ export function useChat({
       client?.unsubscribe(channelId);
       dispatch({ type: "channel/leave", channelId });
     };
-  }, [channelId, focusMessageId, loadHistory, markReadFor, stateRef]);
+  }, [channelId, currentUserId, focusMessageId, loadHistory, markReadFor, stateRef]);
 
   /* ── sending ────────────────────────────────────────────────────── */
 
@@ -308,7 +314,13 @@ export function useChat({
           dispatch({ type: "pending/queue", channelId: target, clientMsgId });
           return;
         }
-        dispatch({ type: "message/upsert", channelId: target, message: data, currentUserId });
+        dispatch({
+          type: "message/upsert",
+          channelId: target,
+          message: data,
+          currentUserId,
+          created: true,
+        });
         await markReadFor(target, data.id);
       } catch (error) {
         // Kept, not dropped: the design's dashed "Waiting to send" treatment.
@@ -377,7 +389,13 @@ export function useChat({
         if (data === undefined) {
           return false;
         }
-        dispatch({ type: "message/upsert", channelId: target, message: data, currentUserId });
+        dispatch({
+          type: "message/upsert",
+          channelId: target,
+          message: data,
+          currentUserId,
+          created: false,
+        });
         return true;
       } catch (error) {
         console.warn("Could not edit the message:", error);
@@ -417,7 +435,13 @@ export function useChat({
           content: "",
           deleted_at: new Date().toISOString(),
         };
-        dispatch({ type: "message/upsert", channelId: target, message: removed, currentUserId });
+        dispatch({
+          type: "message/upsert",
+          channelId: target,
+          message: removed,
+          currentUserId,
+          created: false,
+        });
       }
       return true;
     },
