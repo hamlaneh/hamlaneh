@@ -2,12 +2,6 @@
   <title id="title">Hamlaneh symbol — dark theme</title>
   <desc id="desc">Interwoven communication loops surrounding a speech bubble with three dots.</desc>
   <defs>
-    <linearGradient id="brand-gradient" x1="22" y1="20" x2="240" y2="242" gradientUnits="userSpaceOnUse">
-
-      <stop offset="0" stop-color="#6FB5AA"/>
-      <stop offset="0.52" stop-color="#81C9BD"/>
-      <stop offset="1" stop-color="#9ADACF"/>
-    </linearGradient>
     <linearGradient id="dark-bg" x1="0" y1="0" x2="260" y2="260" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#111615"/>
       <stop offset="1" stop-color="#18201E"/>

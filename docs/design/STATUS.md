@@ -21,21 +21,21 @@ Functional requirements per screen (for producing the designs): [BRIEFS.md](BRIE
 The symbol SVGs live in `webapp/public/brand/` (the 4096px PNG renders and the kit zip are
 deliberately not committed — derived artefacts, and git history is not rewritable).
 
-**RESOLVED 2026-08-21 — the design does not change and the logo is not recoloured.** The symbol
-is a project-level brand asset: it identifies the repository and the product (README, favicon,
-anywhere outside the delivered screens), and serves as the fallback wherever a logo is needed but
-none exists. It is deliberately **not** inserted into the delivered UI, which draws the product
-name as text and has no slot for a symbol.
+**RESOLVED 2026-08-21.** The symbol was recoloured to the product palette and the delivered
+UI design is unchanged — the two decisions are separate and both hold:
 
-Recorded for the future, since the two palettes do differ: The kit declares its brand
-colours as Indigo `#4F46E5`, Blue `#3B82F6`, Teal `#14B8A6` on a Slate `#0F172A` dark backdrop.
-The delivered design system uses none of them: brand `#235C55`/`#81C9BD` on a warm `#F7F6F2`
-light ground and a near-black-green `#111615` dark ground. Placed together they read as two
-products, and the dark tile clashes hardest (navy vs green-black).
+- The mark now uses the exact Quiet Nest tokens: light gradient
+  `#123F39 → #194941 → #235C55`, dark gradient `#6FB5AA → #81C9BD → #9ADACF`, tiles on
+  `#F7F6F2` and `#111615 → #18201E` (the dark tile is the app's own canvas, no longer navy).
+  Flat single-colour variants ship in `flat/` for 16–32px and favicon use, where a three-stop
+  gradient collapses into a smudge.
+- **No screen changes.** The delivered artboards draw the product name as text and have no slot
+  for a symbol, so the mark is not inserted into them. It is a project-level asset: repository
+  and product identity, and the fallback wherever a logo is needed but none exists.
 
-the kit is indigo/blue/teal on navy, the interface is green-teal on a warm ground. They are not
-placed next to each other today, so nothing is broken; if a future screen ever puts the symbol
-beside the interface chrome, that is the moment to revisit it.
+All eight SVGs verified self-contained before shipping — no raster, no external references, no
+scripts or filters, `role="img"` and `aria-labelledby` intact — which matters because they are
+served by an app under a strict CSP.
 
 Still missing: the full lockup (symbol + wordmark) exists only as PNG. An SVG would be needed for
 the README and any future site.

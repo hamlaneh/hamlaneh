@@ -130,13 +130,13 @@ async function main() {
   if (symbolOnly) {
     const tileSize = 520;
     const tiles = await Promise.all([
-      makeTile(path.join(pngDir, variants[0][1]), 'GRADIENT · LIGHT · TRANSPARENT', tileSize, '#F7F6F2'),
-      makeTile(path.join(pngDir, variants[1][1]), 'GRADIENT · LIGHT · TILE', tileSize, '#D7DEDA'),
-      makeTile(path.join(pngDir, variants[2][1]), 'GRADIENT · DARK · TRANSPARENT', tileSize, '#111615'),
-      makeTile(path.join(pngDir, variants[3][1]), 'GRADIENT · DARK · TILE', tileSize, '#D7DEDA'),
-      makeTile(path.join(flatPngDir, variants[0][1]), 'FLAT · LIGHT · TRANSPARENT', tileSize, '#F7F6F2'),
+      makeTile(path.join(pngDir, variants[0][1]), 'GRAD · LIGHT · CLEAR', tileSize, '#F7F6F2'),
+      makeTile(path.join(pngDir, variants[1][1]), 'GRAD · LIGHT · TILE', tileSize, '#D7DEDA'),
+      makeTile(path.join(pngDir, variants[2][1]), 'GRAD · DARK · CLEAR', tileSize, '#111615'),
+      makeTile(path.join(pngDir, variants[3][1]), 'GRAD · DARK · TILE', tileSize, '#D7DEDA'),
+      makeTile(path.join(flatPngDir, variants[0][1]), 'FLAT · LIGHT · CLEAR', tileSize, '#F7F6F2'),
       makeTile(path.join(flatPngDir, variants[1][1]), 'FLAT · LIGHT · TILE', tileSize, '#D7DEDA'),
-      makeTile(path.join(flatPngDir, variants[2][1]), 'FLAT · DARK · TRANSPARENT', tileSize, '#111615'),
+      makeTile(path.join(flatPngDir, variants[2][1]), 'FLAT · DARK · CLEAR', tileSize, '#111615'),
       makeTile(path.join(flatPngDir, variants[3][1]), 'FLAT · DARK · TILE', tileSize, '#D7DEDA'),
     ]);
 

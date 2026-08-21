@@ -335,18 +335,28 @@ def symbol_svg(path_data: str, mode: str, background: bool, flat: bool = False) 
       <stop offset="0.52" stop-color="#81C9BD"/>
       <stop offset="1" stop-color="#9ADACF"/>'''
 
+    definitions: list[str] = []
+    if not flat:
+        definitions.append(
+            f'''    <linearGradient id="brand-gradient" x1="22" y1="20" x2="240" y2="242" gradientUnits="userSpaceOnUse">
+{gradient_stops}
+    </linearGradient>'''
+        )
+    if background and mode == "dark":
+        definitions.append(
+            '''    <linearGradient id="dark-bg" x1="0" y1="0" x2="260" y2="260" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#111615"/>
+      <stop offset="1" stop-color="#18201E"/>
+    </linearGradient>'''
+        )
+    defs_markup = ""
+    if definitions:
+        defs_markup = "  <defs>\n" + "\n".join(definitions) + "\n  </defs>"
+
     return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 260" role="img" aria-labelledby="title desc">
   <title id="title">Hamlaneh symbol — {mode} theme</title>
   <desc id="desc">Interwoven communication loops surrounding a speech bubble with three dots.</desc>
-  <defs>
-    <linearGradient id="brand-gradient" x1="22" y1="20" x2="240" y2="242" gradientUnits="userSpaceOnUse">
-{gradient_stops}
-    </linearGradient>
-    <linearGradient id="dark-bg" x1="0" y1="0" x2="260" y2="260" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#111615"/>
-      <stop offset="1" stop-color="#18201E"/>
-    </linearGradient>
-  </defs>
+{defs_markup}
   {background_markup}
   <path d="{path_data}" fill="{fill}" fill-rule="evenodd"/>
 </svg>
