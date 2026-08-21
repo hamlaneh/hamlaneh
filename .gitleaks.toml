@@ -1,0 +1,19 @@
+# Hamlaneh secret-scanning configuration.
+#
+# The default rule set is kept in full — this file only records the narrow,
+# reasoned exceptions. An entry here is a claim that something LOOKS like a
+# secret but cannot authenticate anything; never use it to quiet a real one.
+#
+# Inline `// gitleaks:allow` on the offending line is preferred for new code,
+# because the reason then lives where a reviewer will read it. Path entries
+# exist for findings already written into git history, which an inline comment
+# added later cannot reach.
+
+title = "Hamlaneh"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Password-strength scorer fixtures: a table of INPUTS to a pure scoring function. Each string exists to exercise a length or character-class branch, and nothing in the system accepts any of them as a credential. Committed in f4f35bf before the inline marker existed, so the exemption is path-scoped to cover history."
+paths = ['''webapp/src/auth/passwordStrength\.test\.ts$''']

@@ -59,3 +59,8 @@ scratch/
 # Claude Code local state (launch.json is shared on purpose)
 .claude/worktrees/
 .claude/settings.local.json
+
+# Brand exports: the SVG symbols are committed under webapp/public/brand/.
+# The 4096px PNG renders and the kit zip are derived artefacts — regenerate
+# them from the SVG rather than carrying ~20 MB in every clone forever.
+/exports/

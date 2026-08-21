@@ -47,6 +47,7 @@ const CASES: readonly StrengthCase[] = [
   // Variety axis at exactly the minimum, where length earns nothing.
   { name: "lowercase only", password: "abcdefghijkl", minimumLength: MIN, expected: 1 },
   { name: "two classes earn the first variety point", password: "abcdefghijkL", minimumLength: MIN, expected: 2 },
+  // gitleaks:allow — a scorer input, not a credential; nothing authenticates with it.
   { name: "three classes earn no more than two", password: "abcdefghij1L", minimumLength: MIN, expected: 2 },
   { name: "all four classes earn the second variety point", password: "abcdefghi1L!", minimumLength: MIN, expected: 3 },
 
