@@ -19,7 +19,14 @@
     "requirementsTitle": "شرایط گذرواژه",
     "minLength": "دست‌کم {{minimum, number}} نویسه",
     "requirementMet": "انجام‌شده",
-    "requirementUnmet": "انجام‌نشده"
+    "requirementUnmet": "انجام‌نشده",
+    "strength": {
+      "label": "قدرت گذرواژه",
+      "weak": "ضعیف",
+      "fair": "متوسط",
+      "strong": "قوی",
+      "veryStrong": "بسیار قوی"
+    }
   },
   "login": {
     "title": "ورود",

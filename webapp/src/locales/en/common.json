@@ -19,7 +19,14 @@
     "requirementsTitle": "Password requirements",
     "minLength": "At least {{minimum, number}} characters",
     "requirementMet": "Met",
-    "requirementUnmet": "Not met"
+    "requirementUnmet": "Not met",
+    "strength": {
+      "label": "Strength",
+      "weak": "Weak",
+      "fair": "Fair",
+      "strong": "Strong",
+      "veryStrong": "Very strong"
+    }
   },
   "login": {
     "title": "Sign in",

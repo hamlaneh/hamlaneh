@@ -80,6 +80,15 @@ function minLengthLabel(): string {
   );
 }
 
+/** The strength meter's level label; empty while the field is, when it claims nothing. */
+function strengthLevel(): string {
+  const level = document.querySelector(".hm-strength__level");
+  if (level === null) {
+    throw new Error("the strength meter is not on screen");
+  }
+  return level.textContent;
+}
+
 /** Renders App and waits for the session bootstrap to settle on the login screen. */
 async function renderAppAtLogin() {
   render(<App />);
@@ -690,6 +699,55 @@ describe("delivered design behaviour", () => {
     await user.clear(newPassword);
     await user.type(newPassword, VALID_NEW_PASSWORD);
     expect(requirementItem(minLength)).toHaveTextContent(en.password.requirementMet);
+  });
+
+  it("reflects the typed password in the strength meter", async () => {
+    const user = userEvent.setup();
+    await loginAsNewhire(user);
+    const newPassword = screen.getByLabelText(en.changePassword.newPasswordLabel);
+
+    // Empty field: the meter is drawn — the geometry never moves — but it
+    // claims no level.
+    expect(strengthLevel()).toBe("");
+
+    await user.type(newPassword, "a".repeat(PASSWORD_MIN_LENGTH));
+    expect(strengthLevel()).toBe(en.password.strength.weak);
+
+    await user.clear(newPassword);
+    // The password drawn on the artboard, at the level the artboard labels it.
+    await user.type(newPassword, "quiet-nest-2026");
+    expect(strengthLevel()).toBe(en.password.strength.strong);
+  });
+
+  it("never blocks submission on a password the meter calls weak", async () => {
+    const user = userEvent.setup();
+    await loginAsNewhire(user);
+    // Weakest reading the meter has, but it clears the instance minimum —
+    // which is the only rule that gates the form.
+    const weakButValid = "a".repeat(PASSWORD_MIN_LENGTH);
+
+    await user.type(
+      screen.getByLabelText(en.changePassword.currentPasswordLabel),
+      FIXTURE_NEWHIRE_CREDENTIALS.password,
+    );
+    await user.type(
+      screen.getByLabelText(en.changePassword.newPasswordLabel),
+      weakButValid,
+    );
+    await user.type(
+      screen.getByLabelText(en.changePassword.confirmPasswordLabel),
+      weakButValid,
+    );
+
+    expect(strengthLevel()).toBe(en.password.strength.weak);
+    const submit = screen.getByRole("button", { name: en.changePassword.submit });
+    expect(submit).toBeEnabled();
+
+    await user.click(submit);
+
+    expect(
+      await screen.findByRole("heading", { name: en.home.title }),
+    ).toBeInTheDocument();
   });
 
   it("renders the organization mark when the instance has one", () => {

@@ -48,7 +48,8 @@ installs it on its own server with one command and owns its communication comple
   sign-in, credential-error, rate-limited and forced-password-change states, in light and dark
   themes and in a true RTL Persian mirror. Built from eleven design components (`AuthShell`,
   `InstanceIdentity`, `OrganizationLogoSlot`, `ProductWordmark`, `LanguageSwitcher`, `AuthForm`,
-  `TextField`, `PasswordField`, `PrimaryButton`, `NoticeBanner`, `PasswordRequirements`) over
+  `TextField`, `PasswordField`, `PrimaryButton`, `NoticeBanner`, `PasswordRequirements`,
+  `PasswordStrengthMeter`) over
   the token sheet in `webapp/src/tokens.css`. Fonts (Inter, Vazirmatn) are self-hosted via
   `@fontsource` — no CDN, as the strict CSP requires. Mockup and handoff are mirrored into
   `docs/design/`.

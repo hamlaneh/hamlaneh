@@ -126,11 +126,26 @@ retrofit is how security fails.
 - [ ] Rework `httpserver` route-policy keying from exact method+path to `r.Pattern` before
       adding path-parameter routes (the table fails closed on unknown paths today — safe,
       but every 1.2 route needs it)
-- [ ] Orgs → teams → channels (public/private) → DMs/group DMs; membership and roles
+- [ ] Channels (public/private) → 1:1 DMs; membership and roles. **The instance is the
+      organization** — no org or team layer, no group DMs (see
+      [ADR 001](adr/001-instance-as-org-flat-channels.md); supersedes the earlier
+      "orgs → teams → … → group DMs" wording)
 - [ ] WebSocket gateway: message delivery, presence, typing, read receipts, reconnect/resume.
       Handshake validates Origin (CSWSH defense); auth via cookie/header or short-lived one-time
       ticket — never a long-lived token in the URL query string
-- [ ] Message history, edit, delete, pagination; markdown through strict sanitizer
+- [ ] Message history (cursor-paged in both directions + `around` for permalinks), edit,
+      soft delete (the design keeps a placeholder in place), markdown through strict sanitizer
+- [ ] Message search (`kind=messages`) pulled forward from 1.3 — the delivered chat shell has a
+      search column, and shipping it dead is not an option; file search stays 1.3
+- [ ] Idempotent send: a client-generated `client_msg_id` unique per (channel, author) so a
+      queued message resent after a reconnect lands exactly once
+- [ ] Read positions per user per channel feeding the unread divider and sidebar counts;
+      own-device read sync only — **no cross-user read receipts** (nothing in the design shows
+      another person's read state; privacy default until designed)
+- [ ] Authz harness rework required before this slice: channel-scoped principals
+      (non-member / member / owner / admin-non-member / admin-member) with shared per-cell
+      fixtures, plus a parallel WS operation registry whose completeness gate parses
+      `docs/api/ws-protocol.md` (the OpenAPI gate cannot see WS operations)
 - [ ] Strict baseline CSP on all app responses: `default-src 'self'`, no
       `unsafe-inline`/`unsafe-eval`, `object-src 'none'`
 - [ ] Generic rate-limit middleware with per-endpoint budgets: message send, upload,

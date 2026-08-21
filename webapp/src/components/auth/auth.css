@@ -472,6 +472,54 @@
   }
 }
 
+/* ── password strength meter ───────────────────────────────────────── */
+
+.hm-strength {
+  display: flex;
+  flex-direction: column;
+  gap: 10px; /* off-scale (artboard) */
+}
+
+.hm-strength__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+
+.hm-strength__title {
+  font: 500 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-strength__level {
+  font: 600 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-strength__title:lang(fa),
+.hm-strength__level:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-strength__track {
+  display: flex;
+  gap: 5px; /* off-scale (artboard) */
+}
+
+/* Decorative (aria-hidden): the label beside them carries the state, so the
+ * fill is allowed to be colour alone. */
+.hm-strength__segment {
+  flex: 1;
+  block-size: 5px; /* off-scale (artboard) */
+  border-radius: 3px; /* off-scale (artboard) */
+  background: var(--color-border-subtle);
+}
+
+.hm-strength__segment[data-filled="true"] {
+  background: var(--color-brand-primary);
+}
+
 /* ── password requirements ─────────────────────────────────────────── */
 
 .hm-requirements {

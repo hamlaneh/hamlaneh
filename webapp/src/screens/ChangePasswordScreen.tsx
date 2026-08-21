@@ -8,6 +8,7 @@ import { AuthShell } from "../components/auth/AuthShell";
 import { NoticeBanner } from "../components/auth/NoticeBanner";
 import { PasswordField } from "../components/auth/PasswordField";
 import { PasswordRequirements } from "../components/auth/PasswordRequirements";
+import { PasswordStrengthMeter } from "../components/auth/PasswordStrengthMeter";
 import { PrimaryButton } from "../components/auth/PrimaryButton";
 
 type ChangePasswordError =
@@ -216,6 +217,13 @@ export function ChangePasswordScreen(props: ChangePasswordScreenProps) {
                 "tooShort",
               );
             }}
+          />
+          {/* Between the new-password field and the requirements card, as
+              drawn. Display only — it reflects every keystroke, while the
+              "validate on blur" rule governs errors, not this. */}
+          <PasswordStrengthMeter
+            password={newPassword}
+            minimumLength={PASSWORD_MIN_LENGTH}
           />
           <PasswordRequirements
             requirements={[

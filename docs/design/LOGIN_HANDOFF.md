@@ -99,7 +99,7 @@ no passkeys, no marketing copy, no security claims. The only supporting line is
 1. ~~**Banner space is not reserved.**~~ **RESOLVED 2026-08-21 — artboard wins.** The foundation
    sheet reserves a 46px collapsed block; `login-default` is drawn without it. Decision: follow
    the artboard; the form may shift ~35px when an error appears. Update the foundation sheet.
-2. **Strength meter — RESOLVED 2026-08-21:** the drawn visual (four segments + text label) is
+2. **Strength meter — RESOLVED 2026-08-21, with four follow-ups below:** the drawn visual (four segments + text label) is
    the design; the missing pieces are scoring logic and the three unnamed labels, which the
    design owner delegated to implementation. Built with a transparent length-and-variety
    heuristic and four labels; it is a rough guide, never a security claim (CLAUDE.md principle 4).
@@ -127,3 +127,24 @@ no passkeys, no marketing copy, no security claims. The only supporting line is
 9. ~~**Persian pages render Latin runs in Vazirmatn's own Latin.**~~ **RESOLVED 2026-08-21 —
    stay faithful to the token.** Latin runs inside Persian pages keep Vazirmatn, matching the
    delivered `--font-ui-fa` stack, at a cost of ~49 KB per Persian page. Do not reorder the stack.
+
+### Strength meter — decisions taken where the artboard is silent
+
+Built 2026-08-21 from artboard 5. Points for the designer to confirm or correct:
+
+1. **"Strong" is level 3 of 4, not the top.** The artboard fills three of four segments for
+   `Strong`, so a fourth level must exist or the last segment could never fill. Implemented
+   Weak / Fair / Strong / Very strong (level *k* fills *k* segments), which reproduces the drawn
+   state exactly. If `Strong` was meant to be the top level, only the fourth label and one
+   threshold change.
+2. **The empty state is not drawn.** Rendered as four unfilled segments with the title and no
+   level word, so the column does not move on the first keystroke ("same geometry in every
+   state"). Confirm.
+3. **No fill transition** was specified, so none was authored, even though motion tokens exist.
+4. **Persian strength copy has no reference row** in the mockup's localization table; the four
+   Persian labels (ضعیف / متوسط / قوی / بسیار قوی) were written to match the designer's habit of
+   complete noun phrases.
+
+The scoring rule is implementation, not design: length past the instance minimum plus
+character-class variety, documented in `webapp/src/auth/passwordStrength.ts`. It is advisory
+only — it never blocks submission and never claims a password is safe.
