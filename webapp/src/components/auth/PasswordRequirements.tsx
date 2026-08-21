@@ -1,7 +1,7 @@
 import { useId } from "react";
 import { useTranslation } from "react-i18next";
 
-import { CircleCheckIcon, CircleIcon } from "./icons";
+import { CircleCheckIcon, CircleIcon } from "../icons";
 
 export interface PasswordRequirement {
   /** Stable key, also used as the React key. */

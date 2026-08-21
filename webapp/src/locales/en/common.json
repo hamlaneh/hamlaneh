@@ -43,12 +43,6 @@
       "unexpected": "Something went wrong. Try again."
     }
   },
-  "home": {
-    "title": "Home",
-    "signedInAs": "Signed in as {{name}}",
-    "changePasswordLink": "Change password",
-    "logout": "Log out"
-  },
   "changePassword": {
     "title": "Set a new password",
     "forcedNotice": "Your temporary password must be replaced before you continue.",
@@ -66,6 +60,136 @@
       "mismatch": "Both passwords must match.",
       "networkError": "We could not reach the server. Try again.",
       "unexpected": "The password could not be changed. Try again."
+    }
+  },
+  "account": {
+    "title": "Account",
+    "signedInAs": "Signed in as {{name}}",
+    "changePasswordLink": "Change password",
+    "logout": "Log out"
+  },
+  "chat": {
+    "common": {
+      "cancel": "Cancel",
+      "close": "Close"
+    },
+    "noConversations": "You are not in any conversation yet. Create a channel to start one.",
+    "sidebar": {
+      "label": "Conversations",
+      "channels": "Channels",
+      "directMessages": "Direct messages",
+      "createChannel": "Create a channel",
+      "newDirectMessage": "New direct message",
+      "close": "Close channels",
+      "unreadLabel": "unread",
+      "mentionsLabel": "mentions"
+    },
+    "presence": {
+      "online": "Online",
+      "away": "Away",
+      "offline": "Offline"
+    },
+    "footer": {
+      "account": "Settings"
+    },
+    "header": {
+      "searchPlaceholder": "Search messages and files",
+      "search": "Search",
+      "openChannels": "Open channels",
+      "channelActions": "Channel actions",
+      "noTopic": "No topic set",
+      "directMessage": "Direct message",
+      "memberCount": "{{count}} members",
+      "membersLabel": "members"
+    },
+    "messages": {
+      "listLabel": "Messages in {{channel}}",
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "newMessages": "New messages",
+      "edited": "(edited)",
+      "removed": "Message removed",
+      "waitingToSend": "Waiting to send",
+      "loadingOlder": "Loading earlier messages…",
+      "unknownMember": "unknown",
+      "download": "Download {{filename}}",
+      "editLabel": "Edit message",
+      "saveEdit": "Save",
+      "cancelEdit": "Cancel",
+      "actions": {
+        "edit": "Edit",
+        "copyLink": "Copy link",
+        "delete": "Delete"
+      },
+      "deleteConfirm": {
+        "title": "Delete this message?",
+        "body": "It is removed for everyone in {{channel}}. A placeholder stays in its place.",
+        "confirm": "Delete",
+        "cancel": "Cancel"
+      }
+    },
+    "composer": {
+      "placeholder": "Message {{target}}",
+      "attach": "Attach a file",
+      "attachUnavailable": "File sharing is not available yet.",
+      "send": "Send",
+      "mention": "Mention someone",
+      "hintBold": "**bold**",
+      "hintItalic": "*italic*",
+      "hintCode": "`code`",
+      "hintQuote": "> quote",
+      "hintSend": "Enter to send · Shift+Enter for a new line",
+      "hintCompact": "**bold** · *italic* · `code`",
+      "disconnected": "Disconnected. Your message is kept and sends itself when the connection returns."
+    },
+    "connection": {
+      "reconnecting": "Reconnecting…",
+      "lastConnected": "Last connected {{time}}",
+      "backOnline": "Back online",
+      "offline": "No connection. Retrying in {{seconds}} s."
+    },
+    "search": {
+      "label": "Search results",
+      "close": "Close search",
+      "kindLabel": "Result type",
+      "messages": "Messages",
+      "files": "Files",
+      "searching": "Searching…",
+      "resultsOne": "1 result for “{{query}}”",
+      "resultsOther": "{{count}} results for “{{query}}”",
+      "resultsCapped": "More than {{count}} results for “{{query}}”",
+      "noResults": "No results.",
+      "filesPending": "File search arrives with file sharing.",
+      "failed": "Search failed. Try again."
+    },
+    "empty": {
+      "title": "This is the beginning of {{channel}}",
+      "body": "Give it a topic so people know what belongs here, then invite the few who need it.",
+      "bodyOwner": "You created this channel today. Give it a topic so people know what belongs here, then invite the few who need it.",
+      "invite": "Invite people",
+      "setTopic": "Set a topic",
+      "onlyYou": "Only you can see this channel until someone is invited."
+    },
+    "createChannel": {
+      "title": "Create a channel",
+      "nameLabel": "Channel name",
+      "kindLabel": "Who can be in it",
+      "public": "Public",
+      "private": "Private",
+      "visibilityNote": "Both kinds are visible only to their members. Nobody can find or read a channel they were not invited to.",
+      "submit": "Create channel",
+      "failed": "The channel could not be created."
+    },
+    "channelMenu": {
+      "topicLabel": "Topic",
+      "saveTopic": "Save topic",
+      "dmNote": "A direct message has no topic and its membership is fixed."
+    },
+    "people": {
+      "searchLabel": "Find someone",
+      "invite": "Invite",
+      "message": "Message",
+      "failed": "That did not work. Try again."
     }
   }
 }

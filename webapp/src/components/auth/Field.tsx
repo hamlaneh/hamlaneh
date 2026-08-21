@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import { fieldErrorId } from "./fieldErrorId";
-import { CircleAlertIcon } from "./icons";
+import { CircleAlertIcon } from "../icons";
 
 export interface FieldProps {
   id: string;

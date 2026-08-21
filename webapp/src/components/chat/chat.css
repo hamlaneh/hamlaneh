@@ -1,0 +1,1650 @@
+/* Chat shell — implementation of the delivered "Quiet Nest" chat design
+ * (docs/design/mockups/Hamlaneh Chat.dc.html + docs/design/CHAT_HANDOFF.md).
+ * Values are transcribed from the artboards; colours are only ever referenced
+ * through the tokens in tokens.css, never re-declared. This set adds no new
+ * tokens — the handoff says so explicitly.
+ *
+ * Logical properties only. Bubble side comes from `align-items` on a column
+ * flex, so the whole conversation mirrors from dir="rtl" alone: there is not
+ * one RTL-specific rule in this file, and there must never be one.
+ *
+ * Artboard values that fall between the delivered scales are written as
+ * literals and marked "off-scale" so nobody rounds them to the nearest token.
+ */
+
+.hm-chat {
+  --hm-sidebar-inline-size: 280px;
+  --hm-search-inline-size: 340px;
+  --hm-region-block-size: 64px; /* header height */
+  --hm-footer-block-size: 60px;
+  --hm-row-block-size: 36px;
+  --hm-bubble-max: 520px;
+  --hm-icon-button-size: 34px;
+  --hm-list-padding-block: 18px; /* off-scale (artboard) */
+  --hm-list-padding-inline: 28px; /* off-scale (artboard) */
+  --hm-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  display: flex;
+  block-size: 100dvh;
+  overflow: hidden;
+  background: var(--color-canvas);
+  color: var(--color-text-primary);
+}
+
+/* Text that only assistive technology needs — e.g. the word that tells a
+ * screen reader whether a badge's numeral counts unread messages or mentions,
+ * which the drawn badge carries through fill and glyph instead. */
+.hm-visually-hidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ── sidebar ───────────────────────────────────────────────────────── */
+
+.hm-sidebar {
+  inline-size: var(--hm-sidebar-inline-size);
+  flex: 0 0 var(--hm-sidebar-inline-size);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface-subtle);
+  border-inline-end: 1px solid var(--color-border-subtle);
+}
+
+.hm-sidebar__org {
+  block-size: var(--hm-region-block-size);
+  flex: 0 0 var(--hm-region-block-size);
+  box-sizing: border-box;
+  padding-inline: var(--spacing-4);
+  display: flex;
+  align-items: center;
+  gap: 11px; /* off-scale (artboard) */
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+/* Only the drawer has anything to close. */
+.hm-sidebar__close {
+  display: none;
+}
+
+.hm-sidebar__org-name {
+  flex: 1;
+  min-inline-size: 0;
+  font: 600 15px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 15px off-scale (artboard) */
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-sidebar__nav {
+  flex: 1;
+  min-block-size: 0;
+  overflow-y: auto;
+  padding: 14px var(--spacing-2); /* 14px off-scale (artboard) */
+  display: flex;
+  flex-direction: column;
+  gap: 18px; /* off-scale (artboard) */
+}
+
+.hm-sidebar__section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px; /* off-scale (artboard) */
+}
+
+.hm-sidebar__section-header {
+  block-size: var(--spacing-8);
+  padding-inline: 10px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.hm-sidebar__section-title {
+  font: 600 11px / 1 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.hm-sidebar__add {
+  inline-size: 22px; /* off-scale (artboard) */
+  block-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.hm-sidebar__add:hover {
+  color: var(--color-text-primary);
+}
+
+.hm-sidebar__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px; /* off-scale (artboard) */
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hm-row {
+  inline-size: 100%;
+  block-size: var(--hm-row-block-size);
+  box-sizing: border-box;
+  padding-inline: 10px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: 9px; /* off-scale (artboard) */
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--duration-state) var(--ease-out);
+}
+
+.hm-row:hover {
+  background: var(--color-surface-disabled); /* the sheet's "hover · neutral tint" */
+  color: var(--color-text-primary);
+}
+
+/* The open conversation reads as open through fill AND weight, exactly as an
+ * unread one does — the artboard draws the active row at 600. */
+.hm-row[aria-current="page"] {
+  background: var(--color-brand-soft);
+  color: var(--color-text-primary);
+}
+
+.hm-row[aria-current="page"] .hm-row__name {
+  font-weight: 600;
+}
+
+.hm-row__icon {
+  flex: 0 0 15px; /* off-scale (artboard) */
+  color: currentcolor;
+}
+
+.hm-row__name {
+  flex: 1;
+  min-inline-size: 0;
+  font: 400 var(--text-body) / 1.3 var(--hm-font-ui, var(--font-ui));
+  color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-row__name:lang(fa) {
+  line-height: 1.7;
+}
+
+/* Unread carries weight AND an outlined count; a mention carries fill and an
+ * "@". Neither state rests on colour alone. */
+.hm-row[data-unread="true"] {
+  color: var(--color-text-primary);
+}
+
+.hm-row[data-unread="true"] .hm-row__name {
+  font-weight: 600;
+}
+
+.hm-badge {
+  min-inline-size: 22px; /* off-scale (artboard) */
+  block-size: 20px;
+  padding-inline: 6px; /* off-scale (artboard) */
+  border-radius: 10px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 11px / 1 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+}
+
+.hm-badge--unread {
+  border: 1px solid var(--color-border-control);
+  color: var(--color-text-primary);
+}
+
+.hm-badge--mention {
+  background: var(--color-brand-primary);
+  color: var(--color-on-brand);
+}
+
+/* ── avatar and presence ───────────────────────────────────────────── */
+
+.hm-avatar {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.hm-avatar__initial {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--hm-avatar-size, 26px);
+  block-size: var(--hm-avatar-size, 26px);
+  border-radius: 50%;
+  color: var(--color-on-brand);
+  font: 600 var(--hm-avatar-type, 10px) / 1 var(--hm-font-ui, var(--font-ui));
+  overflow: hidden;
+}
+
+/* Four token fills, assigned by a stable hash of the user id. */
+.hm-avatar[data-tint="brand"] .hm-avatar__initial {
+  background: var(--color-brand-primary);
+}
+
+.hm-avatar[data-tint="warm"] .hm-avatar__initial {
+  background: var(--color-accent-warm);
+}
+
+.hm-avatar[data-tint="info"] .hm-avatar__initial {
+  background: var(--color-info);
+}
+
+.hm-avatar[data-tint="success"] .hm-avatar__initial {
+  background: var(--color-success);
+}
+
+/* Shape, not just colour: online solid, away barred, offline hollow. */
+.hm-presence {
+  position: absolute;
+  inset-inline-end: -1px;
+  inset-block-end: -1px;
+  inline-size: 11px; /* off-scale (artboard) */
+  block-size: 11px;
+  border-radius: 50%;
+  border: 1.5px solid transparent; /* off-scale (artboard) */
+  box-shadow: 0 0 0 2px var(--hm-presence-ring, var(--color-surface-subtle));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hm-presence[data-state="online"] {
+  background: var(--color-success);
+  border-color: var(--color-success);
+}
+
+.hm-presence[data-state="away"] {
+  background: var(--color-warning);
+  border-color: var(--color-warning);
+}
+
+.hm-presence[data-state="offline"] {
+  background: transparent;
+  border-color: var(--color-border-control);
+}
+
+.hm-presence__bar {
+  inline-size: 5px; /* off-scale (artboard) */
+  block-size: 1.5px;
+  border-radius: 1px;
+  background: var(--color-on-brand);
+}
+
+/* ── user footer ───────────────────────────────────────────────────── */
+
+.hm-sidebar__footer {
+  block-size: var(--hm-footer-block-size);
+  flex: 0 0 var(--hm-footer-block-size);
+  box-sizing: border-box;
+  padding-inline: var(--spacing-3);
+  display: flex;
+  align-items: center;
+  gap: 10px; /* off-scale (artboard) */
+  border-block-start: 1px solid var(--color-border-subtle);
+}
+
+.hm-sidebar__me {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px; /* off-scale (artboard) */
+}
+
+.hm-sidebar__me-name {
+  font: 600 13px / 1.2 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-sidebar__me-presence {
+  font: 400 11px / 1.2 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-icon-button {
+  inline-size: var(--hm-icon-button-size);
+  block-size: var(--hm-icon-button-size);
+  flex: 0 0 var(--hm-icon-button-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background-color var(--duration-press) var(--ease-out);
+}
+
+.hm-icon-button:hover:not(:disabled) {
+  background: var(--color-surface-disabled);
+  color: var(--color-text-primary);
+}
+
+.hm-icon-button:disabled {
+  color: var(--color-border-disabled);
+  cursor: not-allowed;
+}
+
+/* ── conversation column ───────────────────────────────────────────── */
+
+.hm-chat__main {
+  position: relative;
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-canvas);
+}
+
+.hm-chat-header {
+  block-size: var(--hm-region-block-size);
+  flex: 0 0 var(--hm-region-block-size);
+  box-sizing: border-box;
+  padding-inline: 20px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+.hm-chat-header__title {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px; /* off-scale (artboard) */
+}
+
+.hm-chat-header__name {
+  margin: 0;
+  font: 600 var(--text-control) / 1.3 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+
+.hm-chat-header__name:lang(fa) {
+  line-height: 1.5;
+}
+
+.hm-chat-header__topic {
+  font: 400 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-chat-header__topic:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-chat-header__members {
+  display: flex;
+  align-items: center;
+  gap: 7px; /* off-scale (artboard) */
+  font: 400 13px / 1 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.hm-chat-header__search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  inline-size: 236px; /* off-scale (artboard) */
+}
+
+.hm-chat-header__search-icon {
+  position: absolute;
+  inset-inline-start: 11px; /* off-scale (artboard) */
+  display: flex;
+  color: var(--color-text-secondary);
+  pointer-events: none;
+}
+
+.hm-search-input {
+  inline-size: 100%;
+  block-size: 38px; /* off-scale (artboard) */
+  box-sizing: border-box;
+  padding-inline: 34px var(--spacing-3); /* 34px off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+  font: 400 13px / 1 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-search-input:focus-visible {
+  outline: none;
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 26%, transparent);
+}
+
+/* Mobile-only affordances; the desktop header draws neither. */
+.hm-chat-header__drawer-toggle,
+.hm-chat-header__search-toggle,
+.hm-chat-header__mobile-meta {
+  display: none;
+}
+
+/* ── message list ──────────────────────────────────────────────────── */
+
+.hm-messages {
+  flex: 1;
+  min-block-size: 0;
+  overflow-y: auto;
+  padding: var(--hm-list-padding-block) var(--hm-list-padding-inline);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Dimmed while the socket is down, so the banner reads as the live layer. */
+.hm-messages[data-dimmed="true"] .hm-msg-group[data-live="true"],
+.hm-messages[data-dimmed="true"] .hm-separator,
+.hm-messages[data-dimmed="true"] .hm-divider {
+  opacity: 0.5;
+}
+
+.hm-separator {
+  display: flex;
+  align-items: center;
+  gap: 14px; /* off-scale (artboard) */
+  padding-block: 6px 4px; /* off-scale (artboard) */
+}
+
+.hm-separator__rule {
+  flex: 1;
+  block-size: 1px;
+  background: var(--color-border-subtle);
+}
+
+.hm-separator__label {
+  font: 500 var(--text-caption) / 1 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+}
+
+.hm-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding-block: 18px 6px; /* off-scale (artboard) */
+}
+
+.hm-divider__rule {
+  flex: 1;
+  block-size: 1px;
+  background: var(--color-brand-primary);
+}
+
+.hm-divider__label {
+  font: 600 11px / 1 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-brand-primary);
+}
+
+.hm-history-loader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px; /* off-scale (artboard) */
+  padding-block: var(--spacing-2) 4px;
+  font: 500 13px / 1 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-skeleton {
+  background: var(--color-border-subtle);
+  animation: hm-pulse 1.4s ease-in-out infinite;
+}
+
+.hm-skeleton--avatar {
+  inline-size: 26px; /* off-scale (artboard) */
+  block-size: 26px;
+  border-radius: 50%;
+}
+
+.hm-skeleton--name {
+  inline-size: 82px; /* off-scale (artboard) */
+  block-size: 9px;
+  border-radius: 5px;
+}
+
+.hm-skeleton--bubble {
+  block-size: 40px; /* off-scale (artboard) */
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+@keyframes hm-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* ── message group ─────────────────────────────────────────────────── */
+
+.hm-msg-group {
+  display: flex;
+  flex-direction: column;
+  /* The only thing that decides which side a run sits on. */
+  align-items: flex-start;
+  margin-block-start: 14px; /* off-scale (artboard) */
+}
+
+.hm-msg-group[data-own="true"] {
+  align-items: flex-end;
+}
+
+.hm-msg-group__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-block-end: 5px; /* off-scale (artboard) */
+}
+
+/* Own runs read name-then-time from the end side; row-reverse is direction
+ * agnostic, so this mirrors with dir like everything else. */
+.hm-msg-group[data-own="true"] .hm-msg-group__meta {
+  flex-direction: row-reverse;
+}
+
+.hm-msg-group__author {
+  font: 600 13px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-msg-group__author:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-msg-group__time {
+  font: 400 11px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-msg-group__time:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-msg-group__queued {
+  display: flex;
+  align-items: center;
+  gap: 5px; /* off-scale (artboard) */
+  font: 400 11px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+  color: var(--color-warning);
+}
+
+.hm-msg {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  max-inline-size: 100%;
+}
+
+.hm-msg + .hm-msg {
+  margin-block-start: 3px; /* off-scale (artboard) */
+}
+
+/* Own bubbles keep their toolbar on the inner side of the row. */
+.hm-msg-group[data-own="true"] .hm-msg {
+  flex-direction: row-reverse;
+}
+
+.hm-msg__bubble {
+  max-inline-size: var(--hm-bubble-max);
+  inline-size: fit-content;
+  min-inline-size: 0;
+  padding: 10px 13px; /* off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-primary);
+}
+
+/* Own: brand.soft, no outline. The transparent border keeps both bubbles the
+ * same size so a run does not shift by a pixel between authors. */
+.hm-msg-group[data-own="true"] .hm-msg__bubble {
+  background: var(--color-brand-soft);
+  border-color: transparent;
+}
+
+/* The notch: 4px on the leading top corner of the first bubble of a run.
+ * Logical corners only — never top-left / top-right. */
+.hm-msg[data-first="true"] .hm-msg__bubble {
+  border-start-start-radius: 4px; /* off-scale (artboard) */
+}
+
+.hm-msg-group[data-own="true"] .hm-msg[data-first="true"] .hm-msg__bubble {
+  border-start-start-radius: var(--radius-lg);
+  border-start-end-radius: 4px; /* off-scale (artboard) */
+}
+
+.hm-msg__bubble[data-removed="true"] {
+  background: transparent;
+  border: 1px dashed var(--color-border-subtle);
+}
+
+.hm-msg__bubble[data-queued="true"] {
+  background: transparent;
+  border: 1px dashed var(--color-warning);
+}
+
+.hm-msg__removed {
+  font: italic 400 13px / 1.55 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-msg__removed:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-msg__queued-body {
+  font: 400 var(--text-body) / 1.55 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hm-msg__edited {
+  font: 400 11px / 1 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+  color: var(--color-text-secondary);
+  margin-inline-start: 4px;
+}
+
+/* ── message actions ───────────────────────────────────────────────── */
+
+/* Hidden until hover or focus inside the message, but always in the tab
+ * order: keyboard focus reveals exactly the same toolbar. */
+.hm-msg__actions {
+  display: flex;
+  gap: 2px; /* off-scale (artboard) */
+  padding: 3px; /* off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 9px; /* off-scale (artboard) */
+  box-shadow: var(--shadow-raised);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-state) var(--ease-out);
+}
+
+.hm-msg:hover .hm-msg__actions,
+.hm-msg:focus-within .hm-msg__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.hm-msg__action {
+  inline-size: 30px; /* off-scale (artboard) */
+  block-size: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px; /* off-scale (artboard) */
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.hm-msg__action:hover {
+  background: var(--color-surface-disabled);
+  color: var(--color-text-primary);
+}
+
+/* The only accent-red control in the set, and it always confirms. */
+.hm-msg__action--danger,
+.hm-msg__action--danger:hover {
+  color: var(--color-danger);
+}
+
+.hm-confirm {
+  padding: var(--spacing-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  max-inline-size: 360px; /* off-scale (artboard) */
+}
+
+.hm-confirm__title {
+  margin: 0;
+  font: 600 15px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 15px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-confirm__body {
+  margin: 0;
+  font: 400 13px / 1.6 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-confirm__body:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-confirm__actions {
+  display: flex;
+  gap: var(--spacing-2);
+}
+
+.hm-compact-button {
+  block-size: 36px; /* off-scale (artboard) */
+  padding-inline: 14px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  background: transparent;
+  border: 1px solid var(--color-border-control);
+  border-radius: 9px; /* off-scale (artboard) */
+  color: var(--color-text-primary);
+  font: 600 13px / 1 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  cursor: pointer;
+}
+
+.hm-compact-button--primary {
+  background: var(--color-brand-primary);
+  border-color: var(--color-brand-primary);
+  color: var(--color-on-brand);
+}
+
+.hm-compact-button--danger {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  color: var(--color-on-brand);
+}
+
+/* The confirmation floats over the conversation; the artboard draws the card
+ * without placing it, so it is centred and nothing else is added. */
+.hm-confirm-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-6);
+  pointer-events: none;
+}
+
+.hm-confirm-layer > * {
+  pointer-events: auto;
+}
+
+/* ── inline edit ───────────────────────────────────────────────────── */
+
+.hm-msg__edit {
+  display: flex;
+  flex-direction: column;
+  gap: 7px; /* off-scale (artboard) */
+  inline-size: min(var(--hm-bubble-max), 100%);
+}
+
+.hm-msg__edit-field {
+  inline-size: 100%;
+  box-sizing: border-box;
+  min-block-size: 44px;
+  padding: 10px 13px; /* off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-lg);
+  font: 400 var(--text-body) / 1.55 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+  resize: none;
+}
+
+.hm-msg__edit-field:focus-visible {
+  outline: none;
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 26%, transparent);
+}
+
+/* ── markdown inside a bubble ──────────────────────────────────────── */
+
+.hm-md {
+  font: 400 var(--text-body) / 1.55 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.hm-md:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-md > :first-child {
+  margin-block-start: 0;
+}
+
+.hm-md > :last-child {
+  margin-block-end: 0;
+}
+
+.hm-md p {
+  margin-block: 0 7px; /* off-scale (artboard) */
+}
+
+.hm-md p:last-child {
+  margin-block-end: 0;
+}
+
+.hm-md strong {
+  font-weight: 600;
+}
+
+.hm-md blockquote {
+  margin: 0;
+  padding-inline-start: 11px; /* off-scale (artboard) */
+  border-inline-start: 2px solid var(--color-border-subtle);
+  font-size: 13px; /* off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-md ul,
+.hm-md ol {
+  margin-block: 0;
+  padding-inline-start: 20px; /* off-scale (artboard) */
+  font-size: 13px; /* off-scale (artboard) */
+  line-height: 1.6;
+}
+
+/* IBM Plex Mono on the artboards; the delivered token sheet carries no mono
+ * face and this set adds no tokens, so code uses the platform monospace
+ * stack. Flagged in the slice report. */
+.hm-md code {
+  padding: 2px 5px; /* off-scale (artboard) */
+  background: var(--color-surface-subtle);
+  border-radius: 5px; /* off-scale (artboard) */
+  font: 400 12.5px / 1.5 var(--hm-mono); /* off-scale (artboard) */
+}
+
+.hm-md pre {
+  margin: 0;
+  overflow-x: auto;
+}
+
+.hm-md pre code {
+  display: block;
+  padding: 9px 11px; /* off-scale (artboard) */
+  background: var(--color-surface-subtle);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px; /* off-scale (artboard) */
+  line-height: 1.6;
+}
+
+.hm-md__link {
+  color: var(--color-brand-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* The mockup does not draw a mention. Rendered with the set's existing
+ * emphasis pair — brand tone plus medium weight — and nothing invented
+ * beyond that. Flagged in the slice report. */
+.hm-mention {
+  font-weight: 500;
+  color: var(--color-brand-primary);
+}
+
+/* ── attachment and link cards ─────────────────────────────────────── */
+
+.hm-card {
+  display: flex;
+  align-items: center;
+  gap: 11px; /* off-scale (artboard) */
+  padding: 10px; /* off-scale (artboard) */
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  min-inline-size: min(300px, 100%); /* off-scale (artboard) */
+  margin-block-start: 9px; /* off-scale (artboard) */
+}
+
+.hm-card__glyph {
+  inline-size: 36px; /* off-scale (artboard) */
+  block-size: 36px;
+  flex: 0 0 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+}
+
+.hm-card__text {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px; /* off-scale (artboard) */
+}
+
+.hm-card__name {
+  font: 500 13px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-card__meta {
+  font: 400 11px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-card__download {
+  color: var(--color-brand-primary);
+}
+
+.hm-image-card {
+  padding: 10px; /* off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  margin-block-start: 9px; /* off-scale (artboard) */
+}
+
+.hm-image-card__frame {
+  inline-size: 320px; /* off-scale (artboard) */
+  max-inline-size: 100%;
+  block-size: 180px; /* off-scale (artboard) */
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+}
+
+.hm-image-card__preview {
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+}
+
+.hm-image-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  margin-block-start: var(--spacing-2);
+  padding-inline: 2px; /* off-scale (artboard) */
+}
+
+.hm-image-card__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px; /* off-scale (artboard) */
+  min-inline-size: 0;
+}
+
+.hm-image-card__name {
+  font: 500 var(--text-caption) / 1.3 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+}
+
+.hm-link-card {
+  display: flex;
+  gap: var(--spacing-3);
+  padding: 11px; /* off-scale (artboard) */
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  max-inline-size: 420px; /* off-scale (artboard) */
+  margin-block-start: 9px; /* off-scale (artboard) */
+  text-decoration: none;
+}
+
+.hm-link-card__thumb {
+  inline-size: var(--spacing-16);
+  block-size: var(--spacing-16);
+  flex: 0 0 var(--spacing-16);
+  background: var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+}
+
+.hm-link-card__text {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px; /* off-scale (artboard) */
+}
+
+.hm-link-card__title {
+  font: 500 13px / 1.35 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-link-card__description {
+  font: 400 var(--text-caption) / 1.45 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+}
+
+.hm-link-card__host {
+  font: 400 11px / 1.3 var(--hm-mono); /* 11px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+/* ── composer ──────────────────────────────────────────────────────── */
+
+.hm-composer {
+  flex: 0 0 auto;
+  padding: 0 var(--hm-list-padding-inline) var(--hm-list-padding-block);
+  display: flex;
+  flex-direction: column;
+  gap: 7px; /* off-scale (artboard) */
+}
+
+.hm-composer__box {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--duration-state) var(--ease-out);
+}
+
+.hm-composer__box:focus-within {
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 26%, transparent);
+}
+
+/* Disabled is carried by the dashed boundary and tone, as everywhere else. */
+.hm-composer__box[data-disabled="true"] {
+  background: var(--color-surface-disabled);
+  border: 1px dashed var(--color-border-disabled);
+}
+
+.hm-composer__box[data-disabled="true"] .hm-icon-button {
+  color: var(--color-border-disabled);
+}
+
+.hm-composer__field {
+  flex: 1;
+  min-inline-size: 0;
+  min-block-size: 28px; /* off-scale (artboard) */
+  max-block-size: 120px; /* grows to 120, then scrolls */
+  padding: 5px 4px; /* off-scale (artboard) */
+  border: 0;
+  background: transparent;
+  resize: none;
+  font: 400 var(--text-body) / 1.55 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+  outline: none;
+}
+
+.hm-composer__field:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-composer__field::placeholder {
+  color: var(--color-text-secondary);
+}
+
+.hm-composer__send[data-ready="true"] {
+  background: var(--color-brand-primary);
+  color: var(--color-on-brand);
+}
+
+.hm-composer__send[data-ready="true"]:hover:not(:disabled) {
+  background: var(--color-brand-hover);
+  color: var(--color-on-brand);
+}
+
+.hm-composer__hints {
+  display: flex;
+  align-items: center;
+  gap: 14px; /* off-scale (artboard) */
+  padding-inline: 4px; /* off-scale (artboard) */
+  font: 400 var(--text-caption) / 1.4 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+}
+
+.hm-composer__hints:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-composer__hint-send {
+  margin-inline-start: auto;
+}
+
+.hm-composer__hints-compact {
+  display: none;
+}
+
+.hm-composer__reason {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding-inline: 4px; /* off-scale (artboard) */
+  font: 400 var(--text-caption) / 1.4 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-warning-text);
+}
+
+.hm-composer__reason:lang(fa) {
+  line-height: 1.7;
+}
+
+/* ── connection banner ─────────────────────────────────────────────── */
+
+.hm-connection {
+  position: absolute;
+  inset-block-start: 78px; /* off-scale (artboard) */
+  inset-inline: 0;
+  display: flex;
+  justify-content: center;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.hm-connection__pill {
+  display: flex;
+  align-items: center;
+  gap: 10px; /* off-scale (artboard) */
+  padding: 10px var(--spacing-4); /* 10px off-scale (artboard) */
+  border: 1px solid;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-overlay);
+  font: 500 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+}
+
+.hm-connection__pill:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-connection__pill[data-tone="warning"] {
+  background: var(--color-warning-soft);
+  border-color: var(--color-warning);
+  color: var(--color-warning-text);
+}
+
+.hm-connection__pill[data-tone="warning"] .hm-connection__icon {
+  color: var(--color-warning);
+}
+
+.hm-connection__pill[data-tone="success"] {
+  background: var(--color-success-soft);
+  border-color: var(--color-success);
+  color: var(--color-text-primary);
+}
+
+.hm-connection__pill[data-tone="success"] .hm-connection__icon {
+  color: var(--color-success);
+}
+
+.hm-connection__pill[data-tone="danger"] {
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.hm-connection__pill[data-tone="danger"] .hm-connection__icon {
+  color: var(--color-danger);
+}
+
+.hm-connection__detail {
+  font-weight: 400;
+}
+
+.hm-spin {
+  animation: hm-spin 900ms linear infinite;
+}
+
+/* ── empty channel ─────────────────────────────────────────────────── */
+
+.hm-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  max-inline-size: var(--hm-bubble-max);
+  gap: 18px; /* off-scale (artboard) */
+}
+
+.hm-empty__glyph {
+  inline-size: 52px; /* off-scale (artboard) */
+  block-size: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-brand-soft);
+  border-radius: 14px; /* off-scale (artboard) */
+  color: var(--color-brand-primary);
+}
+
+.hm-empty__text {
+  display: flex;
+  flex-direction: column;
+  gap: 9px; /* off-scale (artboard) */
+}
+
+.hm-empty__title {
+  margin: 0;
+  font: 600 22px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 22px off-scale (artboard) */
+  letter-spacing: -0.015em;
+  color: var(--color-text-primary);
+}
+
+.hm-empty__title:lang(fa) {
+  line-height: 1.7;
+  letter-spacing: normal;
+}
+
+.hm-empty__body,
+.hm-empty__note {
+  margin: 0;
+  font: 400 var(--text-body) / 1.65 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+}
+
+.hm-empty__note {
+  font-size: 13px; /* off-scale (artboard) */
+  line-height: 1.6;
+}
+
+.hm-empty__body:lang(fa),
+.hm-empty__note:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-empty__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px; /* off-scale (artboard) */
+  flex-wrap: wrap;
+}
+
+.hm-action-button {
+  block-size: 40px; /* off-scale (artboard) */
+  padding-inline: var(--spacing-4);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  background: transparent;
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font: 600 var(--text-body) / 1 var(--hm-font-ui, var(--font-ui));
+  cursor: pointer;
+}
+
+.hm-action-button--primary {
+  background: var(--color-brand-primary);
+  border-color: var(--color-brand-primary);
+  color: var(--color-on-brand);
+}
+
+.hm-action-button--primary:hover {
+  background: var(--color-brand-hover);
+  border-color: var(--color-brand-hover);
+}
+
+/* ── search panel ──────────────────────────────────────────────────── */
+
+.hm-search-panel {
+  inline-size: var(--hm-search-inline-size);
+  flex: 0 0 var(--hm-search-inline-size);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border-inline-start: 1px solid var(--color-border-subtle);
+}
+
+.hm-search-panel__header {
+  block-size: var(--hm-region-block-size);
+  flex: 0 0 var(--hm-region-block-size);
+  box-sizing: border-box;
+  padding-inline: 18px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+.hm-search-panel__title {
+  margin: 0;
+  font: 600 var(--text-body) / 1.3 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+}
+
+.hm-search-panel__title:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-search-panel__tabs {
+  padding: var(--spacing-3) 14px 0; /* 14px off-scale (artboard) */
+  display: flex;
+  gap: 6px; /* off-scale (artboard) */
+}
+
+.hm-search-tab {
+  block-size: 30px; /* off-scale (artboard) */
+  padding-inline: 11px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font: 600 var(--text-caption) / 1 var(--hm-font-ui, var(--font-ui));
+  cursor: pointer;
+}
+
+.hm-search-tab[aria-selected="true"] {
+  background: var(--color-brand-primary);
+  border-color: var(--color-brand-primary);
+  color: var(--color-on-brand);
+}
+
+.hm-search-panel__results {
+  flex: 1;
+  min-block-size: 0;
+  overflow-y: auto;
+  padding: var(--spacing-3) 14px 20px; /* off-scale (artboard) */
+  display: flex;
+  flex-direction: column;
+  gap: 10px; /* off-scale (artboard) */
+  margin: 0;
+  list-style: none;
+}
+
+.hm-result {
+  inline-size: 100%;
+  box-sizing: border-box;
+  padding: var(--spacing-3);
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 7px; /* off-scale (artboard) */
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.hm-result:hover {
+  border-color: var(--color-border-control);
+}
+
+.hm-result__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px; /* off-scale (artboard) */
+  font: 400 11px / 1 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-result__channel {
+  font-weight: 600;
+}
+
+.hm-result__author {
+  display: flex;
+  align-items: center;
+  gap: 7px; /* off-scale (artboard) */
+  font: 600 var(--text-caption) / 1.3 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+}
+
+.hm-result__snippet {
+  font: 400 13px / 1.6 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-result__snippet:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-result__snippet mark {
+  padding: 1px 3px; /* off-scale (artboard) */
+  background: var(--color-brand-soft);
+  border-radius: 3px; /* off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-search-panel__empty {
+  padding: var(--spacing-3) 14px; /* 14px off-scale (artboard) */
+  font: 400 13px / 1.6 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+/* ── plumbing surfaces (no design yet — docs/design/STATUS.md) ─────── */
+
+/* Create channel, invite people, the DM picker, the mention picker and the
+ * account menu are not drawn anywhere in the mockup. Per the UI pipeline they
+ * are plain semantic HTML with no styling beyond structure; they get their
+ * appearance when a design lands. */
+.hm-plumbing {
+  position: absolute;
+  inset-block-start: var(--hm-region-block-size);
+  inset-inline-start: 0;
+  z-index: 5;
+  padding: var(--spacing-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+}
+
+.hm-plumbing--footer {
+  inset-block-start: auto;
+  inset-block-end: var(--hm-footer-block-size);
+}
+
+/* ── responsive ────────────────────────────────────────────────────── */
+
+/* Below 1280 the search results stop being a third column and float over the
+ * conversation instead (chat-components -> Responsive). */
+@media (max-width: 1279px) {
+  .hm-search-panel {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 0;
+    z-index: 3;
+    box-shadow: var(--shadow-overlay);
+  }
+}
+
+/* Below 900 the sidebar becomes a 300px drawer over a scrim, opened from the
+ * header, and every control goes to the 44px touch target. */
+@media (max-width: 899px) {
+  .hm-chat {
+    --hm-row-block-size: var(--size-target);
+    --hm-icon-button-size: var(--size-target);
+    --hm-bubble-max: 264px;
+    --hm-region-block-size: 56px;
+    --hm-list-padding-block: 14px; /* off-scale (artboard) */
+    --hm-list-padding-inline: 14px; /* off-scale (artboard) */
+    --hm-sidebar-inline-size: 300px;
+  }
+
+  .hm-sidebar {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 4;
+    box-shadow: var(--shadow-overlay);
+  }
+
+  .hm-sidebar[data-open="false"] {
+    display: none;
+  }
+
+  .hm-chat__scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 3;
+    border: 0;
+    /* The token sheet declares its own elevation shadows against this same
+     * ink; the scrim is the artboard's rgba(28,39,36,.42). */
+    background: rgb(28 39 36 / 0.42);
+  }
+
+  .hm-chat-header {
+    padding-inline: var(--spacing-2);
+    gap: 6px; /* off-scale (artboard) */
+  }
+
+  .hm-chat-header__drawer-toggle,
+  .hm-chat-header__search-toggle,
+  .hm-sidebar__close {
+    display: flex;
+    border-radius: var(--radius-md);
+    color: var(--color-text-primary);
+  }
+
+  .hm-chat-header__title {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px; /* off-scale (artboard) */
+  }
+
+  .hm-chat-header__name {
+    font-size: 15px; /* off-scale (artboard) */
+    line-height: 1.25;
+  }
+
+  .hm-chat-header__mobile-meta {
+    display: block;
+    font: 400 11px / 1.25 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .hm-chat-header__topic,
+  .hm-chat-header__members,
+  .hm-chat-header__actions {
+    display: none;
+  }
+
+  /* The drawn mobile bar has no search field; it appears when the search
+   * control is pressed (the mockup is silent on where it lands). */
+  .hm-chat-header__search {
+    display: none;
+    inline-size: auto;
+    flex: 1;
+  }
+
+  .hm-chat-header[data-search-open="true"] .hm-chat-header__search {
+    display: flex;
+  }
+
+  .hm-chat-header[data-search-open="true"] .hm-chat-header__title {
+    display: none;
+  }
+
+  .hm-composer {
+    padding-inline: var(--spacing-3);
+    padding-block-end: calc(var(--spacing-3) + env(safe-area-inset-bottom));
+    gap: 6px; /* off-scale (artboard) */
+  }
+
+  .hm-composer__box {
+    padding: 6px; /* off-scale (artboard) */
+    gap: 6px; /* off-scale (artboard) */
+  }
+
+  .hm-composer__field {
+    padding-block: var(--spacing-3);
+  }
+
+  .hm-composer__hints {
+    display: none;
+  }
+
+  .hm-composer__hints-compact {
+    display: block;
+    padding-inline: 4px; /* off-scale (artboard) */
+    font: 400 11px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+    color: var(--color-text-secondary);
+  }
+
+  .hm-search-panel {
+    inline-size: 100%;
+    flex-basis: 100%;
+  }
+
+  .hm-msg-group {
+    margin-block-start: var(--spacing-3);
+  }
+
+  .hm-msg-group__meta {
+    gap: 7px; /* off-scale (artboard) */
+    margin-block-end: 4px; /* off-scale (artboard) */
+  }
+
+  .hm-msg__bubble {
+    padding: 9px var(--spacing-3); /* 9px off-scale (artboard) */
+  }
+
+  /* Touch has no hover: the toolbar is always available rather than hidden
+   * behind a state the device cannot express. */
+  .hm-msg__actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (min-width: 900px) {
+  .hm-chat__scrim {
+    display: none;
+  }
+}

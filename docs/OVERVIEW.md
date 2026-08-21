@@ -53,6 +53,16 @@ installs it on its own server with one command and owns its communication comple
   the token sheet in `webapp/src/tokens.css`. Fonts (Inter, Vazirmatn) are self-hosted via
   `@fontsource` — no CDN, as the strict CSP requires. Mockup and handoff are mirrored into
   `docs/design/`.
+- **The chat shell carries its delivered design** ("Quiet Nest", delivered 2026-08-21) and is now
+  the authenticated app: sidebar with channels, DMs, presence and distinct unread/mention
+  treatments; bubble message list with run grouping, unread divider, edited and removed markers,
+  and file/image/link cards; composer; search as a third column; plus the empty, loading-history,
+  reconnecting, DM, dark, Persian-RTL and 375px mobile states. The RTL mirror comes from `dir`
+  alone — there is no RTL-specific CSS. Message markdown renders through an allowlist sanitizer
+  with raw HTML never parsed.
+- **Realtime client** implementing `docs/api/ws-protocol.md`: handshake, per-channel subscribe,
+  message/presence/read events, heartbeat, bounded reconnect backoff, and `resync` fallback to
+  REST backfill. It talks to mocks today — the server gateway is the next backend slice.
 - The React webapp also has working en/fa i18n with RTL switching, a locale key-parity check,
   a typed API client with CSRF and transparent session refresh, and MSW mock handlers typed
   against the generated schema (off by default).
@@ -62,14 +72,20 @@ installs it on its own server with one command and owns its communication comple
   webapp typecheck/lint/tests/build, gitleaks, codegen drift checks, compose smoke test.
   Activates when the GitHub remote exists.
 
-**Not yet built:** password reset + TOTP 2FA (rest of 1.1), messaging, files, the admin
-dashboard UI, calls, E2EE — see the phase list below.
+**Not yet built:** password reset + TOTP 2FA (rest of 1.1); the messaging **backend** (every
+chat endpoint answers 501 today and the WS gateway does not exist, so the chat shell runs on
+mocks); files; the admin dashboard and user-settings UIs (both designed, not built); calls;
+E2EE — see the phase list below.
 
 ## What's next
 
-**Phase 1.1 remainder:** password reset (needs email infra), TOTP 2FA, device list UI.
-After that: 1.2 messaging (WebSockets), 1.3 files/search, 1.4 admin dashboard, 1.5 full
-bilingual UI + PWA baseline, 1.6 SSO/SCIM.
+**Phase 1.1b** — password reset, TOTP 2FA, and the session-list endpoints — is the next slice:
+it unblocks three separate designed screen sets at once (the reset artboards, the settings
+Security section, and the settings Sessions list). Then the 1.2 messaging backend behind the
+chat shell, 1.3 files/search, 1.4 the admin dashboard, 1.5 PWA baseline, 1.6 SSO/SCIM.
+
+**All Phase 1 designs are delivered** — auth, chat, admin dashboard, user settings — so from
+here the backend is the pacing item, not the design.
 
 ## Architecture at a glance
 

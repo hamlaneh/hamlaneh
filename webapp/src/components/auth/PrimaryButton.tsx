@@ -1,4 +1,4 @@
-import { LoaderCircleIcon } from "./icons";
+import { LoaderCircleIcon } from "../icons";
 
 interface PrimaryButtonProps {
   label: string;

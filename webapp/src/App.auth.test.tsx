@@ -43,7 +43,7 @@ afterAll(() => {
 });
 
 function signedInAs(name: string): string {
-  return en.home.signedInAs.replace("{{name}}", name);
+  return en.account.signedInAs.replace("{{name}}", name);
 }
 
 /**
@@ -87,6 +87,24 @@ function strengthLevel(): string {
     throw new Error("the strength meter is not on screen");
   }
   return level.textContent;
+}
+
+/**
+ * Being signed in now means the chat shell is mounted; its sidebar is the
+ * landmark that is present exactly then.
+ */
+function findChatShell() {
+  return screen.findByRole("navigation", { name: en.chat.sidebar.label });
+}
+
+function queryChatShell() {
+  return screen.queryByRole("navigation", { name: en.chat.sidebar.label });
+}
+
+/** Account actions sit behind the Settings control in the user footer. */
+async function openAccountMenu(user: UserEvent) {
+  await user.click(screen.getByRole("button", { name: en.chat.footer.account }));
+  await screen.findByRole("dialog", { name: en.chat.footer.account });
 }
 
 /** Renders App and waits for the session bootstrap to settle on the login screen. */
@@ -172,8 +190,9 @@ describe("login", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { name: en.home.title }),
+      await findChatShell(),
     ).toBeInTheDocument();
+    await openAccountMenu(user);
     expect(
       screen.getByText(signedInAs(FIXTURE_ADMIN.display_name)),
     ).toBeInTheDocument();
@@ -246,7 +265,7 @@ describe("session bootstrap", () => {
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: en.home.title }),
+      await findChatShell(),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: en.login.title }),
@@ -260,7 +279,7 @@ describe("session bootstrap", () => {
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: en.home.title }),
+      await findChatShell(),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: en.login.title }),
@@ -292,7 +311,7 @@ describe("session bootstrap", () => {
       await screen.findByRole("heading", { name: en.login.title }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: en.home.title }),
+      queryChatShell(),
     ).not.toBeInTheDocument();
   });
 });
@@ -304,7 +323,7 @@ describe("forced password change", () => {
 
     expect(screen.getByText(en.changePassword.forcedNotice)).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: en.home.title }),
+      queryChatShell(),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: en.changePassword.cancel }),
@@ -492,8 +511,9 @@ describe("forced password change", () => {
     });
 
     expect(
-      await screen.findByRole("heading", { name: en.home.title }),
+      await findChatShell(),
     ).toBeInTheDocument();
+    await openAccountMenu(user);
     expect(
       screen.getByText(signedInAs(FIXTURE_NEWHIRE.display_name)),
     ).toBeInTheDocument();
@@ -511,9 +531,10 @@ describe("voluntary password change", () => {
       FIXTURE_CREDENTIALS.identifier,
       FIXTURE_CREDENTIALS.password,
     );
-    await screen.findByRole("heading", { name: en.home.title });
+    await findChatShell();
+    await openAccountMenu(user);
     await user.click(
-      screen.getByRole("button", { name: en.home.changePasswordLink }),
+      screen.getByRole("button", { name: en.account.changePasswordLink }),
     );
     await screen.findByRole("heading", { name: en.changePassword.title });
   }
@@ -531,7 +552,7 @@ describe("voluntary password change", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { name: en.home.title }),
+      await findChatShell(),
     ).toBeInTheDocument();
   });
 
@@ -546,7 +567,7 @@ describe("voluntary password change", () => {
     });
 
     expect(
-      await screen.findByRole("heading", { name: en.home.title }),
+      await findChatShell(),
     ).toBeInTheDocument();
   });
 });
@@ -560,15 +581,16 @@ describe("logout", () => {
       FIXTURE_CREDENTIALS.identifier,
       FIXTURE_CREDENTIALS.password,
     );
-    await screen.findByRole("heading", { name: en.home.title });
+    await findChatShell();
+    await openAccountMenu(user);
 
-    await user.click(screen.getByRole("button", { name: en.home.logout }));
+    await user.click(screen.getByRole("button", { name: en.account.logout }));
 
     expect(
       await screen.findByRole("heading", { name: en.login.title }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: en.home.title }),
+      queryChatShell(),
     ).not.toBeInTheDocument();
   });
 });
@@ -615,7 +637,7 @@ describe("delivered design behaviour", () => {
       await user.click(screen.getByRole("button", { name: en.login.submit }));
 
       expect(
-        await screen.findByRole("heading", { name: en.home.title }),
+        await findChatShell(),
       ).toBeInTheDocument();
       // The retry actually reached the network — the screen is not inert.
       expect(requests.count()).toBe(1);
@@ -746,7 +768,7 @@ describe("delivered design behaviour", () => {
     await user.click(submit);
 
     expect(
-      await screen.findByRole("heading", { name: en.home.title }),
+      await findChatShell(),
     ).toBeInTheDocument();
   });
 

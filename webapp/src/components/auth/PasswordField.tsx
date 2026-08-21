@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { FieldProps } from "./Field";
 import { Field } from "./Field";
 import { fieldErrorId } from "./fieldErrorId";
-import { EyeIcon, EyeOffIcon } from "./icons";
+import { EyeIcon, EyeOffIcon } from "../icons";
 
 interface PasswordFieldProps extends FieldProps {
   value: string;

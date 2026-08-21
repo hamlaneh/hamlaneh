@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "./tokens.css";
 @import "./components/auth/auth.css";
+@import "./components/chat/chat.css";
 
 /* Self-hosted, no CDN (strict CSP): only the weights the design uses —
  * 400 body, 500 labels and links, 600 headings and buttons. Inter carries

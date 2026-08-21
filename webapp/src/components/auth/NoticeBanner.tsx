@@ -1,6 +1,6 @@
 import type { Ref } from "react";
 
-import { CircleAlertIcon, TriangleAlertIcon } from "./icons";
+import { CircleAlertIcon, TriangleAlertIcon } from "../icons";
 
 interface NoticeBannerProps {
   /**

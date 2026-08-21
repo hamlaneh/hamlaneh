@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { BrowserRouter } from "react-router";
 
 import { api } from "./api/client";
 import type { components } from "./api/schema";
 import { AuthShell } from "./components/auth/AuthShell";
 import { ChangePasswordScreen } from "./screens/ChangePasswordScreen";
-import { HomeScreen } from "./screens/HomeScreen";
+import { ChatApp } from "./screens/ChatApp";
 import { LoginScreen } from "./screens/LoginScreen";
 
 type User = components["schemas"]["User"];
@@ -31,9 +32,10 @@ async function fetchSession(): Promise<Session> {
 }
 
 /**
- * Session bootstrap and screen routing by conditional render (no router
- * dependency — three screens do not justify one). Each pre-authentication
- * screen brings its own AuthShell.
+ * Session bootstrap. Which pre-authentication screen shows is decided by
+ * session state, not by URL, so those stay a conditional render and each
+ * brings its own AuthShell. Once signed in, the chat shell mounts behind a
+ * router: channels are addressable and a message has a permalink.
  */
 function App() {
   const { t } = useTranslation();
@@ -113,14 +115,18 @@ function App() {
     );
   }
 
+  // The chat shell is the authenticated app; only it needs a URL, so the
+  // router starts here.
   return (
-    <HomeScreen
-      user={session.user}
-      onLogout={handleLogout}
-      onChangePassword={() => {
-        setShowChangePassword(true);
-      }}
-    />
+    <BrowserRouter>
+      <ChatApp
+        currentUser={session.user}
+        onLogout={handleLogout}
+        onChangePassword={() => {
+          setShowChangePassword(true);
+        }}
+      />
+    </BrowserRouter>
   );
 }
 

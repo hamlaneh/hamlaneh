@@ -43,12 +43,6 @@
       "unexpected": "مشکلی پیش آمد. دوباره تلاش کنید."
     }
   },
-  "home": {
-    "title": "خانه",
-    "signedInAs": "واردشده با نام {{name}}",
-    "changePasswordLink": "تغییر گذرواژه",
-    "logout": "خروج"
-  },
   "changePassword": {
     "title": "تعیین گذرواژهٔ جدید",
     "forcedNotice": "گذرواژهٔ موقت شما باید پیش از ادامه تغییر کند.",
@@ -66,6 +60,136 @@
       "mismatch": "هر دو گذرواژه باید یکسان باشند.",
       "networkError": "نتوانستیم به سرور متصل شویم. دوباره تلاش کنید.",
       "unexpected": "تغییر گذرواژه انجام نشد. دوباره تلاش کنید."
+    }
+  },
+  "account": {
+    "title": "حساب",
+    "signedInAs": "واردشده با نام {{name}}",
+    "changePasswordLink": "تغییر گذرواژه",
+    "logout": "خروج"
+  },
+  "chat": {
+    "common": {
+      "cancel": "انصراف",
+      "close": "بستن"
+    },
+    "noConversations": "هنوز در هیچ گفت‌وگویی نیستید. برای شروع، یک کانال بسازید.",
+    "sidebar": {
+      "label": "گفت‌وگوها",
+      "channels": "کانال‌ها",
+      "directMessages": "پیام‌های مستقیم",
+      "createChannel": "ساخت کانال",
+      "newDirectMessage": "پیام مستقیم تازه",
+      "close": "بستن کانال‌ها",
+      "unreadLabel": "خوانده‌نشده",
+      "mentionsLabel": "اشاره"
+    },
+    "presence": {
+      "online": "برخط",
+      "away": "غایب",
+      "offline": "برون‌خط"
+    },
+    "footer": {
+      "account": "تنظیمات"
+    },
+    "header": {
+      "searchPlaceholder": "جست‌وجوی پیام‌ها و پرونده‌ها",
+      "search": "جست‌وجو",
+      "openChannels": "باز کردن کانال‌ها",
+      "channelActions": "کنش‌های کانال",
+      "noTopic": "موضوعی تعیین نشده",
+      "directMessage": "پیام مستقیم",
+      "memberCount": "{{count}} عضو",
+      "membersLabel": "عضو"
+    },
+    "messages": {
+      "listLabel": "پیام‌های {{channel}}",
+      "today": "امروز",
+      "yesterday": "دیروز",
+      "newMessages": "پیام‌های تازه",
+      "edited": "(ویرایش‌شده)",
+      "removed": "پیام حذف شد",
+      "waitingToSend": "در انتظار ارسال",
+      "loadingOlder": "در حال بارگذاری پیام‌های پیشین…",
+      "unknownMember": "ناشناس",
+      "download": "دانلود {{filename}}",
+      "editLabel": "ویرایش پیام",
+      "saveEdit": "ذخیره",
+      "cancelEdit": "انصراف",
+      "actions": {
+        "edit": "ویرایش",
+        "copyLink": "کپی پیوند",
+        "delete": "حذف"
+      },
+      "deleteConfirm": {
+        "title": "این پیام حذف شود؟",
+        "body": "برای همه در {{channel}} حذف می‌شود و جای آن یک نشانه می‌ماند.",
+        "confirm": "حذف",
+        "cancel": "انصراف"
+      }
+    },
+    "composer": {
+      "placeholder": "پیام به {{target}}",
+      "attach": "پیوست پرونده",
+      "attachUnavailable": "هم‌رسانی پرونده هنوز در دسترس نیست.",
+      "send": "ارسال",
+      "mention": "اشاره به کسی",
+      "hintBold": "**پررنگ**",
+      "hintItalic": "*مورب*",
+      "hintCode": "`کد`",
+      "hintQuote": "> نقل‌قول",
+      "hintSend": "اینتر برای ارسال · شیفت+اینتر برای خط تازه",
+      "hintCompact": "**پررنگ** · *مورب* · `کد`",
+      "disconnected": "ارتباط قطع است. پیام شما نگه داشته می‌شود و با بازگشت ارتباط خودش ارسال می‌شود."
+    },
+    "connection": {
+      "reconnecting": "در حال اتصال دوباره…",
+      "lastConnected": "آخرین اتصال {{time}}",
+      "backOnline": "دوباره برخط",
+      "offline": "ارتباطی نیست. تلاش دوباره تا {{seconds}} ثانیه."
+    },
+    "search": {
+      "label": "نتایج جست‌وجو",
+      "close": "بستن جست‌وجو",
+      "kindLabel": "نوع نتیجه",
+      "messages": "پیام‌ها",
+      "files": "پرونده‌ها",
+      "searching": "در حال جست‌وجو…",
+      "resultsOne": "یک نتیجه برای «{{query}}»",
+      "resultsOther": "{{count}} نتیجه برای «{{query}}»",
+      "resultsCapped": "بیش از {{count}} نتیجه برای «{{query}}»",
+      "noResults": "نتیجه‌ای نیست.",
+      "filesPending": "جست‌وجوی پرونده همراه با هم‌رسانی پرونده می‌آید.",
+      "failed": "جست‌وجو ناموفق بود. دوباره تلاش کنید."
+    },
+    "empty": {
+      "title": "این آغاز {{channel}} است",
+      "body": "موضوعی برایش بگذارید تا همه بدانند چه چیزی این‌جا جا دارد، بعد همان چند نفری را که لازم دارند دعوت کنید.",
+      "bodyOwner": "این کانال را امروز شما ساختید. موضوعی برایش بگذارید تا همه بدانند چه چیزی این‌جا جا دارد، بعد همان چند نفری را که لازم دارند دعوت کنید.",
+      "invite": "دعوت افراد",
+      "setTopic": "تعیین موضوع",
+      "onlyYou": "تا کسی دعوت نشود، این کانال را فقط شما می‌بینید."
+    },
+    "createChannel": {
+      "title": "ساخت کانال",
+      "nameLabel": "نام کانال",
+      "kindLabel": "چه کسانی می‌توانند عضو باشند",
+      "public": "عمومی",
+      "private": "خصوصی",
+      "visibilityNote": "هر دو نوع فقط برای اعضایشان دیده می‌شوند. هیچ‌کس نمی‌تواند کانالی را که به آن دعوت نشده پیدا یا بازخوانی کند.",
+      "submit": "ساخت کانال",
+      "failed": "کانال ساخته نشد."
+    },
+    "channelMenu": {
+      "topicLabel": "موضوع",
+      "saveTopic": "ذخیرهٔ موضوع",
+      "dmNote": "پیام مستقیم موضوع ندارد و اعضایش ثابت است."
+    },
+    "people": {
+      "searchLabel": "یافتن کسی",
+      "invite": "دعوت",
+      "message": "پیام",
+      "failed": "انجام نشد. دوباره تلاش کنید."
     }
   }
 }

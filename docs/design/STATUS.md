@@ -13,3 +13,5 @@ Functional requirements per screen (for producing the designs): [BRIEFS.md](BRIE
 | Admin dashboard (8 artboards + components) | BRIEFS.md §3 | **DESIGNED** — delivered 2026-08-21 | `Hamlaneh Admin.dc.html` (handoff: [ADMIN_HANDOFF.md](ADMIN_HANDOFF.md)) |
 | User settings (6 artboards + components) | BRIEFS.md §4 | **DESIGNED** — delivered 2026-08-21 | `Hamlaneh Settings.dc.html` (handoff: [SETTINGS_HANDOFF.md](SETTINGS_HANDOFF.md)) |
 | Call / meeting view | BRIEFS.md §5 | PENDING — do not design yet (Phase 2) | — |
+| Chat overlays — create channel, people picker (invite + new DM), mention picker | BRIEFS.md §2 addendum | **DESIGNED** — delivered 2026-08-21 as 13 `chat-addendum-*` artboards; plumbing exists and awaits the reskin | `Hamlaneh Chat.dc.html` (handoff: [CHAT_HANDOFF.md](CHAT_HANDOFF.md)) |
+| Channel menu, account menu | BRIEFS.md §2 (implied, not drawn) | **awaiting-design** — unstyled plumbing; not covered by the addendum | — |

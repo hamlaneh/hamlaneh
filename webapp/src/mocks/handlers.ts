@@ -1,6 +1,8 @@
 import { http, HttpResponse } from "msw";
 
 import type { components } from "../api/schema";
+import { chatHandlers, resetMockChat } from "./chat";
+import { realtimeHandler } from "./ws";
 
 type HealthStatus = components["schemas"]["HealthStatus"];
 type ApiError = components["schemas"]["Error"];
@@ -105,10 +107,16 @@ function freshAuthState(): MockAuthState {
 
 let auth = freshAuthState();
 
-/** Tests call this between cases to drop the mock session, password changes, and fixture cookies. */
+/**
+ * Tests call this between cases to drop the mock session, password changes and
+ * fixture cookies. Conversation state goes with it: the chat shell is part of
+ * the signed-in app, so leaking read positions or sent messages between cases
+ * would be exactly as confusing as leaking a session.
+ */
 export function resetMockAuth(): void {
   auth = freshAuthState();
   clearDomCookies();
+  resetMockChat();
 }
 
 /**
@@ -301,6 +309,9 @@ export const handlers = [
     // Single page: no next_cursor.
     HttpResponse.json({ users: [FIXTURE_ADMIN, FIXTURE_MEMBER] }),
   ),
+
+  ...chatHandlers,
+  realtimeHandler,
 
   http.post<never, AdminCreateUserRequest, User>(
     "/api/v1/admin/users",

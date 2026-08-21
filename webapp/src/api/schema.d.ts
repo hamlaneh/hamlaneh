@@ -132,6 +132,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Directory of instance users (invite and DM pickers).
+         * @description Backs the two people-pickers the chat shell draws: "Invite people" on a channel and the "+" beside Direct messages. Returns the reduced UserSummary shape only — never email, role, or password state. Ordered by username ascending; the cursor encodes the last row's (username, id).
+         */
+        get: operations["listUsers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/users": {
         parameters: {
             query?: never;
@@ -147,6 +167,246 @@ export interface paths {
          * @description The primary way users come into existence — public registration is off by default. Audit-logged.
          */
         post: operations["adminCreateUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every channel and DM the caller belongs to (the sidebar).
+         * @description Membership is the only visibility rule in Phase 1.2, so this returns exactly what the sidebar draws: public channels, private channels and direct messages the caller is a member of, each carrying its unread and mention counts. Ordered by (created_at, id) ascending — the sidebar does its own grouping and display sort.
+         */
+        get: operations["listChannels"];
+        put?: never;
+        /**
+         * Create a public or private channel.
+         * @description The "+" beside Channels. The creator becomes the sole member, which is what the empty-channel state promises ("Only you can see this channel until someone is invited"). Direct messages are opened through /api/v1/dms instead — kind `dm` is rejected here.
+         */
+        post: operations["createChannel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open — or reuse — the 1:1 direct message with one user.
+         * @description The "+" beside Direct messages. Exactly one DM channel exists per user pair (ADR 001), so this is idempotent: 200 returns the channel that already existed, 201 reports one that was just created. Opening a DM with yourself is a 400.
+         */
+        post: operations["openDirectMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * One channel or DM the caller belongs to.
+         * @description Backs a deep link into a conversation (and a reload of one). A non-member — including an org admin who is not a member — gets 404, so the channel's existence never leaks.
+         */
+        get: operations["getChannel"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Set the channel topic.
+         * @description Backs "Set a topic" in the empty-channel state and the topic line in the header. Any member may set it. Direct messages have no topic — a PATCH on a DM is a 400. Renaming a channel is not in this slice.
+         */
+        patch: operations["updateChannel"];
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Members of a channel (the count in the header).
+         * @description Ordered by username ascending; the cursor encodes the last row's (username, user_id).
+         */
+        get: operations["listChannelMembers"];
+        put?: never;
+        /**
+         * Invite a user into a channel.
+         * @description Backs "Invite people". Any member may invite any user into a public or private channel. Idempotent — inviting somebody who is already a member changes nothing and still returns 204. A direct message's membership is fixed at two, so inviting into a DM is a 400 (code dm_membership_fixed).
+         */
+        post: operations["addChannelMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/members/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+                userId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Leave a channel, or remove somebody from it.
+         * @description Leaving yourself is always allowed. Removing somebody else requires being the channel's creator, or an org admin who is a member of it — the same boundary as message moderation: admins hold no power in channels they are not in. Idempotent: removing a non-member returns 204. A direct message's membership is fixed, so this is a 400 on a DM (code dm_membership_fixed). Removing the last member of a channel is refused (code last_member) — an empty channel nobody can reach is a leak of nothing but a dead row.
+         */
+        delete: operations["removeChannelMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * One page of channel history.
+         * @description Pages with `before`, `after` or `around` — at most one of the three; two together is a 400. A cursor is opaque (base64 of the anchor message's created_at and id). Every page is ordered ascending by (created_at, id) so the client renders it in reading order regardless of the direction it paged in. `around` centres the page on the cursor and is how a copied message link resolves. Soft-deleted messages stay in the page with empty content and a deleted_at, because the design keeps a placeholder in their place.
+         */
+        get: operations["listMessages"];
+        put?: never;
+        /**
+         * Send a message.
+         * @description Idempotent on `client_msg_id`, which the client generates once per message and reuses verbatim on every retry — a message queued while the socket was down lands exactly once. A first send returns 201; a resend of the same client_msg_id returns 200 with the message that already exists, unmodified.
+         */
+        post: operations["sendMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/messages/{messageId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+                messageId: components["parameters"]["MessageId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a message (soft).
+         * @description The author may delete their own message; an org admin may delete any message in a channel they are a member of (code not_message_author_or_admin on refusal). Soft delete — the row keeps its place with its content erased, which is what the dashed "Message removed" placeholder renders. Idempotent: deleting an already-deleted message is still 204.
+         */
+        delete: operations["deleteMessage"];
+        options?: never;
+        head?: never;
+        /**
+         * Edit your own message.
+         * @description Author-only, admins included — editing somebody else's words is impersonation, so an admin who is a member of the channel still gets 403 (code not_message_author). The message keeps its place and gains an edited_at, which the design renders as "(edited)". Editing a deleted message is a 409.
+         */
+        patch: operations["editMessage"];
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Move the caller's read position in a channel.
+         * @description Feeds the "New messages" divider and the sidebar unread and mention counts. Monotonic per (user, channel): a position older than the one already stored is accepted and ignored, so a stale tab cannot undo a read. Own-device sync only — a read position is never visible to any other user, and the contract carries no cross-user read receipts anywhere.
+         */
+        put: operations["setReadPosition"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search messages (and, from Phase 1.3, files).
+         * @description Backs the search column. Scope is enforced inside the query by joining channel membership, so results, counts and snippets can never come from a conversation the caller is not in. Snippets are a parts array of {text, match} — the server never renders HTML; the design's highlight is drawn client-side from `match`. `total` is exact up to 200 and reports total_capped beyond that. `kind=files` is accepted now and returns an empty page until the Phase 1.3 upload pipeline exists; its result shape arrives with that slice.
+         */
+        get: operations["search"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ws": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Upgrade to the realtime WebSocket.
+         * @description Authenticated by the session cookie on the upgrade request — never by a token in the URL. The handshake requires an Origin header matching the instance's public origin; a missing or mismatched Origin is rejected (CSWSH defense). The socket binds to the session family, so a cookie rotation does not drop it and revoking the family closes it within ten seconds. Frames, operations, resume and close codes are specified in docs/api/ws-protocol.md; this entry exists so the transport's authentication is covered by the authz matrix like any other endpoint.
+         */
+        get: operations["connectWebSocket"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -219,6 +479,225 @@ export interface components {
             /** @default false */
             is_admin?: boolean;
         };
+        /**
+         * @description online — a live socket. away — the client reported itself idle. offline — no socket after a short grace period.
+         * @enum {string}
+         */
+        Presence: "online" | "away" | "offline";
+        /** @description The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state. */
+        UserSummary: {
+            /** Format: uuid */
+            id: string;
+            username: string;
+            display_name: string;
+            /** @description Present only where the design shows presence — the DM peer and the user directory. Message authors carry no presence. */
+            presence?: components["schemas"]["Presence"];
+        };
+        UserSummaryPage: {
+            users: components["schemas"]["UserSummary"][];
+            /** @description Present when another page exists. */
+            next_cursor?: string;
+        };
+        /**
+         * @description Flat channel kinds (ADR 001 — no org or team layer). In Phase 1.2 visibility is membership for all three; `kind` is stored so a channel directory and join flow can arrive without a schema change.
+         * @enum {string}
+         */
+        ChannelKind: "public" | "private" | "dm";
+        /** @description One conversation. Only members ever receive a Channel — every channel-scoped path answers 404 to everyone else. */
+        Channel: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["ChannelKind"];
+            /** @description The name the sidebar renders after "#". Unique across non-DM channels; null for a direct message, which the client labels with dm_peer.display_name instead. */
+            slug?: string | null;
+            /** @description Empty string when unset — the header renders its own "No topic set" copy. Always empty for a direct message. */
+            topic: string;
+            /** @description The count drawn beside the channel name in the header. */
+            member_count: number;
+            /** @description The other person. Present only when kind is dm. */
+            dm_peer?: components["schemas"]["UserSummary"];
+            /** @description Messages after the caller's read position, excluding the caller's own messages and deleted ones. */
+            unread_count: number;
+            /** @description The subset of unread_count that mentions the caller — the sidebar's filled "@" badge, as opposed to the outlined plain-unread count. */
+            mention_count: number;
+            /**
+             * Format: uuid
+             * @description Where the "New messages" divider goes on entry. Null when the caller has never read the channel.
+             */
+            last_read_message_id?: string | null;
+            /**
+             * Format: date-time
+             * @description Timestamp of the newest message; null in an empty channel.
+             */
+            last_message_at?: string | null;
+            /**
+             * Format: uuid
+             * @description Who created the channel — the empty state says "You created this channel today". Null if that account no longer exists.
+             */
+            created_by?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ChannelPage: {
+            channels: components["schemas"]["Channel"][];
+            /** @description Present when another page exists. */
+            next_cursor?: string;
+        };
+        /** @description Enough of a channel to label a search result — "#deploys" for a channel, the peer's display name for a direct message. */
+        ChannelRef: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["ChannelKind"];
+            slug?: string | null;
+            /** @description Present only when kind is dm. */
+            dm_peer?: components["schemas"]["UserSummary"];
+        };
+        CreateChannelRequest: {
+            slug: string;
+            /**
+             * @description Direct messages are opened through /api/v1/dms, not here.
+             * @enum {string}
+             */
+            kind: "public" | "private";
+            /** @default  */
+            topic?: string;
+        };
+        UpdateChannelRequest: {
+            /** @description Empty string clears the topic. */
+            topic: string;
+        };
+        OpenDirectMessageRequest: {
+            /**
+             * Format: uuid
+             * @description The other person. Must not be the caller.
+             */
+            user_id: string;
+        };
+        AddChannelMemberRequest: {
+            /** Format: uuid */
+            user_id: string;
+        };
+        MemberPage: {
+            members: components["schemas"]["UserSummary"][];
+            /** @description Present when another page exists. */
+            next_cursor?: string;
+        };
+        /** @description A file card in the message list. Read-only on Message: attachments are created by the Phase 1.3 upload pipeline, so until that slice lands the array is always empty. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both. */
+        Attachment: {
+            /** Format: uuid */
+            id: string;
+            filename: string;
+            /** @description The card's short type label ("PDF", "PNG") is derived from this. */
+            content_type: string;
+            /** Format: int64 */
+            size_bytes: number;
+            /** @description Images only — the card's "1600 × 900" line. */
+            width?: number | null;
+            height?: number | null;
+            /** @description Download target. Served from the cookie-less files origin (Phase 1.3). */
+            url: string;
+            /** @description Images only — the card's preview. */
+            thumbnail_url?: string | null;
+        };
+        /** @description The link-preview card: image, title, description, and the host line the client derives from url. Read-only, and always absent until the Phase 1.3 egress preview proxy exists. */
+        LinkPreview: {
+            url: string;
+            title?: string | null;
+            description?: string | null;
+            image_url?: string | null;
+        };
+        Message: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            channel_id: string;
+            author: components["schemas"]["UserSummary"];
+            /**
+             * Format: uuid
+             * @description The sender's idempotency key, echoed back so an optimistic bubble can be reconciled with the stored message.
+             */
+            client_msg_id: string;
+            /** @description Markdown source. The client renders it through a strict sanitizer — the server never returns HTML. Empty string once the message is deleted. */
+            content: string;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Non-null renders the "(edited)" marker.
+             */
+            edited_at?: string | null;
+            /**
+             * Format: date-time
+             * @description Non-null renders the dashed "Message removed" placeholder. The row keeps its place in history so the conversation never reshapes.
+             */
+            deleted_at?: string | null;
+            /** @description Always empty until the Phase 1.3 upload pipeline lands. */
+            attachments: components["schemas"]["Attachment"][];
+            /** @description Absent until the Phase 1.3 preview proxy lands. */
+            link_preview?: components["schemas"]["LinkPreview"];
+        };
+        /** @description One page of history, always ordered ascending by (created_at, id). The two cursors are the handles for the next scrollback and the next forward fetch; each is absent when there is nothing more in that direction. */
+        MessagePage: {
+            messages: components["schemas"]["Message"][];
+            /** @description Pass as `before` to fetch the previous (older) page. */
+            before_cursor?: string;
+            /** @description Pass as `after` to fetch the next (newer) page. */
+            after_cursor?: string;
+        };
+        SendMessageRequest: {
+            /**
+             * Format: uuid
+             * @description Generated by the client once per message and reused verbatim on every retry. Unique per (channel, author).
+             */
+            client_msg_id: string;
+            /** @description Markdown as authored, with one extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name. */
+            content: string;
+        };
+        EditMessageRequest: {
+            content: string;
+        };
+        SetReadPositionRequest: {
+            /**
+             * Format: uuid
+             * @description The newest message the caller has seen. Must belong to this channel.
+             */
+            message_id: string;
+        };
+        /**
+         * @description The two tabs above the results. `files` is accepted from Phase 1.2 but returns an empty page until the Phase 1.3 upload pipeline exists.
+         * @default messages
+         * @enum {string}
+         */
+        SearchKind: "messages" | "files";
+        SearchSnippetPart: {
+            text: string;
+            /** @description True for the run the query matched; the client highlights it. */
+            match: boolean;
+        };
+        /** @description A snippet as alternating plain and matched runs. Never HTML — the design's highlight is drawn from `match`, so a message body can never inject markup through search results. */
+        SearchSnippet: {
+            parts: components["schemas"]["SearchSnippetPart"][];
+        };
+        /** @description One message hit: where it was said, by whom, when, and the matching run of text. The result shape for kind=files arrives with Phase 1.3. */
+        SearchResult: {
+            /** Format: uuid */
+            message_id: string;
+            channel: components["schemas"]["ChannelRef"];
+            author: components["schemas"]["UserSummary"];
+            /** Format: date-time */
+            created_at: string;
+            snippet: components["schemas"]["SearchSnippet"];
+        };
+        SearchPage: {
+            kind: components["schemas"]["SearchKind"];
+            results: components["schemas"]["SearchResult"][];
+            /** @description Exact match count, counted up to 200 — the "4 results for …" line. */
+            total: number;
+            /** @description True when there were more than 200 matches and total is the cap. */
+            total_capped: boolean;
+            /** @description Present when another page exists. */
+            next_cursor?: string;
+        };
     };
     responses: {
         /** @description Request validation failed. */
@@ -248,6 +727,15 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description No such resource for this caller. Channel-scoped paths answer 404 — never 403 — to a non-member, so a channel's existence never leaks; an org admin who is not a member sees the same 404. */
+        NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
         /** @description Too many attempts; retry later. */
         RateLimited: {
             headers: {
@@ -258,7 +746,11 @@ export interface components {
             };
         };
     };
-    parameters: never;
+    parameters: {
+        /** @description A channel or direct message the caller is a member of. */
+        ChannelId: string;
+        MessageId: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -433,6 +925,35 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    listUsers: {
+        parameters: {
+            query?: {
+                /** @description Case-insensitive filter over username and display name. */
+                q?: string;
+                limit?: number;
+                /** @description Opaque pagination cursor from a previous response. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the user directory. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSummaryPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
     adminListUsers: {
         parameters: {
             query?: {
@@ -493,6 +1014,498 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    listChannels: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Opaque pagination cursor from a previous response. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the caller's conversations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateChannelRequest"];
+            };
+        };
+        responses: {
+            /** @description Channel created; the caller is its only member. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Channel"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Slug already taken (code channel_slug_taken). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    openDirectMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OpenDirectMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description The direct message already existed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Channel"];
+                };
+            };
+            /** @description Direct message created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Channel"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description No such user (code user_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The channel. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Channel"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateChannelRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated channel. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Channel"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listChannelMembers: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Opaque pagination cursor from a previous response. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of members. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    addChannelMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddChannelMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description The user is a member (added now, or already was). */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description No such channel for this caller (code channel_not_found) or no such user (code user_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    removeChannelMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user is not a member (removed now, or already was not). */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Visible, but not the caller's to do — not the creator and not an admin member (code forbidden). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listMessages: {
+        parameters: {
+            query?: {
+                /** @description Return messages older than this cursor (scrollback). */
+                before?: string;
+                /** @description Return messages newer than this cursor (reconnect backfill). */
+                after?: string;
+                /** @description Centre the page on this cursor (permalinks); limit splits either side. */
+                around?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of messages. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessagePage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    sendMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description This client_msg_id was already sent; the existing message is returned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Message stored and broadcast. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    deleteMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+                messageId: components["parameters"]["MessageId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The message is deleted (now, or already was). */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    editMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+                messageId: components["parameters"]["MessageId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description The edited message. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The message is deleted (code message_deleted). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    setReadPosition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetReadPositionRequest"];
+            };
+        };
+        responses: {
+            /** @description Read position stored, or ignored as a regression. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    search: {
+        parameters: {
+            query: {
+                q: string;
+                kind?: components["schemas"]["SearchKind"];
+                limit?: number;
+                /** @description Opaque pagination cursor from a previous response. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of results. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    connectWebSocket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Switching Protocols — the WebSocket is open. */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Origin missing or not allowed (code origin_not_allowed). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
         };
     };
 }

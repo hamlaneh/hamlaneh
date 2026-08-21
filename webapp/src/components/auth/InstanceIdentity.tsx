@@ -1,4 +1,4 @@
-import { ArcMotif } from "./icons";
+import { ArcMotif } from "../icons";
 import type { Organization } from "./OrganizationLogoSlot";
 import { OrganizationLogoSlot } from "./OrganizationLogoSlot";
 import { ProductWordmark } from "./ProductWordmark";
