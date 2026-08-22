@@ -1,24 +1,35 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
+import { http } from "msw";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import App from "./App";
+import i18n from "./i18n";
 import en from "./locales/en/common.json";
+import fa from "./locales/fa/common.json";
 import {
+  FIXTURE_RECOVERY_CODES,
   FIXTURE_TOTP_CODE,
   FIXTURE_TWOSTEP_CREDENTIALS,
   resetMockAuth,
 } from "./mocks/handlers";
 import { server } from "./mocks/node";
 
+/** One code from the set the mock hands out at enrolment: `P4RD-1TWL`. */
+const RECOVERY_CODE = FIXTURE_RECOVERY_CODES[4];
+
+/** The same code as someone reads it off paper in a hurry. */
+const RECOVERY_CODE_AS_TYPED = " p4rd1twl ";
+
 beforeAll(() => {
   server.listen({ onUnhandledRequest: "error" });
 });
 
-afterEach(() => {
+afterEach(async () => {
   server.resetHandlers();
   resetMockAuth();
+  await i18n.changeLanguage("en");
 });
 
 afterAll(() => {
@@ -56,20 +67,24 @@ async function enterCode(user: UserEvent, code: string) {
   await user.keyboard(code);
 }
 
-/** Signs in with the account whose login answers 202, landing on the code screen. */
-async function reachCodeScreen(user: UserEvent) {
+/**
+ * Signs in with the account whose login answers 202, landing on the code
+ * screen. `copy` selects the locale the labels are read from, so the same
+ * helper serves the English and the Persian cases.
+ */
+async function reachCodeScreen(user: UserEvent, copy: typeof en | typeof fa = en) {
   render(<App />);
-  await screen.findByRole("heading", { name: en.login.title });
+  await screen.findByRole("heading", { name: copy.login.title });
   await user.type(
-    screen.getByLabelText(en.login.identifierLabel),
+    screen.getByLabelText(copy.login.identifierLabel),
     FIXTURE_TWOSTEP_CREDENTIALS.identifier,
   );
   await user.type(
-    screen.getByLabelText(en.login.passwordLabel),
+    screen.getByLabelText(copy.login.passwordLabel),
     FIXTURE_TWOSTEP_CREDENTIALS.password,
   );
-  await user.click(screen.getByRole("button", { name: en.login.submit }));
-  await screen.findByRole("heading", { name: en.totp.title });
+  await user.click(screen.getByRole("button", { name: copy.login.submit }));
+  await screen.findByRole("heading", { name: copy.totp.title });
 }
 
 describe("two-step sign-in", () => {
@@ -124,6 +139,22 @@ describe("two-step sign-in", () => {
     ).toBeInTheDocument();
   });
 
+  it("spends no attempt on a half-typed six-digit code, and says so on the cells", async () => {
+    const user = userEvent.setup({ delay: null });
+    await reachCodeScreen(user);
+    const submitted = captureSubmittedCodes();
+
+    await enterCode(user, "123");
+    await user.click(screen.getByRole("button", { name: en.totp.submit }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(en.totp.error.incomplete);
+    expect(submitted).toEqual([]);
+    // What is typed stays put — only a rejection by the server clears it.
+    expect(codeValues()).toEqual(["1", "2", "3", "", "", ""]);
+    expect(codeCell(0)).toHaveFocus();
+  });
+
   it("returns to the password step, saying why, when the challenge is gone", async () => {
     const user = userEvent.setup({ delay: null });
     await reachCodeScreen(user);
@@ -136,5 +167,164 @@ describe("two-step sign-in", () => {
 
     await screen.findByRole("heading", { name: en.login.title });
     expect(await screen.findByText(en.totp.error.challengeLost)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Records the `code` every two-step request carries and then hands the request
+ * on: a resolver that returns nothing falls through to the real mock, so the
+ * flow still completes exactly as it does without the spy.
+ */
+function captureSubmittedCodes(): string[] {
+  const codes: string[] = [];
+  server.use(
+    http.post("/api/v1/auth/login/totp", async ({ request }) => {
+      const body = (await request.clone().json()) as { code: string };
+      codes.push(body.code);
+      return undefined;
+    }),
+  );
+  return codes;
+}
+
+/** Switches the challenge screen to its recovery-code half and types `value`. */
+async function enterRecoveryCode(
+  user: UserEvent,
+  value: string,
+  copy: typeof en | typeof fa = en,
+) {
+  await user.click(
+    screen.getByRole("button", { name: copy.totp.recovery.useRecoveryCode }),
+  );
+  await user.type(screen.getByLabelText(copy.totp.recovery.codeLabel), value);
+}
+
+describe("recovery codes at sign-in", () => {
+  it("switches to the recovery-code field and back to the cells", async () => {
+    const user = userEvent.setup({ delay: null });
+    await reachCodeScreen(user);
+
+    await user.click(
+      screen.getByRole("button", { name: en.totp.recovery.useRecoveryCode }),
+    );
+
+    // One plain field replaces the six cells, and focus follows it: whoever
+    // asked for this can start typing without hunting for the input.
+    const field = screen.getByLabelText(en.totp.recovery.codeLabel);
+    expect(field).toHaveFocus();
+    expect(
+      screen.queryByRole("group", { name: en.totp.codeLabel }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(en.totp.recovery.helper)).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: en.totp.recovery.useAuthenticator }),
+    );
+
+    expect(codeCells()).toHaveLength(6);
+    expect(codeCell(0)).toHaveFocus();
+    expect(
+      screen.queryByLabelText(en.totp.recovery.codeLabel),
+    ).not.toBeInTheDocument();
+  });
+
+  it("sends a lower-case, hyphen-free code in the form the contract describes", async () => {
+    const user = userEvent.setup({ delay: null });
+    await reachCodeScreen(user);
+    const submitted = captureSubmittedCodes();
+
+    await enterRecoveryCode(user, RECOVERY_CODE_AS_TYPED);
+    await user.click(screen.getByRole("button", { name: en.totp.submit }));
+
+    expect(
+      await screen.findByRole("navigation", { name: en.chat.sidebar.label }),
+    ).toBeInTheDocument();
+    // "case-insensitive, hyphens and spaces ignored" (openapi.yaml,
+    // TotpLoginRequest) — and one request, on the one endpoint both halves use.
+    expect(submitted).toEqual([RECOVERY_CODE.replace("-", "")]);
+  });
+
+  it("handles a wrong recovery code exactly as it handles a wrong six-digit one", async () => {
+    const user = userEvent.setup({ delay: null });
+    await reachCodeScreen(user);
+
+    await enterRecoveryCode(user, "ZZZZ-ZZZZ");
+    await user.click(screen.getByRole("button", { name: en.totp.submit }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(en.totp.error.invalidRecoveryCode);
+    // The same three things the cells do: clear, take focus back, and leave
+    // the challenge alive rather than dropping the user at the password step.
+    const field = screen.getByLabelText(en.totp.recovery.codeLabel);
+    expect(field).toHaveValue("");
+    expect(field).toHaveFocus();
+    expect(screen.getByRole("heading", { name: en.totp.title })).toBeInTheDocument();
+
+    await user.type(field, RECOVERY_CODE);
+    await user.click(screen.getByRole("button", { name: en.totp.submit }));
+
+    expect(
+      await screen.findByRole("navigation", { name: en.chat.sidebar.label }),
+    ).toBeInTheDocument();
+  });
+
+  it("spends no attempt on a value the contract would reject outright", async () => {
+    const user = userEvent.setup({ delay: null });
+    await reachCodeScreen(user);
+    const submitted = captureSubmittedCodes();
+
+    // Four characters is under the contract's minimum, so the server would
+    // answer 400 — and the five-attempt budget is too precious to burn on it.
+    await enterRecoveryCode(user, "P4RD");
+    await user.click(screen.getByRole("button", { name: en.totp.submit }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(en.totp.error.recoveryIncomplete);
+    expect(submitted).toEqual([]);
+    expect(screen.getByLabelText(en.totp.recovery.codeLabel)).toHaveFocus();
+  });
+
+  it("leaves the authenticator path working after a detour through recovery", async () => {
+    const user = userEvent.setup({ delay: null });
+    await reachCodeScreen(user);
+    const submitted = captureSubmittedCodes();
+
+    await enterRecoveryCode(user, RECOVERY_CODE_AS_TYPED);
+    await user.click(
+      screen.getByRole("button", { name: en.totp.recovery.useAuthenticator }),
+    );
+    await enterCode(user, FIXTURE_TOTP_CODE);
+    await user.click(screen.getByRole("button", { name: en.totp.submit }));
+
+    expect(
+      await screen.findByRole("navigation", { name: en.chat.sidebar.label }),
+    ).toBeInTheDocument();
+    // The abandoned recovery code was never sent, and the six digits went
+    // untouched — no normalisation is applied to the authenticator half.
+    expect(submitted).toEqual([FIXTURE_TOTP_CODE]);
+  });
+
+  it("offers the same way back in, in Persian, on the mirrored page", async () => {
+    const user = userEvent.setup({ delay: null });
+    await i18n.changeLanguage("fa");
+    await reachCodeScreen(user, fa);
+    const submitted = captureSubmittedCodes();
+
+    await enterRecoveryCode(user, RECOVERY_CODE_AS_TYPED, fa);
+
+    expect(document.documentElement.dir).toBe("rtl");
+    const field = screen.getByLabelText(fa.totp.recovery.codeLabel);
+    // Persian copy, not an English fallback.
+    expect(screen.getByText(fa.totp.recovery.helper)).toBeInTheDocument();
+    // The value is Latin: it keeps its own direction inside the mirrored page,
+    // exactly as the six-cell row does.
+    expect(field).toHaveAttribute("dir", "ltr");
+
+    await user.click(screen.getByRole("button", { name: fa.totp.submit }));
+
+    expect(
+      await screen.findByRole("navigation", { name: fa.chat.sidebar.label }),
+    ).toBeInTheDocument();
+    expect(submitted).toEqual([RECOVERY_CODE.replace("-", "")]);
   });
 });

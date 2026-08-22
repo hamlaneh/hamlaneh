@@ -56,9 +56,17 @@
     "submit": "Verify",
     "submitting": "Verifying…",
     "back": "Back",
+    "recovery": {
+      "useRecoveryCode": "Use a recovery code instead",
+      "useAuthenticator": "Use your authenticator app instead",
+      "helper": "Enter one of the recovery codes you saved when you turned on two-step verification. Capitals and the dash do not matter.",
+      "codeLabel": "Recovery code"
+    },
     "error": {
       "incomplete": "Enter all six digits.",
       "invalidCode": "That code is not valid. Check the app and try again.",
+      "recoveryIncomplete": "Enter one of your recovery codes.",
+      "invalidRecoveryCode": "That recovery code is not valid. Each code works once — check whether you have already used it.",
       "challengeLost": "That verification step expired. Sign in again.",
       "rateLimited": "Too many attempts. Try again in a few minutes.",
       "networkError": "We could not reach the server. Try again.",

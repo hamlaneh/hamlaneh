@@ -15,6 +15,7 @@ Functional requirements per screen (for producing the designs): [BRIEFS.md](BRIE
 | Call / meeting view | BRIEFS.md §5 | PENDING — do not design yet (Phase 2) | — |
 | Chat overlays — create channel, people picker (invite + new DM), mention picker | BRIEFS.md §2 addendum | **DESIGNED** — delivered 2026-08-21 as 13 `chat-addendum-*` artboards; plumbing exists and awaits the reskin | `Hamlaneh Chat.dc.html` (handoff: [CHAT_HANDOFF.md](CHAT_HANDOFF.md)) |
 | Channel menu, account menu | BRIEFS.md §2 addendum 2 | **DESIGNED** — delivered 2026-08-21 as 11 further `chat-addendum-*` artboards; plumbing exists and awaits the reskin | `Hamlaneh Chat.dc.html` (handoff: [CHAT_HANDOFF.md](CHAT_HANDOFF.md)) |
+| Recovery-code entry on `login-totp` | BRIEFS.md §1 | `awaiting-design` — the `login-totp` artboard draws only the six authenticator cells, so a user who lost their authenticator had nowhere to type the recovery codes enrolment gave them; the screen now switches between the six cells and one plain recovery-code field, built entirely from delivered parts (`TextField`, `hm-text-button`) with no new visual treatment | — (needs a `login-totp-recovery` variant of `Hamlaneh Auth.dc.html`) |
 
 ## Brand assets
 
