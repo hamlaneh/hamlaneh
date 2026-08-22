@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { api, retryAfterSeconds } from "../api/client";
+import { api } from "../api/client";
 import type { components } from "../api/schema";
+import { useRateLimitNotice } from "../auth/rateLimit";
+import type { RateLimitKeys } from "../auth/rateLimit";
 import { AuthForm } from "../components/auth/AuthForm";
 import { AuthShell } from "../components/auth/AuthShell";
 import { NoticeBanner } from "../components/auth/NoticeBanner";
@@ -38,8 +40,16 @@ export interface LoginNotice {
   message: string;
 }
 
-/** From this wait up the notice counts whole minutes; below it, whole seconds. */
-const SECONDS_PER_MINUTE = 60;
+/**
+ * The sign-in screen's rate-limit sentence family. Four other screens borrow
+ * the counted variants: their undated wording is this same sentence, so the
+ * count-carrying forms are shared rather than copied per namespace.
+ */
+const RATE_LIMIT_KEYS: RateLimitKeys = {
+  undated: "login.error.rateLimited",
+  seconds: "login.error.rateLimitedSeconds",
+  minutes: "login.error.rateLimitedMinutes",
+};
 
 /**
  * Sign-in against POST /api/v1/auth/login, in the delivered design
@@ -68,39 +78,18 @@ export function LoginScreen({
   // Bumped on every failure so a repeated identical failure still moves focus.
   const [failureCount, setFailureCount] = useState(0);
   const [submitting, setSubmitting] = useState(false);
-  // When the server's stated wait runs out, and how much of it is left. Both
-  // are null/0 whenever the 429 named no wait this client would act on.
-  const [retryAt, setRetryAt] = useState<number | null>(null);
-  const [remaining, setRemaining] = useState(0);
   const alertRef = useRef<HTMLDivElement>(null);
+  const {
+    message: rateLimitMessage,
+    start: startRateLimitWait,
+    clear: clearRateLimitWait,
+  } = useRateLimitNotice(RATE_LIMIT_KEYS, () => {
+    // The wait the server named has passed: the notice goes with the
+    // condition it described and the form is live again.
+    setError((current) => (current === "rateLimited" ? "none" : current));
+  });
 
   const rateLimited = error === "rateLimited";
-
-  /**
-   * The countdown re-reads the clock instead of decrementing a counter: a
-   * throttled background tab fires the interval late, and a count that drifts
-   * with it would be the same guess this screen just stopped making.
-   */
-  useEffect(() => {
-    if (retryAt === null) {
-      return undefined;
-    }
-    const timer = setInterval(() => {
-      const left = Math.ceil((retryAt - Date.now()) / 1000);
-      if (left > 0) {
-        setRemaining(left);
-        return;
-      }
-      // The wait the server named has passed: the notice goes with the
-      // condition it described and the form is live again.
-      setRetryAt(null);
-      setRemaining(0);
-      setError("none");
-    }, 1000);
-    return () => {
-      clearInterval(timer);
-    };
-  }, [retryAt]);
 
   useEffect(() => {
     // A form-level failure is announced by role="alert" and takes focus, so
@@ -129,28 +118,8 @@ export function LoginScreen({
   const clearRateLimitNotice = () => {
     if (rateLimited) {
       setError("none");
-      setRetryAt(null);
-      setRemaining(0);
+      clearRateLimitWait();
     }
-  };
-
-  /**
-   * The rate-limit notice: the wait the server stated, counted down, or the
-   * undated wording when it stated none this client would act on (see
-   * `retryAfterSeconds`). One sentence either way — only the number is new.
-   */
-  const rateLimitMessage = (): string => {
-    if (remaining <= 0) {
-      return t("login.error.rateLimited");
-    }
-    if (remaining < SECONDS_PER_MINUTE) {
-      return t("login.error.rateLimitedSeconds", { count: remaining });
-    }
-    // Rounded up: telling someone four minutes when four and a half are left
-    // just buys them another refusal.
-    return t("login.error.rateLimitedMinutes", {
-      count: Math.ceil(remaining / SECONDS_PER_MINUTE),
-    });
   };
 
   const submit = async () => {
@@ -185,9 +154,7 @@ export function LoginScreen({
         // The spec's RateLimited response carries the wait; reading it is the
         // difference between telling the user when the door reopens and
         // inventing "a few minutes".
-        const wait = retryAfterSeconds(response);
-        setRetryAt(wait === null ? null : Date.now() + wait * 1000);
-        setRemaining(wait ?? 0);
+        startRateLimitWait(response);
         fail("rateLimited");
       } else if (response.status === 401) {
         fail("invalidCredentials");
@@ -219,7 +186,7 @@ export function LoginScreen({
           <NoticeBanner
             ref={alertRef}
             tone={rateLimited ? "warning" : "danger"}
-            message={rateLimited ? rateLimitMessage() : t(`login.error.${error}`)}
+            message={rateLimited ? rateLimitMessage : t(`login.error.${error}`)}
           />
         )}
         <div className="hm-form__fields">

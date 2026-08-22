@@ -89,6 +89,10 @@
     "error": {
       "invalidEmail": "Enter a valid email address.",
       "rateLimited": "Too many requests. Try again in a few minutes.",
+      "rateLimitedMinutes_one": "Too many requests. Try again in {{count, number}} minute.",
+      "rateLimitedMinutes_other": "Too many requests. Try again in {{count, number}} minutes.",
+      "rateLimitedSeconds_one": "Too many requests. Try again in {{count, number}} second.",
+      "rateLimitedSeconds_other": "Too many requests. Try again in {{count, number}} seconds.",
       "networkError": "We could not reach the server. Try again.",
       "unexpected": "Something went wrong. Try again."
     }

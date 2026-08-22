@@ -110,6 +110,12 @@ installs it on its own server with one command and owns its communication comple
   with Security (change password, `TwoFactorCard`, the three-step `TwoFactorSetup`, and
   `RecoveryCodesStep`), Sessions (one row per live family, current first, with remote
   sign-out behind a confirm dialog), Language and Appearance.
+- **Rate-limited states name the wait rather than guessing it.** Every 429 the server sends
+  carries `Retry-After`, and one hook (`webapp/src/auth/rateLimit.ts`) turns it into the notice
+  each of the six affected screens already draws — sign-in, the two-step challenge, both reset
+  screens, and the two account-security cards. The count comes from re-reading the clock rather
+  than decrementing, so a backgrounded tab cannot drift, and a missing or nonsensical header
+  falls back to the older undated wording rather than rendering `NaN` at someone.
 - An `ErrorBoundary` wraps the authenticated app, so a render fault shows a recovery message
   instead of a blank page.
 - **Realtime client** implementing `docs/api/ws-protocol.md`: handshake, per-channel subscribe,

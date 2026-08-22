@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api } from "../api/client";
+import { useRateLimitNotice } from "../auth/rateLimit";
+import type { RateLimitKeys } from "../auth/rateLimit";
 import { AuthForm } from "../components/auth/AuthForm";
 import { AuthShell } from "../components/auth/AuthShell";
 import { BackLink } from "../components/auth/BackLink";
@@ -23,6 +25,18 @@ type ResetError =
 const FIELD_OF: Partial<Record<ResetError, "new" | "confirm">> = {
   tooShort: "new",
   mismatch: "confirm",
+};
+
+/**
+ * This screen's undated wording, with the counted variants borrowed from the
+ * sign-in screen: `resetPassword.error.rateLimited` and
+ * `login.error.rateLimited` are the same sentence, and the counted forms are
+ * that sentence with the vague tail replaced by the number the server gave.
+ */
+const RATE_LIMIT_KEYS: RateLimitKeys = {
+  undated: "resetPassword.error.rateLimited",
+  seconds: "login.error.rateLimitedSeconds",
+  minutes: "login.error.rateLimitedMinutes",
 };
 
 interface ResetPasswordScreenProps {
@@ -68,6 +82,15 @@ export function ResetPasswordScreen({
   const newPasswordRef = useRef<HTMLInputElement>(null);
   const confirmPasswordRef = useRef<HTMLInputElement>(null);
   const alertRef = useRef<HTMLDivElement>(null);
+  const {
+    message: rateLimitMessage,
+    start: startRateLimitWait,
+    clear: clearRateLimitWait,
+  } = useRateLimitNotice(RATE_LIMIT_KEYS, () => {
+    // The stated wait has passed, so the notice goes — but only if it is
+    // still the notice on screen; a later failure of its own must stand.
+    setError((current) => (current === "rateLimited" ? "none" : current));
+  });
 
   useEffect(() => {
     // Only submissions move focus — never a keystroke.
@@ -104,6 +127,8 @@ export function ResetPasswordScreen({
     }
     setSubmitting(true);
     setError("none");
+    // A fresh attempt supersedes whatever wait the last 429 stated.
+    clearRateLimitWait();
     try {
       const { response } = await api.POST("/api/v1/auth/reset-complete", {
         body: { token, new_password: newPassword },
@@ -115,6 +140,10 @@ export function ResetPasswordScreen({
       if (response.status === 401) {
         fail("invalidToken");
       } else if (response.status === 429) {
+        // The spec's RateLimited response carries the wait; reading it is the
+        // difference between telling the user when the door reopens and
+        // inventing "a few minutes".
+        startRateLimitWait(response);
         fail("rateLimited");
       } else if (response.status === 400) {
         // The client already enforced the minimum; a 400 here is policy only
@@ -137,9 +166,11 @@ export function ResetPasswordScreen({
       : undefined;
 
   const formError =
-    error !== "none" && FIELD_OF[error] === undefined
-      ? t(`resetPassword.error.${error}`)
-      : undefined;
+    error === "rateLimited"
+      ? rateLimitMessage
+      : error !== "none" && FIELD_OF[error] === undefined
+        ? t(`resetPassword.error.${error}`)
+        : undefined;
 
   return (
     <AuthShell opticalRise={24}>

@@ -6,6 +6,8 @@ import { SettingsButton } from "./SettingsButton";
 import { StepHeader } from "./StepHeader";
 import { api } from "../../api/client";
 import type { components } from "../../api/schema";
+import { useRateLimitNotice } from "../../auth/rateLimit";
+import type { RateLimitKeys } from "../../auth/rateLimit";
 import { groupSecret } from "../../settings/sessionTime";
 import { NoticeBanner } from "../auth/NoticeBanner";
 import { OtpInput } from "../auth/OtpInput";
@@ -31,6 +33,17 @@ type SetupError =
   | "rateLimited"
   | "networkError"
   | "unexpected";
+
+/**
+ * The same sentence family the rest of the security section uses: this
+ * screen's undated wording, with the counted variants borrowed from the
+ * sign-in screen (see TwoFactorCard).
+ */
+const RATE_LIMIT_KEYS: RateLimitKeys = {
+  undated: "settings.totp.error.rateLimited",
+  seconds: "login.error.rateLimitedSeconds",
+  minutes: "login.error.rateLimitedMinutes",
+};
 
 /** The account line under the manual key: "issuer: account" from the URI. */
 function accountFromUri(otpauthUri: string): string {
@@ -72,6 +85,15 @@ export function TwoFactorSetup({ onCancel, onActivated }: TwoFactorSetupProps) {
   const [busy, setBusy] = useState(false);
   const [failureCount, setFailureCount] = useState(0);
   const firstCellRef = useRef<HTMLInputElement>(null);
+  const {
+    message: rateLimitMessage,
+    start: startRateLimitWait,
+    clear: clearRateLimitWait,
+  } = useRateLimitNotice(RATE_LIMIT_KEYS, () => {
+    // The stated wait has passed, so the notice goes — but only if it is
+    // still the notice on screen; a later failure of its own must stand.
+    setError((current) => (current === "rateLimited" ? "none" : current));
+  });
 
   useEffect(() => {
     if (failureCount > 0) {
@@ -92,12 +114,18 @@ export function TwoFactorSetup({ onCancel, onActivated }: TwoFactorSetupProps) {
           setStep({ kind: "scan", setup: data });
           return;
         }
+        if (response.status === 429) {
+          // The spec's RateLimited response carries the wait; reading it is
+          // the difference between telling the user when the door reopens and
+          // inventing "a few minutes".
+          startRateLimitWait(response);
+          setError("rateLimited");
+          return;
+        }
         setError(
           response.status === 409 && apiError?.error.code === "totp_already_enabled"
             ? "alreadyEnabled"
-            : response.status === 429
-              ? "rateLimited"
-              : "unexpected",
+            : "unexpected",
         );
       },
       (requestError: unknown) => {
@@ -110,7 +138,7 @@ export function TwoFactorSetup({ onCancel, onActivated }: TwoFactorSetupProps) {
     return () => {
       live = false;
     };
-  }, []);
+  }, [startRateLimitWait]);
 
   const rejectCode = (kind: Exclude<SetupError, "none">) => {
     setError(kind);
@@ -121,10 +149,27 @@ export function TwoFactorSetup({ onCancel, onActivated }: TwoFactorSetupProps) {
   /** Step 1 again after the pending setup expired, with a fresh secret. */
   const restart = async () => {
     try {
-      const { data, response } = await api.POST("/api/v1/users/me/totp/setup");
+      const { data, error: apiError, response } = await api.POST("/api/v1/users/me/totp/setup");
       if (response.status === 200 && data !== undefined) {
         setStep({ kind: "scan", setup: data });
+        return;
       }
+      // Every other answer used to be dropped, which left the screen showing
+      // "the setup expired, start again" after a restart that itself failed —
+      // an instruction the user had just followed, with nothing to say it had
+      // not worked. The mount path above already answers all of these; this is
+      // the same handling, and a refusal here outranks the expiry notice
+      // because it is the newer fact.
+      if (response.status === 429) {
+        startRateLimitWait(response);
+        setError("rateLimited");
+        return;
+      }
+      setError(
+        response.status === 409 && apiError?.error.code === "totp_already_enabled"
+          ? "alreadyEnabled"
+          : "unexpected",
+      );
     } catch (requestError) {
       console.warn("Two-step setup restart failed:", requestError);
       setError("networkError");
@@ -164,7 +209,13 @@ export function TwoFactorSetup({ onCancel, onActivated }: TwoFactorSetupProps) {
         void restart();
         return;
       }
-      rejectCode(response.status === 429 ? "rateLimited" : "unexpected");
+      if (response.status === 429) {
+        // The wait the server stated, rather than the guess this used to show.
+        startRateLimitWait(response);
+        rejectCode("rateLimited");
+        return;
+      }
+      rejectCode("unexpected");
     } catch (requestError) {
       console.warn("Two-step verification request failed:", requestError);
       rejectCode("networkError");
@@ -200,13 +251,14 @@ export function TwoFactorSetup({ onCancel, onActivated }: TwoFactorSetupProps) {
       ? t(`settings.totp.error.${error}`)
       : undefined;
   const formError =
-    error === "alreadyEnabled" ||
-    error === "setupExpired" ||
-    error === "rateLimited" ||
-    error === "networkError" ||
-    error === "unexpected"
-      ? t(`settings.totp.error.${error}`)
-      : undefined;
+    error === "rateLimited"
+      ? rateLimitMessage
+      : error === "alreadyEnabled" ||
+          error === "setupExpired" ||
+          error === "networkError" ||
+          error === "unexpected"
+        ? t(`settings.totp.error.${error}`)
+        : undefined;
 
   return (
     <>
@@ -269,6 +321,7 @@ export function TwoFactorSetup({ onCancel, onActivated }: TwoFactorSetupProps) {
                 setCode(value);
                 if (error !== "none") {
                   setError("none");
+                  clearRateLimitWait();
                 }
               }}
             />

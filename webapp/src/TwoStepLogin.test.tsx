@@ -1,7 +1,7 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
-import { http } from "msw";
+import { http, HttpResponse } from "msw";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import App from "./App";
@@ -10,6 +10,7 @@ import en from "./locales/en/common.json";
 import fa from "./locales/fa/common.json";
 import {
   FIXTURE_RECOVERY_CODES,
+  FIXTURE_RETRY_AFTER_SECONDS,
   FIXTURE_TOTP_CODE,
   FIXTURE_TWOSTEP_CREDENTIALS,
   resetMockAuth,
@@ -326,5 +327,117 @@ describe("recovery codes at sign-in", () => {
       await screen.findByRole("navigation", { name: fa.chat.sidebar.label }),
     ).toBeInTheDocument();
     expect(submitted).toEqual([RECOVERY_CODE.replace("-", "")]);
+  });
+});
+
+/**
+ * Answers the two-step endpoint's 429 with `header` as its Retry-After, or
+ * with none at all when it is undefined — the shapes a server that cannot say
+ * when the door reopens produces.
+ */
+function totpRateLimitedWith(header?: string) {
+  server.use(
+    http.post("/api/v1/auth/login/totp", () =>
+      HttpResponse.json(
+        { error: { code: "rate_limited", message: "Too many attempts." } },
+        {
+          status: 429,
+          ...(header === undefined ? {} : { headers: { "Retry-After": header } }),
+        },
+      ),
+    ),
+  );
+}
+
+describe("rate limiting at the two-step step", () => {
+  it("states the wait the 429 names rather than guessing at it", async () => {
+    const user = userEvent.setup({ delay: null });
+    await reachCodeScreen(user);
+    totpRateLimitedWith(String(FIXTURE_RETRY_AFTER_SECONDS));
+
+    await enterCode(user, FIXTURE_TOTP_CODE);
+    await user.click(screen.getByRole("button", { name: en.totp.submit }));
+
+    // Non-urgent by design: the rate-limit notice is announced politely.
+    const notice = await screen.findByRole("status");
+    const minutes = Math.ceil(FIXTURE_RETRY_AFTER_SECONDS / 60);
+    expect(notice).toHaveTextContent(
+      en.login.error.rateLimitedMinutes_other.replace(
+        "{{count, number}}",
+        new Intl.NumberFormat("en").format(minutes),
+      ),
+    );
+    // The undated wording is what this replaces, not what it repeats.
+    expect(notice).not.toHaveTextContent(en.totp.error.rateLimited);
+  });
+
+  it.each([
+    ["carries no Retry-After", undefined],
+    ["carries a Retry-After of zero", "0"],
+    ["carries a non-numeric Retry-After", "soon"],
+    ["carries an HTTP-date Retry-After", "Wed, 21 Oct 2026 07:28:00 GMT"],
+    ["carries an absurd Retry-After", "999999999"],
+  ])("falls back to the undated wording when the 429 %s", async (_case, header) => {
+    const user = userEvent.setup({ delay: null });
+    await reachCodeScreen(user);
+    totpRateLimitedWith(header);
+
+    await enterCode(user, FIXTURE_TOTP_CODE);
+    await user.click(screen.getByRole("button", { name: en.totp.submit }));
+
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent(en.totp.error.rateLimited);
+    // Never a number the response did not support — and never "NaN".
+    expect(notice.textContent).not.toMatch(/\d|NaN/u);
+  });
+
+  it("lifts the notice by itself once the stated wait has passed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await reachCodeScreen(user);
+    // One second, so the countdown runs out inside the test rather than being
+    // simulated: what is asserted is that the timer really ends the state.
+    totpRateLimitedWith("1");
+
+    await enterCode(user, FIXTURE_TOTP_CODE);
+    await user.click(screen.getByRole("button", { name: en.totp.submit }));
+
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent(
+      en.login.error.rateLimitedSeconds_one.replace("{{count, number}}", "1"),
+    );
+
+    await waitFor(
+      () => {
+        expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      },
+      { timeout: 3000 },
+    );
+  });
+
+  it("keeps the retry path the screen already had", async () => {
+    const user = userEvent.setup({ delay: null });
+    await reachCodeScreen(user);
+    totpRateLimitedWith(String(FIXTURE_RETRY_AFTER_SECONDS));
+
+    await enterCode(user, FIXTURE_TOTP_CODE);
+    await user.click(screen.getByRole("button", { name: en.totp.submit }));
+    await screen.findByRole("status");
+
+    // Submit was never disabled here and must not become so: the stated wait
+    // is an extra thing the notice can say, not a new lock on the form.
+    expect(screen.getByRole("button", { name: en.totp.submit })).toBeEnabled();
+
+    // Typing again lifts the notice, exactly as it did before the countdown.
+    await enterCode(user, FIXTURE_TOTP_CODE);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    // And the challenge is still live: the server's window slides, the same
+    // code goes through, and the sign-in completes.
+    server.resetHandlers();
+    await user.click(screen.getByRole("button", { name: en.totp.submit }));
+
+    expect(
+      await screen.findByRole("navigation", { name: en.chat.sidebar.label }),
+    ).toBeInTheDocument();
   });
 });

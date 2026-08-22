@@ -1075,10 +1075,10 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description Too many attempts; retry later. Carries Retry-After on the auth paths, so a client can show a real countdown instead of guessing — without it the sign-in form has no honest way to say when the door reopens. */
+        /** @description Too many attempts; retry later. Always carries Retry-After, so a client can show a real countdown instead of guessing — without it a form has no honest way to say when the door reopens. */
         RateLimited: {
             headers: {
-                /** @description Whole seconds until the caller's budget frees up. Present on the login, two-step and account-security 429s; the password-reset endpoints do not carry it yet (recorded in ROADMAP). */
+                /** @description Whole seconds until the caller's budget frees up. Present on every 429 this server sends: one function writes them all and it sets the header unconditionally, so carrying it is a property of the code rather than something each handler has to remember. */
                 "Retry-After"?: number;
                 [name: string]: unknown;
             };
