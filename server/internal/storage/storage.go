@@ -51,6 +51,44 @@
 // Operations that never touch users at all — DisableTotp, StartTotpSetup,
 // VerifyTotpSetup, ReplaceRecoveryCodes — still obey the table order among
 // themselves (totp_challenges → user_totp → user_recovery_codes).
+//
+// # Lock order: the messaging tables
+//
+// The conversation tables extend the same order at the end:
+//
+//	… → sessions → channels → channel_members → messages
+//
+// Today nothing in channels.go or messages.go takes an explicit row lock:
+// there is no SELECT ... FOR UPDATE in either file, and no messaging
+// operation calls lockAccount. That is deliberate rather than an oversight.
+// What these operations need to serialize on is a uniqueness claim — one DM
+// per user pair, one message per (channel, author, client_msg_id) — and a
+// unique index already serializes exactly that, at the row that matters,
+// without pulling an unrelated account row into the transaction. An account
+// lock here would be lock traffic with nothing to serialize.
+//
+// Two consequences worth stating, because both are easy to reason about
+// wrongly:
+//
+//   - Inserting a message or a membership row takes an implicit KEY SHARE
+//     lock on every row its foreign keys reference — the author's and the DM
+//     participants' users rows, the channel row. KEY SHARE conflicts with
+//     the FOR UPDATE that lockAccount takes, so a message insert can block
+//     behind a password reset on its own author. Blocking is not deadlock:
+//     the messaging transaction never goes on to ask for a lock an
+//     account-scoped transaction holds, so no cycle can close.
+//   - The multi-statement transactions (CreateChannel, OpenDirectMessage)
+//     insert into channels before channel_members, matching the order above.
+//
+// A hazard for whoever adds membership rules in 1.2b: the contract's
+// removeChannelMember refuses to remove a channel's last member, and the
+// obvious race-free implementation — SELECT the channel FOR UPDATE, then
+// count and delete — deadlocks against a concurrent AddChannelMember. The
+// remover would hold channels FOR UPDATE and wait on the uncommitted
+// channel_members row; the adder would hold that row and wait for KEY SHARE
+// on channels behind the FOR UPDATE. That cycle is why the rule is not
+// enforced in this package, and why moving it here later needs a deliberate
+// design pass rather than a quick lock.
 package storage
 
 import (

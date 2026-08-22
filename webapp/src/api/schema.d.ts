@@ -567,7 +567,7 @@ export interface paths {
         };
         /**
          * One page of channel history.
-         * @description Pages with `before`, `after` or `around` — at most one of the three; two together is a 400. A cursor is opaque (base64 of the anchor message's created_at and id). Every page is ordered ascending by (created_at, id) so the client renders it in reading order regardless of the direction it paged in. `around` centres the page on the cursor and is how a copied message link resolves. Soft-deleted messages stay in the page with empty content and a deleted_at, because the design keeps a placeholder in their place.
+         * @description Pages with `before`, `after` or `around` — at most one of the three; two together is a 400. With no cursor at all, returns the newest `limit` messages: the channel as it looks when opened, which is the only page a client can render before it knows any message id. A cursor is opaque (base64 of the anchor message's created_at and id). Every page is ordered ascending by (created_at, id) so the client renders it in reading order regardless of the direction it paged in. `around` centres the page on the cursor and is how a copied message link resolves. Soft-deleted messages stay in the page with empty content and a deleted_at, because the design keeps a placeholder in their place.
          */
         get: operations["listMessages"];
         put?: never;
