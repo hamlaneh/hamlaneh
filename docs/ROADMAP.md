@@ -159,43 +159,70 @@ retrofit is how security fails.
 
 ### 1.2 Messaging core
 
+Split into two slices. The contract for both already exists and is deliberately not being
+rewritten: `docs/api/openapi.yaml` carries every messaging path (their handlers answer 501
+today), `docs/api/ws-protocol.md` is a complete realtime spec that the webapp's realtime client
+already implements against mocks, and migration 0003 already models channels, DM pairs,
+membership, messages with `client_msg_id`, soft delete, mentions and read positions. What is
+missing is the server behind it.
+
+#### 1.2a Thin end-to-end — chat that actually works
+
+The smallest change that turns the mocked chat shell into a real one: pick a channel, read its
+history, send a message, and have it appear on someone else's screen without a refresh.
+
 - [x] Rework `httpserver` route-policy keying from exact method+path to `r.Pattern` before
       adding path-parameter routes — **landed early in 1.1b**, because the session-revocation
       route `DELETE /api/v1/sessions/{id}` was itself a path-parameter route and could not be
       classified without it. The table still fails closed: an unclassified pattern is refused,
       so a 1.2 route that nobody adds a policy for is unreachable rather than unguarded
-- [ ] Channels (public/private) → 1:1 DMs; membership and roles. **The instance is the
+- [ ] **Authz harness rework first, before any handler.** Today's four columns are
+      instance-scoped (anonymous / member / member-must-change / admin) and cannot express the
+      question this phase turns on: *member of which channel?* Needs channel-scoped principals
+      (non-member / member / owner / admin-non-member / admin-member) over shared per-cell
+      fixtures. This is the contract every later slice registers into, so it is designed once,
+      deliberately, and not grown by accretion
+- [ ] Channels (public/private) and 1:1 DMs; membership and roles. **The instance is the
       organization** — no org or team layer, no group DMs (see
-      [ADR 001](adr/001-instance-as-org-flat-channels.md); supersedes the earlier
-      "orgs → teams → … → group DMs" wording)
-- [ ] WebSocket gateway: message delivery, presence, typing, read receipts, reconnect/resume.
-      Handshake validates Origin (CSWSH defense); auth via cookie/header or short-lived one-time
-      ticket — never a long-lived token in the URL query string
-- [ ] Message history (cursor-paged in both directions + `around` for permalinks), edit,
-      soft delete (the design keeps a placeholder in place), markdown through strict sanitizer
-- [ ] Message search (`kind=messages`) pulled forward from 1.3 — the delivered chat shell has a
-      search column, and shipping it dead is not an option; file search stays 1.3
-- [ ] Idempotent send: a client-generated `client_msg_id` unique per (channel, author) so a
-      queued message resent after a reconnect lands exactly once
+      [ADR 001](adr/001-instance-as-org-flat-channels.md))
+- [ ] Storage interface + Postgres driver for channels, membership and messages
+- [ ] Message history, cursor-paged in both directions (`around` for permalinks lands with
+      1.2b, when there is a permalink to resolve)
+- [ ] Idempotent send: `client_msg_id` unique per (channel, author), so a message queued
+      offline and resent after a reconnect lands exactly once. The unique index already exists
+- [ ] WebSocket gateway per `docs/api/ws-protocol.md`: handshake with Origin validation (CSWSH
+      defense), auth by cookie or short-lived one-time ticket — **never** a long-lived token in
+      the query string — message delivery, presence, typing, heartbeat, reconnect/resume
+- [ ] Open socket terminated ≤10s after its session is revoked. Specified in the protocol since
+      1.1b and untestable until the gateway exists; it is a 1.2a exit condition, not a later one
+- [ ] Markdown through the strict sanitizer, server side as well as client side
+- [ ] Strict baseline CSP on all app responses: `default-src 'self'`, no
+      `unsafe-inline`/`unsafe-eval`, `object-src 'none'`
+- [ ] Generic rate-limit middleware with per-endpoint budgets, replacing the auth-specific
+      limiters: message send, WS connect/reconnect, and the existing login/reset/TOTP budgets
+- Tests: **IDOR matrix over REST and WS** (user A must never read or write channel B — automated
+  via the harness, both protocols); **WS security suite**: (a) connect without session rejected,
+  (b) expired/revoked session rejected, (c) open socket terminated ≤10s after remote revocation,
+  (d) subscribe/send to non-member channel rejected, (e) presence/typing/message events of a
+  private channel never reach a listening non-member socket, (f) reconnect/resume delivers
+  missed messages exactly once, (g) disallowed Origin rejected; XSS corpus against the
+  sanitizer; CSP header regression test; message-send and WS-reconnect flood tests;
+  race-detector clean under concurrent send
+
+#### 1.2b Everything the chat shell draws but 1.2a does not fill
+
+- [ ] Message edit and soft delete (the design keeps a placeholder in place where a message was)
 - [ ] Read positions per user per channel feeding the unread divider and sidebar counts;
       own-device read sync only — **no cross-user read receipts** (nothing in the design shows
       another person's read state; privacy default until designed)
-- [ ] Authz harness rework required before this slice: channel-scoped principals
-      (non-member / member / owner / admin-non-member / admin-member) with shared per-cell
-      fixtures, plus a parallel WS operation registry whose completeness gate parses
-      `docs/api/ws-protocol.md` (the OpenAPI gate cannot see WS operations)
-- [ ] Strict baseline CSP on all app responses: `default-src 'self'`, no
-      `unsafe-inline`/`unsafe-eval`, `object-src 'none'`
-- [ ] Generic rate-limit middleware with per-endpoint budgets: message send, upload,
-      WS connect/reconnect, TOTP verify
-- Tests: **IDOR matrix over REST and WS** (user A must never read/write channel B — automated
-  via the harness); **WS security suite**: (a) connect without session rejected, (b) expired/
-  revoked session rejected, (c) open socket terminated ≤10s after remote revocation,
-  (d) subscribe/send to non-member channel rejected, (e) presence/typing/read/message events of
-  a private channel never reach a listening non-member socket, (f) reconnect/resume delivers
-  missed messages exactly once, (g) disallowed Origin rejected; XSS corpus against the
-  sanitizer; CSP header regression test (no inline/eval); message-send and WS-reconnect flood
-  tests; race-detector clean under concurrent send/edit/delete
+- [ ] Message search (`kind=messages`), pulled forward from 1.3 because the delivered chat shell
+      has a search column and shipping it dead is not an option; file search stays 1.3. Migration
+      0003 deliberately left out the tsvector column and GIN index: the text-search configuration
+      is language-dependent, the product is bilingual, and the choice is effectively frozen once
+      an index is built on it — so it is made here, with the search code, not before it
+- [ ] `around` cursor for permalinks
+- Tests: search authz (results never leak channels the user cannot see); edit/delete authorship
+  and admin rules in the matrix; unread counts under concurrent read/send
 
 ### 1.3 Files, previews, search
 
