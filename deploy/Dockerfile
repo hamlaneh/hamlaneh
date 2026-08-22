@@ -4,10 +4,29 @@
 # `context: ..` / `dockerfile: deploy/Dockerfile`), or manually:
 #   docker build -f deploy/Dockerfile .
 #
-# Multi-stage: golang builder -> distroless static (no shell, no package
-# manager, non-root). The final image contains the binary only.
+# Three stages: node builds the web application, golang embeds it in the
+# binary, distroless static runs it (no shell, no package manager,
+# non-root). Only the last stage ships — the final image contains the
+# binary and nothing else.
 
-FROM golang:1.26 AS build
+# Node LTS, pinned by digest (CLAUDE.md "CI gates": base images pinned by
+# digest; Dependabot's docker ecosystem covers deploy/ and keeps it fresh).
+FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS webbuild
+
+WORKDIR /src/webapp
+
+# Cache the dependency install separately from source changes. `npm ci`, not
+# `npm install`: the lockfile is committed and must be obeyed exactly.
+COPY webapp/package.json webapp/package-lock.json ./
+RUN npm ci
+
+COPY webapp/ ./
+# `npm run build` is `tsc --noEmit && vite build`, so a type error fails the
+# image build rather than shipping a broken bundle.
+RUN npm run build
+
+
+FROM golang:1.26@sha256:45a5f7a810238aabcbad211d70b9ae082022d96f7c7259e94041ad1b933575ac AS build
 
 WORKDIR /src/server
 
@@ -18,10 +37,18 @@ COPY server/go.mod server/go.su[m] ./
 RUN go mod download
 
 COPY server/ ./
+
+# internal/webassets/dist is a committed placeholder that exists only so
+# `go build ./...` works without a webapp build (a go:embed of a missing
+# directory is a compile error). Replace it wholesale with the real one, so
+# no placeholder file can survive into the binary.
+RUN rm -rf ./internal/webassets/dist
+COPY --from=webbuild /src/webapp/dist/ ./internal/webassets/dist/
+
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
       -o /out/hamlaneh-server ./cmd/hamlaneh-server
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 COPY --from=build /out/hamlaneh-server /usr/local/bin/hamlaneh-server
 

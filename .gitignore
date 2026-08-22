@@ -31,6 +31,11 @@ server/bin/
 coverage.*
 
 # Node / webapp
+# Anchored on purpose: server/internal/webassets/dist/ is a COMMITTED
+# placeholder, not build output. go:embed of a missing directory is a compile
+# error, so it exists to keep `go build ./...` working without a webapp build;
+# deploy/Dockerfile replaces it with the real bundle. Do not add a bare
+# `dist/` rule — it would make the server fail to compile in a fresh clone.
 node_modules/
 webapp/dist/
 webapp/build/

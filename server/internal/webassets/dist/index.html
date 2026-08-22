@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hamlaneh</title>
+</head>
+<body>
+  <main>
+    <h1>Hamlaneh</h1>
+    <p>
+      This binary was built without the web application, so there is no user
+      interface to show. That is expected for a plain <code>go build</code>:
+      the Go toolchain does not build the webapp.
+    </p>
+    <p>
+      To get the real application, build the image the deployment uses &mdash;
+      <code>docker compose up -d --build</code> from <code>deploy/</code>
+      &mdash; which runs <code>npm run build</code> in <code>webapp/</code>
+      and copies <code>webapp/dist</code> over this placeholder before
+      compiling the server.
+    </p>
+  </main>
+</body>
+</html>

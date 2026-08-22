@@ -39,6 +39,11 @@ const (
 	codeUsernameTaken       errorCode = "username_taken"
 	codeEmailTaken          errorCode = "email_taken"
 	codeInternalError       errorCode = "internal_error"
+	// codeNotFound answers a path under /api that no contract route claims.
+	// It is the router's answer, not a resource's: the contract's
+	// resource-level 404s carry their own codes (session_not_found,
+	// channel_not_found, user_not_found).
+	codeNotFound errorCode = "not_found"
 	// codeNotImplemented marks a contract endpoint whose behavior has not
 	// shipped yet (see messaging_stubs.go). It is never an authorization
 	// answer: route-level gates run first and answer 401/403 themselves.
@@ -51,6 +56,7 @@ const (
 	msgForbidden        = "not allowed"
 	msgInternalError    = "internal server error"
 	msgNotImplemented   = "endpoint not implemented yet"
+	msgNotFound         = "no such endpoint"
 )
 
 // errorFallbackBody answers when even marshalling the error envelope fails;

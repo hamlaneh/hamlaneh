@@ -1,26 +1,23 @@
 // Package httpserver provides the Hamlaneh HTTP server: routing, handlers,
-// and embedded static assets for the Phase 0 walking skeleton.
+// the built React application embedded in the binary, and the response
+// headers that constrain it.
 //
-// TLS termination and security headers (including the strict CSP) are the
-// reverse proxy's job (Caddy); this server speaks plain HTTP on its address.
+// TLS termination is the reverse proxy's job (Caddy); this server speaks
+// plain HTTP on its address. The content-security headers, including the
+// CSP, belong to the application and are set here — see securityheaders.go
+// for why they are not in the proxy.
 package httpserver
 
 import (
-	"embed"
+	"io/fs"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
 	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
+	"github.com/hamlaneh/hamlaneh/server/internal/webassets"
 )
-
-//go:embed index.html
-var indexPage []byte
-
-//go:embed static
-var staticFS embed.FS
 
 // Server timeouts guard against slow-client (slowloris-style) resource
 // exhaustion. Values are generous for Phase 0 and can tighten later.
@@ -59,47 +56,43 @@ func New(addr string, store Store, opts ...Option) *http.Server {
 
 // Handler returns the root HTTP handler with every route registered:
 //
-//	GET /                 embedded static login page
-//	GET /static/*         embedded static assets (stylesheets)
-//	GET /healthz          liveness probe, 200 {"status":"ok"}
-//	GET /readyz           readiness probe (database ping + schema version)
-//	/api/v1/*             contract endpoints (Phase 1.1 identity core; the
-//	                      Phase 1.2 messaging surface is routed and gated
-//	                      but still answers 501 — see messaging_stubs.go)
+//	GET /, /reset, /c/*  the built React application (webapp.go)
+//	GET /assets/*        its content-hashed bundle
+//	GET /brand/*         its unhashed public files
+//	GET /healthz         liveness probe, 200 {"status":"ok"}
+//	GET /readyz          readiness probe (database ping + schema version)
+//	/api/v1/*            contract endpoints (Phase 1.1 identity core; the
+//	                     Phase 1.2 messaging surface is routed and gated
+//	                     but still answers 501 — see messaging_stubs.go)
+//	/api/*               anything else under /api: the contract's JSON 404
 //
 // Contract routes are registered by the generated api package, so the router
 // can never drift from docs/api/openapi.yaml. Every contract route runs
 // behind securityMiddleware (CSRF, sessions, must-change gate, admin), and
 // malformed request parameters answer with the contract's JSON Error shape
 // instead of oapi-codegen's plain-text default. Anything else is a 404.
+//
+// The whole result is wrapped in securityHeaders, so the HTML document is
+// covered by the same policy as the API.
 func Handler(store Store, opts ...Option) http.Handler {
+	return handler(store, webassets.FS(), opts...)
+}
+
+// handler is Handler with the web build injected. Tests use it to serve a
+// fixture bundle: the Go CI job never runs `npm run build`, so the embedded
+// build in a plain checkout is only the placeholder, and asset behaviour has
+// to be exercised against something that looks like a real one.
+func handler(store Store, web fs.FS, opts ...Option) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", handleIndex)
-	mux.Handle("GET /static/", noDirListing(http.FileServerFS(staticFS)))
+	routeWebapp(mux, web)
 
 	s := newAPIServer(store, opts...)
-	return api.HandlerWithOptions(s, api.StdHTTPServerOptions{
+	routed := api.HandlerWithOptions(s, api.StdHTTPServerOptions{
 		BaseRouter:       mux,
 		Middlewares:      []api.MiddlewareFunc{s.securityMiddleware},
 		ErrorHandlerFunc: requestErrorHandler,
 	})
-}
-
-func handleIndex(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	writeBody(w, r, indexPage)
-}
-
-// noDirListing returns 404 for directory paths so the embedded static file
-// server never renders auto-generated directory indexes.
-func noDirListing(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/") {
-			http.NotFound(w, r)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	return securityHeaders(routed)
 }
 
 // writeBody writes body and logs a failed write; by the time a response

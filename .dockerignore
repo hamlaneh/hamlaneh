@@ -1,0 +1,29 @@
+# Build context for the server image is the REPOSITORY ROOT
+# (deploy/docker-compose.yml sets `context: ..`), so everything here is
+# uploaded to the daemon on every build unless it is excluded.
+#
+# The first entry is a correctness rule, not an optimisation: the image
+# copies webapp/ and runs `npm ci` inside it, and a host node_modules built
+# for a different OS or architecture would land on top of the container's.
+**/node_modules
+
+# Build output, rebuilt inside the image.
+webapp/dist
+webapp/build
+server/bin
+desktop/src-tauri/target
+
+# Secrets never belong in a build context. deploy/.env holds the generated
+# database password; .env.example is documentation and is not needed either.
+**/.env
+**/.env.*
+
+# Not part of the server build.
+.git
+.github
+.claude
+docs
+desktop
+coverage
+test-results
+playwright-report

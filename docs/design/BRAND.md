@@ -1,5 +1,11 @@
 # Hamlaneh brand assets
 
+The files this describes live in `webapp/public/brand/`. This note deliberately does
+not, because everything under `webapp/public/` is copied verbatim into the built bundle
+and served on the public URL of every deployed instance — internal documentation has no
+business being there.
+
+
 These SVGs use the Quiet Nest product palette. The symbol geometry is identical across every file.
 
 ## Gradient assets

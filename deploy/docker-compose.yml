@@ -1,7 +1,11 @@
 # Hamlaneh deployment stack (Phase 0 walking skeleton).
 #
 # Topology:
-#   internet -> caddy (TLS + security headers) -> server (:8080) -> db
+#   internet -> caddy (TLS + HSTS) -> server (:8080) -> db
+#
+# The server carries the built web application inside its binary and sets the
+# application's content-security headers itself; Caddy owns only what a TLS
+# terminator owns. See the ownership note in Caddyfile before moving either.
 #
 # Security posture (see docs/ROADMAP.md Phase 0):
 #   - every container runs as a non-root UID with a read-only root FS,
@@ -116,7 +120,7 @@ services:
 
   db:
     <<: *hardening
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     user: "70:70" # uid/gid of the "postgres" user in the alpine image
     environment:
       POSTGRES_DB: hamlaneh

@@ -7,11 +7,14 @@
 #   ./verify-defaults.sh
 #
 # Checks:
-#   1. HTTPS endpoint serves the baseline security headers
-#      (HSTS, nosniff, Referrer-Policy, CSP incl. frame-ancestors 'none')
-#   2. /healthz returns 200
-#   3. Postgres is NOT reachable from the host (localhost:5432 closed)
-#   4. caddy, server and db containers all run as a non-root UID
+#   1. HTTPS endpoint serves the baseline security headers. HSTS comes from
+#      Caddy; the content-security headers (CSP, nosniff, Referrer-Policy,
+#      Permissions-Policy, Cross-Origin-*) come from the Go server and are
+#      checked HERE because the point is that they survive the proxy.
+#   2. The real web application is served — not a placeholder
+#   3. /healthz returns 200
+#   4. Postgres is NOT reachable from the host (localhost:5432 closed)
+#   5. caddy, server and db containers all run as a non-root UID
 #
 # Prints every check; exits non-zero listing every failed one.
 
@@ -80,6 +83,24 @@ check_security_headers() {
     failure "Referrer-Policy header missing"
   fi
 
+  if grep -qi '^permissions-policy:' <<<"$headers"; then
+    pass "Permissions-Policy header present"
+  else
+    failure "Permissions-Policy header missing"
+  fi
+
+  if grep -qi '^cross-origin-opener-policy:[[:space:]]*same-origin' <<<"$headers"; then
+    pass "Cross-Origin-Opener-Policy: same-origin present"
+  else
+    failure "Cross-Origin-Opener-Policy: same-origin missing"
+  fi
+
+  if grep -qi '^cross-origin-resource-policy:[[:space:]]*same-origin' <<<"$headers"; then
+    pass "Cross-Origin-Resource-Policy: same-origin present"
+  else
+    failure "Cross-Origin-Resource-Policy: same-origin missing"
+  fi
+
   local csp
   csp="$(grep -i '^content-security-policy:' <<<"$headers" | head -n 1)"
   if [ -z "$csp" ]; then
@@ -98,6 +119,54 @@ check_security_headers() {
     pass "CSP denies framing (frame-ancestors 'none')"
   else
     failure "CSP frame-ancestors 'none' missing"
+  fi
+
+  if grep -q "unsafe-inline\|unsafe-eval" <<<"$csp"; then
+    failure "CSP allows an unsafe source: ${csp}"
+  else
+    pass "CSP allows no 'unsafe-inline' or 'unsafe-eval'"
+  fi
+}
+
+# The stack must serve the REAL web application, not a placeholder page.
+# The assertion is deliberately something only a built bundle can satisfy:
+# index.html has to reference a content-hashed module bundle under /assets/,
+# and that bundle has to come back over HTTP. The cache split is checked at
+# the same time — caching index.html the way the bundle is cached would pin
+# every browser to the previous release and quietly break upgrades.
+check_webapp_served() {
+  local html asset headers
+  if ! html="$(curl -sk --max-time 10 "${CONNECT[@]}" "https://${DOMAIN}/")"; then
+    failure "web application document unreachable"
+    return
+  fi
+
+  asset="$(grep -o '/assets/[A-Za-z0-9._-]*\.js' <<<"$html" | head -n 1)"
+  if [ -z "$asset" ]; then
+    failure "the served page references no /assets/*.js bundle — is this a placeholder?"
+    return
+  fi
+  pass "the served page references its built bundle (${asset})"
+
+  if curl -sk --max-time 10 -o /dev/null -f "${CONNECT[@]}" "https://${DOMAIN}${asset}"; then
+    pass "the bundle itself is served"
+  else
+    failure "bundle ${asset} is referenced but not served"
+    return
+  fi
+
+  headers="$(curl -skI --max-time 10 "${CONNECT[@]}" "https://${DOMAIN}${asset}")"
+  if grep -qi '^cache-control:.*immutable' <<<"$headers"; then
+    pass "the content-hashed bundle is cached immutably"
+  else
+    failure "the content-hashed bundle has no immutable Cache-Control"
+  fi
+
+  headers="$(curl -skI --max-time 10 "${CONNECT[@]}" "https://${DOMAIN}/")"
+  if grep -qi '^cache-control:.*no-cache' <<<"$headers"; then
+    pass "index.html is revalidated (no-cache), so upgrades take effect"
+  else
+    failure "index.html is missing Cache-Control: no-cache — upgrades would not reach browsers"
   fi
 }
 
@@ -190,6 +259,7 @@ main() {
   printf 'Verifying secure defaults for https://%s/ (via 127.0.0.1)\n\n' "$DOMAIN"
 
   check_security_headers
+  check_webapp_served
   check_healthz
   check_auth_defaults
   check_db_not_exposed

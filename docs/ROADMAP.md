@@ -176,6 +176,19 @@ history, send a message, and have it appear on someone else's screen without a r
       route `DELETE /api/v1/sessions/{id}` was itself a path-parameter route and could not be
       classified without it. The table still fails closed: an unclassified pattern is refused,
       so a 1.2 route that nobody adds a policy for is unreachable rather than unguarded
+- [x] **Ship the web application.** Found while starting this slice, not planned: nothing
+      in `deploy/` ever ran `npm run build`, so `docker compose up` served the Phase 0
+      placeholder page and none of the built UI existed outside `npm run dev` — a direct
+      violation of "installation is the product". The image now builds `webapp/` and the
+      Go binary embeds it, so home mode (Phase 4, no proxy) gets the same code path.
+      The compose-smoke gate was passing against the placeholder because it discarded the
+      response body; it now asserts the real bundle
+- [x] **Baseline security headers, owned by the application.** A strict CSP existed, but
+      only in the Caddyfile — so it would not have existed at all in home mode. The Go
+      server now sets CSP (no `unsafe-inline`, no `unsafe-eval`), `Referrer-Policy:
+      no-referrer`, `Permissions-Policy`, nosniff and the `Cross-Origin-*` pair around the
+      whole handler; Caddy keeps HSTS, which only a TLS terminator can set meaningfully.
+      Every directive was derived from the real build output rather than copied
 - [ ] **Authz harness rework first, before any handler.** Today's four columns are
       instance-scoped (anonymous / member / member-must-change / admin) and cannot express the
       question this phase turns on: *member of which channel?* Needs channel-scoped principals
@@ -190,6 +203,11 @@ history, send a message, and have it appear on someone else's screen without a r
       1.2b, when there is a permalink to resolve)
 - [ ] Idempotent send: `client_msg_id` unique per (channel, author), so a message queued
       offline and resent after a reconnect lands exactly once. The unique index already exists
+- [ ] Read positions, **moved here from 1.2b**: the contract makes `unread_count` and
+      `mention_count` required on every `Channel`, and `GET /api/v1/channels` ships in this
+      slice, so the alternative was emitting zeros the sidebar would draw as truth. Own-device
+      read sync only — **no cross-user read receipts** (nothing in the design shows another
+      person's read state; privacy default until designed)
 - [ ] WebSocket gateway per `docs/api/ws-protocol.md`: handshake with Origin validation (CSWSH
       defense), auth by cookie or short-lived one-time ticket — **never** a long-lived token in
       the query string — message delivery, presence, typing, heartbeat, reconnect/resume
@@ -212,15 +230,17 @@ history, send a message, and have it appear on someone else's screen without a r
 #### 1.2b Everything the chat shell draws but 1.2a does not fill
 
 - [ ] Message edit and soft delete (the design keeps a placeholder in place where a message was)
-- [ ] Read positions per user per channel feeding the unread divider and sidebar counts;
-      own-device read sync only — **no cross-user read receipts** (nothing in the design shows
-      another person's read state; privacy default until designed)
 - [ ] Message search (`kind=messages`), pulled forward from 1.3 because the delivered chat shell
       has a search column and shipping it dead is not an option; file search stays 1.3. Migration
       0003 deliberately left out the tsvector column and GIN index: the text-search configuration
       is language-dependent, the product is bilingual, and the choice is effectively frozen once
       an index is built on it — so it is made here, with the search code, not before it
 - [ ] `around` cursor for permalinks
+- [ ] The contract's `last_member` refusal on `removeChannelMember`. Deliberately **not** in
+      the storage layer: the obvious race-free shape there (lock the channel, then count and
+      delete) deadlocks against a concurrent `AddChannelMember`, and the cycle is written out
+      in the `# Lock order` section of `storage.go`. It belongs above storage, or needs a
+      deliberate design pass
 - Tests: search authz (results never leak channels the user cannot see); edit/delete authorship
   and admin rules in the matrix; unread counts under concurrent read/send
 
@@ -363,6 +383,9 @@ Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measur
       one-liner uses this URL so tutorials never break
 - [ ] Bare-IP mode polished; home mode: single binary with SQLite (storage suite now runs
       against **both** drivers in CI, per CLAUDE.md); Tauri desktop app builds
+- [ ] Response compression in the Go server, for home mode only. Caddy's `encode zstd gzip`
+      covers the compose path, but home mode has no proxy in front of it and would otherwise
+      serve the ~560 KB web bundle uncompressed over whatever link the household has
 - [ ] Signed releases (Sigstore/cosign) + SBOM; auto-update channel, on by default for security
       patches, **with anti-rollback** (older validly-signed release refused unless forced)
 - [ ] Automated encrypted backups on by default; documented restore

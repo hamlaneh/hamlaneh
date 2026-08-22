@@ -30,20 +30,12 @@ func TestHandlerRoutes(t *testing.T) {
 			wantBodyContain: `"status"`,
 		},
 		{
-			name:            "root serves login page HTML",
+			name:            "root serves the web application document",
 			method:          http.MethodGet,
 			path:            "/",
 			wantStatus:      http.StatusOK,
 			wantContentType: "text/html",
 			wantBodyContain: "Hamlaneh",
-		},
-		{
-			name:            "stylesheet is served",
-			method:          http.MethodGet,
-			path:            "/static/style.css",
-			wantStatus:      http.StatusOK,
-			wantContentType: "text/css",
-			wantBodyContain: "body",
 		},
 		{
 			name:       "unknown path is 404",
@@ -52,15 +44,15 @@ func TestHandlerRoutes(t *testing.T) {
 			wantStatus: http.StatusNotFound,
 		},
 		{
-			name:       "unknown static asset is 404",
+			name:       "unknown asset is 404",
 			method:     http.MethodGet,
-			path:       "/static/no-such-file.css",
+			path:       "/assets/no-such-file.css",
 			wantStatus: http.StatusNotFound,
 		},
 		{
-			name:       "static directory listing is blocked",
+			name:       "asset directory listing is blocked",
 			method:     http.MethodGet,
-			path:       "/static/",
+			path:       "/assets/",
 			wantStatus: http.StatusNotFound,
 		},
 		{
@@ -132,9 +124,15 @@ func TestHealthzBody(t *testing.T) {
 	}
 }
 
-// TestLoginPageCSPCompliance pins the contract that the served HTML carries
-// no inline script or style: Caddy sets a strict CSP that would break them.
-func TestLoginPageCSPCompliance(t *testing.T) {
+// TestServedDocumentCSPCompliance pins that the HTML this binary serves
+// carries no inline script or style, which the CSP in securityheaders.go
+// would block outright.
+//
+// In a plain checkout the embedded build is the placeholder (the Go CI job
+// does not run `npm run build`), so this covers the placeholder; the same
+// property of the REAL bundle is asserted over HTTP by
+// deploy/verify-defaults.sh, which runs against a booted stack.
+func TestServedDocumentCSPCompliance(t *testing.T) {
 	t.Parallel()
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -143,22 +141,16 @@ func TestLoginPageCSPCompliance(t *testing.T) {
 
 	body := rec.Body.String()
 	if strings.Contains(body, "<script") {
-		t.Error("login page contains an inline <script> tag")
+		t.Error("served document contains an inline <script> tag")
 	}
 	if strings.Contains(body, "<style") {
-		t.Error("login page contains an inline <style> tag")
+		t.Error("served document contains an inline <style> tag")
 	}
 	if strings.Contains(body, "style=") {
-		t.Error("login page contains an inline style attribute")
+		t.Error("served document contains an inline style attribute")
 	}
 	if !strings.Contains(body, `lang="en"`) {
-		t.Error(`login page is missing lang="en"`)
-	}
-	if !strings.Contains(body, "/static/style.css") {
-		t.Error("login page does not link /static/style.css")
-	}
-	if !strings.Contains(body, "<form") {
-		t.Error("login page is missing the sign-in form")
+		t.Error(`served document is missing lang="en"`)
 	}
 }
 

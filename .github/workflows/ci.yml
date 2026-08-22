@@ -55,8 +55,12 @@ jobs:
               - 'webapp/**'
               - 'docs/api/**'
               - '.github/workflows/ci.yml'
+            # webapp/ is in this list because the server image builds and
+            # embeds it: a webapp-only change still changes what the stack
+            # serves, so the smoke test has to run.
             deploy:
               - 'server/**'
+              - 'webapp/**'
               - 'deploy/**'
               - '.github/workflows/ci.yml'
 
@@ -272,13 +276,26 @@ jobs:
             sleep 5
           done
 
-      - name: Check health endpoint and login page through Caddy
+      - name: Check health endpoint and web application through Caddy
         # HAMLANEH_DOMAIN=localhost means Caddy issues a certificate from its
         # internal CA, hence -k (the smoke test checks reachability and status,
         # not the public trust chain).
+        #
+        # A bare 200 on / is not enough: this job passed for a whole phase
+        # against a placeholder page that said sign-in did not work. The page
+        # must reference the content-hashed bundle a real `npm run build`
+        # emits, and that bundle must be fetchable.
         run: |
+          set -euo pipefail
           curl -fsSk --retry 10 --retry-delay 3 --retry-all-errors https://localhost/healthz
-          curl -fsSk --retry 10 --retry-delay 3 --retry-all-errors -o /dev/null https://localhost/
+          html="$(curl -fsSk --retry 10 --retry-delay 3 --retry-all-errors https://localhost/)"
+          asset="$(grep -o '/assets/[A-Za-z0-9._-]*\.js' <<<"$html" | head -n 1)"
+          if [ -z "$asset" ]; then
+            echo "::error::/ served no /assets/*.js bundle — the web application did not ship"
+            exit 1
+          fi
+          echo "web application bundle: $asset"
+          curl -fsSk -o /dev/null "https://localhost${asset}"
 
       - name: Verify secure defaults
         env:

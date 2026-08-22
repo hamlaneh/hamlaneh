@@ -25,10 +25,23 @@ installs it on its own server with one command and owns its communication comple
 **Phase 0 — walking skeleton, running and verified:**
 
 - `docker compose up` (from `deploy/`) boots a hardened 3-container stack:
-  **Caddy** (auto-TLS + strict security headers: HSTS, CSP, nosniff) →
+  **Caddy** (auto-TLS + HSTS) →
   **Go server** (distroless, non-root, read-only FS) →
   **PostgreSQL 17** (internal-only network, never exposed).
-- The Go server serves a placeholder login page, `/healthz` (liveness) and `/readyz`
+- **The real React application ships in the binary.** `deploy/Dockerfile` builds
+  `webapp/` with `npm ci && npm run build` and the Go build embeds `webapp/dist`
+  (`internal/webassets`), so `docker compose up` serves the actual sign-in, chat and
+  settings UI — no placeholder, and no separate web server. Content-hashed assets are
+  cached immutably, `index.html` is not, and the client-side routes the app needs
+  (`/`, `/reset`, `/c/*`) resolve to it while an unknown `/api/` path still answers the
+  contract's JSON 404. Home mode (Phase 4, a single binary with no proxy) gets the same
+  code path for free.
+- **The application owns its content-security headers**, not the proxy: CSP (no
+  `unsafe-inline`, no `unsafe-eval`), `X-Content-Type-Options`, `Referrer-Policy:
+  no-referrer`, `Permissions-Policy` and the `Cross-Origin-*` pair are set by
+  `internal/httpserver` around the whole handler. Caddy keeps only HSTS — a duplicated
+  CSP is ANDed by browsers, and a proxy-only policy would not exist in home mode.
+- The Go server also serves `/healthz` (liveness) and `/readyz`
   (DB + schema readiness), connects to Postgres via pgx, and **runs embedded migrations
   automatically at startup** (0001 users, 0002 sessions, 0003 channels/messages,
   0004 password reset + TOTP).
@@ -103,7 +116,8 @@ installs it on its own server with one command and owns its communication comple
   a typed API client with CSRF and transparent session refresh, and MSW mock handlers typed
   against the generated schema (off by default).
 - `deploy/install.sh` v0 (OS detect, Docker install, secret generation) and
-  `deploy/verify-defaults.sh` (14 secure-default checks, all passing).
+  `deploy/verify-defaults.sh` (22 secure-default checks, all passing — including that the
+  served page is the real bundle and not a placeholder).
 - CI pipeline (GitHub Actions, SHA-pinned): Go build/vet/lint/race-tests/gosec/govulncheck,
   webapp typecheck/lint/tests/build, gitleaks, codegen drift checks, compose smoke test.
   Activates when the GitHub remote exists.
@@ -132,15 +146,16 @@ here the backend is the pacing item, not the design.
 
 | Component | Technology | Role |
 |---|---|---|
-| `server/` | Go (stdlib-first, pgx, golang-migrate) | Single static binary: API, WebSockets, auth |
-| `webapp/` | React + TypeScript + Vite + Tailwind + i18next | Web UI, bilingual en/fa with RTL |
+| `server/` | Go (stdlib-first, pgx, golang-migrate) | Single static binary: API, WebSockets, auth, and the embedded web UI |
+| `webapp/` | React + TypeScript + Vite + Tailwind + i18next | Web UI, bilingual en/fa with RTL; built into the server binary at image build |
 | `desktop/` | Tauri v2 (planned, Phase 4) | Native desktop wrapper around the web UI |
-| `deploy/` | Docker Compose + Caddy + install.sh | The one-command install; Caddy owns TLS |
+| `deploy/` | Docker Compose + Caddy + install.sh | The one-command install; Caddy owns TLS and HSTS only |
 | Database | PostgreSQL (server) / SQLite (home mode, Phase 4) | One storage interface, two drivers |
 | Calls | LiveKit SFU + TURN (Phase 2) | Voice/video/screen share |
 | E2EE | MLS via audited library (Phase 3) | Compromised server sees only ciphertext |
 
-Request flow: browser → Caddy (TLS, headers) → Go server (:8080) → Postgres (internal network).
+Request flow: browser → Caddy (TLS, HSTS) → Go server (:8080 — web UI, API, security
+headers) → Postgres (internal network).
 
 ## The admin dashboard (first-class, decided Aug 2026)
 

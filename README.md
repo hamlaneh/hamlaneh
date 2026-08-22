@@ -25,8 +25,11 @@ curl -fsSL get.hamlaneh.com | bash
 
 ## Quick start (walking skeleton)
 
-What exists today is the Phase 0 walking skeleton: `docker compose up` boots Caddy,
-the Go server, and Postgres, and serves a static login page over TLS.
+`docker compose up` boots Caddy, the Go server, and Postgres, and serves the real
+React web application over TLS — the build is embedded in the Go binary, so there is
+no separate web server to run. Sign-in, two-step verification, password reset and the
+settings panel work; the messaging backend does not exist yet, so the chat surface is
+still a shell (see [docs/OVERVIEW.md](docs/OVERVIEW.md) for the honest current state).
 
 ```bash
 git clone https://github.com/hamlaneh/hamlaneh.git
@@ -57,9 +60,12 @@ first screen. Repository code and documentation are English.
 
 ## Project status
 
-**Pre-development — Phase 0 (Foundation).** Nothing usable is built yet. We are laying
-the skeleton: repository hygiene, CI gates, and a `docker compose up` that serves a
-login page over TLS. The full plan, with phases and measurable test gates, lives in
+**Early development — Phase 1 (Core communication).** Phase 0 is complete and
+`docker compose up` now serves the real application over TLS: you can sign in, be forced
+through a first-run password change, turn on two-step verification with recovery codes,
+reset a forgotten password by email, and see and revoke your other signed-in devices.
+The chat interface is built and running against mock data — the messaging backend behind
+it is the slice in progress, so conversations are not real yet. The full plan, with phases and measurable test gates, lives in
 [docs/ROADMAP.md](docs/ROADMAP.md); strategy and rationale live in
 [docs/PLAN.md](docs/PLAN.md).
 
