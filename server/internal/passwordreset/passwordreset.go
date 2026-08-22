@@ -83,12 +83,37 @@ const (
 // Errors callers branch on with errors.Is.
 var (
 	// ErrRateLimited reports that the caller exhausted a budget; the HTTP
-	// layer answers 429.
+	// layer answers 429. Refusals carry it through RateLimitedError, so
+	// errors.Is still matches while the duration stays reachable.
 	ErrRateLimited = errors.New("passwordreset: rate limited")
 	// ErrInvalidToken is the single answer for a token that is unknown,
 	// expired, or already used.
 	ErrInvalidToken = errors.New("passwordreset: invalid reset token")
 )
+
+// RateLimitedError is a refusal that knows how long it lasts, so the HTTP
+// layer can answer with Retry-After instead of leaving the client to guess.
+// A guessing client either retries too early — spending an attempt on a
+// refusal it could have predicted — or gives up on a wait that has already
+// passed.
+//
+// It unwraps to ErrRateLimited so errors.Is keeps working unchanged.
+//
+// The duration is not an enumeration oracle even though one of the budgets
+// is keyed on the address: every request is counted whether or not it
+// matched an account, so the wait describes the caller's own request
+// history and never whether the address exists.
+type RateLimitedError struct {
+	// RetryAfter is how long the exhausted budget stays exhausted.
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitedError) Error() string {
+	return fmt.Sprintf("passwordreset: rate limited for %s", e.RetryAfter)
+}
+
+// Unwrap reports the sentinel so errors.Is(err, ErrRateLimited) holds.
+func (e *RateLimitedError) Unwrap() error { return ErrRateLimited }
 
 // Store is what the service needs from persistent storage. *storage.Store
 // implements it.
@@ -197,8 +222,18 @@ func (s *Service) Available() bool { return s.deliverable }
 // is built to avoid.
 func (s *Service) Request(ctx context.Context, ipKey, email string) error {
 	addressKey := strings.ToLower(strings.TrimSpace(email))
-	if s.ipLimiter.Limited(ipKey) || s.addressLimiter.Limited(addressKey) {
-		return ErrRateLimited
+	// Both budgets guard this path, so the wait is the longer of the two
+	// that are actually exhausted: clearing only the shorter one would send
+	// the caller back into the other's refusal.
+	var wait time.Duration
+	if s.ipLimiter.Limited(ipKey) {
+		wait = s.ipLimiter.RetryAfter(ipKey)
+	}
+	if s.addressLimiter.Limited(addressKey) {
+		wait = max(wait, s.addressLimiter.RetryAfter(addressKey))
+	}
+	if wait > 0 {
+		return &RateLimitedError{RetryAfter: wait}
 	}
 	// Every request counts, matched or not: counting only real accounts
 	// would make the 429 itself an existence check.
@@ -244,7 +279,7 @@ func (s *Service) Request(ctx context.Context, ipKey, email string) error {
 // because only the caller can phrase the failure for its own contract.
 func (s *Service) Complete(ctx context.Context, ipKey, token, newPassword string) error {
 	if s.completeLimiter.Limited(ipKey) {
-		return ErrRateLimited
+		return &RateLimitedError{RetryAfter: s.completeLimiter.RetryAfter(ipKey)}
 	}
 	s.completeLimiter.Record(ipKey)
 

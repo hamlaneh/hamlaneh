@@ -83,12 +83,15 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code errorCo
 	writeBody(w, r, data)
 }
 
-// writeRateLimited is the single source of the 429 answer for the sign-in
-// limiters: the contract Error shape plus a Retry-After header carrying how
-// long the caller's budget stays exhausted (ROADMAP: Retry-After on every
-// 429, so the sign-in form can show a real countdown). Seconds are rounded
-// up, never below 1 — a Retry-After of 0 would invite an immediate retry of
-// a request that was just refused.
+// writeRateLimited is the single source of every 429 this server answers:
+// the contract Error shape plus a Retry-After header carrying how long the
+// caller's budget stays exhausted, so a client can show a real countdown
+// instead of guessing. Nothing else writes a rate-limited status — that is
+// what makes "every 429 carries the header" a property of the code rather
+// than a habit each handler has to remember.
+//
+// Seconds are rounded up, never below 1: a Retry-After of 0 invites an
+// immediate retry of the request that was just refused.
 func writeRateLimited(w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
 	seconds := int64((retryAfter + time.Second - 1) / time.Second)
 	if seconds < 1 {

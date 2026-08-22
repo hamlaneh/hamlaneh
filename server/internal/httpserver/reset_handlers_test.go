@@ -603,3 +603,65 @@ func tokenFromURL(t *testing.T, link string) string {
 	}
 	return token
 }
+
+// wantRetryAfter asserts a 429 carries a usable countdown. A missing header
+// leaves the client guessing; a zero invites an immediate retry of the
+// request that was just refused.
+func wantRetryAfter(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
+	raw := rec.Header().Get("Retry-After")
+	if raw == "" {
+		t.Fatal("429 carries no Retry-After header")
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil {
+		t.Fatalf("Retry-After %q is not an integer count of seconds: %v", raw, err)
+	}
+	if seconds < 1 {
+		t.Errorf("Retry-After is %d; a client told to wait no time retries into the same refusal", seconds)
+	}
+}
+
+// TestPasswordResetRateLimitsCarryRetryAfter covers both reset endpoints.
+// They were the last two 429s in the contract answering without the header,
+// because the service reported an exhausted budget without saying for how
+// long.
+func TestPasswordResetRateLimitsCarryRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("request", func(t *testing.T) {
+		t.Parallel()
+
+		handler, _ := resetHandler(t, &resetFakeStore{userErr: storage.ErrNotFound}, deliverableConfig())
+		const address = "countdown@example.com"
+		for attempt := range 20 {
+			// A fresh client each time, so the address budget is the one
+			// that trips and the header comes from that limiter.
+			rec := doHandler(t, handler, request(http.MethodPost, "/api/v1/auth/reset-request",
+				`{"email":"`+address+`"}`,
+				withRemoteAddr("198.51.100."+strconv.Itoa(attempt%250+1)+":54321")))
+			if rec.Code == http.StatusTooManyRequests {
+				wantRetryAfter(t, rec)
+				return
+			}
+		}
+		t.Fatal("repeated requests for one address were never rate limited")
+	})
+
+	t.Run("complete", func(t *testing.T) {
+		t.Parallel()
+
+		handler, _ := resetHandler(t, &resetFakeStore{outcome: storage.ResetOutcomeUnknown}, deliverableConfig())
+		body := `{"token":"` + strings.Repeat("q", 43) + `","new_password":"` + resetTestPassword + `"}`
+		for range 60 {
+			rec := doHandler(t, handler, request(http.MethodPost, "/api/v1/auth/reset-complete", body,
+				withRemoteAddr("203.0.113.77:54321")))
+			if rec.Code == http.StatusTooManyRequests {
+				wantRetryAfter(t, rec)
+				return
+			}
+		}
+		t.Fatal("repeated completion attempts from one client were never rate limited")
+	})
+}

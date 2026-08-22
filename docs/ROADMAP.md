@@ -115,8 +115,10 @@ retrofit is how security fails.
 - [x] `Retry-After` declared in the contract and emitted on the login, two-step and
       account-security 429s, so the sign-in form can show a real countdown instead of clearing
       its rate-limited state on the next edit — *slice 1.1b*
-- [ ] `Retry-After` on the two password-reset 429s: `passwordreset.Service` returns
-      `ErrRateLimited` without a duration, so those endpoints still answer without the header
+- [x] `Retry-After` on the two password-reset 429s — `passwordreset.Service` reported an
+      exhausted budget without saying for how long; refusals now carry the duration in a typed
+      error that still unwraps to `ErrRateLimited`. Every 429 in the server goes through one
+      function, so carrying the header is a property of the code rather than a habit — *1.2a*
 - [x] `GET /api/v1/instance` **backend** carries `password_min_length`
       and `password_reset_available`, because a zero-config install has no SMTP and a
       "Forgot password?" link that silently goes nowhere is dishonest — *slice 1.1b*

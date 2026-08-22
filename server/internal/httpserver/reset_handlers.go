@@ -54,9 +54,10 @@ func (s *apiServer) RequestPasswordReset(w http.ResponseWriter, r *http.Request)
 
 	_, ipKey := clientIP(r)
 	err := s.reset.Request(r.Context(), ipKey, email)
+	var limited *passwordreset.RateLimitedError
 	switch {
-	case errors.Is(err, passwordreset.ErrRateLimited):
-		writeError(w, r, http.StatusTooManyRequests, codeRateLimited, "too many attempts, try again later")
+	case errors.As(err, &limited):
+		writeRateLimited(w, r, limited.RetryAfter)
 	case err != nil:
 		// Deliberately not surfaced. Storing a token and dispatching mail
 		// only happen for addresses that exist, so answering 500 when they
@@ -107,9 +108,10 @@ func (s *apiServer) CompletePasswordReset(w http.ResponseWriter, r *http.Request
 
 	_, ipKey := clientIP(r)
 	err := s.reset.Complete(r.Context(), ipKey, req.Token, req.NewPassword)
+	var limited *passwordreset.RateLimitedError
 	switch {
-	case errors.Is(err, passwordreset.ErrRateLimited):
-		writeError(w, r, http.StatusTooManyRequests, codeRateLimited, "too many attempts, try again later")
+	case errors.As(err, &limited):
+		writeRateLimited(w, r, limited.RetryAfter)
 	case errors.Is(err, passwordreset.ErrInvalidToken):
 		writeInvalidResetToken(w, r)
 	case err != nil:
