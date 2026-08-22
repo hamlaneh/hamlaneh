@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { api } from "../api/client";
+import { api, retryAfterSeconds } from "../api/client";
 import type { components } from "../api/schema";
 import { AuthForm } from "../components/auth/AuthForm";
 import { AuthShell } from "../components/auth/AuthShell";
@@ -38,6 +38,9 @@ export interface LoginNotice {
   message: string;
 }
 
+/** From this wait up the notice counts whole minutes; below it, whole seconds. */
+const SECONDS_PER_MINUTE = 60;
+
 /**
  * Sign-in against POST /api/v1/auth/login, in the delivered design
  * (artboards login-default, login-error, login-rate-limited, and their dark
@@ -46,9 +49,10 @@ export interface LoginNotice {
  * One deviation from `login-rate-limited`, recorded in the handoff's open
  * questions: that artboard disables the fields and the toggle as well as the
  * button, but the mockup's async panel also requires every failure to "leave
- * an edit-and-retry path", and the 429 carries no Retry-After to end the state
- * on. Disabling everything with no timer bricks the screen until a reload, so
- * only the button is disabled and editing a field lifts the notice.
+ * an edit-and-retry path". So only the button is disabled, and editing a field
+ * lifts the notice. The 429's Retry-After now ends the state on its own too,
+ * where the server sends one — but it is a second exit, never the only one:
+ * a header this screen cannot trust must not leave the form dead.
  */
 export function LoginScreen({
   onAuthenticated,
@@ -64,9 +68,39 @@ export function LoginScreen({
   // Bumped on every failure so a repeated identical failure still moves focus.
   const [failureCount, setFailureCount] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  // When the server's stated wait runs out, and how much of it is left. Both
+  // are null/0 whenever the 429 named no wait this client would act on.
+  const [retryAt, setRetryAt] = useState<number | null>(null);
+  const [remaining, setRemaining] = useState(0);
   const alertRef = useRef<HTMLDivElement>(null);
 
   const rateLimited = error === "rateLimited";
+
+  /**
+   * The countdown re-reads the clock instead of decrementing a counter: a
+   * throttled background tab fires the interval late, and a count that drifts
+   * with it would be the same guess this screen just stopped making.
+   */
+  useEffect(() => {
+    if (retryAt === null) {
+      return undefined;
+    }
+    const timer = setInterval(() => {
+      const left = Math.ceil((retryAt - Date.now()) / 1000);
+      if (left > 0) {
+        setRemaining(left);
+        return;
+      }
+      // The wait the server named has passed: the notice goes with the
+      // condition it described and the form is live again.
+      setRetryAt(null);
+      setRemaining(0);
+      setError("none");
+    }, 1000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [retryAt]);
 
   useEffect(() => {
     // A form-level failure is announced by role="alert" and takes focus, so
@@ -87,15 +121,36 @@ export function LoginScreen({
   };
 
   /**
-   * The 429 carries no Retry-After yet (slice 1.1b), so a countdown would be
-   * invented. The honest exit is the edit-and-retry path the design requires
-   * of every failure: touching either field drops the notice and re-enables
-   * submit. A server that is still limiting simply answers 429 again.
+   * The edit-and-retry path the design requires of every failure: touching
+   * either field drops the notice and re-enables submit, countdown or no
+   * countdown. A server that is still limiting simply answers 429 again — and
+   * says how long is left, so the notice comes back with a fresh number.
    */
   const clearRateLimitNotice = () => {
     if (rateLimited) {
       setError("none");
+      setRetryAt(null);
+      setRemaining(0);
     }
+  };
+
+  /**
+   * The rate-limit notice: the wait the server stated, counted down, or the
+   * undated wording when it stated none this client would act on (see
+   * `retryAfterSeconds`). One sentence either way — only the number is new.
+   */
+  const rateLimitMessage = (): string => {
+    if (remaining <= 0) {
+      return t("login.error.rateLimited");
+    }
+    if (remaining < SECONDS_PER_MINUTE) {
+      return t("login.error.rateLimitedSeconds", { count: remaining });
+    }
+    // Rounded up: telling someone four minutes when four and a half are left
+    // just buys them another refusal.
+    return t("login.error.rateLimitedMinutes", {
+      count: Math.ceil(remaining / SECONDS_PER_MINUTE),
+    });
   };
 
   const submit = async () => {
@@ -127,6 +182,12 @@ export function LoginScreen({
       // fault: anything else the contract allows (400) or does not (5xx) is
       // reported as an unexpected failure.
       if (response.status === 429) {
+        // The spec's RateLimited response carries the wait; reading it is the
+        // difference between telling the user when the door reopens and
+        // inventing "a few minutes".
+        const wait = retryAfterSeconds(response);
+        setRetryAt(wait === null ? null : Date.now() + wait * 1000);
+        setRemaining(wait ?? 0);
         fail("rateLimited");
       } else if (response.status === 401) {
         fail("invalidCredentials");
@@ -158,7 +219,7 @@ export function LoginScreen({
           <NoticeBanner
             ref={alertRef}
             tone={rateLimited ? "warning" : "danger"}
-            message={t(`login.error.${error}`)}
+            message={rateLimited ? rateLimitMessage() : t(`login.error.${error}`)}
           />
         )}
         <div className="hm-form__fields">

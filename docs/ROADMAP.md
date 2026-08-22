@@ -191,6 +191,16 @@ history, send a message, and have it appear on someone else's screen without a r
       no-referrer`, `Permissions-Policy`, nosniff and the `Cross-Origin-*` pair around the
       whole handler; Caddy keeps HSTS, which only a TLS terminator can set meaningfully.
       Every directive was derived from the real build output rather than copied
+- [x] **Playwright e2e against the real stack**, landed here rather than in 1.5 because this is
+      the first slice where it was possible: until the web bundle shipped inside the binary there
+      was no application to drive. Per-PR runs full `en` plus the `fa` smoke subset, nightly runs
+      both in full, and the suite starts its own isolated compose stack so it can never touch a
+      developer's volumes. Accounts come from the bootstrap path and the admin API — no test-only
+      back door into the server. The RTL **snapshot** tests in 1.5 are still outstanding; this is
+      the harness they will need
+- [x] Consume `Retry-After` in the sign-in form. The header shipped in 1.1b and the frontend kept
+      guessing ("try again in a few minutes") from a stale comment claiming the contract carried
+      no such header. Found by the first e2e run, which read the real 429 through Caddy
 - [ ] **Authz harness rework first, before any handler.** Today's four columns are
       instance-scoped (anonymous / member / member-must-change / admin) and cannot express the
       question this phase turns on: *member of which channel?* Needs channel-scoped principals

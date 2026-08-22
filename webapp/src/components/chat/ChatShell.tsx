@@ -226,10 +226,18 @@ export function ChatShell({
 
         {activeChannel === undefined ? (
           <div className="hm-messages">
+            {/* Three states, three sentences. A failed load used to fall into
+                the empty-account invitation, which told someone with twenty
+                channels that they had none — an outage is not an empty
+                account, and no artboard draws a control to retry from, so the
+                honest exit is the reload the composer already asks for when
+                its connection is gone. */}
             <p className="hm-empty__body">
               {state.channelsStatus === "loading"
                 ? t("common.loading")
-                : t("chat.noConversations")}
+                : state.channelsStatus === "error"
+                  ? t("chat.conversationsFailed")
+                  : t("chat.noConversations")}
             </p>
           </div>
         ) : view.status === "ready" &&

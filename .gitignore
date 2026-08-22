@@ -44,6 +44,12 @@ webapp/build/
 coverage/
 test-results/
 playwright-report/
+blob-report/
+.playwright/
+# Generated per e2e run: the throwaway compose environment (a random database
+# password and the bootstrap admin credentials) plus the state file the
+# workers read. Never committed — see webapp/e2e/support/stack.ts.
+webapp/e2e/.stack/
 
 # Tauri / Rust
 desktop/src-tauri/target/

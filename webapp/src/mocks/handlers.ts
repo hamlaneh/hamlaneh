@@ -50,6 +50,13 @@ export const FIXTURE_NEWHIRE_CREDENTIALS = {
 /** Any login attempt with this identifier gets a 429 (UI rate-limit path). */
 export const FIXTURE_RATELIMITED_IDENTIFIER = "fixture.ratelimited";
 
+/**
+ * The `Retry-After` that 429 carries, in seconds — the value a real run through
+ * Caddy answered with, so the mock exercises the same arithmetic the browser
+ * does (298 s reads as "5 minutes" once rounded up).
+ */
+export const FIXTURE_RETRY_AFTER_SECONDS = 298;
+
 /** An account with two-step verification on: its login answers 202. */
 export const FIXTURE_TWOSTEP_CREDENTIALS = {
   identifier: "fixture.twostep",
@@ -301,8 +308,16 @@ function clearDomCookies(): void {
 // not_authenticated, invalid_current_password, rate_limited. Do not invent
 // codes here — the UI localizes by code, so drift breaks error messages.
 
-function errorResponse(status: number, code: string, message: string) {
-  return HttpResponse.json<ApiError>({ error: { code, message } }, { status });
+function errorResponse(
+  status: number,
+  code: string,
+  message: string,
+  headers?: Record<string, string>,
+) {
+  return HttpResponse.json<ApiError>(
+    { error: { code, message } },
+    { status, ...(headers === undefined ? {} : { headers }) },
+  );
 }
 
 function notAuthenticated() {
@@ -329,6 +344,11 @@ export const handlers = [
           429,
           "rate_limited",
           "Too many login attempts; retry later.",
+          // The real server sets Retry-After on every 429 it produces
+          // (server/internal/httpserver/errors.go), and the spec documents it
+          // on RateLimited. A mock that omitted it would only ever exercise
+          // the fallback path.
+          { "Retry-After": String(FIXTURE_RETRY_AFTER_SECONDS) },
         );
       }
       const account = FIXTURE_ACCOUNTS.find(

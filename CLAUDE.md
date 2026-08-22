@@ -56,7 +56,11 @@ Filled/updated by the Phase 0 scaffold PR — keep this section current; every a
 - Go: latest stable, pinned via `toolchain` in `go.mod`. Module: `github.com/hamlaneh/hamlaneh/server`
 - Node: current LTS + npm (lockfile committed, `npm ci` in CI)
 - Server: `go build ./...` · `go test -race ./...` · `golangci-lint run` (from `server/`)
-- Webapp: `npm run dev` · `npm test` · `npm run lint` · `npm run typecheck` · `npm run i18n:check` (from `webapp/`; Playwright e2e arrives in Phase 1)
+- Webapp: `npm run dev` · `npm test` · `npm run lint` · `npm run typecheck` · `npm run i18n:check` · `npm run e2e` (all from `webapp/`)
+- E2e drives the **real stack**: `npm run e2e` builds and starts the compose stack under its own
+  project name and runs Playwright against it over HTTPS. It never touches a running instance's
+  volumes. `HAMLANEH_E2E_ALL_LOCALES=1` widens `fa` from the smoke subset to the full suite
+  (what the nightly workflow runs). Needs Docker Compose ≥ 2.24.
 - Stack: `docker compose up` (from `deploy/`) · `deploy/verify-defaults.sh` checks secure defaults
 - Locale parity: `npm run i18n:check` (fails on en/fa key divergence)
 

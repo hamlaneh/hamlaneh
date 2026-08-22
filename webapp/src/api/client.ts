@@ -37,6 +37,37 @@ const csrfMiddleware: Middleware = {
 };
 
 /**
+ * The largest `Retry-After` this client will believe. Every 429 the contract
+ * describes is a window of minutes, so anything past an hour is not a wait a
+ * screen can honestly count down — it is a value to distrust, not to render.
+ */
+const MAX_RETRY_AFTER_SECONDS = 60 * 60;
+
+/**
+ * Whole seconds until the caller's budget frees up, from a 429's `Retry-After`
+ * — or null when the response does not carry one this client will act on.
+ *
+ * The spec's `RateLimited` response documents the header as an integer count of
+ * seconds (present on the login, two-step and account-security 429s), so that
+ * is the only form read here: the HTTP-date alternative RFC 9110 also allows is
+ * not what the server sends. Absent, blank, zero, negative, fractional,
+ * non-numeric and out-of-range all mean one thing to a caller — this response
+ * cannot say when the door reopens, so say something vaguer rather than render
+ * a guess dressed as a fact.
+ */
+export function retryAfterSeconds(response: Response): number | null {
+  const header = response.headers.get("Retry-After")?.trim() ?? "";
+  if (!/^\d+$/u.test(header)) {
+    return null;
+  }
+  const seconds = Number(header);
+  if (seconds <= 0 || seconds > MAX_RETRY_AFTER_SECONDS) {
+    return null;
+  }
+  return seconds;
+}
+
+/**
  * Auth endpoints that must never trigger the automatic refresh+retry below:
  * a 401 from login IS the answer, a 401 from refresh means the session is
  * unrecoverable (retrying would loop), and logout drops the session anyway.

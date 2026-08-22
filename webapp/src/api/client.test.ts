@@ -16,7 +16,7 @@ import {
   resetMockAuth,
 } from "../mocks/handlers";
 import { server } from "../mocks/node";
-import { api } from "./client";
+import { api, retryAfterSeconds } from "./client";
 import type { components } from "./schema";
 
 type User = components["schemas"]["User"];
@@ -77,6 +77,57 @@ describe("api client against the contract mocks", () => {
     // to the user, which is exactly what the runtime assertion below pins.
     expectTypeOf(data).toExtend<User | TwoFactorChallenge | undefined>();
     expect(data).toEqual(FIXTURE_ADMIN);
+  });
+});
+
+describe("Retry-After", () => {
+  it("reads the whole seconds a 429 names", async () => {
+    server.use(
+      http.post("/api/v1/auth/login", () =>
+        HttpResponse.json<ApiError>(
+          { error: { code: "rate_limited", message: "Too many attempts." } },
+          { status: 429, headers: { "Retry-After": "298" } },
+        ),
+      ),
+    );
+
+    const { response } = await api.POST("/api/v1/auth/login", {
+      body: { identifier: "someone", password: "irrelevant-password" },
+    });
+
+    expect(response.status).toBe(429);
+    expect(retryAfterSeconds(response)).toBe(298);
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["blank", "   "],
+    ["zero", "0"],
+    ["negative", "-30"],
+    ["fractional", "12.5"],
+    ["not a number", "soon"],
+    ["an HTTP-date", "Wed, 21 Oct 2026 07:28:00 GMT"],
+    ["longer than the screen can honestly count down", "999999999"],
+  ])("answers null when the header is %s", async (_case, value) => {
+    server.use(
+      http.post("/api/v1/auth/login", () =>
+        HttpResponse.json<ApiError>(
+          { error: { code: "rate_limited", message: "Too many attempts." } },
+          {
+            status: 429,
+            ...(value === undefined ? {} : { headers: { "Retry-After": value } }),
+          },
+        ),
+      ),
+    );
+
+    const { response } = await api.POST("/api/v1/auth/login", {
+      body: { identifier: "someone", password: "irrelevant-password" },
+    });
+
+    // Every one of these means the same thing: this response cannot say when
+    // the door reopens, so the caller must not render a number.
+    expect(retryAfterSeconds(response)).toBeNull();
   });
 });
 

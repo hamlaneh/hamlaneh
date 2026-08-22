@@ -1,7 +1,7 @@
 {
+  "//": "The end-to-end suite is Node code, not browser code, so it gets its own project: `types: [\"node\"]` here would leak process/fs globals into src/ if it lived in the root tsconfig. DOM stays in `lib` because page.evaluate callbacks run in the page. Strictness matches the root project exactly — e2e code is production-adjacent and is reviewed as such.",
   "compilerOptions": {
-    "target": "ES2022",
-    "useDefineForClassFields": true,
+    "target": "ES2023",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -9,7 +9,6 @@
     "resolveJsonModule": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
-    "jsx": "react-jsx",
     "noEmit": true,
     "skipLibCheck": true,
 
@@ -20,7 +19,7 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
 
-    "types": ["vite/client"]
+    "types": ["node"]
   },
-  "include": ["src", "vite.config.ts", "playwright.config.ts"]
+  "include": ["."]
 }

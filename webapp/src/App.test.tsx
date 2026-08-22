@@ -15,7 +15,12 @@ import { PASSWORD_MIN_LENGTH } from "./auth/passwordPolicy";
 import i18n, { LANGUAGE_STORAGE_KEY } from "./i18n";
 import en from "./locales/en/common.json";
 import fa from "./locales/fa/common.json";
-import { FIXTURE_NEWHIRE_CREDENTIALS, resetMockAuth } from "./mocks/handlers";
+import {
+  FIXTURE_NEWHIRE_CREDENTIALS,
+  FIXTURE_RATELIMITED_IDENTIFIER,
+  FIXTURE_RETRY_AFTER_SECONDS,
+  resetMockAuth,
+} from "./mocks/handlers";
 import { server } from "./mocks/node";
 
 // App bootstraps the session over the network on mount, so even the language
@@ -125,6 +130,29 @@ describe("App", () => {
         ),
       ),
     ).not.toBeInTheDocument();
+  });
+
+  it("states the rate-limit wait in Persian, in Persian digits", async () => {
+    const user = userEvent.setup({ delay: null });
+    await renderAppAtLogin();
+    await user.click(languageOption("fa"));
+
+    await user.type(
+      screen.getByLabelText(fa.login.identifierLabel),
+      FIXTURE_RATELIMITED_IDENTIFIER,
+    );
+    await user.type(screen.getByLabelText(fa.login.passwordLabel), "any-password");
+    await user.click(screen.getByRole("button", { name: fa.login.submit }));
+
+    const minutes = Math.ceil(FIXTURE_RETRY_AFTER_SECONDS / 60);
+    const persianMinutes = new Intl.NumberFormat("fa").format(minutes);
+    expect(persianMinutes).toMatch(/^[۰-۹]+$/u);
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent(
+      fa.login.error.rateLimitedMinutes_other.replace("{{count, number}}", persianMinutes),
+    );
+    // The undated Persian wording is what this replaces, not what it repeats.
+    expect(notice).not.toHaveTextContent(fa.login.error.rateLimited);
   });
 
   it("persists the chosen language in localStorage", async () => {

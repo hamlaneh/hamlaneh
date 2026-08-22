@@ -1,0 +1,33 @@
+# End-to-end test overlay for deploy/docker-compose.yml.
+#
+# The e2e suite drives the REAL stack — Caddy terminating TLS in front of the
+# Go binary that carries the web bundle, with a real PostgreSQL behind it.
+# Nothing about the application is mocked or replaced here; this file changes
+# only what would otherwise collide with a Hamlaneh instance already running
+# on the same machine:
+#
+#   - the published ports move off 80/443 (a developer's own stack owns those)
+#
+# Everything else — images, hardening, health checks, the internal-only data
+# network — comes from deploy/docker-compose.yml unchanged, so the suite tests
+# the shipped topology and not a test-only variant of it.
+#
+# Isolation also depends on two things the runner passes, not on this file:
+# a distinct project name (`-p hamlaneh-e2e`, which namespaces the containers
+# AND the volumes) and `--env-file` pointing at a generated throwaway
+# environment (which keeps deploy/.env, and therefore the developer's real
+# database password, out of the picture entirely).
+#
+# Usage is not by hand — webapp/e2e/stack/compose.ts owns the invocation:
+#   docker compose -p hamlaneh-e2e \
+#     -f deploy/docker-compose.yml -f webapp/e2e/docker-compose.e2e.yml \
+#     --env-file <generated> up -d --build
+
+services:
+  caddy:
+    # `!override` replaces the base list instead of appending to it: compose
+    # merges sequences by concatenation, and an appended mapping would still
+    # try to bind 80/443 and fail against a running instance.
+    # Requires Docker Compose v2.24+.
+    ports: !override
+      - "${HAMLANEH_E2E_HTTPS_PORT:-8443}:443"

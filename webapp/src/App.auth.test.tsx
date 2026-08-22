@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -23,6 +23,7 @@ import {
   FIXTURE_NEWHIRE,
   FIXTURE_NEWHIRE_CREDENTIALS,
   FIXTURE_RATELIMITED_IDENTIFIER,
+  FIXTURE_RETRY_AFTER_SECONDS,
   resetMockAuth,
 } from "./mocks/handlers";
 import { server } from "./mocks/node";
@@ -55,6 +56,33 @@ function tooShortMessage(): string {
   return en.changePassword.error.tooShort.replace(
     "{{minimum, number}}",
     new Intl.NumberFormat("en").format(PASSWORD_MIN_LENGTH),
+  );
+}
+
+/** The rate-limit notice as rendered for a wait of `minutes` whole minutes. */
+function rateLimitedInMinutes(minutes: number): string {
+  return en.login.error.rateLimitedMinutes_other.replace(
+    "{{count, number}}",
+    new Intl.NumberFormat("en").format(minutes),
+  );
+}
+
+/**
+ * Answers the login 429 with `header` as its Retry-After, or with none at all
+ * when it is undefined — the shapes a server that cannot say when the door
+ * reopens produces.
+ */
+function loginRateLimitedWith(header?: string) {
+  server.use(
+    http.post("/api/v1/auth/login", () =>
+      HttpResponse.json(
+        { error: { code: "rate_limited", message: "Too many login attempts." } },
+        {
+          status: 429,
+          ...(header === undefined ? {} : { headers: { "Retry-After": header } }),
+        },
+      ),
+    ),
   );
 }
 
@@ -226,7 +254,7 @@ describe("login", () => {
     expect(alert).toHaveTextContent(en.login.error.invalidCredentials);
   });
 
-  it("shows the rate-limit message on 429", async () => {
+  it("shows the wait the 429 names rather than guessing at it", async () => {
     const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
 
@@ -234,7 +262,69 @@ describe("login", () => {
 
     // Non-urgent by design: the rate-limit notice is announced politely.
     const notice = await screen.findByRole("status");
+    // This assertion used to be `en.login.error.rateLimited` — "try again in a
+    // few minutes" — which was the honest answer only while the contract had no
+    // Retry-After. It has one now (spec: RateLimited), so guessing where the
+    // server gave a number is the bug, not the fix.
+    const minutes = Math.ceil(FIXTURE_RETRY_AFTER_SECONDS / 60);
+    expect(notice).toHaveTextContent(rateLimitedInMinutes(minutes));
+    expect(notice).not.toHaveTextContent(en.login.error.rateLimited);
+  });
+
+  it("counts the wait down in seconds once under a minute", async () => {
+    const user = userEvent.setup({ delay: null });
+    loginRateLimitedWith("45");
+    await renderAppAtLogin();
+
+    await submitLogin(user, FIXTURE_RATELIMITED_IDENTIFIER, "any-password");
+
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent(
+      en.login.error.rateLimitedSeconds_other.replace("{{count, number}}", "45"),
+    );
+  });
+
+  it("lifts the notice by itself once the stated wait has passed", async () => {
+    const user = userEvent.setup({ delay: null });
+    // One second, so the countdown runs out inside the test rather than being
+    // simulated: what is asserted is that the timer really ends the state.
+    loginRateLimitedWith("1");
+    await renderAppAtLogin();
+
+    await submitLogin(user, FIXTURE_RATELIMITED_IDENTIFIER, "any-password");
+
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent(
+      en.login.error.rateLimitedSeconds_one.replace("{{count, number}}", "1"),
+    );
+    expect(screen.getByRole("button", { name: en.login.submit })).toBeDisabled();
+
+    await waitFor(
+      () => {
+        expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      },
+      { timeout: 3000 },
+    );
+    expect(screen.getByRole("button", { name: en.login.submit })).toBeEnabled();
+  });
+
+  it.each([
+    ["carries no Retry-After", undefined],
+    ["carries a Retry-After of zero", "0"],
+    ["carries a non-numeric Retry-After", "soon"],
+    ["carries an HTTP-date Retry-After", "Wed, 21 Oct 2026 07:28:00 GMT"],
+    ["carries an absurd Retry-After", "999999999"],
+  ])("falls back to the undated wording when the 429 %s", async (_case, header) => {
+    const user = userEvent.setup({ delay: null });
+    loginRateLimitedWith(header);
+    await renderAppAtLogin();
+
+    await submitLogin(user, FIXTURE_RATELIMITED_IDENTIFIER, "any-password");
+
+    const notice = await screen.findByRole("status");
     expect(notice).toHaveTextContent(en.login.error.rateLimited);
+    // Never a number the response did not support — and never "NaN".
+    expect(notice.textContent).not.toMatch(/\d|NaN/u);
   });
 
   it("never blames the password for a server fault", async () => {
@@ -628,8 +718,9 @@ describe("delivered design behaviour", () => {
     // The switcher stays live, so the notice can still be read in either
     // language while the form is blocked.
     expect(screen.getByRole("radio", { name: en.language.shortFa })).toBeEnabled();
-    // The fields stay editable: the 429 carries no Retry-After yet, so the
-    // edit-and-retry path is the only exit that is not an invented timer.
+    // The fields stay editable even now that the 429 states a wait: the
+    // countdown is a second exit, never a replacement for the edit-and-retry
+    // path the behaviour panel requires of every failure.
     expect(screen.getByLabelText(en.login.identifierLabel)).toBeEnabled();
     expect(screen.getByLabelText(en.login.passwordLabel)).toBeEnabled();
   });

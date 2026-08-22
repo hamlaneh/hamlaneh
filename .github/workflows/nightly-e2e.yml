@@ -1,0 +1,66 @@
+# Nightly end-to-end run — the both-locales tier.
+#
+# CLAUDE.md's testing policy splits the suite in two: every pull request runs
+# the full suite in `en` plus the `fa` smoke subset (the `e2e` job in ci.yml),
+# and the full suite runs in BOTH locales nightly. This workflow is that
+# second tier and nothing else — HAMLANEH_E2E_ALL_LOCALES widens the `fa`
+# project from its smoke subset to every spec.
+#
+# CI hygiene matches ci.yml: third-party actions pinned by commit SHA with
+# the version in the trailing comment, minimal token permissions, npm ci.
+
+name: Nightly e2e
+
+on:
+  schedule:
+    # 02:30 UTC, off the hour so it does not queue behind the crowd.
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-e2e
+  cancel-in-progress: false
+
+jobs:
+  e2e-both-locales:
+    name: End-to-end (en + fa, full)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HAMLANEH_E2E_ALL_LOCALES: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+
+      - name: Install dependencies
+        working-directory: webapp
+        run: npm ci
+
+      - name: Install the browser
+        working-directory: webapp
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the suite in both locales
+        working-directory: webapp
+        run: npm run e2e
+
+      - name: Upload the report, traces and screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nightly-e2e-report
+          path: |
+            webapp/playwright-report/
+            webapp/test-results/
+          retention-days: 14
+          if-no-files-found: ignore

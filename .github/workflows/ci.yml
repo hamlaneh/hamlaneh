@@ -40,6 +40,7 @@ jobs:
       server: ${{ steps.filter.outputs.server }}
       webapp: ${{ steps.filter.outputs.webapp }}
       deploy: ${{ steps.filter.outputs.deploy }}
+      e2e: ${{ steps.filter.outputs.e2e }}
     steps:
       - name: Filter changed paths
         id: filter
@@ -62,6 +63,16 @@ jobs:
               - 'server/**'
               - 'webapp/**'
               - 'deploy/**'
+              - '.github/workflows/ci.yml'
+            # The e2e suite drives the composed stack, so it is sensitive to
+            # exactly the same three trees as compose-smoke: the frontend it
+            # clicks, the server that serves it, and the deployment that
+            # wires the two together.
+            e2e:
+              - 'server/**'
+              - 'webapp/**'
+              - 'deploy/**'
+              - 'docs/api/**'
               - '.github/workflows/ci.yml'
 
   server:
@@ -189,6 +200,57 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  e2e:
+    name: End-to-end (Playwright)
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.e2e == 'true'
+    runs-on: ubuntu-latest
+    # The stack build dominates: a cold `docker compose up --build` is a few
+    # minutes, the browser run a couple more.
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+
+      - name: Install dependencies
+        working-directory: webapp
+        run: npm ci
+
+      - name: Install the browser
+        working-directory: webapp
+        # `npx playwright` runs the binary from node_modules, so the browser
+        # build always matches the @playwright/test version npm ci installed
+        # from the committed lockfile. Chromium only: that is what the
+        # config's single device profile uses.
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the suite (full en + fa smoke subset)
+        working-directory: webapp
+        # The suite starts and stops the stack itself, under its own compose
+        # project name; see webapp/e2e/support/stack.ts.
+        run: npm run e2e
+
+      - name: Upload the report, traces and screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-report
+          # test-results/ carries the trace, video and screenshot of every
+          # failure plus the stack's own logs; a red run with neither is
+          # nearly unactionable.
+          path: |
+            webapp/playwright-report/
+            webapp/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
 
   gitleaks:
     name: Secret scan (gitleaks)

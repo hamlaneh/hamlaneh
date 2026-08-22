@@ -102,8 +102,11 @@ installs it on its own server with one command and owns its communication comple
   screens (`ResetRequestScreen`, `ResetPasswordScreen`, and the completion notice); the reset
   token travels in the URL **fragment**, never a query string, so it cannot reach the access
   logs of the server it unlocks, and the page scrubs it from the address bar on read. Two-step
-  sign-in is `TotpChallengeScreen` over an `OtpInput` that accepts paste and arrow keys across
-  six cells. Settings opens as a panel over the dimmed chat (`SettingsPanel`, focus-trapped)
+  sign-in is `TotpChallengeScreen`, which offers the `OtpInput` — six cells accepting paste and
+  arrow keys — and a switch to a plain field for a recovery code, so losing the authenticator is
+  recoverable rather than terminal. Both post the same field to the same endpoint; the server
+  already accepted either. The recovery half borrows delivered components unchanged and is
+  marked `awaiting-design`, so the artboard, when it lands, is a reskin rather than a rebuild. Settings opens as a panel over the dimmed chat (`SettingsPanel`, focus-trapped)
   with Security (change password, `TwoFactorCard`, the three-step `TwoFactorSetup`, and
   `RecoveryCodesStep`), Sessions (one row per live family, current first, with remote
   sign-out behind a confirm dialog), Language and Appearance.
@@ -118,19 +121,25 @@ installs it on its own server with one command and owns its communication comple
 - `deploy/install.sh` v0 (OS detect, Docker install, secret generation) and
   `deploy/verify-defaults.sh` (22 secure-default checks, all passing — including that the
   served page is the real bundle and not a placeholder).
+- **End-to-end tests (Playwright) against the real stack.** `npm run e2e` builds and starts the
+  compose stack under its own project name — real Caddy, the real Go binary with the embedded
+  bundle, a real PostgreSQL — and drives a browser over HTTPS. Nothing is mocked, and a developer's
+  running instance is untouchable by it. Accounts come from the supported bootstrap path and the
+  admin API, so there is no test-only back door into the server. Covers sign-in and its refusals,
+  the forced first password change, the two-step challenge (asserting no session cookie exists
+  before the code is accepted), enumeration-safe password reset, the sessions list and remote
+  sign-out, and sign-in rate limiting; the Persian subset asserts real mirroring — computed
+  `direction: rtl` and the sidebar actually on the right — not merely that Persian text appears.
+  Per-PR runs `en` in full plus the `fa` smoke subset; a nightly workflow runs both in full.
+  Failures upload traces, screenshots, video and the container logs.
 - CI pipeline (GitHub Actions, SHA-pinned): Go build/vet/lint/race-tests/gosec/govulncheck,
-  webapp typecheck/lint/tests/build, gitleaks, codegen drift checks, compose smoke test.
-  Activates when the GitHub remote exists.
+  webapp typecheck/lint/tests/build, Playwright e2e, gitleaks, codegen drift checks, compose smoke
+  test. Activates when the GitHub remote exists.
 
 **Not yet built:** the messaging **backend** (every chat endpoint answers 501 today and the WS
 gateway does not exist, so the chat shell and the realtime client both run on mocks); files;
 the admin dashboard (designed, not built); calls; E2EE — see the phase list below.
 
-**Known gap, recorded rather than hidden:** recovery codes can be generated and shown but not
-yet *used* to sign in. The two-step screen is six numeric cells and cannot accept a `XXXX-XXXX`
-code, and no artboard shows an alternative entry point — so the one path that rescues someone
-who has lost their authenticator is unreachable until that design addendum lands. The backend
-accepts recovery codes today; only the way in is missing.
 
 ## What's next
 

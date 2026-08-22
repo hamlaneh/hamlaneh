@@ -120,10 +120,20 @@ no passkeys, no marketing copy, no security claims. The only supporting line is
    tone to the token sheet or confirm the substitution.
 8. **`login-rate-limited` contradicts the async-behaviour panel.** The artboard disables the
    identifier, password, toggle and submit; the behaviour panel requires every failure to "always
-   leave an edit-and-retry path". With no `Retry-After` in the contract, obeying the artboard
-   literally leaves the form permanently dead until a page reload. Implemented: the notice and the
-   disabled submit are kept, the fields stay editable, and touching either field clears the notice.
-   Update the artboard annotation or bless the deviation.
+   leave an edit-and-retry path".
+   **Premise changed 2026-08-22.** The original entry rested on there being no `Retry-After` in
+   the contract, so the notice could only say "try again in a few minutes" and nothing but a page
+   reload could end the state. Slice 1.1b added the header: every login 429 now states the wait in
+   whole seconds, and the spec documents it on `RateLimited`. Implemented now: the same
+   `NoticeBanner`, in the same warning tone and slot, states that wait and counts it down —
+   "Try again in 5 minutes", then seconds under the last minute — and lifts itself when the wait
+   runs out. Nothing else about the state changed.
+   Still deviating from the artboard, and for the same reason: the fields stay editable and
+   touching either one clears the notice early. The countdown is a second exit, not a replacement
+   — a 429 whose header is missing, zero, non-numeric or absurd falls back to the undated wording,
+   and disabling everything on that path would leave the form dead until a reload.
+   Two things for the designer: the artboard draws no countdown (it draws the undated sentence),
+   and it still draws the fields disabled. Update the annotation for both, or bless the deviation.
 9. ~~**Persian pages render Latin runs in Vazirmatn's own Latin.**~~ **RESOLVED 2026-08-21 —
    stay faithful to the token.** Latin runs inside Persian pages keep Vazirmatn, matching the
    delivered `--font-ui-fa` stack, at a cost of ~49 KB per Persian page. Do not reorder the stack.

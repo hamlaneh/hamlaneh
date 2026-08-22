@@ -139,6 +139,53 @@ describe("sidebar", () => {
   });
 });
 
+describe("the conversation list", () => {
+  it("invites the user to create a channel only when the list is really empty", async () => {
+    server.use(http.get("/api/v1/channels", () => HttpResponse.json({ channels: [] })));
+    renderChat("/");
+
+    expect(await screen.findByText(en.chat.noConversations)).toBeInTheDocument();
+  });
+
+  it("says the list could not be loaded rather than that the account is empty", async () => {
+    // A failed load and an empty account are not the same fact, and the second
+    // one is an accusation: it tells someone with twenty channels that they
+    // have none, and invites them to make another.
+    server.use(http.get("/api/v1/channels", () => HttpResponse.error()));
+    renderChat("/");
+
+    expect(await screen.findByText(en.chat.conversationsFailed)).toBeInTheDocument();
+    expect(screen.queryByText(en.chat.noConversations)).not.toBeInTheDocument();
+  });
+
+  it("says nothing about the list while it is still loading", async () => {
+    // Held open by the test rather than by wall-clock delay, so a loaded runner
+    // cannot miss the loading state.
+    let releaseChannels: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseChannels = resolve;
+    });
+    server.use(
+      http.get("/api/v1/channels", async () => {
+        await gate;
+        return HttpResponse.json({ channels: [] });
+      }),
+    );
+
+    try {
+      renderChat("/");
+
+      expect(await screen.findByText(en.common.loading)).toBeInTheDocument();
+      expect(screen.queryByText(en.chat.noConversations)).not.toBeInTheDocument();
+      expect(screen.queryByText(en.chat.conversationsFailed)).not.toBeInTheDocument();
+    } finally {
+      // Never leave the handler (and therefore the request) hanging if an
+      // assertion above threw.
+      releaseChannels?.();
+    }
+  });
+});
+
 describe("opening a channel", () => {
   it("loads history and stores the read position at the newest message", async () => {
     await openDeploys();
@@ -458,5 +505,15 @@ describe("the Persian mirror", () => {
     expect(within(nav).getByText(fa.chat.sidebar.channels)).toBeInTheDocument();
     expect(within(nav).getByText(fa.chat.sidebar.directMessages)).toBeInTheDocument();
     expect(screen.getByText(fa.chat.composer.hintSend)).toBeInTheDocument();
+  });
+
+  it("says a failed conversation load in Persian", async () => {
+    await i18n.changeLanguage("fa");
+    server.use(http.get("/api/v1/channels", () => HttpResponse.error()));
+    renderChat("/");
+
+    expect(await screen.findByText(fa.chat.conversationsFailed)).toBeInTheDocument();
+    expect(screen.queryByText(fa.chat.noConversations)).not.toBeInTheDocument();
+    expect(document.documentElement).toHaveAttribute("dir", "rtl");
   });
 });
