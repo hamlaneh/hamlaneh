@@ -115,6 +115,20 @@ func requestedFile(r *http.Request) string {
 // impossible rather than merely unlinked. Cache-Control is set only once the
 // file is known to exist: an immutable 404 under /assets/ would outlive by a
 // year the deploy that caused it.
+//
+// name comes from the request, so gosec reports G703 (path traversal) here.
+// It cannot escape, and the reason is worth stating rather than assuming:
+// a.files is the compile-time embedded build, and embed.FS resolves names
+// through fs.ValidPath, which refuses any "..", any leading slash and any "."
+// element. There is no path from a request into the host filesystem because
+// the filesystem being read has no host paths in it. The worst a crafted name
+// could reach is another file of the same bundle, all of which are already
+// served at public URLs.
+//
+// That guarantee is a property of the FS, not of this function: pointing
+// a.files at os.DirFS, or at anything else backed by real directories, makes
+// G703 a live finding again and this suppression wrong.
+// TestWebappRefusesPathTraversal holds the behaviour to that claim.
 func (a *webapp) serveFile(w http.ResponseWriter, r *http.Request, name, cacheControl string) {
 	info, err := fs.Stat(a.files, name)
 	if err != nil || !info.Mode().IsRegular() {
@@ -123,7 +137,7 @@ func (a *webapp) serveFile(w http.ResponseWriter, r *http.Request, name, cacheCo
 	}
 	w.Header().Set("Content-Type", contentTypeFor(name))
 	w.Header().Set("Cache-Control", cacheControl)
-	http.ServeFileFS(w, r, a.files, name)
+	http.ServeFileFS(w, r, a.files, name) // #nosec G703 -- a.files is the embedded build; embed.FS has no host paths to traverse into (see above)
 }
 
 // contentTypeFor resolves a file's Content-Type from the allowlist above.

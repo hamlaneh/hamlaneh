@@ -359,3 +359,50 @@ func TestHealthProbesUnaffectedByWebapp(t *testing.T) {
 		})
 	}
 }
+
+// TestWebappRefusesPathTraversal pins the property gosec's G703 taint
+// analysis flags on serveFile: the file name reaching the filesystem comes
+// from the request. It cannot escape, and this test is what says so rather
+// than the comment above the call.
+//
+// The fixture build carries a file outside every served route, so a request
+// that reached it would be reading something the deploy never meant to
+// publish — which is exactly the failure G703 describes, expressed as bytes
+// rather than as an argument about layers.
+func TestWebappRefusesPathTraversal(t *testing.T) {
+	t.Parallel()
+
+	const secret = "this file is not published"
+	build := fixtureBuild()
+	build["secrets/deploy-notes.txt"] = &fstest.MapFile{Data: []byte(secret)}
+
+	// Literal, percent-encoded, doubled and mixed-route forms: ServeMux
+	// cleans some of these before a handler sees them, fs.FS rejects the
+	// rest, and the assertion below does not care which layer refused.
+	hostile := []string{
+		"/assets/../secrets/deploy-notes.txt",
+		"/assets/..%2fsecrets%2fdeploy-notes.txt",
+		"/assets/%2e%2e/secrets/deploy-notes.txt",
+		"/assets/....//secrets/deploy-notes.txt",
+		"/brand/../secrets/deploy-notes.txt",
+		"/brand/../../secrets/deploy-notes.txt",
+		"/secrets/deploy-notes.txt",
+	}
+
+	for _, target := range hostile {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			httpserver.HandlerWithWebBuild(nil, build).ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusOK {
+				t.Errorf("status 200 for a path outside the served routes")
+			}
+			if strings.Contains(rec.Body.String(), secret) {
+				t.Errorf("the unpublished file's contents were served (status %d)", rec.Code)
+			}
+		})
+	}
+}
