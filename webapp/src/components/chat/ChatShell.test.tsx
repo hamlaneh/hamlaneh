@@ -64,7 +64,6 @@ function renderChat(path = "/", realtime: { retryDelayMs: () => number } = FAST_
       <ChatApp
         currentUser={FIXTURE_ADMIN}
         onLogout={() => undefined}
-        onChangePassword={() => undefined}
         realtime={realtime}
       />
     </MemoryRouter>,

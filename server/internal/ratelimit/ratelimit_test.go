@@ -146,6 +146,94 @@ func TestLimiterLimitedAndRecord(t *testing.T) {
 	})
 }
 
+// TestLimiterRetryAfter pins that RetryAfter is the honest remainder of the
+// lockout — exactly the time Limited keeps answering true — so a 429's
+// Retry-After header can promise something real.
+func TestLimiterRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("zero for unseen and under-limit keys", func(t *testing.T) {
+		t.Parallel()
+		l := New(2, time.Minute, WithNow(newFakeClock().Now))
+
+		if got := l.RetryAfter("unseen"); got != 0 {
+			t.Errorf("RetryAfter(unseen) = %v, want 0", got)
+		}
+		l.Record("k")
+		if got := l.RetryAfter("k"); got != 0 {
+			t.Errorf("RetryAfter under the limit = %v, want 0", got)
+		}
+	})
+
+	t.Run("the remainder counts down as time passes", func(t *testing.T) {
+		t.Parallel()
+		clock := newFakeClock()
+		l := New(2, time.Minute, WithNow(clock.Now))
+
+		l.Record("k")
+		clock.Advance(10 * time.Second)
+		l.Record("k")
+
+		// Limited clears when the FIRST event (10s old) leaves the window.
+		if got := l.RetryAfter("k"); got != 50*time.Second {
+			t.Errorf("RetryAfter = %v, want 50s", got)
+		}
+		clock.Advance(20 * time.Second)
+		if got := l.RetryAfter("k"); got != 30*time.Second {
+			t.Errorf("RetryAfter after 20s = %v, want 30s", got)
+		}
+
+		// The prediction comes true: still limited one instant before it,
+		// free once the window has slid past the governing event.
+		clock.Advance(30 * time.Second)
+		if !l.Limited("k") {
+			t.Error("not limited although RetryAfter promised 30s more")
+		}
+		clock.Advance(time.Second)
+		if l.Limited("k") {
+			t.Error("still limited after the promised remainder elapsed")
+		}
+		if got := l.RetryAfter("k"); got != 0 {
+			t.Errorf("RetryAfter after expiry = %v, want 0", got)
+		}
+	})
+
+	t.Run("past the limit the governing event moves up", func(t *testing.T) {
+		t.Parallel()
+		clock := newFakeClock()
+		l := New(2, time.Minute, WithNow(clock.Now))
+
+		// Three events: the key stays limited until the count falls BELOW
+		// the limit, i.e. until the second event (40s old) ages out too.
+		l.Record("k")
+		clock.Advance(20 * time.Second)
+		l.Record("k")
+		clock.Advance(20 * time.Second)
+		l.Record("k")
+		if got := l.RetryAfter("k"); got != 40*time.Second {
+			t.Errorf("RetryAfter with 3 of 2 events = %v, want 40s", got)
+		}
+	})
+
+	t.Run("a fully-expired key is pruned and free", func(t *testing.T) {
+		t.Parallel()
+		clock := newFakeClock()
+		l := New(1, time.Minute, WithNow(clock.Now))
+
+		l.Record("k")
+		clock.Advance(61 * time.Second)
+		if got := l.RetryAfter("k"); got != 0 {
+			t.Errorf("RetryAfter after full expiry = %v, want 0", got)
+		}
+		l.mu.Lock()
+		_, exists := l.events["k"]
+		l.mu.Unlock()
+		if exists {
+			t.Error("fully-expired key not removed by RetryAfter")
+		}
+	})
+}
+
 // TestLimiterSweep pins the memory bound: keys whose events have all expired
 // are removed once a full window has passed, and checks on unseen keys
 // create no state at all.

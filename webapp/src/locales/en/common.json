@@ -25,6 +25,7 @@
     "minLength": "At least {{minimum, number}} characters",
     "requirementMet": "Met",
     "requirementUnmet": "Not met",
+    "otpCell": "Digit {{index}} of {{total}}",
     "strength": {
       "label": "Strength",
       "weak": "Weak",
@@ -45,8 +46,57 @@
       "invalidCredentials": "Incorrect username or password.",
       "rateLimited": "Too many attempts. Try again in a few minutes.",
       "networkError": "We could not reach the server. Try again.",
-      "unexpected": "Something went wrong. Try again.",
-      "twoStepRequired": "This account uses two-step verification, which is not available yet."
+      "unexpected": "Something went wrong. Try again."
+    }
+  },
+  "totp": {
+    "title": "Two-step verification",
+    "helper": "Enter the code from your authenticator app",
+    "codeLabel": "One-time code",
+    "submit": "Verify",
+    "submitting": "Verifying…",
+    "back": "Back",
+    "error": {
+      "incomplete": "Enter all six digits.",
+      "invalidCode": "That code is not valid. Check the app and try again.",
+      "challengeLost": "That verification step expired. Sign in again.",
+      "rateLimited": "Too many attempts. Try again in a few minutes.",
+      "networkError": "We could not reach the server. Try again.",
+      "unexpected": "Something went wrong. Try again."
+    }
+  },
+  "resetRequest": {
+    "title": "Reset your password",
+    "helper": "Enter the email address associated with your account.",
+    "emailLabel": "Email address",
+    "submit": "Send reset link",
+    "submitting": "Sending…",
+    "backToSignIn": "Back to sign in",
+    "confirmation": "If that address exists, a reset link is on its way.",
+    "confirmationHelper": "The link is valid for {{minutes, number}} minutes. Check your spam folder if it does not arrive.",
+    "error": {
+      "invalidEmail": "Enter a valid email address.",
+      "rateLimited": "Too many requests. Try again in a few minutes.",
+      "networkError": "We could not reach the server. Try again.",
+      "unexpected": "Something went wrong. Try again."
+    }
+  },
+  "resetPassword": {
+    "title": "Create a new password",
+    "helper": "Choose a password you have not used on this instance before.",
+    "newPasswordLabel": "New password",
+    "confirmPasswordLabel": "Confirm new password",
+    "submit": "Reset password",
+    "submitting": "Resetting…",
+    "requestNewLink": "Request a new link",
+    "done": "Your password was reset. Sign in with the new one.",
+    "error": {
+      "tooShort": "The new password must be at least {{minimum, number}} characters.",
+      "mismatch": "Both passwords must match.",
+      "invalidToken": "This reset link is no longer valid. Request a new one.",
+      "rateLimited": "Too many attempts. Try again in a few minutes.",
+      "networkError": "We could not reach the server. Try again.",
+      "unexpected": "The password could not be reset. Try again."
     }
   },
   "changePassword": {
@@ -71,8 +121,165 @@
   "account": {
     "title": "Account",
     "signedInAs": "Signed in as {{name}}",
-    "changePasswordLink": "Change password",
     "logout": "Log out"
+  },
+  "settings": {
+    "title": "Settings",
+    "close": "Close settings",
+    "cancel": "Cancel",
+    "saved": "Saved",
+    "working": "Working…",
+    "stepOf": "Step {{step, number}} of {{total, number}}",
+    "nav": {
+      "language": "Language",
+      "security": "Security",
+      "appearance": "Appearance"
+    },
+    "leave": {
+      "title": "Leave without saving?",
+      "body": "Your password change has been started but not saved.",
+      "save": "Save and close",
+      "discard": "Discard"
+    },
+    "security": {
+      "lede": "Your password, two-step verification, and the devices signed in to your account.",
+      "changePassword": "Change password",
+      "confirmLabel": "Confirm",
+      "requirementsTitle": "Requirements on this instance",
+      "otherSessionsNote": "Changing your password does not sign out your other sessions. Sign them out below if you need to.",
+      "sessionsCount_one": "{{count}} device signed in.",
+      "sessionsCount_other": "{{count}} devices signed in.",
+      "thisDevice": "This one is a {{device}}.",
+      "manageSessions": "Manage"
+    },
+    "totp": {
+      "cardTitle": "Two-step verification",
+      "on": "On",
+      "off": "Off",
+      "explainer": "An authenticator app generates a six-digit code that Hamlaneh asks for after your password. Codes are produced on your device, so they work without a network.",
+      "setUp": "Set up",
+      "turnedOn": "Turned on",
+      "codesLeft": "Recovery codes left",
+      "codesLeftValue": "{{remaining, number}} of {{total, number}}",
+      "newCodes": "New recovery codes",
+      "disable": "Disable",
+      "confirmPasswordLabel": "Confirm your password",
+      "disablePrompt": {
+        "title": "Turn off two-step verification?",
+        "body": "Your account goes back to password-only. Your recovery codes stop working.",
+        "confirm": "Turn off"
+      },
+      "regeneratePrompt": {
+        "title": "Generate new recovery codes?",
+        "body": "Every code in your current set stops working the moment the new ones appear.",
+        "confirm": "Generate"
+      },
+      "scan": {
+        "title": "Scan this with your authenticator app",
+        "lede": "Any TOTP app works — Aegis, Ente Auth, 1Password, Bitwarden. Nothing is sent to us during setup.",
+        "qrLabel": "Setup QR code",
+        "qrNote": "The code is rendered from the key below it. It is never a stored image.",
+        "step1": "Open your authenticator app and add a new account.",
+        "step2": "Scan the code, or enter the key by hand if the camera is not an option.",
+        "step3": "Enter the six-digit code it shows on the next step.",
+        "manualKeyLabel": "Or enter this key manually",
+        "copyKey": "Copy",
+        "copied": "Key copied.",
+        "accountLine": "Account name {{account}} · time-based, 30-second period, 6 digits.",
+        "continue": "Continue"
+      },
+      "verify": {
+        "title": "Enter the code it shows",
+        "lede": "Six digits, refreshing every 30 seconds.",
+        "codeLabel": "One-time code",
+        "submit": "Verify and continue",
+        "submitting": "Verifying…"
+      },
+      "codes": {
+        "title": "Save your recovery codes",
+        "lede": "Each code signs you in once if you lose the authenticator. Treat them like your password.",
+        "warning": "Store these in a password manager or somewhere physically safe — not in this chat. This is the only time they are shown. Without them and without your authenticator, only an administrator can restore access.",
+        "listLabel": "Recovery codes",
+        "download": "Download as text",
+        "copy": "Copy all",
+        "print": "Print",
+        "copied": "Recovery codes copied.",
+        "copyFailed": "Could not copy. Select the codes and copy them by hand.",
+        "regenerateNote": "You can generate a fresh set later from Security. Doing so invalidates every code above.",
+        "acknowledge": "I have saved these codes somewhere safe",
+        "activate": "Turn on two-step verification",
+        "activating": "Turning on…",
+        "done": "Done"
+      },
+      "error": {
+        "incomplete": "Enter all six digits.",
+        "invalidCode": "That code did not match. Check your app's clock is correct.",
+        "invalidPassword": "That password is incorrect.",
+        "alreadyEnabled": "Two-step verification is already on for this account.",
+        "notEnabled": "Two-step verification is not on for this account.",
+        "setupExpired": "That setup expired. Start again from the first step.",
+        "rateLimited": "Too many attempts. Try again in a few minutes.",
+        "networkError": "We could not reach the server. Try again.",
+        "unexpected": "Something went wrong. Try again."
+      }
+    },
+    "sessions": {
+      "title": "Active sessions",
+      "lede": "Every device currently signed in to your account. Signing one out ends it immediately.",
+      "signOutOthers": "Sign out everywhere else",
+      "signOut": "Sign out",
+      "signingOut": "Signing out…",
+      "thisDevice": "This device",
+      "current": "Current",
+      "unknownLocation": "Unknown location",
+      "runtimeOn": "{{app}} on {{platform}}",
+      "activeNow": "Active now",
+      "activeWhen": "Active {{when}}",
+      "lastActiveWhen": "Last active {{when}}",
+      "lastActiveUnknown": "Last active — unknown",
+      "locationNote": "Locations are estimated from the IP address and are often approximate. If a session looks wrong, sign it out and change your password.",
+      "device": {
+        "linuxDesktop": "Linux desktop",
+        "windowsDesktop": "Windows desktop",
+        "macDesktop": "Mac desktop",
+        "androidPhone": "Android phone",
+        "iphone": "iPhone",
+        "ipad": "iPad",
+        "desktopApp": "Hamlaneh desktop app",
+        "unknown": "Unknown device"
+      },
+      "confirmOthers": {
+        "title_one": "Sign out {{count}} other session?",
+        "title_other": "Sign out {{count}} other sessions?",
+        "body": "This device stays signed in. The others must sign in again, including the desktop app.",
+        "confirm": "Sign them out"
+      },
+      "error": {
+        "loadFailed": "We could not load your sessions. Try again.",
+        "revokeFailed": "That session could not be signed out. Try again."
+      }
+    },
+    "language": {
+      "lede": "Applies immediately and flips the whole interface direction. Nothing you have typed is lost.",
+      "note": "No flags — a language is not a country. The organization's default sets what new accounts get; this overrides it for you only.",
+      "name": {
+        "en": "English",
+        "fa": "فارسی"
+      },
+      "detail": {
+        "en": "Left to right · Inter",
+        "fa": "Right to left · Vazirmatn"
+      }
+    },
+    "appearance": {
+      "lede": "Applies immediately. System follows your operating system, including when it changes at dusk.",
+      "note": "Each option is a real preview built from the theme's own tokens, not a coloured square.",
+      "option": {
+        "light": "Light",
+        "dark": "Dark",
+        "system": "System"
+      }
+    }
   },
   "chat": {
     "common": {

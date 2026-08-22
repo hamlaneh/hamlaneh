@@ -29,10 +29,15 @@ const (
 // rate-limit check → validate → authenticate → create a session family →
 // set the three session cookies → 200 with the user.
 //
-// The rate limiters count only failed authentications: both keys are
+// An account with two-step verification on stops one step short of that: the
+// password earns a challenge cookie and 202, and only CompleteTotpLogin
+// mints its session (see challengeIfTwoStep in totp_handlers.go).
+//
+// The rate limiters count failed authentications and two-step challenge
+// mints (see consumeLoginBudget for why a mint is an attempt): both keys are
 // checked (without consuming anything) before any database or argon2 work,
-// and recorded only when authentication fails, so successful logins from a
-// shared IP never lock legitimate users out.
+// and a login that ends in a session records nothing, so completed sign-ins
+// from a shared IP never lock legitimate users out.
 func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
 		internalError(w, r, errNoStorage)
@@ -41,7 +46,7 @@ func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 
 	addr, ipKey := clientIP(r)
 	if s.loginIPLimiter.Limited(ipKey) {
-		writeError(w, r, http.StatusTooManyRequests, codeRateLimited, "too many attempts, try again later")
+		writeRateLimited(w, r, s.loginIPLimiter.RetryAfter(ipKey))
 		return
 	}
 
@@ -60,7 +65,7 @@ func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 
 	identifierKey := strings.ToLower(req.Identifier)
 	if s.loginIdentifierLimiter.Limited(identifierKey) {
-		writeError(w, r, http.StatusTooManyRequests, codeRateLimited, "too many attempts, try again later")
+		writeRateLimited(w, r, s.loginIdentifierLimiter.RetryAfter(identifierKey))
 		return
 	}
 
@@ -70,7 +75,7 @@ func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 		// and wrong-password attempts are indistinguishable by timing, then
 		// answer through the same single call site.
 		password.CompareDummy(req.Password)
-		s.recordLoginFailure(ipKey, identifierKey)
+		s.consumeLoginBudget(ipKey, identifierKey)
 		writeInvalidCredentials(w, r)
 		return
 	}
@@ -85,18 +90,28 @@ func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 		// the standard response so nothing about the account leaks, and
 		// scream in the logs.
 		slog.Error("stored password hash is malformed", "user_id", user.ID, "error", err)
-		s.recordLoginFailure(ipKey, identifierKey)
+		s.consumeLoginBudget(ipKey, identifierKey)
 		writeInvalidCredentials(w, r)
 		return
 	}
 	if !ok {
-		s.recordLoginFailure(ipKey, identifierKey)
+		s.consumeLoginBudget(ipKey, identifierKey)
 		writeInvalidCredentials(w, r)
 		return
 	}
 
 	if needsRehash {
 		s.rehashPassword(r.Context(), user.ID, req.Password)
+	}
+
+	// The password is only the first half for an account with two-step
+	// verification on: challengeIfTwoStep answers 202 with the challenge
+	// cookie and nothing else, and no session is minted here. It fails closed
+	// — anything it cannot determine is answered by it, not fallen through.
+	// It receives both limiter keys because minting a challenge spends login
+	// budget exactly as a failed password would.
+	if s.challengeIfTwoStep(w, r, user.ID, ipKey, identifierKey) {
+		return
 	}
 
 	tokens, cookies := mintSessionTokens()
@@ -115,10 +130,21 @@ func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 	writeJSONValue(w, r, http.StatusOK, apiUser(user))
 }
 
-// recordLoginFailure counts one failed authentication against both login
-// rate-limit keys. It runs only on authentication failures — successful
-// logins consume no budget, and internal errors are not attempts.
-func (s *apiServer) recordLoginFailure(ipKey, identifierKey string) {
+// consumeLoginBudget counts one login attempt against both login rate-limit
+// keys. Exactly two kinds of attempt spend it, and both leave the attacker
+// wanting another go:
+//
+//   - a failed authentication (unknown identifier or wrong password), and
+//   - a two-step challenge mint — the password was CORRECT, so this is not
+//     recorded as a failure but as spending the login-attempt budget: every
+//     mint opens a fresh five-guess code window, and if minting were free an
+//     attacker holding the password could retry the second factor without
+//     limit (mint, burn five guesses, mint again). Metering the mint is what
+//     kills that loop at its source.
+//
+// A login that ends in a session consumes nothing (a completed two-step
+// sign-in included), and internal errors are not attempts.
+func (s *apiServer) consumeLoginBudget(ipKey, identifierKey string) {
 	s.loginIPLimiter.Record(ipKey)
 	s.loginIdentifierLimiter.Record(identifierKey)
 }

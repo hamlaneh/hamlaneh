@@ -9,12 +9,12 @@ import { NoticeBanner } from "../components/auth/NoticeBanner";
 import { PasswordField } from "../components/auth/PasswordField";
 import { PrimaryButton } from "../components/auth/PrimaryButton";
 import { TextField } from "../components/auth/TextField";
+import { useInstance } from "../instance/instanceInfo";
 
 type User = components["schemas"]["User"];
 
 type LoginError =
   | "none"
-  | "twoStepRequired"
   | "invalidCredentials"
   | "rateLimited"
   | "networkError"
@@ -22,6 +22,20 @@ type LoginError =
 
 interface LoginScreenProps {
   onAuthenticated: (user: User) => void;
+  /** Password accepted, second factor still owed: continue at /auth/login/totp. */
+  onTwoStepRequired: () => void;
+  onForgotPassword: () => void;
+  /**
+   * A standing message from wherever the user arrived — a completed reset, or
+   * a two-step challenge that ran out. Announced politely: it did not fail
+   * here, so it must not take focus from the form.
+   */
+  notice?: LoginNotice | undefined;
+}
+
+export interface LoginNotice {
+  tone: "success" | "warning";
+  message: string;
 }
 
 /**
@@ -36,8 +50,14 @@ interface LoginScreenProps {
  * on. Disabling everything with no timer bricks the screen until a reload, so
  * only the button is disabled and editing a field lifts the notice.
  */
-export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
+export function LoginScreen({
+  onAuthenticated,
+  onTwoStepRequired,
+  onForgotPassword,
+  notice,
+}: LoginScreenProps) {
   const { t } = useTranslation();
+  const { info, loaded } = useInstance();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<LoginError>("none");
@@ -92,9 +112,10 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
       if (data !== undefined) {
         if (response.status === 202) {
           // Password accepted, but the account has two-step verification on:
-          // there is no session yet. The code screen lands with slice 1.1b —
-          // until then, say so rather than pretending the sign-in worked.
-          fail("twoStepRequired");
+          // there is NO session yet. A distinct status precisely so this can
+          // never be mistaken for a signed-in state — hand over to the code
+          // screen, which completes the sign-in against the challenge cookie.
+          onTwoStepRequired();
           return;
         }
         onAuthenticated(data as User);
@@ -129,7 +150,11 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
           void submit();
         }}
       >
-        {error === "none" ? null : (
+        {error === "none" ? (
+          notice === undefined ? null : (
+            <NoticeBanner tone={notice.tone} message={notice.message} />
+          )
+        ) : (
           <NoticeBanner
             ref={alertRef}
             tone={rateLimited ? "warning" : "danger"}
@@ -158,12 +183,17 @@ export function LoginScreen({ onAuthenticated }: LoginScreenProps) {
               clearRateLimitNotice();
             }}
             labelAction={
-              // Password reset has no endpoint until slice 1.1b; the design's
-              // disabled link state stands in until it does. aria-disabled
-              // keeps assistive tech from reading it as ordinary prose.
-              <span className="hm-link" role="link" aria-disabled="true" data-disabled="true">
-                {t("login.forgotPassword")}
-              </span>
+              // Instance policy decides whether this link exists at all: a
+              // zero-config install has no mail transport, and the contract
+              // adds password_reset_available precisely so the screen can omit
+              // the link instead of offering one that goes nowhere. Absent
+              // while the instance document is still loading, so it never
+              // appears and then vanishes.
+              loaded && info.password_reset_available ? (
+                <button type="button" className="hm-link" onClick={onForgotPassword}>
+                  {t("login.forgotPassword")}
+                </button>
+              ) : null
             }
           />
         </div>

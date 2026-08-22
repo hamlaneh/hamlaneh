@@ -21,6 +21,7 @@ linters:
     - copyloopvar
     - bodyclose
     - noctx
+    - exhaustive
     # security
     # style / maintainability
     - revive
@@ -30,6 +31,14 @@ linters:
   settings:
     errcheck:
       check-type-assertions: true
+    exhaustive:
+      # A switch over an outcome enum must name every member, even when it
+      # also has a default. The default is the runtime fail-safe (a missing
+      # case would otherwise write no response at all, which net/http turns
+      # into an empty 200); this linter is what stops the case going missing
+      # in the first place. Letting a default satisfy the check would trade
+      # the second guarantee away for the first.
+      default-signifies-exhaustive: false
     govet:
       enable-all: true
       disable:

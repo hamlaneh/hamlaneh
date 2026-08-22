@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
+	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
 )
 
 //go:embed index.html
@@ -30,14 +31,25 @@ const (
 	idleTimeout       = 120 * time.Second
 )
 
+// Option configures a server beyond its storage. Every option is optional by
+// construction: the zero-config install passes none.
+type Option func(*apiServer)
+
+// WithPasswordReset installs the password-reset policy. Omitting it leaves
+// reset unconfigured — the honest state of an install with no mail transport
+// — and the reset endpoints answer accordingly (see apiServer.reset).
+func WithPasswordReset(svc *passwordreset.Service) Option {
+	return func(s *apiServer) { s.reset = svc }
+}
+
 // New returns an *http.Server bound to addr with the Hamlaneh router and
 // hardened timeouts configured. store backs everything stateful and may be
 // nil in unit tests (readyz then reports degraded and authenticated routes
 // answer 500). The caller owns the server's lifecycle.
-func New(addr string, store Store) *http.Server {
+func New(addr string, store Store, opts ...Option) *http.Server {
 	return &http.Server{
 		Addr:              addr,
-		Handler:           Handler(store),
+		Handler:           Handler(store, opts...),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -60,12 +72,12 @@ func New(addr string, store Store) *http.Server {
 // behind securityMiddleware (CSRF, sessions, must-change gate, admin), and
 // malformed request parameters answer with the contract's JSON Error shape
 // instead of oapi-codegen's plain-text default. Anything else is a 404.
-func Handler(store Store) http.Handler {
+func Handler(store Store, opts ...Option) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handleIndex)
 	mux.Handle("GET /static/", noDirListing(http.FileServerFS(staticFS)))
 
-	s := newAPIServer(store)
+	s := newAPIServer(store, opts...)
 	return api.HandlerWithOptions(s, api.StdHTTPServerOptions{
 		BaseRouter:       mux,
 		Middlewares:      []api.MiddlewareFunc{s.securityMiddleware},

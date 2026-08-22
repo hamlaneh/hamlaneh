@@ -324,6 +324,22 @@
   border-block-start: 1px solid var(--color-border-subtle);
 }
 
+/* The account menu's trigger: avatar plus name, with the gear beside it
+ * (chat-addendum-account-menu-light: "anchored above the identity trigger").
+ * A button with no button chrome — the footer row is what is drawn. */
+.hm-sidebar__identity {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px; /* off-scale (artboard) */
+  padding: 0;
+  background: transparent;
+  border: 0;
+  text-align: start;
+  cursor: pointer;
+}
+
 .hm-sidebar__me {
   flex: 1;
   min-inline-size: 0;

@@ -6,6 +6,51 @@
 // PGPORT, PGDATABASE, PGUSER, PGPASSWORD, PGSSLMODE), which pgx honors
 // natively — no DSN string is ever assembled, so passwords need no URL
 // escaping.
+//
+// # Lock order
+//
+// Much of what this package does races by nature — an attempt counter, a
+// single-use consumption, an activation switch — and each of those runs in a
+// transaction that locks the rows it is about to change with
+// SELECT ... FOR UPDATE. Two transactions taking the same locks in opposite
+// orders deadlock, so the whole package, across files, obeys one order:
+//
+//	users → password_reset_tokens → totp_challenges → user_totp →
+//	user_recovery_codes → sessions
+//
+// with one rule on top of it: an account-scoped transaction takes the
+// account's own row FIRST, via lockAccount:
+//
+//	SELECT ... FROM users WHERE id = $1 FOR UPDATE
+//
+// That single lock is what serializes concurrent operations on one account,
+// and it is the reason CreatePasswordResetToken can promise one live link
+// per account and ConsumePasswordReset can promise that no session survives
+// a completed reset. Both promises are about a writer this transaction
+// cannot see: under READ COMMITTED a sweep never observes another
+// transaction's uncommitted INSERT, so the writer has to be excluded rather
+// than out-read. Because every account-scoped transaction takes that lock
+// before it takes any other, two of them can never hold conflicting locks on
+// one account at the same time, and no cycle between them can form.
+//
+// Two corollaries that are easy to get wrong:
+//
+//   - A transaction addressed by a token hash (ConsumePasswordReset,
+//     CompleteTotpChallenge) does not know the account yet. It resolves the
+//     owner with an UNLOCKED read first — user_id never changes on those
+//     rows — then takes the account lock, then re-reads the row FOR UPDATE.
+//     The unlocked read decides nothing; the re-read under the lock is what
+//     decides liveness. Locking the token row first and the account second
+//     is the shape that deadlocks, because CreatePasswordResetToken holds
+//     the account and wants the token rows.
+//   - A statement that locks rows in exactly one table cannot deadlock and
+//     needs no account lock (CreateTotpChallenge, ActivateTotp,
+//     RotateSession, RevokeFamily, RevokeUserFamily, RevokeOtherFamilies).
+//     Adding one there would be lock traffic with nothing to serialize.
+//
+// Operations that never touch users at all — DisableTotp, StartTotpSetup,
+// VerifyTotpSetup, ReplaceRecoveryCodes — still obey the table order among
+// themselves (totp_challenges → user_totp → user_recovery_codes).
 package storage
 
 import (

@@ -13,6 +13,11 @@
 // first admin account; once any user exists they are ignored.
 // The healthcheck subcommand needs neither a database nor those variables.
 //
+// Password reset needs an SMTP transport (HAMLANEH_SMTP_HOST and friends)
+// and HAMLANEH_PUBLIC_URL to build links from. Setting none of them is a
+// supported install: reset is then switched off and says so. Setting them
+// half-way is not, and stops startup.
+//
 // The server speaks plain HTTP; TLS termination is the reverse proxy's job.
 // It shuts down gracefully on SIGINT/SIGTERM.
 package main
@@ -31,6 +36,7 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/bootstrap"
 	"github.com/hamlaneh/hamlaneh/server/internal/healthcheck"
 	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
+	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
 
@@ -75,11 +81,22 @@ func run(args []string) error {
 		defer store.Close()
 
 		adminCfg, present := bootstrap.AdminFromEnv()
-		if err := bootstrap.EnsureAdmin(ctx, store, adminCfg, present); err != nil {
+		if err = bootstrap.EnsureAdmin(ctx, store, adminCfg, present); err != nil {
 			return err
 		}
 
-		return serve(ctx, httpserver.New(listenAddr, store))
+		// A half-configured mail transport, or one with no public URL to build
+		// links from, stops startup: reset that silently mints tokens nobody
+		// can open is worse than reset that is honestly switched off.
+		reset, err := passwordreset.FromEnv(store)
+		if err != nil {
+			return fmt.Errorf("configure password reset: %w", err)
+		}
+		// Drains the dispatch queue; the server has stopped accepting
+		// requests by the time serve returns.
+		defer reset.Close()
+
+		return serve(ctx, httpserver.New(listenAddr, store, httpserver.WithPasswordReset(reset)))
 	case args[0] == "healthcheck":
 		if len(args) > 1 {
 			return fmt.Errorf("healthcheck takes no arguments\n%s", usage)

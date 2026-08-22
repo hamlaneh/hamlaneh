@@ -101,10 +101,13 @@ function queryChatShell() {
   return screen.queryByRole("navigation", { name: en.chat.sidebar.label });
 }
 
-/** Account actions sit behind the Settings control in the user footer. */
+/**
+ * The account menu hangs off the identity in the user footer; the gear beside
+ * it opens Settings directly (chat-addendum-account-menu-light).
+ */
 async function openAccountMenu(user: UserEvent) {
-  await user.click(screen.getByRole("button", { name: en.chat.footer.account }));
-  await screen.findByRole("dialog", { name: en.chat.footer.account });
+  await user.click(screen.getByRole("button", { name: en.account.title }));
+  await screen.findByRole("dialog", { name: en.account.title });
 }
 
 /** Renders App and waits for the session bootstrap to settle on the login screen. */
@@ -524,7 +527,12 @@ describe("forced password change", () => {
 });
 
 describe("voluntary password change", () => {
-  async function openFromHome(user: UserEvent) {
+  /**
+   * A voluntary change is no longer a screen of its own: it is the
+   * Change-password card in Settings → Security (`settings-security`), driving
+   * the same `useChangePassword` as the forced screen.
+   */
+  async function openSettings(user: UserEvent) {
     await renderAppAtLogin();
     await submitLogin(
       user,
@@ -532,43 +540,56 @@ describe("voluntary password change", () => {
       FIXTURE_CREDENTIALS.password,
     );
     await findChatShell();
-    await openAccountMenu(user);
-    await user.click(
-      screen.getByRole("button", { name: en.account.changePasswordLink }),
-    );
-    await screen.findByRole("heading", { name: en.changePassword.title });
+    await user.click(screen.getByRole("button", { name: en.chat.footer.account }));
+    await screen.findByRole("dialog", { name: en.settings.title });
   }
 
-  it("opens from Home without the forced notice and can be cancelled", async () => {
+  async function submitPanelChange(
+    user: UserEvent,
+    fields: { current: string; next: string; confirm: string },
+  ) {
+    await user.type(
+      screen.getByLabelText(en.changePassword.currentPasswordLabel),
+      fields.current,
+    );
+    await user.type(screen.getByLabelText(en.changePassword.newPasswordLabel), fields.next);
+    await user.type(screen.getByLabelText(en.settings.security.confirmLabel), fields.confirm);
+    await user.click(
+      screen.getByRole("button", { name: en.settings.security.changePassword }),
+    );
+  }
+
+  it("opens over the chat without the forced notice, and closes back to it", async () => {
     const user = userEvent.setup({ delay: null });
-    await openFromHome(user);
+    await openSettings(user);
 
     expect(
       screen.queryByText(en.changePassword.forcedNotice),
     ).not.toBeInTheDocument();
+    // The conversation is still there, behind the panel — settings are a
+    // detour, not a mode you enter.
+    expect(queryChatShell()).toBeInTheDocument();
 
-    await user.click(
-      screen.getByRole("button", { name: en.changePassword.cancel }),
-    );
+    await user.click(screen.getByRole("button", { name: en.settings.close }));
 
     expect(
-      await findChatShell(),
-    ).toBeInTheDocument();
+      screen.queryByRole("dialog", { name: en.settings.title }),
+    ).not.toBeInTheDocument();
+    expect(await findChatShell()).toBeInTheDocument();
   });
 
-  it("returns to Home after a successful voluntary change", async () => {
+  it("shows the saved mark after a successful change, without leaving the panel", async () => {
     const user = userEvent.setup({ delay: null });
-    await openFromHome(user);
+    await openSettings(user);
 
-    await submitChangePassword(user, {
+    await submitPanelChange(user, {
       current: FIXTURE_CREDENTIALS.password,
       next: VALID_NEW_PASSWORD,
       confirm: VALID_NEW_PASSWORD,
     });
 
-    expect(
-      await findChatShell(),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(en.settings.saved)).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: en.settings.title })).toBeInTheDocument();
   });
 });
 
@@ -646,12 +667,14 @@ describe("delivered design behaviour", () => {
     }
   });
 
-  it("marks the not-yet-available reset link as a disabled link, not prose", async () => {
+  it("offers the reset link as a real control once the instance serves reset", async () => {
     await renderAppAtLogin();
 
-    const link = screen.getByText(en.login.forgotPassword);
-    expect(link).toHaveAttribute("role", "link");
-    expect(link).toHaveAttribute("aria-disabled", "true");
+    // Slice 1.1a rendered this in the design's disabled-link state because no
+    // endpoint existed. It does now, and the instance document decides:
+    // available here, absent when it is not (asserted in Settings.test.tsx).
+    const link = await screen.findByRole("button", { name: en.login.forgotPassword });
+    expect(link).toBeEnabled();
   });
 
   it("keeps the identifier, clears the password and moves focus to the alert", async () => {

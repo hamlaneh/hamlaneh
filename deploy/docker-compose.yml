@@ -87,6 +87,19 @@ services:
       HAMLANEH_ADMIN_USERNAME: ${HAMLANEH_ADMIN_USERNAME:-}
       HAMLANEH_ADMIN_PASSWORD: ${HAMLANEH_ADMIN_PASSWORD:-}
       HAMLANEH_ADMIN_LOCALE: ${HAMLANEH_ADMIN_LOCALE:-en}
+      # Absolute public origin, used to build emailed links. Caddy owns it,
+      # so the server is told rather than left to guess.
+      HAMLANEH_PUBLIC_URL: ${HAMLANEH_PUBLIC_URL:-https://${HAMLANEH_DOMAIN:-localhost}}
+      # Password reset by email: an empty SMTP host disables it, which is the
+      # zero-config default. Setting the host makes _FROM required, and a
+      # half-configured transport stops startup (see .env.example).
+      HAMLANEH_SMTP_HOST: ${HAMLANEH_SMTP_HOST:-}
+      HAMLANEH_SMTP_PORT: ${HAMLANEH_SMTP_PORT:-}
+      HAMLANEH_SMTP_FROM: ${HAMLANEH_SMTP_FROM:-}
+      HAMLANEH_SMTP_FROM_NAME: ${HAMLANEH_SMTP_FROM_NAME:-}
+      HAMLANEH_SMTP_ENCRYPTION: ${HAMLANEH_SMTP_ENCRYPTION:-}
+      HAMLANEH_SMTP_USERNAME: ${HAMLANEH_SMTP_USERNAME:-}
+      HAMLANEH_SMTP_PASSWORD: ${HAMLANEH_SMTP_PASSWORD:-}
     # No ports published: only Caddy talks to the server.
     networks:
       - edge

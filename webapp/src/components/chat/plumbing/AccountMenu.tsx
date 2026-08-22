@@ -6,20 +6,24 @@ import { LanguageSwitcher } from "../../LanguageSwitcher";
 /**
  * UNDESIGNED SURFACE — plain semantic HTML, no styling beyond structure.
  *
- * The mockup draws a Settings control in the user footer but no panel behind
- * it; user settings are BRIEFS.md §4 (PENDING). Until that design lands this
- * is where the account actions the app already has — change password, sign
- * out, language — are reachable.
+ * The account menu itself is designed (Hamlaneh Chat.dc.html, the
+ * `chat-addendum-account-menu-*` artboards) and still awaits its reskin. It is
+ * anchored above the identity trigger; the gear beside it opens Settings
+ * directly, which is where password changes, language and appearance now live.
+ *
+ * The drawn menu also lists "Change password". That is not implemented here:
+ * the settings panel owns the password form (`settings-security`), and two
+ * routes to the same form is the duplication this slice was told to avoid.
+ * Flagged for the designer in the slice report.
  */
 
 interface AccountMenuProps {
   user: User;
-  onChangePassword: () => void;
   onLogout: () => void;
   onClose: () => void;
 }
 
-export function AccountMenu({ user, onChangePassword, onLogout, onClose }: AccountMenuProps) {
+export function AccountMenu({ user, onLogout, onClose }: AccountMenuProps) {
   const { t } = useTranslation();
 
   return (
@@ -27,7 +31,7 @@ export function AccountMenu({ user, onChangePassword, onLogout, onClose }: Accou
       className="hm-plumbing hm-plumbing--footer"
       role="dialog"
       aria-modal="false"
-      aria-label={t("chat.footer.account")}
+      aria-label={t("account.title")}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           onClose();
@@ -36,11 +40,6 @@ export function AccountMenu({ user, onChangePassword, onLogout, onClose }: Accou
     >
       <h2>{t("account.title")}</h2>
       <p>{t("account.signedInAs", { name: user.display_name })}</p>
-      <p>
-        <button type="button" onClick={onChangePassword}>
-          {t("account.changePasswordLink")}
-        </button>
-      </p>
       <p>
         <button type="button" onClick={onLogout}>
           {t("account.logout")}

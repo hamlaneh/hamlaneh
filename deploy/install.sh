@@ -7,7 +7,9 @@
 #      — anything else exits with a clear error before touching the system
 #   2. installs Docker via get.docker.com only if it is missing
 #   3. resolves the domain/IP (prompt, --domain flag, or existing .env),
-#      generates a random Postgres password into deploy/.env (chmod 600)
+#      generates a random Postgres password into deploy/.env (chmod 600),
+#      and writes the optional settings .env.example documents with empty
+#      values, so turning email on later is an edit rather than a search
 #   4. builds and starts the stack: docker compose up -d --build
 #
 # Idempotent: a second run keeps the existing deploy/.env untouched and
@@ -207,9 +209,77 @@ write_env() {
     printf 'POSTGRES_PASSWORD=%s\n' "$password"
     printf 'HAMLANEH_ADMIN_USERNAME=admin\n'
     printf 'HAMLANEH_ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD"
+    printf 'HAMLANEH_ADMIN_LOCALE=en\n'
+    print_mail_env
   } > "$ENV_FILE"
   umask "$old_umask"
   chmod 600 "$ENV_FILE"
+}
+
+# The optional settings .env.example documents, written into the generated
+# .env so an operator turning email on edits a key that is already there
+# instead of hunting for its name. .env.example points the reader at this
+# file as the generated one; leaving them out made that a dead end.
+#
+# Every value is EMPTY, and that is what keeps zero-config zero-config:
+# compose reads each as ${VAR:-default}, which treats empty exactly like
+# unset, so the public URL still falls back to https://${HAMLANEH_DOMAIN}
+# and an empty SMTP host still leaves password reset switched off. Filling
+# one of these in is the deliberate act that turns the feature on.
+print_mail_env() {
+  cat <<'EOF'
+
+# Absolute public origin, used to build links that go out by email. Empty
+# defaults to https://${HAMLANEH_DOMAIN}, which is right for almost every
+# install; set it only when the public URL differs (a path prefix, or a
+# domain Caddy does not know about). No query, no fragment.
+#   e.g.  HAMLANEH_PUBLIC_URL=https://chat.example.invalid/hamlaneh
+HAMLANEH_PUBLIC_URL=
+
+# Password reset by email — OFF by default.
+#
+# Leaving HAMLANEH_SMTP_HOST empty disables password reset entirely: the
+# endpoints stay reachable and answer exactly as they do for an address that
+# does not exist, and the sign-in screen omits the "Forgot password?" link
+# rather than offering one that goes nowhere.
+#
+# Setting the host turns reset on and makes HAMLANEH_SMTP_FROM required. A
+# half-configured transport stops the server with a message naming the
+# missing variable, instead of failing at somebody's first forgotten
+# password.
+#   e.g.  HAMLANEH_SMTP_HOST=smtp.example.invalid
+#         HAMLANEH_SMTP_FROM=hamlaneh@chat.example.invalid
+#         HAMLANEH_SMTP_FROM_NAME=Hamlaneh
+HAMLANEH_SMTP_HOST=
+HAMLANEH_SMTP_FROM=
+HAMLANEH_SMTP_FROM_NAME=
+
+# Connection protection: starttls (the default), tls (implicit TLS), or
+# none. Empty means starttls. "none" exists only for a relay reachable
+# across a private container network and must always be chosen deliberately.
+HAMLANEH_SMTP_ENCRYPTION=
+
+# Port. Empty means the conventional port for the encryption mode: 587 for
+# starttls, 465 for tls, 25 for none.
+HAMLANEH_SMTP_PORT=
+
+# Submission credentials: set both or neither.
+HAMLANEH_SMTP_USERNAME=
+HAMLANEH_SMTP_PASSWORD=
+EOF
+}
+
+# Upgrade path for the block above, mirroring ensure_admin_env: an .env from
+# an older install predates these keys. Appending them changes nothing —
+# every value is empty, which is what the server already assumed — it just
+# puts the names where the operator can find them.
+ensure_mail_env() {
+  [ -f "$ENV_FILE" ] || return 0
+  if grep -q '^HAMLANEH_SMTP_HOST=' "$ENV_FILE"; then
+    return 0
+  fi
+  log "adding the optional mail settings to deploy/.env (all empty; password reset stays off)"
+  print_mail_env >> "$ENV_FILE"
 }
 
 # Upgrade path: an .env from an older install may predate the admin bootstrap
@@ -226,6 +296,7 @@ ensure_admin_env() {
   {
     printf 'HAMLANEH_ADMIN_USERNAME=admin\n'
     printf 'HAMLANEH_ADMIN_PASSWORD=%s\n' "$(openssl rand -base64 18)"
+    printf 'HAMLANEH_ADMIN_LOCALE=en\n'
   } >> "$ENV_FILE"
 }
 
@@ -264,6 +335,7 @@ main() {
   resolve_domain
   write_env
   ensure_admin_env
+  ensure_mail_env
   start_stack
   print_success
 }

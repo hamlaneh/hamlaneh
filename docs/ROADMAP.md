@@ -84,17 +84,19 @@ retrofit is how security fails.
 - [x] Login: argon2id (t=3, m=64MiB, p=4), rate-limited per-IP and per-identifier, identical
       unknown-user/wrong-password responses, public registration **off by default** (no signup
       endpoint exists at all) — *slice 1.1a, 2026-08-21*
-- [ ] Password reset: email-delivered, single-use, time-limited tokens; rate-limited; uniform
-      responses (no account enumeration); completing a reset invalidates all sessions.
-      UI is already designed — build the `reset-request`, `reset-request-confirmation` and
+- [x] Password reset **backend**: email-delivered, single-use, time-limited (30m) tokens;
+      rate-limited per address and per client; uniform responses (no account enumeration);
+      completing a reset revokes every session family and sets no cookies — *slice 1.1b*
+- [ ] Password reset **UI**: build the `reset-request`, `reset-request-confirmation` and
       `reset-new-password` artboards plus the `BackLink` component (design/LOGIN_HANDOFF.md)
-- [ ] Mail infrastructure the reset depends on: a `Mailer` interface with a recording fake for
+- [x] Mail infrastructure the reset depends on: a `Mailer` interface with a recording fake for
       tests and an SMTP implementation wired in `cmd/`, dispatching asynchronously so SMTP
       latency never sits on a response; SMTP settings plus a public base URL in `.env.example`
       (the server has no other way to build an absolute reset link — Caddy owns the origin);
-      a null mailer that logs and drops when SMTP is unconfigured
-- [ ] Server-side bilingual email templates need a language-policy amendment: the Persian
-      exception in CLAUDE.md currently covers only `webapp/**/locales/fa/**`
+      a null mailer that logs and drops when SMTP is unconfigured — *slice 1.1b*
+- [x] Server-side bilingual email templates need a language-policy amendment: the Persian
+      exception in CLAUDE.md currently covers only `webapp/**/locales/fa/**` — widened to any
+      localized user-facing template wherever it lives — *slice 1.1b*
 - [ ] **Recovery codes have no sign-in entry point.** `login-totp` is six numeric cells; a
       `XXXX-XXXX` recovery code cannot be typed into it, so codes that exist entirely for
       account recovery are unreachable at the moment they are needed. The endpoint accepts them;
@@ -103,20 +105,39 @@ retrofit is how security fails.
       (family revocation)**, opaque tokens stored as SHA-256; HttpOnly+Secure+SameSite=Strict
       cookies; CSRF double-submit via `X-Hamlaneh-CSRF`; change-password revokes all other
       families; forced password change for admin-created accounts — *slice 1.1a*
-- [ ] Sessions remainder: device list UI + per-device revocation endpoints; new-device login
-      notification (needs email infra); expired-row cleanup sweep; client reacts to an
-      unrecoverable 401 mid-use by returning to sign-in; decide a short server-side grace
-      window for concurrent refresh (two tabs racing trips family revocation) — before 1.2
-- [ ] `Retry-After` on every 429 in the contract, not just login — the sign-in form can then show
-      a real countdown instead of clearing its rate-limited state on the next edit (1.1a finding)
-- [ ] `GET /api/v1/instance` carries `password_min_length` (so the webapp stops hard-coding 12)
+- [x] Session management **endpoints**: one row per live session family (device), current
+      first; sign one device out or all the others; another account's family answers 404 so a
+      guessed id confirms nothing — *slice 1.1b*
+- [ ] Sessions remainder: device list UI; new-device login notification (email infra now
+      exists); expired-row cleanup sweep; client reacts to an unrecoverable 401 mid-use by
+      returning to sign-in; decide a short server-side grace window for concurrent refresh
+      (two tabs racing trips family revocation) — before 1.2
+- [x] `Retry-After` declared in the contract and emitted on the login, two-step and
+      account-security 429s, so the sign-in form can show a real countdown instead of clearing
+      its rate-limited state on the next edit — *slice 1.1b*
+- [ ] `Retry-After` on the two password-reset 429s: `passwordreset.Service` returns
+      `ErrRateLimited` without a duration, so those endpoints still answer without the header
+- [x] `GET /api/v1/instance` **backend** carries `password_min_length`
       and `password_reset_available`, because a zero-config install has no SMTP and a
-      "Forgot password?" link that silently goes nowhere is dishonest
+      "Forgot password?" link that silently goes nowhere is dishonest — *slice 1.1b*
 - [ ] TOTP secrets are stored raw — they cannot be hashed, since verification needs the
       plaintext. Encrypting them at rest needs a key-management decision; revisit in Phase 5
-- [ ] 2FA: TOTP first (attempt-limited), then WebAuthn/passkeys; org policy to enforce 2FA.
-      UI is already designed — build the `login-totp` artboard plus the `OtpInput` component
-      (six 60×60 cells, paste distributes, backspace walks back — design/LOGIN_HANDOFF.md)
+- [ ] **Authenticator label waits for the admin dashboard (decided 2026-08-21).** The otpauth
+      issuer is the constant `Hamlaneh`, so a user sees `Hamlaneh: username` in their
+      authenticator. The design shows the organization name there, but no org-name setting
+      exists until Phase 1.4. Deliberately not inventing a scheme now (a domain-derived label
+      was considered and rejected): changing the issuer later rewrites the entry in **every**
+      user's authenticator app, so it is decided once, when the real name exists. Must be
+      settled before the first release that ships two-step verification to users.
+- [x] 2FA **backend**, TOTP: three-step enrolment (setup → verify → activate), attempt-limited
+      on both the setup and the sign-in code, ten single-use recovery codes stored argon2id;
+      login answers 202 with a path-scoped challenge cookie and mints no session until the
+      code verifies — *slice 1.1b*
+- [x] 2FA **UI**: the `login-totp` screen and the `OtpInput` component — *slice 1.1b*
+- [ ] Up to ten argon2 verifications run inside an open transaction holding two row locks on the
+      recovery-code sign-in path (~0.8s of held connection). Bounded by the new per-IP limiter,
+      but the consumption transaction is worth restructuring — Phase 5 hardening
+- [ ] 2FA remainder: WebAuthn/passkeys; org policy to enforce 2FA (needs the admin dashboard)
 - [x] JSON `ErrorHandlerFunc` replaces oapi-codegen's plain-text errors everywhere — *slice 1.1a*
 - [x] Handlers enforce all contract constraints server-side (lengths, patterns, ranges, body
       size cap 64 KiB) — *slice 1.1a*
@@ -125,9 +146,10 @@ retrofit is how security fails.
 - [x] Admin bootstrap flow: install.sh generates `HAMLANEH_ADMIN_*` into untracked `.env`;
       server creates the first admin only while the users table is empty (must-change-password
       set); every later user comes from the admin dashboard or an invite link (see 1.4) — *slice 1.1a*
-- [x] **Authz matrix harness**: table-driven registry, 9 endpoints × 4 principals (anonymous /
-      member / member-must-change / admin) against real server + DB; completeness gate parses
-      `openapi.yaml` and fails on unregistered endpoints (WS entries arrive with 1.2) — *slice 1.1a*
+- [x] **Authz matrix harness**: table-driven registry, every contract endpoint × 4 principals
+      (anonymous / member / member-must-change / admin) against real server + DB; completeness
+      gate parses `openapi.yaml` and fails on unregistered endpoints (WS entries arrive with
+      1.2) — *slice 1.1a*; the 1.1b endpoints registered with real (non-stub) expectations
 - Tests: registration-off negative (signup returns 403 on fresh default instance);
   credential-stuffing/rate-limit tests (login, signup, reset, TOTP — assert 429/lockout);
   refresh-token replay → family revoked; no session token usable before the 2FA step completes;

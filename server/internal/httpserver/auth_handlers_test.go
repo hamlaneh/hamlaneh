@@ -2,11 +2,13 @@ package httpserver_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -74,10 +76,7 @@ func TestLoginNoEnumeration(t *testing.T) {
 
 	wantError(t, unknownUser, http.StatusUnauthorized, "invalid_credentials")
 	wantError(t, wrongPassword, http.StatusUnauthorized, "invalid_credentials")
-	if !equalResponses(unknownUser, wrongPassword) {
-		t.Errorf("unknown-user and wrong-password responses differ:\n%q\nvs\n%q",
-			unknownUser.Body.String(), wrongPassword.Body.String())
-	}
+	assertIdentical(t, "unknown user versus wrong password", unknownUser, wrongPassword)
 	if len(responseCookies(unknownUser)) != 0 || len(responseCookies(wrongPassword)) != 0 {
 		t.Error("failed login set cookies")
 	}
@@ -131,6 +130,84 @@ func TestLoginSuccess(t *testing.T) {
 	if created.AccessTTL != session.AccessTTL || created.RefreshTTL != session.RefreshTTL {
 		t.Errorf("session TTLs = %v/%v, want %v/%v",
 			created.AccessTTL, created.RefreshTTL, session.AccessTTL, session.RefreshTTL)
+	}
+}
+
+// TestLoginOnATwoStepAccountMintsNoSession pins the seam between the two
+// halves of a two-step sign-in: the password earns a challenge and nothing
+// else. If Login stopped consulting the second factor this test would see a
+// 200 with three session cookies instead.
+func TestLoginOnATwoStepAccountMintsNoSession(t *testing.T) {
+	t.Parallel()
+
+	store, created := loginStore(t)
+	activated := time.Now()
+	store.totpByUser = func(_ context.Context, userID uuid.UUID) (storage.Totp, error) {
+		return storage.Totp{UserID: userID, ActivatedAt: &activated}, nil
+	}
+	var challengeUser uuid.UUID
+	var challengeHash []byte
+	store.createTotpChallenge = func(_ context.Context, userID uuid.UUID, tokenHash []byte, _ time.Duration) error {
+		challengeUser, challengeHash = userID, tokenHash
+		return nil
+	}
+
+	rec := do(t, store, request(http.MethodPost, "/api/v1/auth/login",
+		loginBody("member", fixturePassword)))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("got status %d, want 202 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	cookies := responseCookies(rec)
+	if len(cookies) != 1 {
+		t.Fatalf("the password step set %d cookies, want only the challenge", len(cookies))
+	}
+	for _, c := range cookies {
+		switch c.Name {
+		case session.AccessCookie, session.RefreshCookie, session.CSRFCookie:
+			t.Errorf("the password step minted %s on a two-step account", c.Name)
+		}
+	}
+	if created.UserID != uuid.Nil {
+		t.Error("the password step created a session on a two-step account")
+	}
+
+	challenge := cookies[0]
+	if challenge.Name != "hamlaneh_2fa" {
+		t.Fatalf("cookie %q is not the challenge cookie", challenge.Name)
+	}
+	if challenge.Value == "" || challenge.MaxAge <= 0 {
+		t.Errorf("challenge cookie is not live: value %q, max-age %d", challenge.Value, challenge.MaxAge)
+	}
+	if challengeUser != fixtureUser().ID {
+		t.Errorf("challenge minted for %s, want the authenticated user %s", challengeUser, fixtureUser().ID)
+	}
+	// The cookie carries the raw token; only its hash is stored.
+	if string(challengeHash) != string(session.HashToken(challenge.Value)) {
+		t.Error("stored challenge hash does not match the challenge cookie")
+	}
+}
+
+// TestLoginFailsClosedWhenTwoStepCannotBeDetermined pins the direction the
+// second-factor check fails in. A store that cannot say whether the account
+// has one must answer 500, never fall through into a password-only session:
+// "I don't know" must not read as "this account has none".
+func TestLoginFailsClosedWhenTwoStepCannotBeDetermined(t *testing.T) {
+	t.Parallel()
+
+	store, created := loginStore(t)
+	store.totpByUser = func(context.Context, uuid.UUID) (storage.Totp, error) {
+		return storage.Totp{}, errors.New("database is on fire")
+	}
+
+	rec := do(t, store, request(http.MethodPost, "/api/v1/auth/login",
+		loginBody("member", fixturePassword)))
+	wantError(t, rec, http.StatusInternalServerError, "internal_error")
+	if len(responseCookies(rec)) != 0 {
+		t.Error("a login that could not check the second factor set cookies")
+	}
+	if created.UserID != uuid.Nil {
+		t.Error("a login that could not check the second factor created a session")
 	}
 }
 

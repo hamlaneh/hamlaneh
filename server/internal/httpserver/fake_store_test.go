@@ -1,7 +1,6 @@
 package httpserver_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -37,6 +37,21 @@ type fakeStore struct {
 	sessionUserByAccessHash func(ctx context.Context, accessHash []byte) (storage.Session, storage.User, error)
 	rotateSession           func(ctx context.Context, refreshHash []byte, next storage.SessionTokens) (storage.Session, storage.RotateOutcome, error)
 	revokeFamily            func(ctx context.Context, familyID uuid.UUID) error
+
+	listSessionFamilies func(ctx context.Context, userID, currentFamilyID uuid.UUID) ([]storage.SessionFamily, error)
+	revokeUserFamily    func(ctx context.Context, userID, familyID uuid.UUID) error
+	revokeOtherFamilies func(ctx context.Context, userID, keepFamilyID uuid.UUID) error
+
+	totpByUser                   func(ctx context.Context, userID uuid.UUID) (storage.Totp, error)
+	recoveryCodeCounts           func(ctx context.Context, userID uuid.UUID) (int, int, error)
+	startTotpSetup               func(ctx context.Context, userID uuid.UUID, secret []byte, ttl time.Duration) error
+	verifyTotpSetup              func(ctx context.Context, v storage.TotpSetupVerification) (storage.TotpVerifyOutcome, error)
+	activateTotp                 func(ctx context.Context, userID uuid.UUID) (time.Time, error)
+	disableTotp                  func(ctx context.Context, userID uuid.UUID) error
+	replaceRecoveryCodes         func(ctx context.Context, userID uuid.UUID, hashes func() []string) error
+	createTotpChallenge          func(ctx context.Context, userID uuid.UUID, tokenHash []byte, ttl time.Duration) error
+	totpChallengeUserByTokenHash func(ctx context.Context, tokenHash []byte) (uuid.UUID, error)
+	completeTotpChallenge        func(ctx context.Context, att storage.TotpChallengeAttempt) (storage.User, storage.Session, storage.TotpChallengeOutcome, error)
 }
 
 var _ httpserver.Store = (*fakeStore)(nil)
@@ -109,6 +124,109 @@ func (f *fakeStore) RevokeFamily(ctx context.Context, familyID uuid.UUID) error 
 		return errFakeUnwired
 	}
 	return f.revokeFamily(ctx, familyID)
+}
+
+func (f *fakeStore) ListSessionFamilies(ctx context.Context, userID, currentFamilyID uuid.UUID) ([]storage.SessionFamily, error) {
+	if f.listSessionFamilies == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listSessionFamilies(ctx, userID, currentFamilyID)
+}
+
+func (f *fakeStore) RevokeUserFamily(ctx context.Context, userID, familyID uuid.UUID) error {
+	if f.revokeUserFamily == nil {
+		return errFakeUnwired
+	}
+	return f.revokeUserFamily(ctx, userID, familyID)
+}
+
+func (f *fakeStore) RevokeOtherFamilies(ctx context.Context, userID, keepFamilyID uuid.UUID) error {
+	if f.revokeOtherFamilies == nil {
+		return errFakeUnwired
+	}
+	return f.revokeOtherFamilies(ctx, userID, keepFamilyID)
+}
+
+// TotpByUser is the one method whose unwired default is a real answer rather
+// than errFakeUnwired: "this account has no second factor".
+//
+// Login asks it before minting anything and fails closed on any other error,
+// so errFakeUnwired here would turn every login test in the package — tests
+// about rate limiting, enumeration, cookies, CSRF — into a 500. The fake's
+// tests are overwhelmingly about something else, and a fixture account
+// without two-step verification is what they all mean. A test that cares
+// wires the field.
+func (f *fakeStore) TotpByUser(ctx context.Context, userID uuid.UUID) (storage.Totp, error) {
+	if f.totpByUser == nil {
+		return storage.Totp{}, storage.ErrNotFound
+	}
+	return f.totpByUser(ctx, userID)
+}
+
+func (f *fakeStore) RecoveryCodeCounts(ctx context.Context, userID uuid.UUID) (int, int, error) {
+	if f.recoveryCodeCounts == nil {
+		return 0, 0, errFakeUnwired
+	}
+	return f.recoveryCodeCounts(ctx, userID)
+}
+
+func (f *fakeStore) StartTotpSetup(ctx context.Context, userID uuid.UUID, secret []byte, ttl time.Duration) error {
+	if f.startTotpSetup == nil {
+		return errFakeUnwired
+	}
+	return f.startTotpSetup(ctx, userID, secret, ttl)
+}
+
+func (f *fakeStore) VerifyTotpSetup(ctx context.Context, v storage.TotpSetupVerification) (storage.TotpVerifyOutcome, error) {
+	if f.verifyTotpSetup == nil {
+		return storage.TotpVerifyNoSetup, errFakeUnwired
+	}
+	return f.verifyTotpSetup(ctx, v)
+}
+
+func (f *fakeStore) ActivateTotp(ctx context.Context, userID uuid.UUID) (time.Time, error) {
+	if f.activateTotp == nil {
+		return time.Time{}, errFakeUnwired
+	}
+	return f.activateTotp(ctx, userID)
+}
+
+func (f *fakeStore) DisableTotp(ctx context.Context, userID uuid.UUID) error {
+	if f.disableTotp == nil {
+		return errFakeUnwired
+	}
+	return f.disableTotp(ctx, userID)
+}
+
+func (f *fakeStore) ReplaceRecoveryCodes(ctx context.Context, userID uuid.UUID, hashes func() []string) error {
+	if f.replaceRecoveryCodes == nil {
+		return errFakeUnwired
+	}
+	return f.replaceRecoveryCodes(ctx, userID, hashes)
+}
+
+func (f *fakeStore) CreateTotpChallenge(ctx context.Context, userID uuid.UUID, tokenHash []byte, ttl time.Duration) error {
+	if f.createTotpChallenge == nil {
+		return errFakeUnwired
+	}
+	return f.createTotpChallenge(ctx, userID, tokenHash, ttl)
+}
+
+// TotpChallengeUserByTokenHash follows TotpByUser's convention: the unwired
+// default is the real answer "no challenge matches this token", so tests
+// about other things do not need to wire the rate limiter's account lookup.
+func (f *fakeStore) TotpChallengeUserByTokenHash(ctx context.Context, tokenHash []byte) (uuid.UUID, error) {
+	if f.totpChallengeUserByTokenHash == nil {
+		return uuid.Nil, storage.ErrNotFound
+	}
+	return f.totpChallengeUserByTokenHash(ctx, tokenHash)
+}
+
+func (f *fakeStore) CompleteTotpChallenge(ctx context.Context, att storage.TotpChallengeAttempt) (storage.User, storage.Session, storage.TotpChallengeOutcome, error) {
+	if f.completeTotpChallenge == nil {
+		return storage.User{}, storage.Session{}, storage.TotpChallengeNone, errFakeUnwired
+	}
+	return f.completeTotpChallenge(ctx, att)
 }
 
 // fixturePassword is the known password of every fixture user; its argon2
@@ -242,10 +360,36 @@ func loginBody(identifier, pw string) string {
 	return string(b)
 }
 
-// equalResponses reports whether two recorded responses are byte-identical
-// in status, body, and content type.
-func equalResponses(a, b *httptest.ResponseRecorder) bool {
-	return a.Code == b.Code &&
-		bytes.Equal(a.Body.Bytes(), b.Body.Bytes()) &&
-		a.Header().Get("Content-Type") == b.Header().Get("Content-Type")
+// assertIdentical fails when two responses differ in any way a client can
+// observe: status, body, and every header, not just Content-Type. Both
+// anti-enumeration properties in this package — login's unknown-user versus
+// wrong-password, and reset's known versus unknown address — are exactly
+// this assertion, and a leak hiding in some other header would be just as
+// real a leak.
+func assertIdentical(t *testing.T, what string, a, b *httptest.ResponseRecorder) {
+	t.Helper()
+
+	if a.Code != b.Code {
+		t.Errorf("%s: statuses differ: %d vs %d", what, a.Code, b.Code)
+	}
+	if a.Body.String() != b.Body.String() {
+		t.Errorf("%s: bodies differ: %q vs %q", what, a.Body.String(), b.Body.String())
+	}
+	if len(a.Header()) != len(b.Header()) {
+		t.Errorf("%s: header sets differ: %v vs %v", what, a.Header(), b.Header())
+		return
+	}
+	for name, values := range a.Header() {
+		other := b.Header().Values(name)
+		if len(values) != len(other) {
+			t.Errorf("%s: header %s differs: %v vs %v", what, name, values, other)
+			continue
+		}
+		for i := range values {
+			if values[i] != other[i] {
+				t.Errorf("%s: header %s differs: %v vs %v", what, name, values, other)
+				break
+			}
+		}
+	}
 }

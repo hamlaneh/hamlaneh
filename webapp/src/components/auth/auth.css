@@ -410,6 +410,16 @@
   text-decoration-thickness: 2px;
 }
 
+/* "Forgot password?" is a button, not an anchor: the screen it opens is chosen
+ * by state, not by URL. The drawn treatment is a link, so the button carries
+ * no button chrome of its own. */
+button.hm-link {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
 .hm-link[data-disabled="true"] {
   color: var(--color-border-disabled);
   text-decoration-thickness: auto;
@@ -423,6 +433,88 @@
   background: transparent;
   border: 0;
   cursor: pointer;
+}
+
+/* ── back link ─────────────────────────────────────────────────────── */
+
+/* `arrow-left` + label, 44px tall, at the logical start — drawn identically on
+ * login-totp and all three reset artboards. The glyph mirrors through the
+ * shared `.hm-mirror-glyph` utility (chat.css), which is the one rule the
+ * handoff says applies to arrow-left and nothing else. */
+.hm-back-link {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 7px; /* off-scale (artboard) */
+  block-size: var(--size-target);
+  padding-inline: 2px; /* off-scale (artboard) */
+  background: transparent;
+  border: 0;
+  font: 500 var(--text-body) / 1 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-brand-primary);
+  cursor: pointer;
+}
+
+.hm-back-link:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-back-link:hover {
+  color: var(--color-brand-pressed);
+}
+
+/* ── one-time code ─────────────────────────────────────────────────── */
+
+.hm-otp {
+  display: flex;
+  gap: var(--spacing-2);
+}
+
+/* The panel draws a denser cell than the auth screens; same component. */
+.hm-otp[data-size="compact"] {
+  gap: 6px; /* off-scale (artboard) */
+}
+
+.hm-otp__cell {
+  inline-size: var(--size-otp-cell-w);
+  block-size: var(--size-otp-cell-h);
+  padding: 0;
+  text-align: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+  font: 600 20px / 1 var(--hm-font-ui, var(--font-ui)); /* 20px off-scale (artboard) */
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+  transition: border-color var(--duration-state) var(--ease-out);
+}
+
+.hm-otp[data-size="compact"] .hm-otp__cell {
+  inline-size: 42px; /* off-scale (artboard) */
+  block-size: 50px; /* off-scale (artboard) */
+  font-size: 18px; /* off-scale (artboard) */
+}
+
+/* A complete code takes the brand boundary — the drawn "complete" state. */
+.hm-otp[data-complete="true"] .hm-otp__cell {
+  border-color: var(--color-brand-primary);
+}
+
+.hm-otp[data-invalid="true"] .hm-otp__cell {
+  border-color: var(--color-danger);
+}
+
+.hm-otp__cell:focus-visible {
+  outline: none;
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 26%, transparent);
+}
+
+.hm-otp__cell:disabled {
+  background: var(--color-surface-subtle);
+  border: 1px dashed var(--color-border-disabled);
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
 }
 
 /* ── banners ───────────────────────────────────────────────────────── */
@@ -446,6 +538,29 @@
   background: var(--color-warning-soft);
   border-color: var(--color-warning);
   color: var(--color-warning-text);
+}
+
+/* Success and info carry primary text with a toned icon, exactly as drawn on
+ * `reset-request-confirmation` and the foundation sheet's information banner —
+ * unlike danger and warning, whose copy takes the tone itself. */
+.hm-banner--success {
+  background: var(--color-success-soft);
+  border-color: var(--color-success);
+  color: var(--color-text-primary);
+}
+
+.hm-banner--success .hm-banner__icon {
+  color: var(--color-success);
+}
+
+.hm-banner--info {
+  background: var(--color-info-soft);
+  border-color: var(--color-info);
+  color: var(--color-text-primary);
+}
+
+.hm-banner--info .hm-banner__icon {
+  color: var(--color-info);
 }
 
 .hm-banner__icon {

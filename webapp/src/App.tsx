@@ -4,11 +4,17 @@ import { BrowserRouter } from "react-router";
 
 import { api } from "./api/client";
 import type { components } from "./api/schema";
+import { consumeResetToken } from "./auth/resetToken";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AuthShell } from "./components/auth/AuthShell";
+import { InstanceProvider } from "./instance/InstanceProvider";
 import { ChangePasswordScreen } from "./screens/ChangePasswordScreen";
 import { ChatApp } from "./screens/ChatApp";
 import { LoginScreen } from "./screens/LoginScreen";
+import type { LoginNotice } from "./screens/LoginScreen";
+import { ResetPasswordScreen } from "./screens/ResetPasswordScreen";
+import { ResetRequestScreen } from "./screens/ResetRequestScreen";
+import { TotpChallengeScreen } from "./screens/TotpChallengeScreen";
 
 type User = components["schemas"]["User"];
 
@@ -16,6 +22,18 @@ type Session =
   | { status: "loading" }
   | { status: "unauthenticated" }
   | { status: "authenticated"; user: User };
+
+/**
+ * Which pre-authentication screen is showing. Sign-in is two halves now — a
+ * 202 from login means the password was right but no session exists yet — and
+ * the reset screens are reached from the sign-in screen or from an emailed
+ * link, never from a session state.
+ */
+type AuthFlow =
+  | { screen: "login"; notice?: LoginNotice }
+  | { screen: "totp" }
+  | { screen: "resetRequest" }
+  | { screen: "resetPassword"; token: string };
 
 /** Asks the server who is signed in (GET /users/me) and maps it to a Session. */
 async function fetchSession(): Promise<Session> {
@@ -60,14 +78,24 @@ function CrashFallback() {
 
 /**
  * Session bootstrap. Which pre-authentication screen shows is decided by
- * session state, not by URL, so those stay a conditional render and each
- * brings its own AuthShell. Once signed in, the chat shell mounts behind a
- * router: channels are addressable and a message has a permalink.
+ * session state and by the sign-in flow, not by URL, so those stay a
+ * conditional render and each brings its own AuthShell. Once signed in, the
+ * chat shell mounts behind a router: channels are addressable and a message
+ * has a permalink.
  */
 function App() {
   const { t } = useTranslation();
   const [session, setSession] = useState<Session>({ status: "loading" });
-  const [showChangePassword, setShowChangePassword] = useState(false);
+  /**
+   * Read once, at the first render, and scrubbed from the address bar in the
+   * same breath. A token in the link's fragment outranks everything: it is a
+   * recovery path, and it must work even for someone who is already signed in
+   * somewhere.
+   */
+  const [flow, setFlow] = useState<AuthFlow>(() => {
+    const token = consumeResetToken();
+    return token === null ? { screen: "login" } : { screen: "resetPassword", token };
+  });
 
   const refreshSession = useCallback(() => {
     void fetchSession().then(setSession);
@@ -79,7 +107,7 @@ function App() {
   }, [refreshSession]);
 
   const handleAuthenticated = (user: User) => {
-    setShowChangePassword(false);
+    setFlow({ screen: "login" });
     setSession({ status: "authenticated", user });
   };
 
@@ -92,17 +120,68 @@ function App() {
         // user asked to leave — drop to the login screen regardless.
         console.warn("Logout request failed:", requestError);
       }
-      setShowChangePassword(false);
+      setFlow({ screen: "login" });
       setSession({ status: "unauthenticated" });
     })();
   };
 
   const handlePasswordChanged = () => {
-    setShowChangePassword(false);
     // Refetch /users/me so the cleared must_change_password flag comes from
     // the server, not from a local guess.
     refreshSession();
   };
+
+  if (flow.screen === "resetPassword") {
+    return (
+      <ResetPasswordScreen
+        token={flow.token}
+        onComplete={() => {
+          // The contract revokes every session family on a reset, so there is
+          // nothing to return to — the user signs in fresh.
+          setSession({ status: "unauthenticated" });
+          setFlow({
+            screen: "login",
+            notice: { tone: "success", message: t("resetPassword.done") },
+          });
+        }}
+        onBackToSignIn={() => {
+          setFlow({ screen: "login" });
+        }}
+        onRequestNewLink={() => {
+          setFlow({ screen: "resetRequest" });
+        }}
+      />
+    );
+  }
+
+  if (flow.screen === "resetRequest") {
+    return (
+      <ResetRequestScreen
+        onBackToSignIn={() => {
+          setFlow({ screen: "login" });
+        }}
+      />
+    );
+  }
+
+  if (flow.screen === "totp") {
+    return (
+      <TotpChallengeScreen
+        onAuthenticated={handleAuthenticated}
+        onChallengeLost={() => {
+          // No live challenge left: say why the password step came back
+          // rather than dropping the user there with no explanation.
+          setFlow({
+            screen: "login",
+            notice: { tone: "warning", message: t("totp.error.challengeLost") },
+          });
+        }}
+        onBack={() => {
+          setFlow({ screen: "login" });
+        }}
+      />
+    );
+  }
 
   if (session.status === "loading") {
     return (
@@ -115,30 +194,26 @@ function App() {
   }
 
   if (session.status === "unauthenticated") {
-    return <LoginScreen onAuthenticated={handleAuthenticated} />;
-  }
-
-  if (session.user.must_change_password) {
-    // Forced mode: while the flag is set this branch always wins — the only
-    // exits are completing the change or signing out (wrong account).
     return (
-      <ChangePasswordScreen
-        mode="forced"
-        onSuccess={handlePasswordChanged}
-        onSignOut={handleLogout}
+      <LoginScreen
+        notice={flow.notice}
+        onAuthenticated={handleAuthenticated}
+        onTwoStepRequired={() => {
+          setFlow({ screen: "totp" });
+        }}
+        onForgotPassword={() => {
+          setFlow({ screen: "resetRequest" });
+        }}
       />
     );
   }
 
-  if (showChangePassword) {
+  if (session.user.must_change_password) {
+    // Forced mode: while the flag is set this branch always wins — the only
+    // exits are completing the change or signing out (wrong account). A
+    // voluntary change is Settings → Security instead.
     return (
-      <ChangePasswordScreen
-        mode="voluntary"
-        onSuccess={handlePasswordChanged}
-        onCancel={() => {
-          setShowChangePassword(false);
-        }}
-      />
+      <ChangePasswordScreen onSuccess={handlePasswordChanged} onSignOut={handleLogout} />
     );
   }
 
@@ -148,16 +223,17 @@ function App() {
   return (
     <ErrorBoundary fallback={<CrashFallback />}>
       <BrowserRouter>
-        <ChatApp
-          currentUser={session.user}
-          onLogout={handleLogout}
-          onChangePassword={() => {
-            setShowChangePassword(true);
-          }}
-        />
+        <ChatApp currentUser={session.user} onLogout={handleLogout} />
       </BrowserRouter>
     </ErrorBoundary>
   );
 }
 
-export default App;
+/** The instance document is policy every screen below reads; fetch it once. */
+export default function AppWithInstance() {
+  return (
+    <InstanceProvider>
+      <App />
+    </InstanceProvider>
+  );
+}

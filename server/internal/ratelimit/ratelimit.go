@@ -8,8 +8,8 @@
 //
 // Checking and counting are separate on purpose: callers ask Limited before
 // doing guarded work and Record only the attempts that should count (for
-// login, failed authentications), so legitimate successes never consume the
-// budget.
+// login, failed authentications and two-step challenge mints), so completed
+// sign-ins never consume the budget.
 package ratelimit
 
 import (
@@ -83,6 +83,35 @@ func (l *Limiter) Limited(key string) bool {
 	}
 	l.events[key] = recent
 	return len(recent) >= l.limit
+}
+
+// RetryAfter reports how much longer key stays limited: the time until
+// enough recorded events age out of the window that Limited reports false.
+// It returns zero for a key that is not currently limited, and it records
+// nothing — like Limited, it is free to call on rejected requests. Callers
+// use it to put an honest Retry-After header on a 429.
+func (l *Limiter) RetryAfter(key string) time.Duration {
+	now := l.now()
+	cutoff := now.Add(-l.window)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.maybeSweep(now, cutoff)
+
+	recent := pruneBefore(l.events[key], cutoff)
+	if len(recent) == 0 {
+		delete(l.events, key)
+		return 0
+	}
+	l.events[key] = recent
+	if len(recent) < l.limit {
+		return 0
+	}
+	// The key stops being limited the moment its in-window count falls to
+	// limit-1, which is when the (len-limit+1) oldest events have all aged
+	// out; the last of those is recent[len(recent)-l.limit].
+	return recent[len(recent)-l.limit].Add(l.window).Sub(now)
 }
 
 // Record counts one event for key at the current time. Callers gate Record

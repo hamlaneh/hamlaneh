@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
 )
@@ -73,6 +75,21 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code errorCo
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	writeBody(w, r, data)
+}
+
+// writeRateLimited is the single source of the 429 answer for the sign-in
+// limiters: the contract Error shape plus a Retry-After header carrying how
+// long the caller's budget stays exhausted (ROADMAP: Retry-After on every
+// 429, so the sign-in form can show a real countdown). Seconds are rounded
+// up, never below 1 — a Retry-After of 0 would invite an immediate retry of
+// a request that was just refused.
+func writeRateLimited(w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
+	seconds := int64((retryAfter + time.Second - 1) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+	writeError(w, r, http.StatusTooManyRequests, codeRateLimited, "too many attempts, try again later")
 }
 
 // writeInvalidCredentials is the single source of the login-failure

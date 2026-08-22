@@ -1,0 +1,1258 @@
+/* User settings — implementation of the delivered "Quiet Nest" settings design
+ * (docs/design/mockups/Hamlaneh Settings.dc.html + docs/design/SETTINGS_HANDOFF.md).
+ * Values are transcribed from the artboards; colours are only ever referenced
+ * through the tokens in tokens.css, never re-declared. This set adds no new
+ * tokens — the handoff says so explicitly.
+ *
+ * Logical properties only. Artboard values that fall between the delivered
+ * scales are written as literals and marked "off-scale" so nobody rounds them
+ * to the nearest token.
+ */
+
+/* ── panel ─────────────────────────────────────────────────────────── */
+
+.hm-settings-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  align-items: safe center;
+  justify-content: center;
+  padding: var(--spacing-4);
+  /* text.primary at 42%, the same ink the chat drawer's scrim uses — both
+   * artboards draw this literal value, light and dark alike. */
+  background: rgb(28 39 36 / 0.42);
+}
+
+.hm-settings {
+  --hm-settings-nav-inline-size: 220px;
+  --hm-settings-header-block-size: 68px;
+  /* The panel is a sibling of the chat shell, so it declares its own mono
+   * stack rather than inheriting the one on .hm-chat. */
+  --hm-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  display: flex;
+  flex-direction: column;
+  inline-size: min(1040px, 100%);
+  block-size: min(720px, 100%);
+  overflow: hidden;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 16px; /* off-scale (artboard) */
+  box-shadow: var(--shadow-overlay);
+}
+
+.hm-settings__header {
+  flex: 0 0 var(--hm-settings-header-block-size);
+  block-size: var(--hm-settings-header-block-size);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-inline: 28px; /* off-scale (artboard) */
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+.hm-settings__product-title {
+  margin: 0;
+  font: 600 var(--text-subhead) / 1.3 var(--hm-font-ui, var(--font-ui));
+  letter-spacing: -0.015em;
+  color: var(--color-text-primary);
+}
+
+.hm-settings__product-title:lang(fa) {
+  line-height: 1.5;
+  letter-spacing: normal;
+}
+
+.hm-settings__close {
+  inline-size: var(--size-target);
+  block-size: var(--size-target);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background-color var(--duration-press) var(--ease-out);
+}
+
+.hm-settings__close:hover {
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
+}
+
+.hm-settings__body {
+  flex: 1;
+  min-block-size: 0;
+  display: flex;
+}
+
+.hm-settings__nav {
+  flex: 0 0 var(--hm-settings-nav-inline-size);
+  inline-size: var(--hm-settings-nav-inline-size);
+  display: flex;
+  flex-direction: column;
+  gap: 2px; /* off-scale (artboard) */
+  padding: var(--spacing-4) 10px; /* 10px off-scale (artboard) */
+  overflow-y: auto;
+  background: var(--color-canvas);
+  border-inline-end: 1px solid var(--color-border-subtle);
+}
+
+.hm-settings__nav-row {
+  flex: 0 0 var(--size-target);
+  block-size: var(--size-target);
+  display: flex;
+  align-items: center;
+  gap: 11px; /* off-scale (artboard) */
+  padding-inline: var(--spacing-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  font: 400 var(--text-body) / 1.3 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--duration-state) var(--ease-out);
+}
+
+.hm-settings__nav-row:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-settings__nav-row:hover {
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
+}
+
+/* Selection reads from fill AND weight, never from colour alone. */
+.hm-settings__nav-row[aria-selected="true"] {
+  background: var(--color-brand-soft);
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.hm-settings__content {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 26px; /* off-scale (artboard) */
+  padding: 28px 32px; /* off-scale (artboard) */
+  overflow: hidden;
+}
+
+/* The content column is what scrolls — the panel itself never does. */
+.hm-settings__scroll {
+  flex: 1;
+  min-block-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px; /* off-scale (artboard) */
+  overflow-y: auto;
+}
+
+.hm-settings__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 6px; /* off-scale (artboard) */
+}
+
+.hm-settings__section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-6);
+}
+
+.hm-settings__title {
+  margin: 0;
+  font: 600 18px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 18px off-scale (artboard) */
+  letter-spacing: -0.01em;
+  color: var(--color-text-primary);
+}
+
+.hm-settings__title:lang(fa) {
+  line-height: 1.6;
+  letter-spacing: normal;
+}
+
+.hm-settings__lede,
+.hm-settings__note {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.hm-settings__lede {
+  font: 400 13px / 1.6 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+}
+
+.hm-settings__note {
+  font: 400 var(--text-caption) / 1.55 var(--hm-font-ui, var(--font-ui));
+}
+
+.hm-settings__lede:lang(fa),
+.hm-settings__note:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-settings__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px; /* off-scale (artboard) */
+  flex-wrap: wrap;
+}
+
+.hm-settings__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+/* ── buttons ───────────────────────────────────────────────────────── */
+
+/* The panel's pill and the auth set's form CTA share one geometry here, so a
+ * change to the drawn button can never drift between the two. */
+.hm-settings-button,
+.hm-settings .hm-button {
+  inline-size: max-content;
+  flex: 0 0 auto;
+  block-size: var(--size-target);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-2);
+  padding-inline: 18px; /* off-scale (artboard) */
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font: 600 var(--text-body) / 1 var(--hm-font-ui, var(--font-ui));
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-press) var(--ease-out),
+    border-color var(--duration-press) var(--ease-out);
+}
+
+.hm-settings-button:lang(fa),
+.hm-settings .hm-button:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-settings-button[data-size="sm"] {
+  block-size: 36px; /* off-scale (artboard) */
+  padding-inline: 13px; /* off-scale (artboard) */
+  border-radius: 9px; /* off-scale (artboard) */
+  font-size: var(--text-caption);
+}
+
+.hm-settings-button--primary,
+.hm-settings .hm-button {
+  background: var(--color-brand-primary);
+  color: var(--color-on-brand);
+}
+
+.hm-settings-button--primary:hover:not(:disabled),
+.hm-settings .hm-button:hover:not(:disabled) {
+  background: var(--color-brand-hover);
+}
+
+.hm-settings-button--secondary {
+  background: var(--color-surface);
+  border-color: var(--color-border-control);
+  color: var(--color-text-primary);
+}
+
+.hm-settings-button--secondary:hover:not(:disabled) {
+  border-color: var(--color-border-control-hover);
+  background: var(--color-surface-subtle);
+}
+
+.hm-settings-button--danger {
+  background: var(--color-surface);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.hm-settings-button--danger:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+}
+
+.hm-settings-button--dangerSolid {
+  background: var(--color-danger);
+  color: var(--color-surface);
+}
+
+.hm-settings-button[data-busy="true"] {
+  opacity: 0.75;
+  cursor: default;
+}
+
+/* Disabled is carried by the dashed boundary and tone, never colour alone. */
+.hm-settings-button:disabled:not([data-busy="true"]),
+.hm-settings .hm-button:disabled:not([data-busy="true"]) {
+  background: var(--color-surface-disabled);
+  border: 1px dashed var(--color-border-disabled);
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
+}
+
+/* ── saved mark ────────────────────────────────────────────────────── */
+
+.hm-settings-saved {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font: 500 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-success);
+}
+
+.hm-settings-saved:lang(fa) {
+  line-height: 1.75;
+}
+
+/* ── cards ─────────────────────────────────────────────────────────── */
+
+.hm-settings-card {
+  box-sizing: border-box;
+  padding: 18px; /* off-scale (artboard) */
+  display: flex;
+  flex-direction: column;
+  gap: 14px; /* off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.hm-settings-card__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-6);
+}
+
+.hm-settings-card__row--centred {
+  align-items: center;
+}
+
+.hm-settings-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-inline-size: 0;
+}
+
+.hm-settings-card__title-row {
+  display: flex;
+  align-items: center;
+  gap: 11px; /* off-scale (artboard) */
+}
+
+.hm-settings-card__title {
+  margin: 0;
+  font: 600 15px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 15px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-settings-card__title:lang(fa) {
+  line-height: 1.6;
+}
+
+.hm-settings-card__lede {
+  margin: 0;
+  max-inline-size: 520px; /* off-scale (artboard) */
+  font: 400 13px / 1.6 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-settings-card__lede:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-settings-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+/* The password form and the instance policy beside it. */
+.hm-settings-card__split {
+  display: flex;
+  gap: 28px; /* off-scale (artboard) */
+  flex-wrap: wrap;
+}
+
+.hm-settings-form {
+  flex: 0 1 420px; /* the drawn 420–440 form column */
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.hm-settings-form__pair {
+  display: flex;
+  gap: var(--spacing-3);
+}
+
+.hm-settings-form__pair > * {
+  flex: 1;
+  min-inline-size: 0;
+}
+
+.hm-settings-policy {
+  flex: 1 1 220px;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-block-start: var(--spacing-6);
+}
+
+.hm-settings-policy__title {
+  font: 400 var(--text-caption) / 1.55 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+}
+
+/* The panel draws a denser field than the auth screens: 44px controls with a
+ * 13px label. Same components, retuned for this context — the auth set is not
+ * touched, and nothing here re-declares a colour. */
+.hm-settings .hm-input {
+  block-size: var(--size-target);
+  font-size: var(--text-body);
+}
+
+.hm-settings .hm-label {
+  font-size: 13px; /* off-scale (artboard) */
+}
+
+.hm-settings .hm-field {
+  gap: 6px; /* off-scale (artboard) */
+}
+
+.hm-settings .hm-field__toggle {
+  inline-size: 40px; /* off-scale (artboard) */
+  block-size: 40px; /* off-scale (artboard) */
+}
+
+.hm-settings .hm-requirements {
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+/* ── on/off state pill ─────────────────────────────────────────────── */
+
+.hm-settings-state {
+  block-size: 22px; /* off-scale (artboard) */
+  padding-inline: 9px; /* off-scale (artboard) */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px; /* off-scale (artboard) */
+  border: 1px solid var(--color-border-control);
+  border-radius: 6px; /* off-scale (artboard) */
+  font: 600 11px / 1 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-settings-state__dot {
+  inline-size: 7px; /* off-scale (artboard) */
+  block-size: 7px; /* off-scale (artboard) */
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border-control);
+  box-sizing: border-box;
+}
+
+.hm-settings-state[data-on="true"] {
+  background: var(--color-success-soft);
+  border-color: var(--color-success);
+  color: var(--color-text-primary);
+}
+
+.hm-settings-state[data-on="true"] .hm-settings-state__dot {
+  background: var(--color-success);
+  border-color: var(--color-success);
+}
+
+/* ── fact rows ─────────────────────────────────────────────────────── */
+
+.hm-settings-facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px; /* off-scale (artboard) */
+}
+
+.hm-settings-facts__row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  max-inline-size: 320px; /* off-scale (artboard) */
+}
+
+.hm-settings-facts dt,
+.hm-settings-facts dd {
+  margin: 0;
+  font: 400 12.5px / 1.5 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+}
+
+.hm-settings-facts dt {
+  color: var(--color-text-secondary);
+}
+
+.hm-settings-facts dd {
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+/* "Two left would read warning" — settings-components §03. */
+.hm-settings-facts dd[data-low="true"] {
+  color: var(--color-warning-text);
+}
+
+/* ── notes and warnings ────────────────────────────────────────────── */
+
+.hm-settings-warning,
+.hm-settings-note-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px; /* off-scale (artboard) */
+  padding: 14px 16px; /* off-scale (artboard) */
+  border: 1px solid;
+  border-radius: var(--radius-md);
+  font: 400 13px / 1.6 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+}
+
+.hm-settings-warning:lang(fa),
+.hm-settings-note-banner:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-settings-warning {
+  background: var(--color-warning-soft);
+  border-color: var(--color-warning);
+  color: var(--color-warning-text);
+  font-weight: 500;
+}
+
+.hm-settings-warning__icon {
+  flex: 0 0 18px;
+  margin-block-start: 1px;
+  color: var(--color-warning);
+}
+
+.hm-settings-note-banner {
+  background: var(--color-info-soft);
+  border-color: var(--color-info);
+  color: var(--color-text-primary);
+}
+
+.hm-settings-note-banner__icon {
+  flex: 0 0 17px;
+  margin-block-start: 1px;
+  color: var(--color-info);
+}
+
+/* ── step header ───────────────────────────────────────────────────── */
+
+.hm-settings-step {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.hm-settings-step__back {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  block-size: var(--size-target);
+  padding-inline: 2px; /* off-scale (artboard) */
+  background: transparent;
+  border: 0;
+  font: 500 13px / 1 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-brand-primary);
+  cursor: pointer;
+}
+
+.hm-settings-step__divider {
+  inline-size: 1px;
+  block-size: var(--spacing-4);
+  background: var(--color-border-subtle);
+}
+
+.hm-settings-step__label {
+  font: 500 11px / 1 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.hm-settings-step__label:lang(fa) {
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.hm-settings-step__dots {
+  display: flex;
+  gap: 5px; /* off-scale (artboard) */
+}
+
+.hm-settings-step__dot {
+  inline-size: 7px; /* off-scale (artboard) */
+  block-size: 7px; /* off-scale (artboard) */
+  border-radius: 4px; /* off-scale (artboard) */
+  background: var(--color-border-subtle);
+}
+
+.hm-settings-step__dot[data-state="done"] {
+  background: var(--color-brand-primary);
+}
+
+.hm-settings-step__dot[data-state="current"] {
+  inline-size: 18px; /* off-scale (artboard) */
+  background: var(--color-brand-primary);
+}
+
+/* ── two-step setup ────────────────────────────────────────────────── */
+
+.hm-totp-scan {
+  flex-direction: row;
+  gap: var(--spacing-8);
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.hm-totp-scan__qr-column {
+  display: flex;
+  flex-direction: column;
+  gap: 14px; /* off-scale (artboard) */
+  max-inline-size: 212px; /* off-scale (artboard) */
+}
+
+.hm-totp-scan__qr {
+  inline-size: 212px; /* off-scale (artboard) */
+  block-size: 212px; /* off-scale (artboard) */
+  box-sizing: border-box;
+  padding: 14px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-lg);
+}
+
+.hm-totp-scan__qr svg {
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+.hm-totp-scan__instructions {
+  flex: 1 1 320px;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px; /* off-scale (artboard) */
+}
+
+.hm-totp-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 11px; /* off-scale (artboard) */
+}
+
+.hm-totp-steps__item {
+  display: flex;
+  gap: 11px; /* off-scale (artboard) */
+  font: 400 13px / 1.6 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-totp-steps__item:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-totp-steps__number {
+  flex: 0 0 22px; /* off-scale (artboard) */
+  inline-size: 22px;
+  block-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--color-brand-soft);
+  color: var(--color-brand-hover);
+  font: 600 11px / 1 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+}
+
+.hm-totp-key {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-4);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.hm-totp-key__label {
+  font: 500 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-totp-key__row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.hm-totp-key__value {
+  flex: 1;
+  min-inline-size: 0;
+  block-size: var(--size-target);
+  box-sizing: border-box;
+  padding-inline: 14px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  white-space: nowrap;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+  font: 500 var(--text-body) / 1 var(--hm-mono, ui-monospace, monospace);
+  letter-spacing: 0.08em;
+  color: var(--color-text-primary);
+}
+
+/* ── recovery codes ────────────────────────────────────────────────── */
+
+.hm-recovery {
+  display: flex;
+  gap: var(--spacing-8);
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.hm-recovery-codes {
+  flex: 0 1 520px; /* off-scale (artboard) */
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-2) 14px; /* 14px off-scale (artboard) */
+}
+
+.hm-recovery-code {
+  display: flex;
+  align-items: center;
+  gap: 11px; /* off-scale (artboard) */
+  block-size: 38px; /* off-scale (artboard) */
+  padding-inline: var(--spacing-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 9px; /* off-scale (artboard) */
+}
+
+.hm-recovery-code__index {
+  inline-size: 16px; /* off-scale (artboard) */
+  font: 500 11px / 1 var(--hm-mono, ui-monospace, monospace); /* 11px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-recovery-code__value {
+  /* Selectable text, never an image: a screen reader must read it and a
+   * password manager must be able to capture it. */
+  user-select: text;
+  font: 500 var(--text-body) / 1 var(--hm-mono, ui-monospace, monospace);
+  letter-spacing: 0.06em;
+  color: var(--color-text-primary);
+}
+
+.hm-recovery__actions {
+  flex: 1 1 220px;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px; /* off-scale (artboard) */
+}
+
+.hm-recovery__buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.hm-settings__acknowledge {
+  display: flex;
+  align-items: center;
+  gap: 14px; /* off-scale (artboard) */
+  flex-wrap: wrap;
+}
+
+/* ── checkbox ──────────────────────────────────────────────────────── */
+
+.hm-settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px; /* off-scale (artboard) */
+  font: 500 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.hm-settings-checkbox:lang(fa) {
+  line-height: 1.75;
+}
+
+/* Visually hidden but focusable: the native control drives state and the tab
+ * order; the sibling span carries the drawn appearance. */
+.hm-settings-checkbox input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.hm-settings-checkbox__box {
+  flex: 0 0 20px; /* off-scale (artboard) */
+  inline-size: 20px;
+  block-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border-control);
+  border-radius: 5px; /* off-scale (artboard) */
+  color: transparent;
+}
+
+.hm-settings-checkbox input:checked + .hm-settings-checkbox__box {
+  background: var(--color-brand-primary);
+  border-color: var(--color-brand-primary);
+  color: var(--color-on-brand);
+}
+
+.hm-settings-checkbox input:focus-visible + .hm-settings-checkbox__box {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* ── session rows ──────────────────────────────────────────────────── */
+
+.hm-session-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px; /* off-scale (artboard) */
+}
+
+.hm-session {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  padding: var(--spacing-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.hm-session[data-current="true"] {
+  border-color: var(--color-brand-primary);
+}
+
+.hm-session__icon {
+  flex: 0 0 40px; /* off-scale (artboard) */
+  inline-size: 40px;
+  block-size: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-subtle);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+}
+
+.hm-session[data-current="true"] .hm-session__icon {
+  background: var(--color-brand-soft);
+  color: var(--color-brand-primary);
+}
+
+.hm-session__identity {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.hm-session__title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px; /* off-scale (artboard) */
+}
+
+.hm-session__title {
+  font: 600 var(--text-body) / 1.3 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+}
+
+.hm-session__badge {
+  block-size: 20px; /* off-scale (artboard) */
+  padding-inline: var(--spacing-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px; /* off-scale (artboard) */
+  background: var(--color-brand-soft);
+  border-radius: 6px; /* off-scale (artboard) */
+  font: 600 10px / 1 var(--hm-font-ui, var(--font-ui)); /* 10px off-scale (artboard) */
+  color: var(--color-brand-hover);
+  white-space: nowrap;
+}
+
+.hm-session__badge-dot {
+  inline-size: 6px; /* off-scale (artboard) */
+  block-size: 6px;
+  border-radius: 50%;
+  background: var(--color-success);
+}
+
+.hm-session__meta,
+.hm-session__activity {
+  font: 400 12.5px / 1.5 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-session__meta:lang(fa),
+.hm-session__activity:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-session__ip {
+  font-family: var(--hm-mono, ui-monospace, monospace);
+  font-size: var(--text-caption);
+}
+
+.hm-session__activity {
+  flex: 0 0 150px; /* off-scale (artboard) */
+  inline-size: 150px;
+  color: var(--color-text-primary);
+}
+
+.hm-session__action {
+  flex: 0 0 96px; /* off-scale (artboard) */
+  inline-size: 96px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.hm-session__current {
+  font: 400 var(--text-caption) / 1.4 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+  text-align: end;
+}
+
+/* ── single-choice panels ──────────────────────────────────────────── */
+
+.hm-settings-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 10px; /* off-scale (artboard) */
+  max-inline-size: 440px; /* the drawn 420–440 form column */
+}
+
+.hm-settings-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: 14px; /* off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.hm-settings-choice[data-selected="true"] {
+  background: var(--color-brand-soft);
+  border-color: var(--color-brand-primary);
+}
+
+.hm-settings-choice__input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.hm-settings-choice__radio {
+  flex: 0 0 18px; /* off-scale (artboard) */
+  inline-size: 18px;
+  block-size: 18px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--color-border-control);
+  border-radius: 50%;
+  background: var(--color-surface);
+}
+
+.hm-settings-choice[data-selected="true"] .hm-settings-choice__radio,
+.hm-theme-choice[data-selected="true"] .hm-settings-choice__radio {
+  border: 5px solid var(--color-brand-primary); /* off-scale (artboard) */
+}
+
+.hm-settings-choice__input:focus-visible + .hm-settings-choice__radio {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.hm-settings-choice__text {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hm-settings-choice__name {
+  font: 500 var(--text-body) / 1.3 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+}
+
+.hm-settings-choice__name:lang(fa) {
+  font-family: var(--font-ui-fa);
+  line-height: 1.5;
+}
+
+.hm-settings-choice__detail {
+  font: 400 var(--text-caption) / 1.4 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+}
+
+.hm-settings-choice__tag {
+  font: 500 11px / 1 var(--hm-mono, ui-monospace, monospace); /* 11px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+/* ── theme previews ────────────────────────────────────────────────── */
+
+.hm-theme-choices {
+  display: flex;
+  gap: var(--spacing-3);
+  max-inline-size: 440px;
+}
+
+.hm-theme-choice {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px; /* off-scale (artboard) */
+  cursor: pointer;
+}
+
+.hm-theme-choice__row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.hm-theme-choice__name {
+  font: 500 13px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-theme-choice[data-selected="true"] .hm-settings-choice__radio {
+  border-width: 4.5px; /* off-scale (artboard) */
+}
+
+.hm-theme-preview {
+  block-size: 78px; /* off-scale (artboard) */
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+
+/* Each preview is built from the theme it previews, not from the active one —
+ * the literals below are the delivered token values for the OTHER theme, which
+ * is the only way to draw one theme while the page is in the other. */
+.hm-theme-preview[data-scheme="light"] {
+  background: #f7f6f2;
+}
+
+.hm-theme-preview[data-scheme="dark"] {
+  background: #111615;
+}
+
+.hm-theme-choice[data-selected="true"] .hm-theme-preview {
+  border-color: var(--color-brand-primary);
+  box-shadow: 0 0 0 2px var(--color-brand-soft);
+}
+
+.hm-theme-preview__rail {
+  inline-size: 26px; /* off-scale (artboard) */
+  border-inline-end: 1px solid;
+}
+
+.hm-theme-preview[data-scheme="light"] .hm-theme-preview__rail {
+  background: #eef2ef;
+  border-color: #d7deda;
+}
+
+.hm-theme-preview[data-scheme="dark"] .hm-theme-preview__rail {
+  background: #1d2924;
+  border-color: #34413d;
+}
+
+.hm-theme-preview__body,
+.hm-theme-preview__half {
+  flex: 1;
+  padding: var(--spacing-2);
+  display: flex;
+  flex-direction: column;
+  gap: 5px; /* off-scale (artboard) */
+}
+
+.hm-theme-preview__half[data-scheme="light"] {
+  background: #f7f6f2;
+}
+
+.hm-theme-preview__half[data-scheme="dark"] {
+  background: #111615;
+}
+
+.hm-theme-preview__line {
+  inline-size: 70%;
+  block-size: var(--spacing-2);
+  border: 1px solid;
+  border-radius: var(--spacing-1);
+}
+
+.hm-theme-preview[data-scheme="light"] .hm-theme-preview__line,
+.hm-theme-preview__half[data-scheme="light"] .hm-theme-preview__line {
+  background: #ffffff;
+  border-color: #d7deda;
+}
+
+.hm-theme-preview[data-scheme="dark"] .hm-theme-preview__line,
+.hm-theme-preview__half[data-scheme="dark"] .hm-theme-preview__line {
+  background: #18201e;
+  border-color: #34413d;
+}
+
+.hm-theme-preview__bubble {
+  inline-size: 50%;
+  block-size: var(--spacing-2);
+  border-radius: var(--spacing-1);
+  align-self: flex-end;
+}
+
+.hm-theme-preview[data-scheme="light"] .hm-theme-preview__bubble {
+  background: #ddece7;
+}
+
+.hm-theme-preview[data-scheme="dark"] .hm-theme-preview__bubble {
+  background: #193a34;
+}
+
+/* ── confirm dialog ────────────────────────────────────────────────── */
+
+.hm-settings-confirm__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  align-items: safe center;
+  justify-content: center;
+  padding: var(--spacing-4);
+  background: rgb(28 39 36 / 0.42);
+}
+
+.hm-settings-confirm {
+  inline-size: min(420px, 100%);
+  box-sizing: border-box;
+  padding: var(--spacing-6);
+  display: flex;
+  flex-direction: column;
+  gap: 13px; /* off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 14px; /* off-scale (artboard) */
+  box-shadow: var(--shadow-overlay);
+}
+
+.hm-settings-confirm__title {
+  margin: 0;
+  font: 600 var(--text-control) / 1.3 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+}
+
+.hm-settings-confirm__title:lang(fa) {
+  line-height: 1.6;
+}
+
+.hm-settings-confirm__body {
+  margin: 0;
+  font: 400 13px / 1.6 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-settings-confirm__body:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-settings-confirm__actions {
+  display: flex;
+  gap: var(--spacing-2);
+}
+
+/* ── below the drawn panel size ────────────────────────────────────── */
+
+/* The panel is drawn at 1040x720. Narrower than that, the nav becomes a
+ * horizontal strip above the content rather than a squeezed column; every
+ * control keeps its 44px target. */
+@media (max-width: 899px) {
+  .hm-settings__body {
+    flex-direction: column;
+  }
+
+  .hm-settings__nav {
+    flex: 0 0 auto;
+    inline-size: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    border-inline-end: 0;
+    border-block-end: 1px solid var(--color-border-subtle);
+  }
+
+  .hm-settings__content {
+    padding: var(--spacing-4);
+  }
+
+  .hm-session {
+    flex-wrap: wrap;
+  }
+
+  .hm-session__activity,
+  .hm-session__action {
+    flex: 0 0 auto;
+    inline-size: auto;
+  }
+}

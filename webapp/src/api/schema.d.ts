@@ -1075,9 +1075,11 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description Too many attempts; retry later. */
+        /** @description Too many attempts; retry later. Carries Retry-After on the auth paths, so a client can show a real countdown instead of guessing — without it the sign-in form has no honest way to say when the door reopens. */
         RateLimited: {
             headers: {
+                /** @description Whole seconds until the caller's budget frees up. Present on the login, two-step and account-security 429s; the password-reset endpoints do not carry it yet (recorded in ROADMAP). */
+                "Retry-After"?: number;
                 [name: string]: unknown;
             };
             content: {

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 )
 
 // Principal is a matrix column: who is making the request.
@@ -156,6 +157,49 @@ func sessionStub(method, path, target string) Entry {
 	}
 }
 
+// sessionEntry builds the matrix row of an implemented session-gated
+// endpoint. The route-level gates decide first — anonymous 401,
+// still-owes-a-password-change 403 — and a caller past both reaches the
+// handler, which answers want (with code, or "" when want is a success).
+//
+// target is the concrete request target when path carries {template}
+// segments, empty when path is already one (same convention as
+// sessionStub).
+//
+// Every fixture is a fresh account, so want is the handler's answer for one
+// in its initial state: no pending setup, no second factor, one session.
+func sessionEntry(method, path, target string, body func(Fixture) string, want int, code string) Entry {
+	e := Entry{
+		Method:        method,
+		Path:          path,
+		Class:         ClassSession,
+		RequestTarget: target,
+		Body:          body,
+		Want: map[Principal]int{
+			Anonymous:        http.StatusUnauthorized,
+			MemberMustChange: http.StatusForbidden,
+			Member:           want,
+			Admin:            want,
+		},
+		WantCode: map[Principal]string{
+			Anonymous:        "not_authenticated",
+			MemberMustChange: "password_change_required",
+		},
+	}
+	if code != "" {
+		e.WantCode[Member] = code
+		e.WantCode[Admin] = code
+	}
+	return e
+}
+
+// passwordBody re-authenticates as the acting fixture. The TOTP rows that
+// need it send the CORRECT password on purpose: what the matrix pins there
+// is the account's state, not a re-auth failure that would mask it.
+func passwordBody(fx Fixture) string {
+	return fmt.Sprintf(`{"password":%q}`, fx.Password)
+}
+
 // Registry returns the full authorization matrix for the Phase 1.1 surface.
 func Registry() []Entry {
 	return []Entry{
@@ -286,84 +330,120 @@ func Registry() []Entry {
 		sessionStub(http.MethodGet, "/api/v1/search", "/api/v1/search?q=hello"),
 		sessionStub(http.MethodGet, "/api/v1/ws", ""),
 
-		// Phase 1.1b self-service security. Stub-level expectations: a 501 here
-		// means the route-level gates ran and let the caller through, never that
-		// permission was granted. They tighten to real outcomes when the TOTP,
-		// reset and session slices land — for example verify answers 409 with no
-		// pending setup, and revoking another account's family answers 404 so a
-		// guessed id confirms nothing.
-		sessionStub(http.MethodGet, "/api/v1/users/me/totp", ""),
-		sessionStub(http.MethodPost, "/api/v1/users/me/totp/setup", ""),
-		sessionStub(http.MethodPost, "/api/v1/users/me/totp/verify", ""),
-		sessionStub(http.MethodPost, "/api/v1/users/me/totp/activate", ""),
-		sessionStub(http.MethodPost, "/api/v1/users/me/totp/disable", ""),
-		sessionStub(http.MethodPost, "/api/v1/users/me/totp/recovery-codes", ""),
-		sessionStub(http.MethodGet, "/api/v1/users/me/sessions", ""),
-		sessionStub(
-			http.MethodDelete,
-			"/api/v1/users/me/sessions/{familyId}",
+		// Phase 1.1b two-step verification. Real outcomes: every cell below is
+		// the handler's own answer for a fresh account, so a Member/Admin cell
+		// that is not 501 proves the gates ran AND the handler decided.
+		//
+		// The four settings endpoints that refuse do so on the account's state,
+		// never on permission: nothing has been set up, so there is nothing to
+		// verify, activate, disable or reissue. Each carries the body that gets
+		// it past request validation to that decision — a 400 here would pin
+		// the shape of the request instead of the security answer.
+		sessionEntry(http.MethodGet, "/api/v1/users/me/totp", "", nil, http.StatusOK, ""),
+		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/setup", "", nil, http.StatusOK, ""),
+		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/verify", "",
+			func(Fixture) string { return `{"code":"123456"}` },
+			http.StatusConflict, "totp_setup_expired"),
+		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/activate", "", nil,
+			http.StatusConflict, "totp_setup_not_verified"),
+		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/disable", "", passwordBody,
+			http.StatusConflict, "totp_not_enabled"),
+		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/recovery-codes", "", passwordBody,
+			http.StatusConflict, "totp_not_enabled"),
+
+		// Session management is implemented: these are real outcomes, not stubs.
+		sessionEntry(http.MethodGet, "/api/v1/users/me/sessions", "", nil, http.StatusOK, ""),
+		// A well-formed id naming nothing answers exactly like another
+		// account's family: 404. That indistinguishability is the property —
+		// a guessed id must never confirm that someone else is signed in.
+		sessionEntry(http.MethodDelete, "/api/v1/users/me/sessions/{familyId}",
 			"/api/v1/users/me/sessions/00000000-0000-4000-8000-0000000000ff",
-		),
-		sessionStub(http.MethodPost, "/api/v1/users/me/sessions/revoke-others", ""),
+			nil, http.StatusNotFound, "session_not_found"),
+		sessionEntry(http.MethodPost, "/api/v1/users/me/sessions/revoke-others", "", nil,
+			http.StatusNoContent, ""),
 
 		// Public by design. The instance document is read before anyone has a
 		// session, and the reset pair answers identically to every principal —
 		// that uniformity IS the enumeration-safety property, so the matrix
 		// pins it rather than leaving it to the handler tests.
-		publicStub(http.MethodGet, "/api/v1/instance", ""),
-		publicStub(http.MethodPost, "/api/v1/auth/reset-request", ""),
-		publicStub(http.MethodPost, "/api/v1/auth/reset-complete", ""),
-
-		// Gated by the two-step challenge cookie, not a session: a valid session
-		// grants nothing here, which is the property worth pinning.
-		challengeStub(http.MethodPost, "/api/v1/auth/login/totp", ""),
-	}
-}
-
-// publicStub registers an unauthenticated endpoint whose behaviour has not
-// landed yet: every principal reaches the handler and gets the same 501.
-func publicStub(method, path, target string) Entry {
-	return Entry{
-		Method:        method,
-		Path:          path,
-		Class:         ClassPublic,
-		RequestTarget: target,
-		Want: map[Principal]int{
-			Anonymous:        http.StatusNotImplemented,
-			MemberMustChange: http.StatusNotImplemented,
-			Member:           http.StatusNotImplemented,
-			Admin:            http.StatusNotImplemented,
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v1/instance",
+			Class:  ClassPublic,
+			Want: map[Principal]int{
+				Anonymous:        http.StatusOK,
+				MemberMustChange: http.StatusOK,
+				Member:           http.StatusOK,
+				Admin:            http.StatusOK,
+			},
 		},
-		WantCode: map[Principal]string{
-			Anonymous:        "not_implemented",
-			MemberMustChange: "not_implemented",
-			Member:           "not_implemented",
-			Admin:            "not_implemented",
+		{
+			// Every principal gets the same 202 for an address that does not
+			// exist — and the handler tests prove it is byte-identical to the
+			// answer for one that does. That uniformity IS the enumeration
+			// defence, so the matrix pins it rather than trusting the handler.
+			Method: http.MethodPost,
+			Path:   "/api/v1/auth/reset-request",
+			Class:  ClassPublic,
+			Body: func(fx Fixture) string {
+				return `{"email":"nobody` + fx.Unique + `@example.invalid"}`
+			},
+			Want: map[Principal]int{
+				Anonymous:        http.StatusAccepted,
+				MemberMustChange: http.StatusAccepted,
+				Member:           http.StatusAccepted,
+				Admin:            http.StatusAccepted,
+			},
 		},
-	}
-}
+		{
+			// A garbage token answers exactly as an expired, superseded or
+			// already-used one does: one code for all four, so a replayed link
+			// never reveals which of them it hit.
+			Method: http.MethodPost,
+			Path:   "/api/v1/auth/reset-complete",
+			Class:  ClassPublic,
+			Body: func(Fixture) string {
+				return `{"token":"` + strings.Repeat("z", 43) +
+					`","new_password":"a matrix passphrase"}`
+			},
+			Want: map[Principal]int{
+				Anonymous:        http.StatusUnauthorized,
+				MemberMustChange: http.StatusUnauthorized,
+				Member:           http.StatusUnauthorized,
+				Admin:            http.StatusUnauthorized,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:        "invalid_reset_token",
+				MemberMustChange: "invalid_reset_token",
+				Member:           "invalid_reset_token",
+				Admin:            "invalid_reset_token",
+			},
+		},
 
-// challengeStub registers an endpoint gated by the two-step challenge cookie.
-// No fixture holds a challenge, so every principal — session or not — is
-// treated identically; once implemented these become 401 for everyone without
-// a live challenge, which is exactly the guarantee the class exists for.
-func challengeStub(method, path, target string) Entry {
-	return Entry{
-		Method:        method,
-		Path:          path,
-		Class:         ClassChallengeCookie,
-		RequestTarget: target,
-		Want: map[Principal]int{
-			Anonymous:        http.StatusNotImplemented,
-			MemberMustChange: http.StatusNotImplemented,
-			Member:           http.StatusNotImplemented,
-			Admin:            http.StatusNotImplemented,
-		},
-		WantCode: map[Principal]string{
-			Anonymous:        "not_implemented",
-			MemberMustChange: "not_implemented",
-			Member:           "not_implemented",
-			Admin:            "not_implemented",
+		{
+			// Gated by the two-step challenge cookie, not a session. No fixture
+			// holds a challenge, so all four principals answer 401
+			// not_authenticated — identically, the signed-in ones included.
+			// That uniformity IS the class: a session is not authority here,
+			// and only the half-authenticated state a 202 login mints is.
+			//
+			// The refusal also lands before the body is looked at, which is why
+			// this row sends none: no challenge means no request to validate.
+			Method: http.MethodPost,
+			Path:   "/api/v1/auth/login/totp",
+			Class:  ClassChallengeCookie,
+			Want: map[Principal]int{
+				Anonymous:        http.StatusUnauthorized,
+				MemberMustChange: http.StatusUnauthorized,
+				Member:           http.StatusUnauthorized,
+				Admin:            http.StatusUnauthorized,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:        "not_authenticated",
+				MemberMustChange: "not_authenticated",
+				Member:           "not_authenticated",
+				Admin:            "not_authenticated",
+			},
 		},
 	}
 }

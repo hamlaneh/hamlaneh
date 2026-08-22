@@ -109,6 +109,26 @@ export function LoaderCircleIcon(props: IconProps) {
   );
 }
 
+/** The only glyph the handoff mirrors in RTL — see `.hm-mirror-glyph`. */
+export function ArrowLeftIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="m12 19-7-7 7-7" />
+      <path d="M19 12H5" />
+    </Glyph>
+  );
+}
+
+export function InfoIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" />
+    </Glyph>
+  );
+}
+
 /**
  * The decorative nested-arc motif at the foot of the identity panel:
  * aria-hidden, removable, mirrored in RTL by the stylesheet.
@@ -324,6 +344,116 @@ export function ClockIcon(props: IconProps) {
     <Glyph {...props}>
       <circle cx="12" cy="12" r="9" />
       <path d="M12 7v5l3 2" />
+    </Glyph>
+  );
+}
+
+/* ── settings set ──────────────────────────────────────────────────── */
+
+/* The eight glyphs the settings handoff lists as new, plus copy/check/chevron
+ * which the artboards draw inside its buttons and rows. */
+
+export function MonitorIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="2" y="3" width="20" height="14" rx="2" />
+      <path d="M8 21h8" />
+      <path d="M12 17v4" />
+    </Glyph>
+  );
+}
+
+export function SmartphoneIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="6" y="2" width="12" height="20" rx="2" />
+      <path d="M11 18h2" />
+    </Glyph>
+  );
+}
+
+/** The desktop app's session row — a window rather than a browser. */
+export function AppWindowIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="3" y="4" width="18" height="14" rx="2" />
+      <path d="M7 20h10" />
+      <path d="M9 8h6" />
+      <path d="M9 12h4" />
+    </Glyph>
+  );
+}
+
+export function PrinterIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+      <path d="M6 9V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v5" />
+      <rect x="6" y="14" width="12" height="8" rx="1" />
+    </Glyph>
+  );
+}
+
+export function LanguagesIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="m5 8 6 6" />
+      <path d="m4 14 6-6 2-3" />
+      <path d="M2 5h12" />
+      <path d="M7 2h1" />
+      <path d="m22 22-5-10-5 10" />
+      <path d="M14 18h6" />
+    </Glyph>
+  );
+}
+
+export function SunIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2" />
+      <path d="M12 20v2" />
+      <path d="m4.9 4.9 1.4 1.4" />
+      <path d="m17.7 17.7 1.4 1.4" />
+      <path d="M2 12h2" />
+      <path d="M20 12h2" />
+      <path d="m6.3 17.7-1.4 1.4" />
+      <path d="m19.1 4.9-1.4 1.4" />
+    </Glyph>
+  );
+}
+
+export function UserIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </Glyph>
+  );
+}
+
+export function CopyIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+    </Glyph>
+  );
+}
+
+/** Inside the "Manage" button and the saved mark; mirrors in RTL. */
+export function ChevronRightIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="m9 18 6-6-6-6" />
+    </Glyph>
+  );
+}
+
+export function CheckIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M20 6 9 17l-5-5" />
     </Glyph>
   );
 }

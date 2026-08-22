@@ -62,24 +62,43 @@ const (
 // the order scanSession expects.
 const sessionColumns = `id, user_id, family_id, access_expires_at, refresh_expires_at, created_at`
 
-// CreateSession starts a new session family for a login and returns the
-// first generation.
-func (s *Store) CreateSession(ctx context.Context, ns NewSession) (Session, error) {
-	row := s.pool.QueryRow(ctx,
+// rowQuerier is the single method a one-row statement needs, satisfied by
+// both *pgxpool.Pool and pgx.Tx. It exists so a query can be written once
+// and run either on its own connection or inside a caller's transaction —
+// see insertSessionFamily, whose two callers differ in exactly that.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// insertSessionFamily creates the first generation of a fresh session
+// family: a login, whichever half of the sign-in produced it.
+//
+// It takes a rowQuerier rather than the pool because the two-step sign-in
+// has to run this insert inside the transaction that consumes the challenge
+// — a spent recovery code and the session it bought are one atomic fact —
+// while a password-only login has no transaction to join.
+func insertSessionFamily(ctx context.Context, q rowQuerier, userID uuid.UUID, t SessionTokens) (Session, error) {
+	row := q.QueryRow(ctx,
 		`INSERT INTO sessions
 		     (user_id, family_id, refresh_token_hash, access_token_hash,
 		      refresh_expires_at, access_expires_at, user_agent, ip)
 		 VALUES ($1, gen_random_uuid(), $2, $3,
 		         now() + make_interval(secs => $4), now() + make_interval(secs => $5), $6, $7)
 		 RETURNING `+sessionColumns,
-		ns.UserID, ns.RefreshTokenHash, ns.AccessTokenHash,
-		ns.RefreshTTL.Seconds(), ns.AccessTTL.Seconds(), ns.UserAgent, ns.IP,
+		userID, t.RefreshTokenHash, t.AccessTokenHash,
+		t.RefreshTTL.Seconds(), t.AccessTTL.Seconds(), t.UserAgent, t.IP,
 	)
 	sess, err := scanSession(row)
 	if err != nil {
-		return Session{}, fmt.Errorf("create session: %w", err)
+		return Session{}, fmt.Errorf("insert session family: %w", err)
 	}
 	return sess, nil
+}
+
+// CreateSession starts a new session family for a login and returns the
+// first generation.
+func (s *Store) CreateSession(ctx context.Context, ns NewSession) (Session, error) {
+	return insertSessionFamily(ctx, s.pool, ns.UserID, ns.SessionTokens)
 }
 
 // SessionUserByAccessHash authenticates an access token: it returns the

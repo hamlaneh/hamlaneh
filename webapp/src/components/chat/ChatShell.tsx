@@ -20,12 +20,12 @@ import { AccountMenu } from "./plumbing/AccountMenu";
 import { ChannelMenu } from "./plumbing/ChannelMenu";
 import { CreateChannelDialog } from "./plumbing/CreateChannelDialog";
 import { PeoplePicker } from "./plumbing/PeoplePicker";
+import { SettingsPanel } from "../settings/SettingsPanel";
 
 export interface ChatShellProps {
   currentUser: User;
   organizationName?: string | undefined;
   onLogout: () => void;
-  onChangePassword: () => void;
   /** Test seam only — production leaves the realtime client on its defaults. */
   realtime?: RealtimeOverrides;
 }
@@ -45,7 +45,6 @@ export function ChatShell({
   currentUser,
   organizationName,
   onLogout,
-  onChangePassword,
   realtime,
 }: ChatShellProps) {
   const { t } = useTranslation();
@@ -55,7 +54,10 @@ export function ChatShell({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [overlay, setOverlay] = useState<Overlay>("none");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // Settings float over the chat and hand focus back to the gear on Escape.
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
 
   const me = useMemo(() => summarize(currentUser), [currentUser]);
 
@@ -137,7 +139,10 @@ export function ChatShell({
   };
 
   return (
-    <div className="hm-chat">
+    <>
+      {/* The chat behind the panel is inert, not merely dimmed — the settings
+          handoff's accessibility note. */}
+      <div className="hm-chat" inert={settingsOpen}>
       <Sidebar
         channels={state.channels}
         currentUser={currentUser}
@@ -157,14 +162,14 @@ export function ChatShell({
         onToggleAccountMenu={() => {
           setOverlay(overlay === "account" ? "none" : "account");
         }}
+        onOpenSettings={() => {
+          closeOverlay();
+          setSettingsOpen(true);
+        }}
+        settingsButtonRef={settingsButtonRef}
         accountMenu={
           overlay === "account" ? (
-            <AccountMenu
-              user={currentUser}
-              onChangePassword={onChangePassword}
-              onLogout={onLogout}
-              onClose={closeOverlay}
-            />
+            <AccountMenu user={currentUser} onLogout={onLogout} onClose={closeOverlay} />
           ) : null
         }
       />
@@ -327,6 +332,16 @@ export function ChatShell({
           onClose={closeOverlay}
         />
       ) : null}
-    </div>
+      </div>
+
+      {settingsOpen ? (
+        <SettingsPanel
+          restoreFocusRef={settingsButtonRef}
+          onClose={() => {
+            setSettingsOpen(false);
+          }}
+        />
+      ) : null}
+    </>
   );
 }

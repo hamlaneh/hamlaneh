@@ -64,8 +64,11 @@ Filled/updated by the Phase 0 scaffold PR — keep this section current; every a
 
 - **Everything in the repo is English**: code, comments, identifiers, commit messages, PRs,
   issues, all docs, this file.
-  **Single exception:** locale resource files (`webapp/**/locales/fa/**`) contain Persian — that
-  is their job. Everything else stays English.
+  **Single exception:** the localized user-facing content itself — a resource whose whole
+  purpose is to carry a translation. That is `webapp/**/locales/fa/**` and the `fa` half of any
+  localized template wherever it lives (e.g. `server/internal/mailer/templates/*.fa.*`). The
+  exception covers only the translated strings; the file names, the keys, the code that loads
+  them, and every comment around them stay English.
 - **The app UI is bilingual**: English (default) + Persian (`fa`) with full RTL support.
 - Consequences, enforced from the first screen:
   - No hard-coded user-facing strings — every string goes through i18n keys (use `i18n-expert` skill).

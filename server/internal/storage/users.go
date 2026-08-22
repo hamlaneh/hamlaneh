@@ -84,6 +84,33 @@ func (s *Store) UserByIdentifier(ctx context.Context, identifier string) (User, 
 	return u, nil
 }
 
+// lockAccount takes the per-account serialization lock — the FIRST lock any
+// account-scoped transaction takes (see the package's lock-order rule).
+//
+// Everything that has to be true of an account "as a whole" rests on this
+// one lock: one live reset link, no session outliving a completed reset. A
+// sweep cannot see a concurrent transaction's uncommitted INSERT, so the
+// only way to be sure nothing was added behind it is to have excluded the
+// other writer from the start.
+//
+// It selects the id rather than the whole row because the lock is the only
+// thing anyone wants from it; a caller that also needs the account can read
+// it under the lock it now holds.
+//
+// It reports ErrNotFound for an account that is gone; every table here
+// cascades from users, so callers treat that as "nothing to act on".
+func lockAccount(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {
+	var locked uuid.UUID
+	err := tx.QueryRow(ctx, `SELECT id FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("lock account: %w", ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("lock account: %w", err)
+	}
+	return nil
+}
+
 // UserByID returns the user with the given id, or ErrNotFound.
 func (s *Store) UserByID(ctx context.Context, id uuid.UUID) (User, error) {
 	row := s.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id)

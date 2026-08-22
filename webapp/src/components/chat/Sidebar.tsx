@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router";
 
@@ -20,6 +20,9 @@ interface SidebarProps {
   onCreateChannel: () => void;
   onNewDirectMessage: () => void;
   onToggleAccountMenu: () => void;
+  onOpenSettings: () => void;
+  /** The settings panel hands focus back to the gear when it closes. */
+  settingsButtonRef?: RefObject<HTMLButtonElement | null>;
   accountMenu: ReactNode;
 }
 
@@ -84,6 +87,8 @@ export function Sidebar({
   onCreateChannel,
   onNewDirectMessage,
   onToggleAccountMenu,
+  onOpenSettings,
+  settingsButtonRef,
   accountMenu,
 }: SidebarProps) {
   const { t } = useTranslation();
@@ -186,23 +191,34 @@ export function Sidebar({
       </div>
 
       <div className="hm-sidebar__footer">
-        <Avatar
-          userId={currentUser.id}
-          displayName={currentUser.display_name}
-          size={32}
-          typeSize={13}
-          presence={presence}
-          presenceLabel={null}
-        />
-        <div className="hm-sidebar__me">
-          <span className="hm-sidebar__me-name">{currentUser.display_name}</span>
-          {/* The visible label that keeps the dot from carrying state alone. */}
-          <span className="hm-sidebar__me-presence">{presenceLabel}</span>
-        </div>
+        {/* The identity is the account menu's trigger and the gear beside it
+            opens Settings directly — chat-addendum-account-menu-light says so
+            in as many words. */}
+        <button
+          type="button"
+          className="hm-sidebar__identity"
+          aria-label={t("account.title")}
+          onClick={onToggleAccountMenu}
+        >
+          <Avatar
+            userId={currentUser.id}
+            displayName={currentUser.display_name}
+            size={32}
+            typeSize={13}
+            presence={presence}
+            presenceLabel={null}
+          />
+          <span className="hm-sidebar__me">
+            <span className="hm-sidebar__me-name">{currentUser.display_name}</span>
+            {/* The visible label that keeps the dot from carrying state alone. */}
+            <span className="hm-sidebar__me-presence">{presenceLabel}</span>
+          </span>
+        </button>
         <button
           type="button"
           className="hm-icon-button"
-          onClick={onToggleAccountMenu}
+          ref={settingsButtonRef}
+          onClick={onOpenSettings}
           aria-label={t("chat.footer.account")}
         >
           <SettingsIcon size={17} />
