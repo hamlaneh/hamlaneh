@@ -216,7 +216,10 @@ jobs:
           echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum --check --strict
           tar -xzf "$tarball" gitleaks
           ./gitleaks version
-          ./gitleaks git --redact --no-banner --exit-code 1 .
+          # -v prints file, line and rule for each finding; --redact keeps the value
+          # itself out of the log. Without -v the job reports only a count, which
+          # tells a contributor that something leaked but not what or where.
+          ./gitleaks git --redact --no-banner -v --exit-code 1 .
 
   compose-smoke:
     name: Compose smoke (deploy stack)

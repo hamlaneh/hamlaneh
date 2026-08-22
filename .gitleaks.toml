@@ -17,3 +17,19 @@ useDefault = true
 [[allowlists]]
 description = "Password-strength scorer fixtures: a table of INPUTS to a pure scoring function. Each string exists to exercise a length or character-class branch, and nothing in the system accepts any of them as a credential. Committed in f4f35bf before the inline marker existed, so the exemption is path-scoped to cover history."
 paths = ['''webapp/src/auth/passwordStrength\.test\.ts$''']
+
+[[allowlists]]
+description = """
+Two placeholder credentials that the default generic-api-key rule reads as \
+high-entropy because they are long and hex/base32 shaped. Both are structurally \
+impossible as real secrets — one counts 0-9a-f and starts over, the other repeats \
+a single 16-character block twice — and neither authenticates anything: the reset \
+token is handed to a fake store, and the TOTP secret only ever reaches an MSW mock. \
+Scoped to the exact values rather than to their files, because the claim being made \
+is about the strings themselves and stays true wherever they appear. Any edit to \
+either value fails the scan again, which is the point: re-approval is deliberate.\
+"""
+regexes = [
+  '''^0123456789abcdef0123456789abcdef012345678$''',
+  '''^KZ4W9TQR2MHD7FJXKZ4W9TQR2MHD7FJX$''',
+]
