@@ -85,6 +85,15 @@ installs it on its own server with one command and owns its communication comple
   reconnecting, DM, dark, Persian-RTL and 375px mobile states. The RTL mirror comes from `dir`
   alone — there is no RTL-specific CSS. Message markdown renders through an allowlist sanitizer
   with raw HTML never parsed.
+- **The account-security screens carry their delivered design.** Password reset runs as three
+  screens (`ResetRequestScreen`, `ResetPasswordScreen`, and the completion notice); the reset
+  token travels in the URL **fragment**, never a query string, so it cannot reach the access
+  logs of the server it unlocks, and the page scrubs it from the address bar on read. Two-step
+  sign-in is `TotpChallengeScreen` over an `OtpInput` that accepts paste and arrow keys across
+  six cells. Settings opens as a panel over the dimmed chat (`SettingsPanel`, focus-trapped)
+  with Security (change password, `TwoFactorCard`, the three-step `TwoFactorSetup`, and
+  `RecoveryCodesStep`), Sessions (one row per live family, current first, with remote
+  sign-out behind a confirm dialog), Language and Appearance.
 - An `ErrorBoundary` wraps the authenticated app, so a render fault shows a recovery message
   instead of a blank page.
 - **Realtime client** implementing `docs/api/ws-protocol.md`: handshake, per-channel subscribe,
@@ -99,19 +108,22 @@ installs it on its own server with one command and owns its communication comple
   webapp typecheck/lint/tests/build, gitleaks, codegen drift checks, compose smoke test.
   Activates when the GitHub remote exists.
 
-**Not yet built:** the **frontend** for password reset, two-step verification and the sessions
-list (the backend is live; the reset artboards, the settings Security section and the settings
-Sessions list are designed but not implemented); the messaging **backend** (every chat endpoint
-answers 501 today and the WS gateway does not exist, so the chat shell runs on mocks); files;
-the admin dashboard and user-settings UIs (both designed, not built); calls; E2EE — see the
-phase list below.
+**Not yet built:** the messaging **backend** (every chat endpoint answers 501 today and the WS
+gateway does not exist, so the chat shell and the realtime client both run on mocks); files;
+the admin dashboard (designed, not built); calls; E2EE — see the phase list below.
+
+**Known gap, recorded rather than hidden:** recovery codes can be generated and shown but not
+yet *used* to sign in. The two-step screen is six numeric cells and cannot accept a `XXXX-XXXX`
+code, and no artboard shows an alternative entry point — so the one path that rescues someone
+who has lost their authenticator is unreachable until that design addendum lands. The backend
+accepts recovery codes today; only the way in is missing.
 
 ## What's next
 
-**The Phase 1.1b frontend** — three designed screen sets now unblocked by their endpoints: the
-reset artboards, the settings Security section, and the settings Sessions list. Then the 1.2
-messaging backend behind the chat shell, 1.3 files/search, 1.4 the admin dashboard, 1.5 PWA
-baseline, 1.6 SSO/SCIM.
+**The 1.2 messaging core** — the backend behind the chat shell that already exists: channels and
+DMs, the WebSocket gateway (delivery, presence, typing, read positions, reconnect/resume),
+history paging, edit and soft delete, idempotent send, and message search. Then 1.3
+files/search, 1.4 the admin dashboard, 1.5 PWA baseline, 1.6 SSO/SCIM.
 
 **All Phase 1 designs are delivered** — auth, chat, admin dashboard, user settings — so from
 here the backend is the pacing item, not the design.

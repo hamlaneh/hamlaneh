@@ -159,9 +159,11 @@ retrofit is how security fails.
 
 ### 1.2 Messaging core
 
-- [ ] Rework `httpserver` route-policy keying from exact method+path to `r.Pattern` before
-      adding path-parameter routes (the table fails closed on unknown paths today — safe,
-      but every 1.2 route needs it)
+- [x] Rework `httpserver` route-policy keying from exact method+path to `r.Pattern` before
+      adding path-parameter routes — **landed early in 1.1b**, because the session-revocation
+      route `DELETE /api/v1/sessions/{id}` was itself a path-parameter route and could not be
+      classified without it. The table still fails closed: an unclassified pattern is refused,
+      so a 1.2 route that nobody adds a policy for is unreachable rather than unguarded
 - [ ] Channels (public/private) → 1:1 DMs; membership and roles. **The instance is the
       organization** — no org or team layer, no group DMs (see
       [ADR 001](adr/001-instance-as-org-flat-channels.md); supersedes the earlier
