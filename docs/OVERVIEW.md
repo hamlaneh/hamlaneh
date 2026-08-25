@@ -162,10 +162,10 @@ installs it on its own server with one command and owns its communication comple
 **Not yet built:** message edit, delete and search (slice 1.2b, still answering 501); files;
 the admin dashboard (designed, not built); calls; E2EE — see the phase list below.
 
-**Known gaps, recorded rather than hidden:** a DM reaches the sidebar unlabeled (`dm_peer` is
-never filled), `mention_count` is always zero because nothing writes mentions yet, and the
-`member_added` event is implemented in the gateway but never emitted. All three are listed in
-the roadmap under 1.2a.
+A DM now carries its peer, resolved by a join in the same query that draws the sidebar rather
+than a lookup per row; mentions are parsed from the contract's `<@{id}>` token when a message is
+sent, and only members of the conversation get a row — so no mention can ever name somebody who
+was not entitled to read the message it points at.
 
 
 ## What's next

@@ -1,9 +1,11 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -426,12 +428,6 @@ func (s *apiServer) ListChannelMembers(w http.ResponseWriter, r *http.Request, c
 // AddChannelMember invites a user into a channel; any member may invite
 // anybody. It is idempotent — inviting somebody who is already a member
 // changes nothing and still answers 204.
-//
-// No Realtime.MemberAdded event is announced, because it cannot be built
-// honestly: the event carries a storage.User and the Store interface
-// exposes no lookup from a user id to one. Reported to the orchestrator
-// rather than broadcast half-filled — clients reconcile membership from
-// REST, which is the protocol's stated source of truth.
 func (s *apiServer) AddChannelMember(w http.ResponseWriter, r *http.Request, channelID api.ChannelId) {
 	sc, ok := s.resolveChannel(w, r, channelID)
 	if !ok {
@@ -467,7 +463,33 @@ func (s *apiServer) AddChannelMember(w http.ResponseWriter, r *http.Request, cha
 		internalError(w, r, err)
 		return
 	}
+
+	// Announced after the membership committed, and named: the event carries
+	// a UserSummary, so the person has to be read back.
+	if user, ok := namedMember(r.Context(), sc.store, channelID, req.UserId, "member_added"); ok {
+		s.realtime.MemberAdded(channelID, user)
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// namedMember reads the person a membership event names, reporting false
+// when the lookup failed.
+//
+// A failure costs the announcement and nothing else. The membership change
+// is already committed, and the socket is a fast path rather than a delivery
+// guarantee (realtime.go): clients reconcile membership from REST on every
+// resume, so a missed event self-heals, while answering 500 here would
+// report a write that did happen as an error and invite a retry of it. It is
+// logged because a store that cannot read a user it just wrote to is worth
+// knowing about.
+func namedMember(ctx context.Context, store Store, channelID, userID uuid.UUID, event string) (storage.User, bool) {
+	user, err := store.UserByID(ctx, userID)
+	if err != nil {
+		slog.Error("membership event not announced", "event", event,
+			"channel", channelID, "user", userID, "error", err)
+		return storage.User{}, false
+	}
+	return user, true
 }
 
 // RemoveChannelMember takes a user out of a channel — leaving it, or being
@@ -530,9 +552,15 @@ func (s *apiServer) RemoveChannelMember(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// The departing user's own sockets learn the channel is gone for them.
-	// The other half of this event — MemberRemoved to the members who stay —
-	// is not announced, for the reason AddChannelMember gives.
+	// Two events, because the audiences are disjoint (ws-protocol.md §4).
+	// The members who remain get MemberRemoved — the gateway reads that
+	// audience from the membership table now that the removal has committed,
+	// so the departing user is simply not in it. Their own sockets get
+	// ChannelRemoved instead, which names nothing that is no longer their
+	// business, and which needs no lookup to send.
+	if user, ok := namedMember(r.Context(), sc.store, channelID, userID, "member_removed"); ok {
+		s.realtime.MemberRemoved(channelID, user)
+	}
 	s.realtime.ChannelRemoved(userID, channelID)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -545,14 +573,15 @@ func (s *apiServer) RemoveChannelMember(w http.ResponseWriter, r *http.Request, 
 // function a row from any other read would publish a zero nobody computed
 // as though it were a fact.
 //
-// dm_peer is deliberately absent. A storage channel carries the DM pair as
-// two user ids, and nothing in the Store interface resolves a user id into
-// the username and display name a UserSummary needs — so the peer is
-// omitted (the field is optional in the contract) rather than invented.
-// Reported to the orchestrator: until it is filled, a direct message
-// reaches the sidebar without a label.
+// dm_peer is caller-scoped in the same way and for a sharper reason — see
+// storage.Channel — so it is absent from exactly the same rows: a direct
+// message read without a caller cannot say which of the two participants is
+// "the other one". It is absent on every named channel too, which has a slug
+// to draw instead. A storage.DMPeer carries the three fields of a
+// UserSummary and no others, so there is no email, role or password state
+// here to leave out.
 func apiChannel(ch storage.Channel) api.Channel {
-	return api.Channel{
+	out := api.Channel{
 		Id:                ch.ID,
 		Kind:              api.ChannelKind(ch.Kind),
 		Slug:              ch.Slug,
@@ -565,6 +594,10 @@ func apiChannel(ch storage.Channel) api.Channel {
 		CreatedBy:         ch.CreatedBy,
 		CreatedAt:         ch.CreatedAt,
 	}
+	if peer := ch.DMPeer; peer != nil {
+		out.DmPeer = &api.UserSummary{Id: peer.ID, Username: peer.Username, DisplayName: peer.DisplayName}
+	}
+	return out
 }
 
 // apiUserSummary maps a user onto the contract's public UserSummary: the

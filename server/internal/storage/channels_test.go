@@ -748,6 +748,110 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 	})
 }
 
+// assertDMPeer checks that a channel names exactly one person as its direct
+// message peer.
+func assertDMPeer(t *testing.T, ch storage.Channel, want storage.User) {
+	t.Helper()
+
+	if ch.DMPeer == nil {
+		t.Fatalf("channel %s names no dm peer, want %s", ch.ID, want.Username)
+	}
+	if ch.DMPeer.ID != want.ID {
+		t.Errorf("dm peer id = %s, want %s (%s)", ch.DMPeer.ID, want.ID, want.Username)
+	}
+	if ch.DMPeer.Username != want.Username {
+		t.Errorf("dm peer username = %q, want %q", ch.DMPeer.Username, want.Username)
+	}
+	if ch.DMPeer.DisplayName != want.DisplayName {
+		t.Errorf("dm peer display name = %q, want %q", ch.DMPeer.DisplayName, want.DisplayName)
+	}
+}
+
+// TestChannelDMPeerIntegration pins what dm_peer means: the *other*
+// participant, resolved against whoever is asking. A direct message has no
+// slug, so the peer is the only label the sidebar has for it — which makes
+// "the other one" a question about the caller, and makes a caller-less read
+// unable to answer it at all.
+func TestChannelDMPeerIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, _ := testdb.New(t)
+	ctx := context.Background()
+	alice := mustCreateUser(ctx, t, store, newUser("alice"))
+	bob := mustCreateUser(ctx, t, store, newUser("bob"))
+	carol := mustCreateUser(ctx, t, store, newUser("carol"))
+	dm := mustOpenDM(ctx, t, store, alice.ID, bob.ID)
+
+	// One channel, read from both sides: the peer is whoever the caller is
+	// not, so the same row must name a different person to each of them.
+	sides := []struct{ caller, peer storage.User }{
+		{caller: alice, peer: bob},
+		{caller: bob, peer: alice},
+	}
+	for _, side := range sides {
+		t.Run(side.caller.Username+" sees "+side.peer.Username, func(t *testing.T) {
+			ch, err := store.ChannelForUser(ctx, dm.ID, side.caller.ID)
+			if err != nil {
+				t.Fatalf("ChannelForUser: %v", err)
+			}
+			assertDMPeer(t, ch, side.peer)
+		})
+	}
+
+	t.Run("the sidebar's own query carries it", func(t *testing.T) {
+		assertDMPeer(t, sidebarChannel(ctx, t, store, alice.ID, dm.ID), bob)
+	})
+
+	t.Run("opening the direct message names the peer straight away", func(t *testing.T) {
+		opened, _, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID)
+		if err != nil {
+			t.Fatalf("OpenDirectMessage: %v", err)
+		}
+		assertDMPeer(t, opened, bob)
+	})
+
+	t.Run("a named channel has no peer to name", func(t *testing.T) {
+		for _, kind := range []storage.ChannelKind{storage.ChannelKindPublic, storage.ChannelKindPrivate} {
+			t.Run(string(kind), func(t *testing.T) {
+				created := mustCreateChannel(ctx, t, store, newChannel("peerless-"+string(kind), kind, alice.ID))
+				if created.DMPeer != nil {
+					t.Errorf("a %s channel names %+v as its dm peer", kind, created.DMPeer)
+				}
+				if got := sidebarChannel(ctx, t, store, alice.ID, created.ID); got.DMPeer != nil {
+					t.Errorf("the sidebar row of a %s channel names %+v as its dm peer", kind, got.DMPeer)
+				}
+			})
+		}
+	})
+
+	t.Run("a caller who is not in the pair is told nothing", func(t *testing.T) {
+		// ChannelForUser applies no visibility check — membership is the
+		// authz layer's call — so this is reachable, and answering it with
+		// either half of somebody else's pair would name a person to a
+		// stranger.
+		ch, err := store.ChannelForUser(ctx, dm.ID, carol.ID)
+		if err != nil {
+			t.Fatalf("ChannelForUser: %v", err)
+		}
+		if ch.DMPeer != nil {
+			t.Errorf("dm peer = %+v for a caller who is in neither half of the pair", ch.DMPeer)
+		}
+	})
+
+	t.Run("a caller-less read names nobody", func(t *testing.T) {
+		ch, err := store.ChannelByID(ctx, dm.ID)
+		if err != nil {
+			t.Fatalf("ChannelByID: %v", err)
+		}
+		if ch.DMPeer != nil {
+			t.Errorf("dm peer = %+v although ChannelByID was told no caller", ch.DMPeer)
+		}
+		if ch.DMUserA == nil || ch.DMUserB == nil {
+			t.Error("the stored pair is missing; only the derived peer is caller-scoped")
+		}
+	})
+}
+
 // TestOpenDirectMessageConcurrentIntegration is why the insert leans on the
 // partial unique index instead of a read-then-write: several people opening
 // the same pair at once must end up with one channel, one creator, and no

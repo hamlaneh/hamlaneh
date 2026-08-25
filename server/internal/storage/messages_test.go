@@ -106,6 +106,48 @@ func countMessages(ctx context.Context, t *testing.T, conn *pgx.Conn, channelID 
 	return n
 }
 
+// mentionedIDs reads the message_mentions rows of one message straight from
+// SQL, so the assertions below are about the table the sidebar's "@" badge
+// counts rather than about anything CreateMessage reports back.
+func mentionedIDs(ctx context.Context, t *testing.T, conn *pgx.Conn, messageID uuid.UUID) []uuid.UUID {
+	t.Helper()
+
+	rows, err := conn.Query(ctx,
+		`SELECT mentioned_user_id FROM message_mentions WHERE message_id = $1`, messageID)
+	if err != nil {
+		t.Fatalf("read mentions: %v", err)
+	}
+	defer rows.Close()
+
+	ids := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			t.Fatalf("scan mention: %v", scanErr)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read mentions: %v", err)
+	}
+	return ids
+}
+
+// assertMentionRows checks exactly who a message's mention rows name, in no
+// particular order.
+func assertMentionRows(t *testing.T, got, want []uuid.UUID) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("message_mentions holds %v, want exactly %v", got, want)
+	}
+	for _, id := range want {
+		if !slices.Contains(got, id) {
+			t.Errorf("message_mentions is missing %s; it holds %v", id, got)
+		}
+	}
+}
+
 func TestCreateMessageIntegration(t *testing.T) {
 	t.Parallel()
 
@@ -629,4 +671,135 @@ func contentsOf(messages []storage.Message) []string {
 		contents[i] = m.Content
 	}
 	return contents
+}
+
+// seedMembership puts a user in a channel. Mentions are member-scoped, so
+// tests about them have to say who is actually in the conversation.
+func seedMembership(ctx context.Context, t *testing.T, conn *pgx.Conn, channelID, userID uuid.UUID) {
+	t.Helper()
+
+	_, err := conn.Exec(ctx,
+		`INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)
+		 ON CONFLICT DO NOTHING`, channelID, userID)
+	if err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+}
+
+// mentionToken is the contract's literal wire form: <@{user_id}>.
+func mentionTokenFor(id uuid.UUID) string { return "<@" + id.String() + ">" }
+
+// TestCreateMessageMentionsIntegration asserts the rows the sidebar's filled
+// "@" badge counts, read straight from message_mentions rather than from
+// whatever CreateMessage reports back.
+//
+// The member-only rule is the one worth pinning: a mention row names somebody
+// entitled to read the message it points at, so a future "my mentions" view
+// cannot surface a conversation its reader was never in.
+func TestCreateMessageMentionsIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, dsn := testdb.New(t)
+	ctx := context.Background()
+	conn := messagesRawConn(ctx, t, dsn)
+
+	author := mustCreateUser(ctx, t, store, newUser("mentionauthor"))
+	member := mustCreateUser(ctx, t, store, newUser("mentionmember"))
+	stranger := mustCreateUser(ctx, t, store, newUser("mentionstranger"))
+	channelID := seedMessagesChannel(ctx, t, conn, "mentioning")
+	seedMembership(ctx, t, conn, channelID, author.ID)
+	seedMembership(ctx, t, conn, channelID, member.ID)
+
+	send := func(t *testing.T, clientMsgID uuid.UUID, content string) storage.Message {
+		t.Helper()
+		msg, _, err := store.CreateMessage(ctx, storage.NewMessage{
+			ChannelID: channelID, AuthorID: author.ID,
+			ClientMsgID: clientMsgID, Content: content,
+		})
+		if err != nil {
+			t.Fatalf("CreateMessage: %v", err)
+		}
+		return msg
+	}
+
+	t.Run("a mentioned member gets a row", func(t *testing.T) {
+		msg := send(t, uuid.New(), "morning "+mentionTokenFor(member.ID)+", ready?")
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), []uuid.UUID{member.ID})
+	})
+
+	t.Run("naming the same person twice writes one row", func(t *testing.T) {
+		token := mentionTokenFor(member.ID)
+		msg := send(t, uuid.New(), token+" and again "+token)
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), []uuid.UUID{member.ID})
+	})
+
+	t.Run("a non-member is dropped, and does not fail the message", func(t *testing.T) {
+		// A stale paste or a hand-typed id. The message must still land.
+		msg := send(t, uuid.New(), "cc "+mentionTokenFor(stranger.ID)+" "+mentionTokenFor(member.ID))
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), []uuid.UUID{member.ID})
+	})
+
+	t.Run("a token naming nobody is dropped rather than erroring", func(t *testing.T) {
+		// No foreign-key violation: the join simply matches nothing.
+		msg := send(t, uuid.New(), "who is "+mentionTokenFor(uuid.New())+"?")
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), nil)
+	})
+
+	t.Run("a resend writes no second set of rows", func(t *testing.T) {
+		clientMsgID := uuid.New()
+		content := "please look " + mentionTokenFor(member.ID)
+		first := send(t, clientMsgID, content)
+		again := send(t, clientMsgID, content)
+
+		if again.ID != first.ID {
+			t.Fatalf("resend returned message %s, want the existing %s", again.ID, first.ID)
+		}
+		// The primary key would refuse a duplicate outright, so the real risk
+		// is the resend erroring rather than being a lookup. It did not.
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, first.ID), []uuid.UUID{member.ID})
+	})
+
+	t.Run("the counts the sidebar reads follow the rows", func(t *testing.T) {
+		// A fresh channel, so the counts below are only about this subtest.
+		countedID := seedMessagesChannel(ctx, t, conn, "mentioncounts")
+		seedMembership(ctx, t, conn, countedID, author.ID)
+		seedMembership(ctx, t, conn, countedID, member.ID)
+
+		for _, content := range []string{
+			"plain unread, nobody named",
+			"and now " + mentionTokenFor(member.ID),
+		} {
+			if _, _, err := store.CreateMessage(ctx, storage.NewMessage{
+				ChannelID: countedID, AuthorID: author.ID,
+				ClientMsgID: uuid.New(), Content: content,
+			}); err != nil {
+				t.Fatalf("CreateMessage: %v", err)
+			}
+		}
+
+		seen, err := store.ChannelForUser(ctx, countedID, member.ID)
+		if err != nil {
+			t.Fatalf("ChannelForUser: %v", err)
+		}
+		if seen.UnreadCount != 2 {
+			t.Errorf("unread_count = %d, want 2", seen.UnreadCount)
+		}
+		if seen.MentionCount != 1 {
+			t.Errorf("mention_count = %d, want 1", seen.MentionCount)
+		}
+		if seen.MentionCount > seen.UnreadCount {
+			t.Errorf("mention_count %d exceeds unread_count %d; the badge would outrank its own total",
+				seen.MentionCount, seen.UnreadCount)
+		}
+
+		// The author's own message is not unread to them, so neither count
+		// moves for the person who wrote it.
+		mine, err := store.ChannelForUser(ctx, countedID, author.ID)
+		if err != nil {
+			t.Fatalf("ChannelForUser: %v", err)
+		}
+		if mine.UnreadCount != 0 || mine.MentionCount != 0 {
+			t.Errorf("author sees unread=%d mention=%d, want 0/0", mine.UnreadCount, mine.MentionCount)
+		}
+	})
 }

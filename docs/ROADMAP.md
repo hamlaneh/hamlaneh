@@ -225,16 +225,16 @@ history, send a message, and have it appear on someone else's screen without a r
       the query string — message delivery, presence, typing, heartbeat, reconnect/resume
 - [x] Open socket terminated ≤10s after its session is revoked. Specified in the protocol since
       1.1b and untestable until the gateway exists; it is a 1.2a exit condition, not a later one
-- [ ] `dm_peer` on every DM `Channel`. Storage carries a DM's pair as two ids and nothing
+- [x] `dm_peer` on every DM `Channel`. Storage carries a DM's pair as two ids and nothing
       resolves them to a person, so a direct message currently reaches the sidebar unlabeled —
       the design draws a name and an avatar there. Optional in the schema, so it is
       contract-legal and still visibly broken. Belongs in the channel queries as a join, not as
       a lookup per sidebar row
-- [ ] `mention_count` is required on every `Channel` and is **always zero**: nothing writes
+- [x] `mention_count` is required on every `Channel` and was **always zero**: nothing writes
       `message_mentions`. The counting query is correct and has nothing to count, so the
       sidebar's filled "@" badge can never appear. Needs the mention parser on the send path —
       the contract already defines the literal form it parses
-- [ ] `member_added` is specified, implemented in the gateway and **never emitted**: the REST
+- [x] `member_added` is specified, implemented in the gateway and was **never emitted**: the REST
       handler that adds a member cannot name the person, so it announces nothing. Blocked on the
       same missing piece as `dm_peer` until `UserByID` reached the `Store` interface; now only
       the two announce calls are missing

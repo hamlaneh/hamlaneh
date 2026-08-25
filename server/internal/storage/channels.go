@@ -65,16 +65,24 @@ const (
 // scope — that zero means "nobody asked", not "nothing unread", and anything
 // serving a channel to a user must go through a caller-scoped read instead.
 //
+// DMPeer belongs to the same family and is filled by the same paths, for a
+// sharper reason: it is the *other* participant, and "other" is undefined
+// without somebody to be other than. One direct message names bob to alice
+// and alice to bob. So a caller-less read leaves it nil — a nil that means
+// "nobody asked", never "this conversation has no peer" — and so does a read
+// by somebody who is in neither half of the pair, who is owed no name at
+// all. It is nil on every named channel, which has a slug to draw instead.
+//
 // LastMessageAt needs no caller — the newest message in a channel is the same
 // fact whoever asks — so every path fills it. It is nil in an empty channel,
 // and it counts a deleted message: history keeps the row's place, so it is
 // still the last thing that happened there.
 //
-// Slug is nil exactly for a direct message, which the client labels with the
-// other participant's name instead; DMUserA and DMUserB are set exactly for
-// a direct message, canonicalized by the database as DMUserA < DMUserB so
-// one pair can only ever have one channel. CreatedBy is nil once that
-// account is gone (ON DELETE SET NULL).
+// Slug is nil exactly for a direct message, which the client labels with
+// DMPeer's name instead; DMUserA and DMUserB are set exactly for a direct
+// message, canonicalized by the database as DMUserA < DMUserB so one pair
+// can only ever have one channel. CreatedBy is nil once that account is gone
+// (ON DELETE SET NULL).
 type Channel struct {
 	ID                uuid.UUID
 	Kind              ChannelKind
@@ -87,9 +95,24 @@ type Channel struct {
 	UnreadCount       int
 	MentionCount      int
 	LastReadMessageID *uuid.UUID
+	DMPeer            *DMPeer
 	LastMessageAt     *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+}
+
+// DMPeer is the other participant of a direct message: the name row a client
+// draws where a named channel draws its slug, and nothing else.
+//
+// It is deliberately not a User. The channel queries select three columns of
+// the peer, so a User here would be a User with an empty password hash, no
+// address and a false admin flag — a row that looks whole and is not. These
+// three fields are also exactly the contract's UserSummary, which is the
+// only thing about another person a channel response may ever carry.
+type DMPeer struct {
+	ID          uuid.UUID
+	Username    string
+	DisplayName string
 }
 
 // NewChannel carries the fields for creating a named channel. Validation is
@@ -138,7 +161,7 @@ type ListChannelMembersParams struct {
 // INSERT and UPDATE can do that too (INSERT INTO channels AS c).
 //
 // The head and tail exist so the two lists cannot drift apart: they differ in
-// exactly the three caller-scoped columns and nowhere else.
+// exactly the six caller-scoped columns and nowhere else.
 const (
 	channelColumnsHead = `c.id, c.kind, c.slug, c.topic, c.dm_user_a, c.dm_user_b, c.created_by,
 	        (SELECT count(*) FROM channel_members mc WHERE mc.channel_id = c.id)::int, `
@@ -150,13 +173,17 @@ const (
 	// channelColumns is what a query selects when it knows who is asking. It
 	// requires the caller's user id bound as $1 and the joins in callerJoins.
 	channelColumns = channelColumnsHead +
-		`counts.unread, counts.mentions, rp.last_read_message_id` +
+		`counts.unread, counts.mentions, rp.last_read_message_id,
+	        peer.id, peer.username, peer.display_name` +
 		channelColumnsTail
 
 	// unscopedChannelColumns is what a query selects when there is no caller:
-	// literal zeros and a null, never a computed value. See ChannelByID on
+	// literal zeros and nulls, never a computed value. See ChannelByID on
 	// why they are not an answer to anything.
-	unscopedChannelColumns = channelColumnsHead + `0, 0, NULL::uuid` + channelColumnsTail
+	unscopedChannelColumns = channelColumnsHead +
+		`0, 0, NULL::uuid,
+	        NULL::uuid, NULL::text, NULL::text` +
+		channelColumnsTail
 )
 
 // callerJoins resolve everything about a channel that depends on who is
@@ -182,8 +209,21 @@ const (
 // once through message_mentions_user_id_idx instead of probing the primary
 // key once per unread message, which measures ~40x fewer buffers on a
 // channel with a thousand unread.
+//
+// The peer is the last of them, and it is a join rather than a lookup per
+// row for the reason the member count is a subquery: a sidebar with forty
+// direct messages in it must cost one query, not forty-one. The join key is
+// a CASE with no ELSE, so it is null — and the LEFT JOIN therefore finds
+// nobody — in all three cases where there is no other participant to name: a
+// named channel, whose dm columns are null; a direct message read by
+// somebody in neither half of the pair; and any row where the caller is both
+// halves, which the schema forbids. Matching on users' primary key makes it
+// one index probe per direct message on the page.
 const callerJoins = `LEFT JOIN channel_read_positions rp
 	            ON rp.channel_id = c.id AND rp.user_id = $1
+	     LEFT JOIN users peer
+	            ON peer.id = CASE WHEN c.dm_user_a = $1 THEN c.dm_user_b
+	                              WHEN c.dm_user_b = $1 THEN c.dm_user_a END
 	     LEFT JOIN LATERAL (
 	         SELECT count(*)::int AS unread,
 	                count(mn.message_id)::int AS mentions
@@ -253,12 +293,16 @@ func (s *Store) CreateChannel(ctx context.Context, nc NewChannel) (Channel, erro
 // on membership — IsChannelMember, or the authz package — before handing any
 // of it to a user; ListChannelsForUser is the scoped counterpart for lists.
 //
-// There is no caller here, so UnreadCount and MentionCount come back 0 and
-// LastReadMessageID nil — not because the channel is read, but because
-// "unread" is a question about a person and this function was not told one.
+// There is no caller here, so UnreadCount and MentionCount come back 0,
+// LastReadMessageID nil and DMPeer nil — not because the channel is read and
+// not because a direct message has nobody in it, but because "unread" and
+// "the other one" are questions about a person and this function was not
+// told one. Naming a peer here would mean picking a side of the pair at
+// random, and being right half the time is worse than being silent.
 // Anything that serves a channel to a user must read it through
-// ChannelForUser, or it will render a zero nobody computed. LastMessageAt is
-// filled: it needs no caller.
+// ChannelForUser, or it will render a zero nobody computed and a direct
+// message labelled with whoever sorted first. LastMessageAt is filled: it
+// needs no caller.
 func (s *Store) ChannelByID(ctx context.Context, id uuid.UUID) (Channel, error) {
 	ch, err := scanChannel(s.pool.QueryRow(ctx,
 		`SELECT `+unscopedChannelColumns+` FROM channels c WHERE c.id = $1`, id))
@@ -295,10 +339,11 @@ func (s *Store) ChannelForUser(ctx context.Context, channelID, userID uuid.UUID)
 // contract. A direct message has no topic to set (ErrDMHasNoTopic), and an
 // unknown channel is ErrChannelNotFound.
 //
-// The returned Channel carries no caller-scoped counts, for the reason
+// The returned Channel carries no caller-scoped fields, for the reason
 // ChannelByID gives: an update statement is not told who ran it. A handler
 // that answers with the whole channel should re-read it through
-// ChannelForUser rather than serve this row's zeros.
+// ChannelForUser rather than serve this row's zeros. DMPeer is moot here in
+// any case — a direct message has no topic, so this never returns one.
 func (s *Store) UpdateChannelTopic(ctx context.Context, id uuid.UUID, topic string) (Channel, error) {
 	kind, err := s.channelKind(ctx, id)
 	if err != nil {
@@ -593,18 +638,30 @@ func channelForUser(ctx context.Context, q rowQuerier, channelID, userID uuid.UU
 // scanChannel scans one channelColumns (or unscopedChannelColumns) row.
 // pgx.ErrNoRows becomes ErrChannelNotFound.
 func scanChannel(row pgx.Row) (Channel, error) {
-	var ch Channel
+	var (
+		ch                            Channel
+		peerID                        *uuid.UUID
+		peerUsername, peerDisplayName *string
+	)
 	err := row.Scan(
 		&ch.ID, &ch.Kind, &ch.Slug, &ch.Topic, &ch.DMUserA, &ch.DMUserB,
 		&ch.CreatedBy, &ch.MemberCount,
-		&ch.UnreadCount, &ch.MentionCount, &ch.LastReadMessageID, &ch.LastMessageAt,
-		&ch.CreatedAt, &ch.UpdatedAt,
+		&ch.UnreadCount, &ch.MentionCount, &ch.LastReadMessageID,
+		&peerID, &peerUsername, &peerDisplayName,
+		&ch.LastMessageAt, &ch.CreatedAt, &ch.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Channel{}, ErrChannelNotFound
 	}
 	if err != nil {
 		return Channel{}, err
+	}
+	// The peer's three columns arrive together or not at all — username and
+	// display_name are NOT NULL, so the only way any of them is null is the
+	// LEFT JOIN matching nobody. All three are checked anyway rather than
+	// dereferencing two of them on the strength of that argument.
+	if peerID != nil && peerUsername != nil && peerDisplayName != nil {
+		ch.DMPeer = &DMPeer{ID: *peerID, Username: *peerUsername, DisplayName: *peerDisplayName}
 	}
 	return ch, nil
 }

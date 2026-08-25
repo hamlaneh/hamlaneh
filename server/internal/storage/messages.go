@@ -99,11 +99,24 @@ const messageColumns = `m.id, m.channel_id, m.client_msg_id, m.content, m.create
 // insertMessageQuery stores a message unless its idempotency key is already
 // taken, in which case it stores nothing and returns no row. The author is
 // joined onto the inserted row so a send costs one round trip.
+//
+// The mentions of the message go in with it. Their insert selects from the
+// message's own RETURNING, so it writes exactly when a message row is created
+// and nothing when the key was taken; the join against channel_members is
+// what keeps a token naming a stranger — or nobody at all — from becoming a
+// row (see CreateMessage). $5 is the parsed ids, and repeats among them
+// collapse against the channel_members primary key.
 const insertMessageQuery = `WITH inserted AS (
 	    INSERT INTO messages (channel_id, author_id, client_msg_id, content)
 	    VALUES ($1, $2, $3, $4)
 	    ON CONFLICT (channel_id, author_id, client_msg_id) DO NOTHING
 	    RETURNING id, channel_id, author_id, client_msg_id, content, created_at, edited_at, deleted_at
+	), mentioned AS (
+	    INSERT INTO message_mentions (message_id, mentioned_user_id)
+	    SELECT i.id, cm.user_id
+	    FROM inserted i
+	    JOIN channel_members cm
+	      ON cm.channel_id = i.channel_id AND cm.user_id = ANY($5::uuid[])
 	)
 	SELECT ` + messageColumns + `
 	FROM inserted m JOIN users u ON u.id = m.author_id`
@@ -175,10 +188,31 @@ const sendAttempts = 3
 //
 // A channel or author that does not exist (deleted between the
 // authorization check and the send) is ErrNotFound, not a constraint error.
+//
+// Mentions are derived from the content rather than taken from the caller,
+// and are written by the same statement as the message. Deriving them here
+// means the rows the sidebar's "@" badge counts can never disagree with the
+// message they came from, whatever calls this; one statement means no
+// transaction is needed for them to be atomic with it, and a resend — which
+// reaches nothing but the lookup below — cannot write them a second time.
+//
+// Only members of the channel get a mention row. A token naming somebody who
+// is not in the conversation — a stale paste, a hand-typed id, a person since
+// removed — is dropped rather than stored or refused, and the same join makes
+// a token naming no user at all impossible instead of a foreign-key error, so
+// no stray token can fail an otherwise good message. The rule that falls out
+// is worth having on its own: no mention row can name someone who was not
+// entitled to read the message it points at, which is the row a future
+// cross-channel "my mentions" view would otherwise leak. The cost is that
+// somebody mentioned before they joined gets no "@" badge when they arrive —
+// they still get the message as plain unread, like the rest of the history
+// they missed.
 func (s *Store) CreateMessage(ctx context.Context, nm NewMessage) (Message, bool, error) {
+	mentioned := parseMentions(nm.Content)
+
 	for range sendAttempts {
 		row := s.pool.QueryRow(ctx, insertMessageQuery,
-			nm.ChannelID, nm.AuthorID, nm.ClientMsgID, nm.Content)
+			nm.ChannelID, nm.AuthorID, nm.ClientMsgID, nm.Content, mentioned)
 		msg, err := scanMessage(row)
 		if err == nil {
 			return msg, true, nil
