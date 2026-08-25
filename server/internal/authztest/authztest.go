@@ -6,20 +6,26 @@
 //
 // Registering a new endpoint is a one-line ask per slice: add its Entry
 // here, and the harness enforces the user-A-cannot-touch-B matrix for it
-// forever.
+// forever. An endpoint that acts on a channel registers two — one per
+// fixture kind — and answers the five channel relations instead of the four
+// instance-scoped columns (ADR 002).
 package authztest
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
 
 // Principal is a matrix column: who is making the request.
 type Principal string
 
-// The four Phase 1.1 principals.
+// The instance-scoped principals: what an endpoint outside any channel can
+// be asked by.
 const (
 	// Anonymous sends no cookies at all.
 	Anonymous Principal = "anonymous"
@@ -31,9 +37,59 @@ const (
 	Admin Principal = "admin"
 )
 
-// Principals returns every matrix column in stable order.
+// The channel relations (ADR 002). Instance role and channel membership are
+// independent facts, so both admin columns exist: they pin the contract's
+// boundary from either side — admin grants nothing outside membership, and
+// within membership only what the operation's own text grants.
+const (
+	// ChannelNonMember is authenticated and a stranger to this channel.
+	ChannelNonMember Principal = "channel-non-member"
+	// ChannelMember is a member who neither created the channel nor wrote
+	// the fixture message.
+	ChannelMember Principal = "channel-member"
+	// ChannelOwner is the member who created the channel
+	// (channels.created_by). Never the fixture message's author: creating a
+	// channel confers no authority over what is said in it.
+	ChannelOwner Principal = "channel-owner"
+	// AdminNonMember is an org admin who is a stranger to this channel.
+	AdminNonMember Principal = "admin-non-member"
+	// AdminMember is an org admin who is a member of this channel, and not
+	// the fixture message's author.
+	AdminMember Principal = "admin-member"
+	// MemberAuthor is the authorship refinement: a member acting on a
+	// message they wrote. Optional — declared only by operations whose
+	// contract distinguishes the author.
+	MemberAuthor Principal = "member-author"
+)
+
+// Principals returns every matrix column in stable order. It is the universe
+// of columns, not the set any one entry declares: an entry runs exactly the
+// principals present in its Want (Entry.Principals), and must declare at
+// least the ones its shape requires (Entry.RequiredPrincipals).
 func Principals() []Principal {
+	return []Principal{
+		Anonymous, Member, MemberMustChange, Admin,
+		ChannelNonMember, ChannelMember, ChannelOwner,
+		AdminNonMember, AdminMember, MemberAuthor,
+	}
+}
+
+// InstancePrincipals are the columns every instance-scoped entry must
+// declare.
+func InstancePrincipals() []Principal {
 	return []Principal{Anonymous, Member, MemberMustChange, Admin}
+}
+
+// ChannelPrincipals are the seven columns ADR 002 requires of every
+// channel-scoped entry: the two route-gate columns, unchanged, plus the five
+// channel relations. MemberAuthor is a refinement on top, not one of the
+// seven.
+func ChannelPrincipals() []Principal {
+	return []Principal{
+		Anonymous, MemberMustChange,
+		ChannelNonMember, ChannelMember, ChannelOwner,
+		AdminNonMember, AdminMember,
+	}
 }
 
 // Class is the deliberate security classification of an endpoint. The zero
@@ -60,17 +116,42 @@ const (
 	ClassAdmin
 )
 
-// Fixture describes the acting user of one matrix cell. Every cell gets a
-// fresh user (and session), so cells cannot interfere.
+// Fixture is one matrix cell's provisioned world: the acting user and, for a
+// channel-scoped cell, the fresh channel it acts on, the message inside it,
+// and the other users its bodies and paths name.
+//
+// Every cell gets its own — cells mutate (a removal, an edit, a send), and a
+// fixture shared across cells would make a failure depend on the order they
+// happened to run in.
 type Fixture struct {
 	Username string
 	Password string
 	// Unique is a per-cell suffix for bodies that must not collide
-	// (e.g. admin-created usernames).
+	// (e.g. admin-created usernames, channel slugs).
 	Unique string
+
+	// ChannelID and MessageID name the cell's channel and the message inside
+	// it that the message-scoped operations act on. Set for channel-scoped
+	// cells only.
+	ChannelID string
+	MessageID string
+	// MemberUserID is a member of that channel other than the acting user:
+	// the target of a removal, and the author of MessageID for every
+	// principal except MemberAuthor.
+	MemberUserID string
+
+	// OutsiderUserID is a real user who belongs to no channel: the target of
+	// an invite, and the peer of a newly opened direct message.
+	OutsiderUserID string
 }
 
 // Entry is one endpoint's row in the authorization matrix.
+//
+// A channel-scoped entry (Kind non-empty) is registered once per fixture
+// kind, so one contract operation has several rows — private and dm always,
+// public where the tripwire calls for it — each answering on a channel of
+// that kind. The completeness gate refuses a {channelId} operation that
+// registers the instance-scoped shape instead.
 type Entry struct {
 	Method string
 	// Path is the contract path exactly as openapi.yaml spells it,
@@ -78,19 +159,25 @@ type Entry struct {
 	Path  string
 	Class Class
 
-	// RequestTarget is the concrete target the harness requests when Path
-	// is not one itself: real ids substituted for {template} segments,
-	// plus any query parameter the contract makes required (search's q,
-	// which the generated router rejects with 400 before the security
-	// middleware ever runs). Empty means Path is already a valid target.
+	// Kind is the kind of channel this row's fixture provisions, and is what
+	// makes the entry channel-scoped. Empty for instance-scoped entries.
+	Kind storage.ChannelKind
+
+	// RequestTarget is the concrete target the harness requests when Path is
+	// not one itself and the fixture cannot supply it: an id the contract
+	// requires to name nothing, plus any query parameter the contract makes
+	// required (search's q, which the generated router rejects with 400
+	// before the security middleware ever runs). Empty means Path is already
+	// a valid target, or that its {template} segments come from the fixture.
 	RequestTarget string
 
 	// Body builds a minimal valid request body for the acting fixture;
 	// nil for bodyless requests.
 	Body func(fx Fixture) string
 
-	// Want is the expected status per principal. Every principal must be
-	// present (checked by the completeness test).
+	// Want is the expected status per principal. Every principal the entry's
+	// shape requires must be present (checked by the completeness test and
+	// by the runner), and the runner executes exactly the keys that are.
 	Want map[Principal]int
 
 	// WantCode optionally pins the contract error code of non-2xx cells,
@@ -98,62 +185,180 @@ type Entry struct {
 	WantCode map[Principal]string
 }
 
-// Target returns the request target for this entry.
-func (e Entry) Target() string {
-	if e.RequestTarget != "" {
-		return e.RequestTarget
+// Target returns the request target for one cell: RequestTarget, or Path when
+// there is none, with every {template} segment replaced by the fixture's real
+// ids.
+func (e Entry) Target(fx Fixture) string {
+	target := e.RequestTarget
+	if target == "" {
+		target = e.Path
 	}
-	return e.Path
+	return strings.NewReplacer(
+		"{channelId}", fx.ChannelID,
+		"{messageId}", fx.MessageID,
+		"{userId}", fx.MemberUserID,
+	).Replace(target)
 }
 
-// Fixture ids for the path-parameterised Phase 1.2 routes. They name
-// nothing in the database on purpose: while those endpoints are stubs the
-// request never reaches storage, and a well-formed uuid is all the
-// generated router needs to bind the path parameter and hand the request
-// to the security middleware.
-const (
-	fixtureChannelID = "11111111-2222-3333-4444-555555555555"
-	fixtureUserID    = "66666666-7777-8888-9999-aaaaaaaaaaaa"
-	fixtureMessageID = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
-)
+// ChannelScoped reports whether this entry acts on a fixture channel.
+func (e Entry) ChannelScoped() bool { return e.Kind != "" }
 
-// channelPath builds a target under the fixture channel.
-func channelPath(suffix string) string {
-	return "/api/v1/channels/" + fixtureChannelID + suffix
+// RequiredPrincipals returns the columns this entry's shape must declare.
+func (e Entry) RequiredPrincipals() []Principal {
+	if e.ChannelScoped() {
+		return ChannelPrincipals()
+	}
+	return InstancePrincipals()
 }
 
-// sessionStub builds the matrix row of one Phase 1.2 messaging endpoint
-// while its handler is still a stub (server/internal/httpserver/
-// messaging_stubs.go). target is empty when path is already a concrete
-// request target.
+// Principals returns the columns this entry actually runs: every principal
+// present in Want, in the stable order of Principals. A refinement runs
+// because it is declared; a key that is not a known principal runs never,
+// which is what the runner's cell count catches.
+func (e Entry) Principals() []Principal {
+	cols := make([]Principal, 0, len(e.Want))
+	for _, p := range Principals() {
+		if _, ok := e.Want[p]; ok {
+			cols = append(cols, p)
+		}
+	}
+	return cols
+}
+
+// outcome is one cell's expected answer: a status, plus the contract error
+// code when it is a refusal. The code is not decoration — a 404 and a 403 are
+// not interchangeable here, and neither are two refusals sharing a status:
+// "you are not a member" and "this channel has no topic" are both answers a
+// member of a private channel must never see confused for the other.
+type outcome struct {
+	status int
+	code   string
+}
+
+// success is an outcome with no error code to pin.
+func success(status int) outcome { return outcome{status: status} }
+
+// refusal is a non-2xx outcome and the contract code that must carry it.
+func refusal(status int, code string) outcome { return outcome{status: status, code: code} }
+
+// notMember is the answer every channel-scoped operation owes a stranger:
+// 404, never 403, so a channel's existence never leaks — and an org admin who
+// is not a member is a stranger, because membership is the only visibility
+// rule in this phase (openapi.yaml, ADR 002).
+var notMember = refusal(http.StatusNotFound, "channel_not_found")
+
+// members builds the five channel-relation columns from the three answers a
+// member can get. Both non-member columns are notMember on every operation,
+// which is exactly the boundary ADR 002 exists to pin from both sides.
+func members(member, owner, adminMember outcome) map[Principal]outcome {
+	return map[Principal]outcome{
+		ChannelNonMember: notMember,
+		AdminNonMember:   notMember,
+		ChannelMember:    member,
+		ChannelOwner:     owner,
+		AdminMember:      adminMember,
+	}
+}
+
+// plus adds one refinement column to a want map, returning a copy so a map
+// shared by several rows cannot be edited through one of them.
+func plus(want map[Principal]outcome, p Principal, o outcome) map[Principal]outcome {
+	out := maps.Clone(want)
+	out[p] = o
+	return out
+}
+
+// notImplementedYet is what an endpoint nobody has written a handler for
+// answers every caller the route gates let through (messaging_stubs.go).
 //
-// The expectations say what the stubs actually support: the route-level
-// gates decide first — anonymous 401, still-owes-a-password-change 403 —
-// and a caller past both gates reaches a handler that answers 501.
+// It is never a permission decision, and no cell carrying it claims to be
+// one: the route-level gates still decide first — anonymous 401,
+// still-owes-a-password-change 403 — and nothing past them has looked at
+// membership or authorship, because there is no code there to look. A 501
+// says the feature is missing, never "you are allowed to do this".
+var notImplementedYet = refusal(http.StatusNotImplemented, "not_implemented")
+
+// stubbed rewrites a row's want map to what its missing handler actually
+// answers: 501 for every principal past the route gates, the two non-member
+// columns included — no membership check exists yet to produce the 404 a
+// stranger is owed.
 //
-// The 501 cells are a statement about missing code, never a permission
-// decision. When the messaging slice lands they tighten into real
-// per-channel outcomes (a member of the channel 200/201, a non-member 404 so
-// a private channel's existence never leaks, an admin who is not a member
-// the same 404), and this helper disappears with them.
-func sessionStub(method, path, target string) Entry {
-	return Entry{
-		Method:        method,
-		Path:          path,
-		Class:         ClassSession,
-		RequestTarget: target,
+// The contract's real per-channel outcomes stay written at the call site
+// instead of being deleted, so tightening the row when the handler lands is
+// removing this wrapper and the operation's entry from
+// notImplementedOperations — not reconstructing the answers from scratch.
+func stubbed(want map[Principal]outcome) map[Principal]outcome {
+	out := maps.Clone(want)
+	for p := range out {
+		out[p] = notImplementedYet
+	}
+	return out
+}
+
+// searchPath is message search's contract path, spelled as openapi.yaml
+// spells it. Its registry row and its entry below must name one operation,
+// not two strings that agree today.
+const searchPath = "/api/v1/search"
+
+// notImplementedOperations is the closed list of contract operations whose
+// matrix rows may expect a 501: the three that are slice 1.2b work
+// (docs/ROADMAP.md) and have no handler at all.
+//
+// DiffNotImplemented enforces the list in both directions — a row expecting
+// 501 for an unlisted operation fails, so leaving a cell at "nobody wrote
+// this" is always a deliberate edit here; and a listed operation whose rows
+// no longer expect 501 fails too, so the list cannot outlive the stubs it
+// describes. The remaining direction is covered by TestAuthzMatrix itself: a
+// handler that lands while its row still says 501 gets asked, answers for
+// real, and turns the cell red.
+//
+// GET /api/v1/ws is deliberately absent. The gateway is being written now,
+// and its row pins the handshake's origin refusal rather than a 501.
+func notImplementedOperations() []Operation {
+	return []Operation{
+		{Method: http.MethodPatch, Path: messagePath},  // edit a message
+		{Method: http.MethodDelete, Path: messagePath}, // soft-delete a message
+		{Method: http.MethodGet, Path: searchPath},     // search messages
+	}
+}
+
+// channelEntry builds one channel-scoped row. want carries the five channel
+// relations and any refinement; the two route-gate columns are identical on
+// every channel-scoped endpoint — anonymous 401, still-owes-a-password-change
+// 403 — and are filled in here so no row can quietly disagree about them.
+func channelEntry(method, path string, kind storage.ChannelKind,
+	body func(Fixture) string, want map[Principal]outcome,
+) Entry {
+	e := Entry{
+		Method: method,
+		Path:   path,
+		Class:  ClassSession,
+		Kind:   kind,
+		Body:   body,
 		Want: map[Principal]int{
 			Anonymous:        http.StatusUnauthorized,
 			MemberMustChange: http.StatusForbidden,
-			Member:           http.StatusNotImplemented,
-			Admin:            http.StatusNotImplemented,
 		},
 		WantCode: map[Principal]string{
 			Anonymous:        "not_authenticated",
 			MemberMustChange: "password_change_required",
-			Member:           "not_implemented",
-			Admin:            "not_implemented",
 		},
+	}
+	for p, o := range want {
+		e.Want[p] = o.status
+		if o.code != "" {
+			e.WantCode[p] = o.code
+		}
+	}
+	return e
+}
+
+// bothKinds registers one {channelId} operation for the two kinds ADR 002
+// requires, for an operation whose answers do not depend on the kind.
+func bothKinds(method, path string, body func(Fixture) string, want map[Principal]outcome) []Entry {
+	return []Entry{
+		channelEntry(method, path, storage.ChannelKindPrivate, body, want),
+		channelEntry(method, path, storage.ChannelKindDM, body, want),
 	}
 }
 
@@ -163,8 +368,7 @@ func sessionStub(method, path, target string) Entry {
 // handler, which answers want (with code, or "" when want is a success).
 //
 // target is the concrete request target when path carries {template}
-// segments, empty when path is already one (same convention as
-// sessionStub).
+// segments the fixture does not fill, empty when path is already one.
 //
 // Every fixture is a fresh account, so want is the handler's answer for one
 // in its initial state: no pending setup, no second factor, one session.
@@ -193,6 +397,24 @@ func sessionEntry(method, path, target string, body func(Fixture) string, want i
 	return e
 }
 
+// The contract paths of the channel-scoped surface, spelled exactly as
+// openapi.yaml spells them: the {template} segments are the completeness
+// gate's key, and Entry.Target fills them from the cell's fixture.
+const (
+	channelPath  = "/api/v1/channels/{channelId}"
+	membersPath  = channelPath + "/members"
+	memberPath   = membersPath + "/{userId}"
+	messagesPath = channelPath + "/messages"
+	messagePath  = messagesPath + "/{messageId}"
+	readPath     = channelPath + "/read"
+)
+
+// matrixClientMsgID is the send row's idempotency key. Every cell posts into
+// its own fresh channel and the key is unique per (channel, author), so one
+// constant can never collide — not with another cell's send, and not with the
+// fixture message, which storage creates under a key of its own.
+const matrixClientMsgID = "00000000-0000-4000-8000-00000000c0de"
+
 // passwordBody re-authenticates as the acting fixture. The TOTP rows that
 // need it send the CORRECT password on purpose: what the matrix pins there
 // is the account's state, not a re-auth failure that would mask it.
@@ -200,8 +422,37 @@ func passwordBody(fx Fixture) string {
 	return fmt.Sprintf(`{"password":%q}`, fx.Password)
 }
 
-// Registry returns the full authorization matrix for the Phase 1.1 surface.
+// userIDBody names the cell's outsider: a real account that is in no channel.
+// Both operations that take one want a stranger — an invite that adds
+// somebody who is already a member answers 204 without proving anything, and
+// a DM opened with an existing peer is the 200 half of the idempotent pair,
+// not the 201 the row pins.
+func userIDBody(fx Fixture) string {
+	return fmt.Sprintf(`{"user_id":%q}`, fx.OutsiderUserID)
+}
+
+// newChannelBody creates a channel whose slug is this cell's alone.
+func newChannelBody(fx Fixture) string {
+	return fmt.Sprintf(`{"slug":"new%s","kind":"private"}`, fx.Unique)
+}
+
+// readBody moves the read position to the cell's own fixture message, which
+// the contract requires to belong to the channel — so a refusal is about
+// permission, never about the message being somewhere else.
+func readBody(fx Fixture) string {
+	return fmt.Sprintf(`{"message_id":%q}`, fx.MessageID)
+}
+
+// Registry returns the full authorization matrix: the instance-scoped
+// surface followed by the channel-scoped one.
 func Registry() []Entry {
+	return append(instanceRegistry(), channelRegistry()...)
+}
+
+// instanceRegistry is the half of the matrix decided without a channel:
+// instance role, session state, and the endpoints that answer the same to
+// everybody by design.
+func instanceRegistry() []Entry {
 	return []Entry{
 		{
 			Method: http.MethodGet,
@@ -308,31 +559,37 @@ func Registry() []Entry {
 			},
 		},
 
-		// Phase 1.2 messaging surface — see sessionStub for what these
-		// expectations mean and what they become once the slice ships.
-		sessionStub(http.MethodGet, "/api/v1/users", ""),
-		sessionStub(http.MethodGet, "/api/v1/channels", ""),
-		sessionStub(http.MethodPost, "/api/v1/channels", ""),
-		sessionStub(http.MethodPost, "/api/v1/dms", ""),
-		sessionStub(http.MethodGet, "/api/v1/channels/{channelId}", channelPath("")),
-		sessionStub(http.MethodPatch, "/api/v1/channels/{channelId}", channelPath("")),
-		sessionStub(http.MethodGet, "/api/v1/channels/{channelId}/members", channelPath("/members")),
-		sessionStub(http.MethodPost, "/api/v1/channels/{channelId}/members", channelPath("/members")),
-		sessionStub(http.MethodDelete, "/api/v1/channels/{channelId}/members/{userId}",
-			channelPath("/members/"+fixtureUserID)),
-		sessionStub(http.MethodGet, "/api/v1/channels/{channelId}/messages", channelPath("/messages")),
-		sessionStub(http.MethodPost, "/api/v1/channels/{channelId}/messages", channelPath("/messages")),
-		sessionStub(http.MethodPatch, "/api/v1/channels/{channelId}/messages/{messageId}",
-			channelPath("/messages/"+fixtureMessageID)),
-		sessionStub(http.MethodDelete, "/api/v1/channels/{channelId}/messages/{messageId}",
-			channelPath("/messages/"+fixtureMessageID)),
-		sessionStub(http.MethodPut, "/api/v1/channels/{channelId}/read", channelPath("/read")),
-		sessionStub(http.MethodGet, "/api/v1/search", "/api/v1/search?q=hello"),
-		sessionStub(http.MethodGet, "/api/v1/ws", ""),
+		// Phase 1.2, the endpoints decided without a channel. Nothing here
+		// turns on membership: the directory and the sidebar are the caller's
+		// own view, creating a channel needs no permission beyond a session,
+		// and a DM is opened with a user, not inside a conversation.
+		sessionEntry(http.MethodGet, "/api/v1/users", "", nil, http.StatusOK, ""),
+		sessionEntry(http.MethodGet, "/api/v1/channels", "", nil, http.StatusOK, ""),
+		sessionEntry(http.MethodPost, "/api/v1/channels", "", newChannelBody, http.StatusCreated, ""),
+		// A fresh fixture shares no DM with anybody, so opening one is always
+		// the 201 half of this idempotent pair.
+		sessionEntry(http.MethodPost, "/api/v1/dms", "", userIDBody, http.StatusCreated, ""),
+		// Search is slice 1.2b (docs/ROADMAP.md) and has no handler, so what
+		// the signed-in columns pin is the stub's 501 — missing code, not a
+		// permission. The route gates are asserted either way, and the
+		// contract's own story — "a session, and results only from your own
+		// channels" — tightens this row when the handler lands; the leak test
+		// for the second half of it belongs with that slice.
+		sessionEntry(http.MethodGet, searchPath, searchPath+"?q=hello", nil,
+			http.StatusNotImplemented, "not_implemented"),
+		// The upgrade endpoint, asked without an Origin header. The contract
+		// requires the handshake to carry one matching the instance origin and
+		// to reject a missing or mismatched value (CSWSH defense), so the
+		// authenticated columns pin that refusal: a session is necessary and
+		// not sufficient to open a socket. 101 is deliberately not the
+		// expectation — the harness serves through an httptest recorder, which
+		// cannot be hijacked, and a row that could only ever pass by not
+		// upgrading would assert nothing.
+		sessionEntry(http.MethodGet, "/api/v1/ws", "", nil, http.StatusForbidden, "origin_not_allowed"),
 
 		// Phase 1.1b two-step verification. Real outcomes: every cell below is
 		// the handler's own answer for a fresh account, so a Member/Admin cell
-		// that is not 501 proves the gates ran AND the handler decided.
+		// proves the gates ran AND the handler decided.
 		//
 		// The four settings endpoints that refuse do so on the account's state,
 		// never on permission: nothing has been set up, so there is nothing to
@@ -448,6 +705,110 @@ func Registry() []Entry {
 	}
 }
 
+// channelRegistry is the channel-scoped half of the matrix: every operation
+// whose contract path names a {channelId}, registered once per fixture kind.
+//
+// Every Want here is read off that operation's description in
+// docs/api/openapi.yaml. Three answers recur and are worth stating once:
+//
+//   - A non-member gets 404 channel_not_found, org admins included.
+//     Membership is the only visibility rule in Phase 1.2, so an admin
+//     outside a channel is a stranger to it and must not be able to tell it
+//     from a channel that does not exist.
+//   - A direct message refuses what its shape cannot carry with 400, not 403:
+//     its pair is fixed and it has no topic. That is a statement about the
+//     channel, not about the caller — and it is decided after membership, so
+//     the 400 never reaches somebody who should be seeing a 404.
+//   - Creating a channel is not moderating it. ChannelOwner gets the member's
+//     answer on every message operation; only authorship and instance-admin
+//     move those.
+func channelRegistry() []Entry {
+	var (
+		read      = success(http.StatusOK)
+		created   = success(http.StatusCreated)
+		done      = success(http.StatusNoContent)
+		dmFixed   = refusal(http.StatusBadRequest, "dm_membership_fixed")
+		notOwner  = refusal(http.StatusForbidden, "forbidden")
+		notAuthor = refusal(http.StatusForbidden, "not_message_author")
+		notMod    = refusal(http.StatusForbidden, "not_message_author_or_admin")
+		// A direct message has no topic, so PATCHing one is a 400. It is the
+		// single 400 in this surface the contract states without naming a
+		// code; pinned here to the generic request-validation code the server
+		// already writes and the contract-generated webapp mock already
+		// answers. A handler that wants a specific code changes openapi.yaml
+		// first — this value is not the place to settle it.
+		dmNoTopic = refusal(http.StatusBadRequest, "invalid_request")
+	)
+
+	readable := members(read, read, read)
+	entries := bothKinds(http.MethodGet, channelPath, nil, readable)
+
+	// The public tripwire (ADR 002). In Phase 1.2 membership is the only
+	// visibility rule for every kind, so this row is what turns red if
+	// somebody later opens public channels up without a contract change.
+	// One row, not a third full kind: proving sameness twice buys nothing.
+	entries = append(entries,
+		channelEntry(http.MethodGet, channelPath, storage.ChannelKindPublic, nil, readable))
+
+	topicBody := func(Fixture) string { return `{"topic":"a matrix topic"}` }
+	entries = append(entries,
+		channelEntry(http.MethodPatch, channelPath, storage.ChannelKindPrivate, topicBody,
+			members(read, read, read)),
+		channelEntry(http.MethodPatch, channelPath, storage.ChannelKindDM, topicBody,
+			members(dmNoTopic, dmNoTopic, dmNoTopic)))
+
+	entries = append(entries, bothKinds(http.MethodGet, membersPath, nil, readable)...)
+
+	// Any member may invite; a DM's pair is fixed.
+	entries = append(entries,
+		channelEntry(http.MethodPost, membersPath, storage.ChannelKindPrivate, userIDBody,
+			members(done, done, done)),
+		channelEntry(http.MethodPost, membersPath, storage.ChannelKindDM, userIDBody,
+			members(dmFixed, dmFixed, dmFixed)))
+
+	// Removing somebody else: the creator, or an admin who is a member. The
+	// fixture targets a member who is not the acting user, so no cell here is
+	// the always-allowed case of leaving, and the channel keeps a member
+	// either way — the contract's last_member refusal is never in play.
+	entries = append(entries,
+		channelEntry(http.MethodDelete, memberPath, storage.ChannelKindPrivate, nil,
+			members(notOwner, done, done)),
+		channelEntry(http.MethodDelete, memberPath, storage.ChannelKindDM, nil,
+			members(dmFixed, dmFixed, dmFixed)))
+
+	entries = append(entries, bothKinds(http.MethodGet, messagesPath, nil, readable)...)
+
+	sendBody := func(Fixture) string {
+		return fmt.Sprintf(`{"client_msg_id":%q,"content":"a matrix message"}`, matrixClientMsgID)
+	}
+	entries = append(entries, bothKinds(http.MethodPost, messagesPath, sendBody,
+		members(created, created, created))...)
+
+	// Editing is author-only, admins included: rewriting somebody else's
+	// words is impersonation, and no role makes that acceptable. Deleting is
+	// the author, or an admin who is a member of this channel — deletion
+	// removes words, it does not put new ones in somebody's mouth.
+	//
+	// Both are slice 1.2b (docs/ROADMAP.md) and neither handler exists, so
+	// what the server answers today is the stub's 501 and stubbed() says so.
+	// The wants inside it are the contract's real answers, kept here for the
+	// slice that makes them true: landing the handler is deleting the
+	// wrapper and the operation's entry in notImplementedOperations.
+	editBody := func(Fixture) string { return `{"content":"an edited matrix message"}` }
+	entries = append(entries, bothKinds(http.MethodPatch, messagePath, editBody,
+		stubbed(plus(members(notAuthor, notAuthor, notAuthor), MemberAuthor, read)))...)
+
+	entries = append(entries, bothKinds(http.MethodDelete, messagePath, nil,
+		stubbed(plus(members(notMod, notMod, done), MemberAuthor, done)))...)
+
+	// A read position is the caller's own, so every member may move theirs
+	// and a stranger still gets the channel's 404.
+	entries = append(entries, bothKinds(http.MethodPut, readPath, readBody,
+		members(done, done, done))...)
+
+	return entries
+}
+
 // Operation identifies one (method, path) pair of the API contract.
 type Operation struct {
 	Method string
@@ -460,6 +821,9 @@ func (op Operation) String() string { return op.Method + " " + op.Path }
 // missing lists spec operations without a matrix entry (the CI-failing
 // case), extra lists registry entries for operations the spec no longer
 // has. Both come back sorted for stable failure output.
+//
+// One operation may have several entries (one per fixture kind); that is a
+// coverage question, answered by the kind-coverage gate, not this one.
 func DiffRegistry(specOps []Operation, entries []Entry) (missing, extra []string) {
 	inRegistry := map[Operation]bool{}
 	for _, e := range entries {
@@ -480,4 +844,41 @@ func DiffRegistry(specOps []Operation, entries []Entry) (missing, extra []string
 	sort.Strings(missing)
 	sort.Strings(extra)
 	return missing, extra
+}
+
+// DiffNotImplemented compares the registry's 501 expectations against the
+// operations allowed to carry one (notImplementedOperations).
+//
+// unlisted names the cells expecting a 501 for an operation nobody listed —
+// the CI-failing case that keeps "no handler exists" a deliberate statement
+// rather than a shortcut. stale names listed operations no cell expects a 501
+// for any more: the handler landed and the list outlived it. Both come back
+// sorted for stable failure output.
+func DiffNotImplemented(allowed []Operation, entries []Entry) (unlisted, stale []string) {
+	isAllowed := map[Operation]bool{}
+	for _, op := range allowed {
+		isAllowed[op] = true
+	}
+
+	expectsStub := map[Operation]bool{}
+	for _, e := range entries {
+		op := Operation{Method: e.Method, Path: e.Path}
+		for _, principal := range e.Principals() {
+			if e.Want[principal] != http.StatusNotImplemented {
+				continue
+			}
+			expectsStub[op] = true
+			if !isAllowed[op] {
+				unlisted = append(unlisted, fmt.Sprintf("%s [%s] as %s", op, e.Kind, principal))
+			}
+		}
+	}
+	for _, op := range allowed {
+		if !expectsStub[op] {
+			stale = append(stale, op.String())
+		}
+	}
+	sort.Strings(unlisted)
+	sort.Strings(stale)
+	return unlisted, stale
 }

@@ -82,8 +82,14 @@ closed with `4400`.
 
 The version is negotiated **once**, in this exchange, and never renegotiated on a live socket.
 The client offers `protocol_version`; the server answers with the version it will speak. If the
-server cannot speak the offered version it closes with `4400` and a `data.reason` of
-`unsupported_protocol_version` rather than silently downgrading. Protocol version is `1`.
+server cannot speak the offered version it closes with `4400` and the close **reason**
+`unsupported_protocol_version`, rather than silently downgrading. (A WebSocket close frame
+carries a code and a reason string and nothing else — there is no `data` object to put it in.)
+Protocol version is `1`.
+
+A **second `hello` on a live socket closes it with `4400`.** "Negotiated once" is the rule;
+re-offering a version is a client that has lost track of its own connection, and the safe answer
+is to end it rather than guess which negotiation is in force.
 
 `resume` is optional and covered in §5. On a fresh connect it is omitted.
 
@@ -119,6 +125,12 @@ must be `hello`.
 not an object, or a channel-scoped frame without `chan` closes the socket with `4400`. There is
 no partial-parse recovery: an ambiguous frame is a bug or an attack, and neither deserves a
 best-effort interpretation.
+
+**A known field of the wrong type inside `data` is not fatal** — the frame is ignored and the
+socket stays open, the same treatment an unknown `type` gets. The envelope is what has to be
+trustworthy; a `presence` whose `state` arrived as a number is one unusable instruction, not an
+unusable connection. The exception is `hello`: it is the frame that establishes what the socket
+*is*, so an unusable payload there closes with `4400`.
 
 ---
 
@@ -194,6 +206,8 @@ Notes that matter:
 - **The three presence states**: `online` means a live socket exists; `away` means a client
   reported itself idle; `offline` means no socket after a short grace period (so a reload or a
   tunnel blip does not flash the peer offline).
+- **A `typing` event is never echoed to its own sender.** The author already knows; rendering
+  "you are typing" would be a bug baked into the transport.
 - **`typing` has a protocol but no designed UI yet.** The frames are specified and implemented so
   the transport is settled; whether and how a typing indicator is drawn is a design question
   that has not been answered. Nothing renders it in Phase 1.2.

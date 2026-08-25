@@ -39,6 +39,15 @@ const (
 	codeUsernameTaken       errorCode = "username_taken"
 	codeEmailTaken          errorCode = "email_taken"
 	codeInternalError       errorCode = "internal_error"
+
+	// Phase 1.2: conversations. codeChannelNotFound is the answer to "no
+	// such channel for this caller" — an unknown id and a channel the
+	// caller is not in are deliberately indistinguishable, so a channel's
+	// existence never leaks (openapi.yaml components.responses.NotFound).
+	codeChannelNotFound   errorCode = "channel_not_found"
+	codeUserNotFound      errorCode = "user_not_found"
+	codeChannelSlugTaken  errorCode = "channel_slug_taken"
+	codeDMMembershipFixed errorCode = "dm_membership_fixed"
 	// codeNotFound answers a path under /api that no contract route claims.
 	// It is the router's answer, not a resource's: the contract's
 	// resource-level 404s carry their own codes (session_not_found,

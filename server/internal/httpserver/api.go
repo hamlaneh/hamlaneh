@@ -33,6 +33,14 @@ type Store interface {
 	UpdatePassword(ctx context.Context, userID uuid.UUID, passwordHash string, keepFamilyID uuid.UUID) error
 	UpdatePasswordHash(ctx context.Context, userID uuid.UUID, passwordHash string) error
 	ListUsers(ctx context.Context, params storage.ListUsersParams) ([]storage.User, error)
+	// ListDirectory is the people-picker read: username order, filtered,
+	// and a different query from ListUsers rather than a mode flag on it
+	// (storage/directory.go says why).
+	ListDirectory(ctx context.Context, params storage.ListDirectoryParams) ([]storage.User, error)
+	// UserByID names the person in a membership event. The events carry a
+	// UserSummary, and broadcasting one with an empty username is worse than
+	// not broadcasting at all.
+	UserByID(ctx context.Context, id uuid.UUID) (storage.User, error)
 
 	CreateSession(ctx context.Context, ns storage.NewSession) (storage.Session, error)
 	SessionUserByAccessHash(ctx context.Context, accessHash []byte) (storage.Session, storage.User, error)

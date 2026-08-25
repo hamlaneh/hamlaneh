@@ -201,32 +201,48 @@ history, send a message, and have it appear on someone else's screen without a r
 - [x] Consume `Retry-After` in the sign-in form. The header shipped in 1.1b and the frontend kept
       guessing ("try again in a few minutes") from a stale comment claiming the contract carried
       no such header. Found by the first e2e run, which read the real 429 through Caddy
-- [ ] **Authz harness rework first, before any handler.** Today's four columns are
+- [x] **Authz harness rework first, before any handler.** Today's four columns are
       instance-scoped and cannot express the question this phase turns on: *member of which
       channel?* Designed in [ADR 002](adr/002-channel-scoped-authz-matrix.md): seven required
       columns, authorship refinements, per-cell fixture bundles, private+dm kind coverage with
       a single public tripwire row, and a completeness gate that refuses instance-scoped
       registration of any `{channelId}` operation
-- [ ] Channels (public/private) and 1:1 DMs; membership and roles. **The instance is the
+- [x] Channels (public/private) and 1:1 DMs; membership and roles. **The instance is the
       organization** — no org or team layer, no group DMs (see
       [ADR 001](adr/001-instance-as-org-flat-channels.md))
-- [ ] Storage interface + Postgres driver for channels, membership and messages
-- [ ] Message history, cursor-paged in both directions (`around` for permalinks lands with
+- [x] Storage interface + Postgres driver for channels, membership and messages
+- [x] Message history, cursor-paged in both directions (`around` for permalinks lands with
       1.2b, when there is a permalink to resolve)
-- [ ] Idempotent send: `client_msg_id` unique per (channel, author), so a message queued
+- [x] Idempotent send: `client_msg_id` unique per (channel, author), so a message queued
       offline and resent after a reconnect lands exactly once. The unique index already exists
-- [ ] Read positions, **moved here from 1.2b**: the contract makes `unread_count` and
+- [x] Read positions, **moved here from 1.2b**: the contract makes `unread_count` and
       `mention_count` required on every `Channel`, and `GET /api/v1/channels` ships in this
       slice, so the alternative was emitting zeros the sidebar would draw as truth. Own-device
       read sync only — **no cross-user read receipts** (nothing in the design shows another
       person's read state; privacy default until designed)
-- [ ] WebSocket gateway per `docs/api/ws-protocol.md`: handshake with Origin validation (CSWSH
+- [x] WebSocket gateway per `docs/api/ws-protocol.md`: handshake with Origin validation (CSWSH
       defense), auth by cookie or short-lived one-time ticket — **never** a long-lived token in
       the query string — message delivery, presence, typing, heartbeat, reconnect/resume
-- [ ] Open socket terminated ≤10s after its session is revoked. Specified in the protocol since
+- [x] Open socket terminated ≤10s after its session is revoked. Specified in the protocol since
       1.1b and untestable until the gateway exists; it is a 1.2a exit condition, not a later one
+- [ ] `dm_peer` on every DM `Channel`. Storage carries a DM's pair as two ids and nothing
+      resolves them to a person, so a direct message currently reaches the sidebar unlabeled —
+      the design draws a name and an avatar there. Optional in the schema, so it is
+      contract-legal and still visibly broken. Belongs in the channel queries as a join, not as
+      a lookup per sidebar row
+- [ ] `mention_count` is required on every `Channel` and is **always zero**: nothing writes
+      `message_mentions`. The counting query is correct and has nothing to count, so the
+      sidebar's filled "@" badge can never appear. Needs the mention parser on the send path —
+      the contract already defines the literal form it parses
+- [ ] `member_added` is specified, implemented in the gateway and **never emitted**: the REST
+      handler that adds a member cannot name the person, so it announces nothing. Blocked on the
+      same missing piece as `dm_peer` until `UserByID` reached the `Store` interface; now only
+      the two announce calls are missing
+- [ ] WebSocket connect-flood budget (close code `4429`). The per-frame budgets for `subscribe`
+      and `typing` are enforced; the connect budget belongs with the generic rate-limit
+      middleware below, and `4429` is unused until it lands
 - [ ] Markdown through the strict sanitizer, server side as well as client side
-- [ ] Strict baseline CSP on all app responses: `default-src 'self'`, no
+- [x] Strict baseline CSP on all app responses: `default-src 'self'`, no
       `unsafe-inline`/`unsafe-eval`, `object-src 'none'`
 - [ ] Generic rate-limit middleware with per-endpoint budgets, replacing the auth-specific
       limiters: message send, WS connect/reconnect, and the existing login/reset/TOTP budgets

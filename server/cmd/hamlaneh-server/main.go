@@ -38,6 +38,7 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
 	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
+	"github.com/hamlaneh/hamlaneh/server/internal/wsgateway"
 )
 
 const (
@@ -96,7 +97,28 @@ func run(args []string) error {
 		// requests by the time serve returns.
 		defer reset.Close()
 
-		return serve(ctx, httpserver.New(listenAddr, store, httpserver.WithPasswordReset(reset)))
+		// The realtime gateway. Its Origin check is the CSWSH defense standing
+		// in for the CSRF header a browser cannot send on a handshake, so it
+		// needs the instance's public origin; without one it allows nothing
+		// and every upgrade is refused, which is the right way to fail.
+		gateway := wsgateway.New(store, os.Getenv(passwordreset.EnvPublicURL))
+		// Closed before serve returns, because http.Server.Shutdown does not
+		// wait for hijacked connections and a WebSocket is one. Without this,
+		// shutdown reports success while sockets are still being served.
+		//
+		// A failure here is logged rather than returned: the process is on
+		// its way out, and reporting a shutdown hiccup as the run's outcome
+		// would mask whatever actually stopped it.
+		defer func() {
+			if closeErr := gateway.Close(); closeErr != nil {
+				slog.Error("close realtime gateway", "error", closeErr)
+			}
+		}()
+
+		return serve(ctx, httpserver.New(listenAddr, store,
+			httpserver.WithPasswordReset(reset),
+			httpserver.WithRealtime(gateway),
+		))
 	case args[0] == "healthcheck":
 		if len(args) > 1 {
 			return fmt.Errorf("healthcheck takes no arguments\n%s", usage)

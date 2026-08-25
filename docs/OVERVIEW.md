@@ -49,8 +49,10 @@ installs it on its own server with one command and owns its communication comple
   (login/logout/refresh/reset/two-step), current user, account security (TOTP, sessions),
   the public instance document, and admin user-management endpoints. Both sides generate
   code from it (oapi-codegen for Go, openapi-typescript for the webapp); CI fails if
-  generated code drifts. The Phase 1.2 messaging endpoints are routed and gated but still
-  answer 501.
+  generated code drifts. The realtime half is [`docs/api/ws-protocol.md`](api/ws-protocol.md),
+  which OpenAPI cannot describe; its operation table is machine-read by the same completeness
+  gate. Of the Phase 1.2 messaging surface, only message edit, delete and search still answer
+  501 — all three are slice 1.2b.
 - **Real authentication (Phase 1.1a identity core):** argon2id passwords; opaque
   access/refresh tokens in HttpOnly+Secure+SameSite=Strict cookies with rotation and
   reuse detection (a replayed refresh token revokes its whole session family); CSRF
@@ -142,9 +144,28 @@ installs it on its own server with one command and owns its communication comple
   webapp typecheck/lint/tests/build, Playwright e2e, gitleaks, codegen drift checks, compose smoke
   test. Activates when the GitHub remote exists.
 
-**Not yet built:** the messaging **backend** (every chat endpoint answers 501 today and the WS
-gateway does not exist, so the chat shell and the realtime client both run on mocks); files;
+- **Conversations, and a socket that carries them (Phase 1.2a).** Channels, private channels
+  and 1:1 DMs, with membership as the only visibility rule: a non-member — an org admin
+  included — gets 404, so a channel's existence never leaks. Sending is idempotent on a
+  client-generated id, so a message queued while offline and resent lands exactly once.
+  History pages both ways on `(created_at, id)`. The **WebSocket gateway** delivers what the
+  REST layer commits: message events, presence limited to DM peers, typing, read-position sync
+  to the same user's other sockets, heartbeats, and resume with a bounded replay buffer that
+  falls back to REST backfill. The handshake is guarded by a strict Origin check — the
+  cross-site-hijacking defense standing in for the CSRF header a browser cannot send on an
+  upgrade — and a revoked session closes its sockets within a tested 10 seconds.
+- The **authorization matrix** now asks the question this phase turns on: *member of which
+  channel?* 263 cells over ten principals, private and DM channels alike, plus a WebSocket
+  registry whose completeness is checked against the protocol document. Designed in
+  [ADR 002](adr/002-channel-scoped-authz-matrix.md).
+
+**Not yet built:** message edit, delete and search (slice 1.2b, still answering 501); files;
 the admin dashboard (designed, not built); calls; E2EE — see the phase list below.
+
+**Known gaps, recorded rather than hidden:** a DM reaches the sidebar unlabeled (`dm_peer` is
+never filled), `mention_count` is always zero because nothing writes mentions yet, and the
+`member_added` event is implemented in the gateway but never emitted. All three are listed in
+the roadmap under 1.2a.
 
 
 ## What's next

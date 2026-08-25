@@ -33,6 +33,7 @@ type fakeStore struct {
 	updatePassword          func(ctx context.Context, userID uuid.UUID, hash string, keepFamilyID uuid.UUID) error
 	updatePasswordHash      func(ctx context.Context, userID uuid.UUID, hash string) error
 	listUsers               func(ctx context.Context, params storage.ListUsersParams) ([]storage.User, error)
+	listDirectory           func(ctx context.Context, params storage.ListDirectoryParams) ([]storage.User, error)
 	createSession           func(ctx context.Context, ns storage.NewSession) (storage.Session, error)
 	sessionUserByAccessHash func(ctx context.Context, accessHash []byte) (storage.Session, storage.User, error)
 	rotateSession           func(ctx context.Context, refreshHash []byte, next storage.SessionTokens) (storage.Session, storage.RotateOutcome, error)
@@ -53,6 +54,7 @@ type fakeStore struct {
 	totpChallengeUserByTokenHash func(ctx context.Context, tokenHash []byte) (uuid.UUID, error)
 	completeTotpChallenge        func(ctx context.Context, att storage.TotpChallengeAttempt) (storage.User, storage.Session, storage.TotpChallengeOutcome, error)
 
+	userByID            func(ctx context.Context, id uuid.UUID) (storage.User, error)
 	createChannel       func(ctx context.Context, nc storage.NewChannel) (storage.Channel, error)
 	channelForUser      func(ctx context.Context, channelID, userID uuid.UUID) (storage.Channel, error)
 	updateChannelTopic  func(ctx context.Context, id uuid.UUID, topic string) (storage.Channel, error)
@@ -109,6 +111,13 @@ func (f *fakeStore) ListUsers(ctx context.Context, params storage.ListUsersParam
 		return nil, errFakeUnwired
 	}
 	return f.listUsers(ctx, params)
+}
+
+func (f *fakeStore) ListDirectory(ctx context.Context, params storage.ListDirectoryParams) ([]storage.User, error) {
+	if f.listDirectory == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listDirectory(ctx, params)
 }
 
 func (f *fakeStore) CreateSession(ctx context.Context, ns storage.NewSession) (storage.Session, error) {
@@ -489,4 +498,11 @@ func (f *fakeStore) SetReadPosition(ctx context.Context, channelID, userID, mess
 		return errFakeUnwired
 	}
 	return f.setReadPosition(ctx, channelID, userID, messageID)
+}
+
+func (f *fakeStore) UserByID(ctx context.Context, id uuid.UUID) (storage.User, error) {
+	if f.userByID == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.userByID(ctx, id)
 }
