@@ -333,7 +333,7 @@ func expectPresence(t *testing.T, c *wsClient, userID uuid.UUID, state string) {
 	t.Helper()
 
 	var data presenceEventData
-	remarshal(t, c.expect(typePresence)["data"], &data)
+	remarshal(t, c.expectWithin(presenceWaitFor, typePresence)["data"], &data)
 	if data.UserID != userID || data.State != state {
 		t.Fatalf("presence = %+v, want %s %s", data, userID, state)
 	}

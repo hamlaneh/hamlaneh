@@ -22,8 +22,16 @@ import (
 // deliberately generous: a leak test that passes because it gave up early
 // proves nothing.
 const (
-	waitFor  = 3 * time.Second
-	waitNone = 300 * time.Millisecond
+	waitFor = 3 * time.Second
+	// presenceWaitFor is longer than waitFor because presence is the slowest
+	// path here: a socket drop has to be noticed by the sweeper, a grace
+	// timer has to be consulted, and the result fans out to the peer. Under
+	// the whole module running with -race on a two-core CI runner, three
+	// seconds was not always enough, and the resulting failure said nothing
+	// about the state machine these tests exist to pin. Waiting longer for a
+	// frame that must arrive is the same claim, not a weaker one.
+	presenceWaitFor = 15 * time.Second
+	waitNone        = 300 * time.Millisecond
 )
 
 // fakeStore is an in-memory stand-in for the five reads the gateway makes.
@@ -393,7 +401,13 @@ func (c *wsClient) hello(resume ...resumedCursor) helloOKData {
 // heartbeat pings that may arrive at any time.
 func (c *wsClient) expect(types ...string) map[string]any {
 	c.t.Helper()
-	deadline := time.After(waitFor)
+	return c.expectWithin(waitFor, types...)
+}
+
+// expectWithin is expect with a budget the caller picks.
+func (c *wsClient) expectWithin(budget time.Duration, types ...string) map[string]any {
+	c.t.Helper()
+	deadline := time.After(budget)
 	for {
 		select {
 		case frame, ok := <-c.in:
@@ -409,7 +423,7 @@ func (c *wsClient) expect(types ...string) map[string]any {
 			}
 			return frame
 		case <-deadline:
-			c.t.Fatalf("no %v frame within %s", types, waitFor)
+			c.t.Fatalf("no %v frame within %s", types, budget)
 			return nil
 		}
 	}
