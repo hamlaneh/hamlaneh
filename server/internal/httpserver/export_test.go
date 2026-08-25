@@ -12,6 +12,8 @@ const (
 	// TotpSettingsRateLimit is the per-account budget shared by the four
 	// two-step settings endpoints.
 	TotpSettingsRateLimit = totpSettingsRateLimit
+	// SearchRateLimit is the per-account search budget.
+	SearchRateLimit = searchRateLimit
 )
 
 // ContentSecurityPolicy is the CSP this binary serves. The

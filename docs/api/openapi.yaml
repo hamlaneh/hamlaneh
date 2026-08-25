@@ -1235,6 +1235,18 @@ paths:
         total_capped beyond that. `kind=files` is accepted now and returns an
         empty page until the Phase 1.3 upload pipeline exists; its result shape
         arrives with that slice.
+
+        Results are newest-first. Chat search is almost always a hunt for
+        something recent, and the alternative — relevance ranking — is not
+        available under the substring matching this endpoint uses; migration
+        0006's header records why that was chosen over a language-specific
+        configuration.
+
+        Rate limited per account rather than per address, because what a
+        search costs depends on how many messages the caller can reach: a
+        needle shorter than three characters cannot use the trigram index and
+        scans instead, and the contract allows one that short on purpose,
+        since one- and two-character words are ordinary in Persian.
       security:
         - sessionCookie: []
       parameters:

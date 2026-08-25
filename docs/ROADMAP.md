@@ -258,11 +258,23 @@ history, send a message, and have it appear on someone else's screen without a r
 #### 1.2b Everything the chat shell draws but 1.2a does not fill
 
 - [ ] Message edit and soft delete (the design keeps a placeholder in place where a message was)
-- [ ] Message search (`kind=messages`), pulled forward from 1.3 because the delivered chat shell
-      has a search column and shipping it dead is not an option; file search stays 1.3. Migration
-      0003 deliberately left out the tsvector column and GIN index: the text-search configuration
-      is language-dependent, the product is bilingual, and the choice is effectively frozen once
-      an index is built on it — so it is made here, with the search code, not before it
+- [x] Message search (`kind=messages`), pulled forward from 1.3. The configuration decision
+      migration 0003 deferred is made in **migration 0006**, with the reasoning in its header:
+      **trigram substring matching (`pg_trgm`), not tsvector**, because every FTS option required
+      picking a language and PostgreSQL ships no Persian configuration — `english` would have
+      given half the users whole-word-only matching. Substring is also the only choice consistent
+      with the contract's snippet shape, which marks the run the query matched: a stemmed match
+      has no characters to point at. Scope is a join inside the query, so a non-member's message
+      cannot reach the results, the count or a snippet
+- [ ] **Persian search does not stem** — `رفتم` does not find `می‌رود`, and the same applies to
+      English (`deploying` does not find `deploy`). Character matching, not meaning. Pinned by a
+      test so the limitation is documented rather than discovered. Fixing it needs a Persian
+      stemmer PostgreSQL does not ship; that is a future migration replacing the 0006 index, not
+      a tweak to it
+- [ ] A search snippet is the **whole message** — the contract's parts array has to reconstruct
+      the original text, so a windowed snippet would break it. At `limit=50` × 4000 characters
+      that is ~200 KB worst case per page. Not a defect; a payload budget to revisit if pages
+      get heavy
 - [ ] `around` cursor for permalinks
 - [ ] The contract's `last_member` refusal on `removeChannelMember`. Deliberately **not** in
       the storage layer: the obvious race-free shape there (lock the channel, then count and

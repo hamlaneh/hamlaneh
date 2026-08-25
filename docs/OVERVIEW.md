@@ -154,6 +154,16 @@ installs it on its own server with one command and owns its communication comple
   falls back to REST backfill. The handshake is guarded by a strict Origin check — the
   cross-site-hijacking defense standing in for the CSRF header a browser cannot send on an
   upgrade — and a revoked session closes its sockets within a tested 10 seconds.
+- **Message search**, scoped by a join inside the query rather than a filter after it, so a
+  conversation the caller is not in cannot reach the results, the count, or a snippet. It matches
+  **substrings, not word stems** — a deliberate choice recorded in migration 0006: every
+  full-text option meant picking a language, and PostgreSQL ships no Persian configuration, so
+  `english` would have given half the users whole-word matching only. What that buys is finding
+  `کتاب` inside `کتاب‌ها`, and folding the characters Persian is typed two ways so an Arabic
+  keyboard and a Persian one search alike. What it costs, stated plainly because a user will
+  meet it: no stemming in either language — `رفتم` does not find `می‌رود`, and `deploying` does
+  not find `deploy`. Rate limited per account, because a short needle cannot use the index and
+  scans instead.
 - The **authorization matrix** now asks the question this phase turns on: *member of which
   channel?* 263 cells over ten principals, private and DM channels alike, plus a WebSocket
   registry whose completeness is checked against the protocol document. Designed in

@@ -150,6 +150,22 @@ const (
 	totpSettingsRateWindow = 5 * time.Minute
 )
 
+// Search is budgeted per account because its cost is not uniform. The
+// trigram index behind it needs three characters to work with; a one- or
+// two-character needle cannot use it and falls back to a sequential scan
+// over every message the caller can reach — measured at 240ms across 60,000
+// rows, and the contract allows a query that short on purpose, because
+// one- and two-character words are ordinary in Persian.
+//
+// So the endpoint is cheap to call and occasionally expensive to serve, from
+// an authenticated caller, in a loop. The contract already reserves 429 here;
+// this is what emits it. 30 in a minute is far above someone typing into a
+// search box and far below what a loop needs to hurt.
+const (
+	searchRateLimit  = 30
+	searchRateWindow = time.Minute
+)
+
 // readyzTimeout bounds the whole readiness probe: a stalled database must
 // become a fast 503, not a hung request.
 const readyzTimeout = 2 * time.Second
@@ -190,6 +206,7 @@ type apiServer struct {
 	totpIPLimiter          *ratelimit.Limiter
 	totpAccountLimiter     *ratelimit.Limiter
 	totpSettingsLimiter    *ratelimit.Limiter
+	searchLimiter          *ratelimit.Limiter
 }
 
 var _ api.ServerInterface = (*apiServer)(nil)
@@ -207,6 +224,7 @@ func newAPIServer(store Store, opts ...Option) *apiServer {
 		totpIPLimiter:          ratelimit.New(totpRateLimit, totpRateWindow),
 		totpAccountLimiter:     ratelimit.New(totpRateLimit, totpRateWindow),
 		totpSettingsLimiter:    ratelimit.New(totpSettingsRateLimit, totpSettingsRateWindow),
+		searchLimiter:          ratelimit.New(searchRateLimit, searchRateWindow),
 	}
 	for _, opt := range opts {
 		opt(s)

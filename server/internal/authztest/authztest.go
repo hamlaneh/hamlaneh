@@ -301,7 +301,7 @@ func stubbed(want map[Principal]outcome) map[Principal]outcome {
 const searchPath = "/api/v1/search"
 
 // notImplementedOperations is the closed list of contract operations whose
-// matrix rows may expect a 501: the three that are slice 1.2b work
+// matrix rows may expect a 501: the two that are slice 1.2b work
 // (docs/ROADMAP.md) and have no handler at all.
 //
 // DiffNotImplemented enforces the list in both directions — a row expecting
@@ -318,7 +318,6 @@ func notImplementedOperations() []Operation {
 	return []Operation{
 		{Method: http.MethodPatch, Path: messagePath},  // edit a message
 		{Method: http.MethodDelete, Path: messagePath}, // soft-delete a message
-		{Method: http.MethodGet, Path: searchPath},     // search messages
 	}
 }
 
@@ -569,14 +568,18 @@ func instanceRegistry() []Entry {
 		// A fresh fixture shares no DM with anybody, so opening one is always
 		// the 201 half of this idempotent pair.
 		sessionEntry(http.MethodPost, "/api/v1/dms", "", userIDBody, http.StatusCreated, ""),
-		// Search is slice 1.2b (docs/ROADMAP.md) and has no handler, so what
-		// the signed-in columns pin is the stub's 501 — missing code, not a
-		// permission. The route gates are asserted either way, and the
-		// contract's own story — "a session, and results only from your own
-		// channels" — tightens this row when the handler lands; the leak test
-		// for the second half of it belongs with that slice.
+		// Search landed in slice 1.2b, so these are real outcomes: a session
+		// is the whole gate, and every signed-in caller gets a 200 — an empty
+		// page for a fresh fixture, which has said nothing to find.
+		//
+		// This row pins the first half of search's contract, "a session".
+		// The second half — results only from your own channels — is not a
+		// matrix shape: it is one caller reading a page, not a principal
+		// reaching an endpoint, and the query enforces it in SQL rather than
+		// at the route. It is pinned where it can be proved, by the leak test
+		// in storage (TestSearchScopeIntegration) and its handler-level twin.
 		sessionEntry(http.MethodGet, searchPath, searchPath+"?q=hello", nil,
-			http.StatusNotImplemented, "not_implemented"),
+			http.StatusOK, ""),
 		// The upgrade endpoint, asked without an Origin header. The contract
 		// requires the handshake to carry one matching the instance origin and
 		// to reject a missing or mismatched value (CSWSH defense), so the

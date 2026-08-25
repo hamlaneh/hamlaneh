@@ -38,18 +38,18 @@ func messagingRoutes() []stubRoute {
 		stubRoute{http.MethodPost, base + "/messages"},
 		stubRoute{http.MethodPut, base + "/read"},
 		stubRoute{http.MethodPost, "/api/v1/dms"},
+		stubRoute{http.MethodGet, "/api/v1/search?q=hello"},
 	)
 }
 
 // messagingStubRoutes is what still answers 501: message edit and soft
-// delete and search — all slice 1.2b. The WebSocket upgrade left this list
-// when the gateway landed.
+// delete, both slice 1.2b. The WebSocket upgrade left this list when the
+// gateway landed, and search when its handler did.
 func messagingStubRoutes() []stubRoute {
 	base := "/api/v1/channels/" + stubChannelID
 	return []stubRoute{
 		{http.MethodPatch, base + "/messages/" + stubMessageID},
 		{http.MethodDelete, base + "/messages/" + stubMessageID},
-		{http.MethodGet, "/api/v1/search?q=hello"},
 	}
 }
 

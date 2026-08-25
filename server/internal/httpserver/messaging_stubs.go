@@ -6,17 +6,14 @@ package httpserver
 // implementation, so *apiServer needs one method per operation to satisfy
 // the generated api.ServerInterface. Slice 1.2a implemented the
 // conversation surface (channel_handlers.go, message_handlers.go) and the
-// user directory (directory_handler.go); the three operations below still
-// answer 501 in the contract's Error shape, each for a reason the storage
-// layer makes concrete:
+// user directory (directory_handler.go); slice 1.2b implemented search
+// (search_handler.go, storage/search.go, migration 0006). The two
+// operations below still answer 501 in the contract's Error shape, for a
+// reason the storage layer makes concrete:
 //
 //   - EditMessage, DeleteMessage: slice 1.2b. Nothing in storage writes
 //     edited_at or deleted_at; messages.go states outright that this slice
 //     sends and reads messages only.
-//   - Search: slice 1.2b, and migration 0003 deliberately left out the
-//     tsvector column and its index — the text-search configuration is
-//     language-dependent and effectively frozen once built, so that choice
-//     is made with the search code, not before it.
 //
 // These stubs still sit behind securityMiddleware, so a 501 is only ever
 // reached by a caller who already passed every route-level gate: anonymous
@@ -43,10 +40,5 @@ func (s *apiServer) EditMessage(w http.ResponseWriter, r *http.Request, _ api.Ch
 
 // DeleteMessage is a slice 1.2b stub: soft-delete a message.
 func (s *apiServer) DeleteMessage(w http.ResponseWriter, r *http.Request, _ api.ChannelId, _ api.MessageId) {
-	notImplemented(w, r)
-}
-
-// Search is a slice 1.2b stub: search messages.
-func (s *apiServer) Search(w http.ResponseWriter, r *http.Request, _ api.SearchParams) {
 	notImplemented(w, r)
 }

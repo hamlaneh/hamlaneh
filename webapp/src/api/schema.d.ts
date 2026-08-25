@@ -643,6 +643,8 @@ export interface paths {
         /**
          * Search messages (and, from Phase 1.3, files).
          * @description Backs the search column. Scope is enforced inside the query by joining channel membership, so results, counts and snippets can never come from a conversation the caller is not in. Snippets are a parts array of {text, match} — the server never renders HTML; the design's highlight is drawn client-side from `match`. `total` is exact up to 200 and reports total_capped beyond that. `kind=files` is accepted now and returns an empty page until the Phase 1.3 upload pipeline exists; its result shape arrives with that slice.
+         *     Results are newest-first. Chat search is almost always a hunt for something recent, and the alternative — relevance ranking — is not available under the substring matching this endpoint uses; migration 0006's header records why that was chosen over a language-specific configuration.
+         *     Rate limited per account rather than per address, because what a search costs depends on how many messages the caller can reach: a needle shorter than three characters cannot use the trigram index and scans instead, and the contract allows one that short on purpose, since one- and two-character words are ordinary in Persian.
          */
         get: operations["search"];
         put?: never;
