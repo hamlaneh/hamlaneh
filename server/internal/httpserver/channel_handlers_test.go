@@ -96,6 +96,33 @@ func memberStore() *fakeStore {
 	return channelStore(fixtureUser(), fixtureChannel(), true)
 }
 
+// dmPerParticipant answers ChannelForUser the way storage does for a direct
+// message: each participant's row names the OTHER one as the peer.
+func dmPerParticipant() func(context.Context, uuid.UUID, uuid.UUID) (storage.Channel, error) {
+	return func(_ context.Context, _, userID uuid.UUID) (storage.Channel, error) {
+		ch := fixtureDM()
+		if userID == peerUUID() {
+			caller := fixtureUser()
+			ch.DMPeer = &storage.DMPeer{
+				ID:          caller.ID,
+				Username:    caller.Username,
+				DisplayName: caller.DisplayName,
+			}
+		}
+		return ch, nil
+	}
+}
+
+// announcementTo finds the channel_created addressed to exactly one user.
+func announcementTo(events []recordedChannelCreated, userID uuid.UUID) (storage.Channel, bool) {
+	for _, ev := range events {
+		if len(ev.userIDs) == 1 && ev.userIDs[0] == userID {
+			return ev.channel, true
+		}
+	}
+	return storage.Channel{}, false
+}
+
 // recordingRealtime captures what a handler announced, so a test can assert
 // both that an event fired and that it carried the right payload.
 type recordingRealtime struct {
@@ -501,7 +528,7 @@ func TestCreateChannel(t *testing.T) {
 func TestOpenDirectMessage(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a new direct message is 201 and reaches both participants", func(t *testing.T) {
+	t.Run("a new direct message reaches each participant with their own row", func(t *testing.T) {
 		t.Parallel()
 		store := authedStore(fixtureUser())
 		var gotCaller, gotPeer uuid.UUID
@@ -509,6 +536,7 @@ func TestOpenDirectMessage(t *testing.T) {
 			gotCaller, gotPeer = caller, peer
 			return fixtureDM(), true, nil
 		}
+		store.channelForUser = dmPerParticipant()
 		rt := &recordingRealtime{}
 
 		rec := doRealtime(t, store, rt, request(http.MethodPost, "/api/v1/dms",
@@ -519,8 +547,51 @@ func TestOpenDirectMessage(t *testing.T) {
 		if gotCaller != fixtureUser().ID || gotPeer != peerUUID() {
 			t.Errorf("storage got (%s, %s), want (caller, peer)", gotCaller, gotPeer)
 		}
-		if len(rt.channelCreated) != 1 || len(rt.channelCreated[0].userIDs) != 2 {
-			t.Fatalf("announced %v, want one event to both participants", rt.channelCreated)
+
+		// Two events, not one to both: dm_peer is the only thing that names a
+		// direct message, and it is caller-scoped. One shared row would name
+		// the peer's own conversation after the peer.
+		if len(rt.channelCreated) != 2 {
+			t.Fatalf("announced %d events, want one per participant: %v", len(rt.channelCreated), rt.channelCreated)
+		}
+		for _, want := range []struct {
+			recipient uuid.UUID
+			peerName  string
+		}{
+			{recipient: fixtureUser().ID, peerName: "Display peer"},
+			{recipient: peerUUID(), peerName: fixtureUser().DisplayName},
+		} {
+			got, ok := announcementTo(rt.channelCreated, want.recipient)
+			if !ok {
+				t.Fatalf("no channel_created for %s: %v", want.recipient, rt.channelCreated)
+			}
+			if got.DMPeer == nil || got.DMPeer.DisplayName != want.peerName {
+				t.Errorf("%s was told the peer is %v, want %q — the OTHER participant",
+					want.recipient, got.DMPeer, want.peerName)
+			}
+		}
+	})
+
+	t.Run("a peer row that cannot be read costs only the peer's announcement", func(t *testing.T) {
+		t.Parallel()
+		store := authedStore(fixtureUser())
+		store.openDirectMessage = func(context.Context, uuid.UUID, uuid.UUID) (storage.Channel, bool, error) {
+			return fixtureDM(), true, nil
+		}
+		store.channelForUser = func(context.Context, uuid.UUID, uuid.UUID) (storage.Channel, error) {
+			return storage.Channel{}, errors.New("the read failed after the channel was created")
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPost, "/api/v1/dms",
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		// The channel exists; a broadcast that failed is not a reason to
+		// report the write that already happened as an error.
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+		}
+		if len(rt.channelCreated) != 1 {
+			t.Fatalf("announced %d events, want only the caller's: %v", len(rt.channelCreated), rt.channelCreated)
 		}
 	})
 
@@ -796,6 +867,81 @@ func TestAddChannelMember(t *testing.T) {
 		if got.channelID != channelUUID() || got.user.ID != peerUUID() || got.user.Username != "peer" {
 			t.Errorf("member_added = (%s, %s/%s), want the channel and the invited user",
 				got.channelID, got.user.ID, got.user.Username)
+		}
+	})
+
+	t.Run("the invited member is told about the channel, as they see it", func(t *testing.T) {
+		t.Parallel()
+		// ws-protocol.md §4: channel_created is what adds the sidebar row for
+		// somebody an invite just made a member. Without it an invitation was
+		// invisible to them until the next reload.
+		store := memberStore()
+		store.addChannelMember = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error { return nil }
+		store.userByID = func(context.Context, uuid.UUID) (storage.User, error) { return peerUser(), nil }
+		invitee := fixtureChannel()
+		invitee.UnreadCount, invitee.MentionCount = 0, 0
+		var scopedTo uuid.UUID
+		store.channelForUser = func(_ context.Context, _, userID uuid.UUID) (storage.Channel, error) {
+			if userID == peerUUID() {
+				scopedTo = userID
+				return invitee, nil
+			}
+			return fixtureChannel(), nil
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPost, channelPath("/members"),
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+		}
+		if scopedTo != peerUUID() {
+			t.Error("the announced row was not read for the invited user")
+		}
+		got, ok := announcementTo(rt.channelCreated, peerUUID())
+		if !ok {
+			t.Fatalf("announced %v, want a channel_created to the invited user", rt.channelCreated)
+		}
+		// The inviter's counts must not travel to the invitee: every count on
+		// a Channel is caller-scoped.
+		if got.UnreadCount != 0 || got.MentionCount != 0 {
+			t.Errorf("the invitee was told (%d, %d), want the row read for them",
+				got.UnreadCount, got.MentionCount)
+		}
+	})
+
+	t.Run("a channel read that fails costs the invitation event, not the invite", func(t *testing.T) {
+		t.Parallel()
+		store := memberStore()
+		var added bool
+		store.addChannelMember = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
+			added = true
+			return nil
+		}
+		store.userByID = func(context.Context, uuid.UUID) (storage.User, error) { return peerUser(), nil }
+		store.channelForUser = func(_ context.Context, _, userID uuid.UUID) (storage.Channel, error) {
+			if userID == peerUUID() {
+				return storage.Channel{}, errors.New("the read failed after the membership committed")
+			}
+			return fixtureChannel(), nil
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPost, channelPath("/members"),
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204 — the membership is committed (body %s)",
+				rec.Code, rec.Body.String())
+		}
+		if !added {
+			t.Error("the membership was never written")
+		}
+		if len(rt.channelCreated) != 0 {
+			t.Errorf("announced %+v with a row it could not read", rt.channelCreated)
+		}
+		// The other half of the announcement is unaffected.
+		if len(rt.memberAdded) != 1 {
+			t.Errorf("announced %d member_added events, want 1", len(rt.memberAdded))
 		}
 	})
 

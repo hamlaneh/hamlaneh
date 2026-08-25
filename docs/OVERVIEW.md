@@ -122,7 +122,8 @@ installs it on its own server with one command and owns its communication comple
   instead of a blank page.
 - **Realtime client** implementing `docs/api/ws-protocol.md`: handshake, per-channel subscribe,
   message/presence/read events, heartbeat, bounded reconnect backoff, and `resync` fallback to
-  REST backfill. It talks to mocks today — the server gateway is the next backend slice.
+  REST backfill. It talks to the real gateway, and the end-to-end suite drives the two halves
+  together in one browser and out of another.
 - The React webapp also has working en/fa i18n with RTL switching, a locale key-parity check,
   a typed API client with CSRF and transparent session refresh, and MSW mock handlers typed
   against the generated schema (off by default).
@@ -136,7 +137,14 @@ installs it on its own server with one command and owns its communication comple
   admin API, so there is no test-only back door into the server. Covers sign-in and its refusals,
   the forced first password change, the two-step challenge (asserting no session cookie exists
   before the code is accepted), enumeration-safe password reset, the sessions list and remote
-  sign-out, and sign-in rate limiting; the Persian subset asserts real mirroring — computed
+  sign-out, and sign-in rate limiting. **Chat is covered across two independent browsers**: a
+  message typed in one composer arriving on the other screen with no reload (frame navigations
+  are counted, so "it appeared" cannot be an accidental refresh), history surviving a reload in
+  reading order, a channel created and somebody invited into it watching the row arrive, a DM
+  naming the *other* participant on both screens, the unread and mention badges, and the IDOR
+  property as a user meets it — a non-member reaches nothing at the URL and their socket
+  receives none of the channel's frames, proven by capturing every frame it did receive. The
+  Persian subset asserts real mirroring — computed
   `direction: rtl` and the sidebar actually on the right — not merely that Persian text appears.
   Per-PR runs `en` in full plus the `fa` smoke subset; a nightly workflow runs both in full.
   Failures upload traces, screenshots, video and the container logs.

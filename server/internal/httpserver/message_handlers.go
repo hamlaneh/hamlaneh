@@ -114,16 +114,12 @@ func messageCursor(w http.ResponseWriter, r *http.Request, encoded string) (*sto
 // same key is 200 with the message that already exists, unmodified and not
 // announced a second time — the first send already delivered it.
 //
-// Mentions are NOT populated. The contract has the client send a mention as
-// the literal token <@{user_id}> for the server to parse into
-// message_mentions rows, which is what the sidebar's "@" badge counts. The
-// counting query is written and correct (storage.callerJoins), but nothing
-// writes that table: storage.NewMessage carries no mention ids, CreateMessage
-// inserts none, and the storage tests say so outright ("Nothing writes
-// message_mentions until the mention parser lands in slice 1.2b"). Parsing
-// here would produce a value with nowhere to put it, so mention_count reads 0
-// on every Channel this slice serves. Reported rather than papered over: it
-// closes with one field on NewMessage and one insert inside CreateMessage.
+// Mentions are not parsed here. The contract has the client send a mention as
+// the literal token <@{user_id}> inside the content, and storage.CreateMessage
+// derives the message_mentions rows from that content in the same statement
+// that stores the message — so the rows the sidebar's "@" badge counts can
+// never disagree with the message they came from, whatever calls it. Nothing
+// in this handler needs to know, and nothing here should start guessing.
 func (s *apiServer) SendMessage(w http.ResponseWriter, r *http.Request, channelID api.ChannelId) {
 	sc, ok := s.resolveChannel(w, r, channelID)
 	if !ok {

@@ -273,8 +273,14 @@ func apiMessage(m storage.Message) api.Message {
 	}
 }
 
+// apiChannel carries dm_peer for the same reason the REST mapping does: a
+// direct message has no slug, so dm_peer is the only thing that names it, and
+// a channel_created without one puts a nameless row in the recipient's
+// sidebar. It is caller-scoped, which is why every caller of this must hand
+// over a row read for the recipient of the event — see
+// httpserver.announceInvitation.
 func apiChannel(ch storage.Channel) api.Channel {
-	return api.Channel{
+	out := api.Channel{
 		Id:                ch.ID,
 		Kind:              api.ChannelKind(ch.Kind),
 		Slug:              ch.Slug,
@@ -287,6 +293,10 @@ func apiChannel(ch storage.Channel) api.Channel {
 		CreatedBy:         ch.CreatedBy,
 		CreatedAt:         ch.CreatedAt,
 	}
+	if peer := ch.DMPeer; peer != nil {
+		out.DmPeer = &api.UserSummary{Id: peer.ID, Username: peer.Username, DisplayName: peer.DisplayName}
+	}
+	return out
 }
 
 func apiUserSummary(u storage.User) api.UserSummary {

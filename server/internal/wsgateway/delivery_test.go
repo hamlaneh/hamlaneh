@@ -494,6 +494,38 @@ func TestChannelCreatedIsFilteredByMembership(t *testing.T) {
 	outsider.expectNone()
 }
 
+// TestChannelCreatedCarriesTheDMPeer: a direct message has no slug, so
+// dm_peer is the only thing that names it. A channel_created that dropped it
+// would put a nameless row in the recipient's sidebar — which is what
+// happened until this frame started carrying the field the REST mapping
+// always has.
+func TestChannelCreatedCarriesTheDMPeer(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	alice := h.store.addUser("alice")
+	bob := h.store.addUser("bob")
+	ch := h.store.addChannel(storage.ChannelKindDM, alice.ID, bob.ID)
+	// The row as BOB sees it: the other one is alice. Announcing one shared
+	// row to both is what the handler must not do, and this is the shape it
+	// hands over instead.
+	ch.DMPeer = &storage.DMPeer{ID: alice.ID, Username: alice.Username, DisplayName: alice.DisplayName}
+
+	c := h.dial(bob, h.store.addFamily(bob.ID))
+	c.hello()
+
+	h.gw.ChannelCreated([]uuid.UUID{bob.ID}, ch)
+
+	var data channelData
+	remarshal(t, c.expect(typeChannelCreated)["data"], &data)
+	if data.Channel.DmPeer == nil {
+		t.Fatal("channel_created carried no dm_peer; the sidebar row would have no name")
+	}
+	if data.Channel.DmPeer.Id != alice.ID || data.Channel.DmPeer.DisplayName != alice.DisplayName {
+		t.Errorf("dm_peer = %+v, want alice", *data.Channel.DmPeer)
+	}
+}
+
 // TestOrderedEventsCarrySequenceNumbers pins the §4 `seq` column: the
 // ordered events advance one per channel and the ephemeral ones carry none.
 func TestOrderedEventsCarrySequenceNumbers(t *testing.T) {

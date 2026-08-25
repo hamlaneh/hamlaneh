@@ -33,8 +33,17 @@ export class App {
 
   /* ── sign-in ─────────────────────────────────────────────────────── */
 
-  async gotoSignIn(): Promise<void> {
-    await this.page.goto("/");
+  /**
+   * Opens the app at `path` and waits for the sign-in screen.
+   *
+   * The path matters for the chat specs: the pre-authentication screens are
+   * chosen by session state rather than by URL, so signing in at
+   * `/c/{channelId}` mounts the shell straight into that conversation. Landing
+   * on "/" instead would take whatever the sidebar happens to list first,
+   * which is not a thing a test should depend on.
+   */
+  async gotoSignIn(path = "/"): Promise<void> {
+    await this.page.goto(path);
     await this.signInHeading.waitFor();
   }
 
@@ -147,6 +156,149 @@ export class App {
     const dialog = this.settingsDialog;
     await dialog.getByRole("button", { name: this.t("settings.security.manageSessions") }).click();
     return dialog.getByRole("list", { name: this.t("settings.sessions.title") });
+  }
+
+  /* ── the conversation ────────────────────────────────────────────── */
+
+  /**
+   * The conversation region. `role="log"` is what MessageList declares, and
+   * its accessible name carries the channel, so the role alone identifies it.
+   */
+  get messageLog(): Locator {
+    return this.page.getByRole("log");
+  }
+
+  /**
+   * Every message body in the open conversation, in reading order.
+   *
+   * A body is markdown rendered into paragraphs, so `paragraph` is the role
+   * that reaches them — and reaching them as a list is what lets a spec assert
+   * the ORDER of a reloaded history rather than merely its contents.
+   */
+  get messageBodies(): Locator {
+    return this.messageLog.getByRole("paragraph");
+  }
+
+  /**
+   * The composer, located by the send button inside it.
+   *
+   * Its own accessible name is "Message {{target}}" with the target wrapped in
+   * Unicode bidi isolates (chat/format.ts), which no plain string a spec
+   * writes can match; the send button's name is a bare key.
+   */
+  get composerForm(): Locator {
+    return this.page
+      .locator("form")
+      .filter({ has: this.page.getByRole("button", { name: this.t("chat.composer.send") }) });
+  }
+
+  get composerField(): Locator {
+    return this.composerForm.getByRole("textbox");
+  }
+
+  /** Types a message and sends it with Enter, as the hint row promises. */
+  async sendMessage(content: string): Promise<void> {
+    await this.composerField.fill(content);
+    await this.composerField.press("Enter");
+  }
+
+  /** Inserts a `<@{user_id}>` mention token through the composer's picker. */
+  async mentionInComposer(displayName: string): Promise<void> {
+    await this.composerForm
+      .getByRole("button", { name: this.t("chat.composer.mention") })
+      .click();
+    await this.composerForm.getByRole("button", { name: displayName, exact: true }).click();
+  }
+
+  /** The channel or DM name in the header — "#slug", or the peer's name. */
+  get channelHeading(): Locator {
+    return this.page.getByRole("heading", { level: 1 });
+  }
+
+  /* ── the sidebar ─────────────────────────────────────────────────── */
+
+  /** One conversation row, by the label it draws. */
+  conversationRow(label: string): Locator {
+    return this.chatSidebar.getByRole("link", { name: label });
+  }
+
+  /**
+   * The account button in the sidebar footer. It carries the caller's own
+   * presence line, which is the one user-visible fact that says the realtime
+   * socket is up — "Online" is written from the connection state and nothing
+   * else (ChatShell: `myPresence`). A realtime test waits on this before it
+   * sends anything, so a pass cannot come from a well-timed history load.
+   */
+  get identityButton(): Locator {
+    return this.chatSidebar.getByRole("button", { name: this.t("account.title") });
+  }
+
+  /**
+   * Creates a channel through the sidebar's "+".
+   *
+   * The dialog is undesigned plumbing, so everything here is plain semantic
+   * HTML: a labelled text field, a radio group, a submit button.
+   */
+  async createChannel(slug: string, kind: "public" | "private" = "public"): Promise<void> {
+    await this.chatSidebar
+      .getByRole("button", { name: this.t("chat.sidebar.createChannel") })
+      .click();
+    const dialog = this.page.getByRole("dialog", { name: this.t("chat.createChannel.title") });
+    await dialog.getByLabel(this.t("chat.createChannel.nameLabel")).fill(slug);
+    if (kind === "private") {
+      await dialog.getByLabel(this.t("chat.createChannel.private")).check();
+    }
+    await dialog.getByRole("button", { name: this.t("chat.createChannel.submit") }).click();
+  }
+
+  /**
+   * Opens the invite picker. The empty state's primary action and the channel
+   * menu's entry carry the same label, so one locator reaches whichever of
+   * them the open channel is showing.
+   */
+  async openInvite(): Promise<void> {
+    await this.page.getByRole("button", { name: this.t("chat.empty.invite") }).click();
+  }
+
+  /**
+   * Invites somebody into the open channel through the people picker, which
+   * must already be open.
+   *
+   * `search` is the username: the directory filters over username and display
+   * name alike, and the username is the value with no spaces in it.
+   */
+  async invitePerson(search: string, displayName: string): Promise<void> {
+    await this.pickPerson(
+      this.t("chat.empty.invite"),
+      this.t("chat.people.invite"),
+      search,
+      displayName,
+    );
+  }
+
+  /** Opens a direct message through the sidebar's "+" beside Direct messages. */
+  async startDirectMessage(search: string, displayName: string): Promise<void> {
+    await this.chatSidebar
+      .getByRole("button", { name: this.t("chat.sidebar.newDirectMessage") })
+      .click();
+    await this.pickPerson(
+      this.t("chat.sidebar.newDirectMessage"),
+      this.t("chat.people.message"),
+      search,
+      displayName,
+    );
+  }
+
+  /** The shared half of both pickers: type, wait for the row, act on it. */
+  private async pickPerson(
+    title: string,
+    actionLabel: string,
+    search: string,
+    displayName: string,
+  ): Promise<void> {
+    const picker = this.page.getByRole("dialog", { name: title });
+    await picker.getByLabel(this.t("chat.people.searchLabel")).fill(search);
+    await picker.getByRole("button", { name: `${actionLabel}: ${displayName}`, exact: true }).click();
   }
 
   /* ── password reset ──────────────────────────────────────────────── */

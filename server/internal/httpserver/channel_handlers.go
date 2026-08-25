@@ -302,10 +302,18 @@ func (s *apiServer) OpenDirectMessage(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
-		// Both participants can see it from now on. The row is caller-scoped,
-		// and sending it to the peer is safe only because a direct message
-		// opened a moment ago has nothing unread in it for either of them.
-		s.realtime.ChannelCreated([]uuid.UUID{prin.user.ID, req.UserId}, ch)
+		// Both participants can see it from now on — and each is told with the
+		// row as THEY see it, not with one shared copy.
+		//
+		// dm_peer is what makes the difference: a direct message has no slug,
+		// so dm_peer is the only thing that names it, and it is caller-scoped
+		// by construction — a row read for one participant says the other one
+		// is "the other one". Announcing the caller's row to both would leave
+		// the peer's sidebar with a conversation named after the peer
+		// themselves. The counts are caller-scoped for the same reason, and
+		// happen to be zero on a channel opened a moment ago.
+		s.realtime.ChannelCreated([]uuid.UUID{prin.user.ID}, ch)
+		announceInvitation(r, store, s.realtime, ch.ID, req.UserId)
 	}
 	writeJSONValue(w, r, status, apiChannel(ch))
 }
@@ -464,12 +472,40 @@ func (s *apiServer) AddChannelMember(w http.ResponseWriter, r *http.Request, cha
 		return
 	}
 
+	// The invited person gets the channel itself first (ws-protocol.md §4:
+	// channel_created is "you created it, or somebody invited you", and their
+	// sidebar adds the row from it). member_added cannot do that job for them:
+	// it names somebody joining a channel their client has never heard of, so
+	// on its own an invitation was invisible until the next reload.
+	//
+	// The row is read as THEY see it, never as the inviter sees it. Every
+	// count on a Channel is caller-scoped, and shipping the inviter's copy
+	// would publish numbers nobody computed for the recipient.
+	announceInvitation(r, sc.store, s.realtime, channelID, req.UserId)
+
 	// Announced after the membership committed, and named: the event carries
 	// a UserSummary, so the person has to be read back.
 	if user, ok := namedMember(r.Context(), sc.store, channelID, req.UserId, "member_added"); ok {
 		s.realtime.MemberAdded(channelID, user)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// announceInvitation tells one user that a channel is theirs to see now.
+//
+// A failed read costs the announcement and nothing else, for the reason
+// namedMember gives: the membership is already committed, the socket is a
+// fast path rather than a delivery guarantee, and the client reconciles its
+// channel list from REST on every resume — so a missed event self-heals into
+// "the row appears on the next reload", which is exactly where this path was
+// before the event existed.
+func announceInvitation(r *http.Request, store Store, rt Realtime, channelID, userID uuid.UUID) {
+	ch, err := store.ChannelForUser(r.Context(), channelID, userID)
+	if err != nil {
+		slog.Error("invitation not announced", "channel", channelID, "user", userID, "error", err)
+		return
+	}
+	rt.ChannelCreated([]uuid.UUID{userID}, ch)
 }
 
 // namedMember reads the person a membership event names, reporting false

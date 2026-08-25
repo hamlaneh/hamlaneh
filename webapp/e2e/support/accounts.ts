@@ -29,6 +29,12 @@ export interface ApiSession {
 }
 
 export interface TestAccount {
+  /**
+   * The server's id for this account. Taken from the creation response rather
+   * than looked up later: it is the value a mention token carries and the one
+   * an invite names, so a spec that needs it must not have to search for it.
+   */
+  id: string;
   username: string;
   password: string;
   email: string;
@@ -44,7 +50,7 @@ function uniqueUsername(prefix: string): string {
   return `${prefix}-${token(6)}`.slice(0, 32);
 }
 
-async function expectOk(response: APIResponse, what: string): Promise<APIResponse> {
+export async function expectOk(response: APIResponse, what: string): Promise<APIResponse> {
   if (!response.ok()) {
     throw new Error(`${what}: ${String(response.status())} ${await response.text()}`);
   }
@@ -85,7 +91,13 @@ export async function signInApi(
   return { context, dispose: () => context.dispose() };
 }
 
-async function post(session: ApiSession, url: string, data?: unknown): Promise<APIResponse> {
+/**
+ * A mutating request on a signed-in session, carrying the double-submit CSRF
+ * header the server requires. Exported because conversation setup (chat.ts)
+ * needs exactly the same thing: there is no test-only write path, so every
+ * fixture goes through the API a browser would.
+ */
+export async function post(session: ApiSession, url: string, data?: unknown): Promise<APIResponse> {
   return session.context.post(url, {
     headers: { [CSRF_HEADER]: await csrfToken(session.context) },
     ...(data === undefined ? {} : { data }),
@@ -160,13 +172,13 @@ export class AccountFactory {
    * is the state the forced-change screen is reached from.
    */
   async createPending(prefix = "e2e"): Promise<TestAccount> {
-    const account: TestAccount = {
+    const account = {
       username: uniqueUsername(prefix),
       password: `initial-${token(10)}`,
       email: `${token(8)}@e2e.invalid`,
       displayName: `E2E ${token(3)}`,
     };
-    await expectOk(
+    const created = await expectOk(
       await post(this.admin, "/api/v1/admin/users", {
         username: account.username,
         password: account.password,
@@ -175,7 +187,8 @@ export class AccountFactory {
       }),
       "admin user creation",
     );
-    return account;
+    const { id } = (await created.json()) as { id: string };
+    return { id, ...account };
   }
 
   /**

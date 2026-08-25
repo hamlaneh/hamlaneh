@@ -255,6 +255,17 @@ history, send a message, and have it appear on someone else's screen without a r
   sanitizer; CSP header regression test; message-send and WS-reconnect flood tests;
   race-detector clean under concurrent send
 
+- [ ] Two screens state something false, both found by the first end-to-end run and both needing
+      copy that does not exist yet:
+      **(a)** opening `/c/{id}` for a channel you are not in renders "You are not in any
+      conversation yet. Create a channel to start one." beside a sidebar listing your
+      conversations. It leaks nothing — a channel that exists and one that does not answer
+      identically — but it is a lie, and it needs its own string plus a way back.
+      **(b)** an empty **direct message** renders the *channel* empty state: "This is the
+      beginning of #" with the slug a DM does not have, "Invite people" and "Set a topic" — both
+      of which the server refuses with 400 on a DM — and "Only you can see this channel until
+      someone is invited", which is false of a conversation with another person in it
+
 #### 1.2b Everything the chat shell draws but 1.2a does not fill
 
 - [ ] Message edit and soft delete (the design keeps a placeholder in place where a message was)

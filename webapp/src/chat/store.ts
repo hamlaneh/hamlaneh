@@ -1,3 +1,4 @@
+import { mentionsUser } from "./mentions";
 import type {
   Channel,
   ConnectionState,
@@ -296,12 +297,21 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         return next;
       }
       // Somebody else's message in a channel we are not reading raises the
-      // sidebar count; the active channel clears it through read/mark.
+      // sidebar count; the active channel clears it through read/mark. A
+      // message that names the caller raises the mention badge as well — the
+      // two badges answer different questions, and no event carries a fresh
+      // Channel to take the counts from, so the mention is read from the token
+      // the message travelled with (mentions.ts).
+      const mentioned = mentionsUser(action.message.content, action.currentUserId);
       return {
         ...next,
         channels: next.channels.map((channel) =>
           channel.id === action.channelId
-            ? { ...channel, unread_count: channel.unread_count + 1 }
+            ? {
+                ...channel,
+                unread_count: channel.unread_count + 1,
+                mention_count: channel.mention_count + (mentioned ? 1 : 0),
+              }
             : channel,
         ),
       };
