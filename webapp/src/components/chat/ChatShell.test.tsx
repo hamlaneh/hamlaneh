@@ -312,6 +312,12 @@ describe("sending", () => {
             author: FIXTURE_ADMIN,
             client_msg_id: body.client_msg_id,
             content: body.content,
+            // Required by the contract, and the server sends it empty until
+            // the Phase 1.3 upload pipeline exists. Omitting it here made the
+            // mock non-conforming and crashed AttachmentCards on an unguarded
+            // map — a test defect that vitest reported as an unhandled error
+            // while still passing the assertion, which is how it reached CI.
+            attachments: [],
             created_at: new Date().toISOString(),
           },
           { status: 201 },
