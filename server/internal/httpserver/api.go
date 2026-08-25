@@ -65,6 +65,27 @@ type Store interface {
 	// would not have stopped the guess.
 	TotpChallengeUserByTokenHash(ctx context.Context, tokenHash []byte) (uuid.UUID, error)
 	CompleteTotpChallenge(ctx context.Context, att storage.TotpChallengeAttempt) (storage.User, storage.Session, storage.TotpChallengeOutcome, error)
+
+	// Conversations. ChannelForUser is the one to reach for in a handler:
+	// it fills the per-caller counts the contract makes required on every
+	// Channel. ChannelByID answers without a caller and leaves those zero,
+	// so it is only correct where no user is in scope.
+	CreateChannel(ctx context.Context, nc storage.NewChannel) (storage.Channel, error)
+	ChannelForUser(ctx context.Context, channelID, userID uuid.UUID) (storage.Channel, error)
+	UpdateChannelTopic(ctx context.Context, id uuid.UUID, topic string) (storage.Channel, error)
+	ListChannelsForUser(ctx context.Context, userID uuid.UUID, params storage.ListChannelsParams) ([]storage.Channel, error)
+	OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID) (storage.Channel, bool, error)
+	AddChannelMember(ctx context.Context, channelID, userID, addedBy uuid.UUID) error
+	RemoveChannelMember(ctx context.Context, channelID, userID uuid.UUID) error
+	ListChannelMembers(ctx context.Context, channelID uuid.UUID, params storage.ListChannelMembersParams) ([]storage.User, error)
+	// IsChannelMember is the fact authz.Can decides channel actions on. It
+	// is read per request, never cached across one: membership changes while
+	// a client is connected, and a stale copy is an authorization bug.
+	IsChannelMember(ctx context.Context, channelID, userID uuid.UUID) (bool, error)
+
+	CreateMessage(ctx context.Context, nm storage.NewMessage) (storage.Message, bool, error)
+	ListMessages(ctx context.Context, params storage.ListMessagesParams) (storage.MessagePage, error)
+	SetReadPosition(ctx context.Context, channelID, userID, messageID uuid.UUID) error
 }
 
 // The production store satisfies the whole surface at compile time.
@@ -144,6 +165,11 @@ var errNoStorage = errors.New("no storage configured")
 type apiServer struct {
 	store Store
 
+	// realtime delivers ws-protocol.md §4 events. Never nil — it defaults to
+	// noRealtime, so a handler announces unconditionally and no event can be
+	// lost to a forgotten nil check.
+	realtime Realtime
+
 	// reset is the password-reset policy. A nil service means reset is not
 	// configured, which is exactly what a zero-config install is:
 	// GET /api/v1/instance reports password_reset_available false, a request
@@ -167,6 +193,7 @@ var _ api.ServerInterface = (*apiServer)(nil)
 func newAPIServer(store Store, opts ...Option) *apiServer {
 	s := &apiServer{
 		store:                  store,
+		realtime:               noRealtime{},
 		loginIPLimiter:         ratelimit.New(loginRateLimit, loginRateWindow),
 		loginIdentifierLimiter: ratelimit.New(loginRateLimit, loginRateWindow),
 		totpIPLimiter:          ratelimit.New(totpRateLimit, totpRateWindow),

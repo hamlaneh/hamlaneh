@@ -104,12 +104,3 @@ func (s *apiServer) OpenDirectMessage(w http.ResponseWriter, r *http.Request) {
 func (s *apiServer) Search(w http.ResponseWriter, r *http.Request, _ api.SearchParams) {
 	notImplemented(w, r)
 }
-
-// ConnectWebSocket is a Phase 1.2 stub: the realtime WebSocket upgrade.
-// There is no gateway yet, so the handshake is refused like any other
-// unimplemented endpoint rather than half-opened. Origin validation and the
-// session-family binding described in docs/api/ws-protocol.md arrive with
-// the gateway itself.
-func (s *apiServer) ConnectWebSocket(w http.ResponseWriter, r *http.Request) {
-	notImplemented(w, r)
-}

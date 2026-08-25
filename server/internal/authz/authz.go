@@ -30,13 +30,26 @@ const (
 // The default is deny: a nil user, an unknown action, or an action the user
 // lacks all deny. ctx is unused today but pinned in the signature so
 // org-policy lookups can be added without touching every call site.
-func Can(_ context.Context, user *storage.User, action Action, _ any) bool {
+func Can(_ context.Context, user *storage.User, action Action, resource any) bool {
 	if user == nil {
 		return false
+	}
+	switch res := resource.(type) {
+	case Channel:
+		return canChannel(user, action, res)
+	case Message:
+		return canMessage(user, action, res)
 	}
 	switch action {
 	case AdminUsersList, AdminUsersCreate:
 		return user.IsAdmin
+	case ChannelRead, ChannelUpdate, ChannelMemberAdd, ChannelMemberRemove,
+		MessageSend, MessageEdit, MessageDelete, ReadPositionSet:
+		// Reached only when the caller passed no resource, or one of the
+		// wrong type. Every Phase 1.2 action is decided against a channel or
+		// a message; without one there is nothing to decide, and deny is the
+		// only safe answer to a question that was not fully asked.
+		return false
 	default:
 		return false
 	}

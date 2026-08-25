@@ -52,6 +52,19 @@ type fakeStore struct {
 	createTotpChallenge          func(ctx context.Context, userID uuid.UUID, tokenHash []byte, ttl time.Duration) error
 	totpChallengeUserByTokenHash func(ctx context.Context, tokenHash []byte) (uuid.UUID, error)
 	completeTotpChallenge        func(ctx context.Context, att storage.TotpChallengeAttempt) (storage.User, storage.Session, storage.TotpChallengeOutcome, error)
+
+	createChannel       func(ctx context.Context, nc storage.NewChannel) (storage.Channel, error)
+	channelForUser      func(ctx context.Context, channelID, userID uuid.UUID) (storage.Channel, error)
+	updateChannelTopic  func(ctx context.Context, id uuid.UUID, topic string) (storage.Channel, error)
+	listChannelsForUser func(ctx context.Context, userID uuid.UUID, params storage.ListChannelsParams) ([]storage.Channel, error)
+	openDirectMessage   func(ctx context.Context, callerID, peerID uuid.UUID) (storage.Channel, bool, error)
+	addChannelMember    func(ctx context.Context, channelID, userID, addedBy uuid.UUID) error
+	removeChannelMember func(ctx context.Context, channelID, userID uuid.UUID) error
+	listChannelMembers  func(ctx context.Context, channelID uuid.UUID, params storage.ListChannelMembersParams) ([]storage.User, error)
+	isChannelMember     func(ctx context.Context, channelID, userID uuid.UUID) (bool, error)
+	createMessage       func(ctx context.Context, nm storage.NewMessage) (storage.Message, bool, error)
+	listMessages        func(ctx context.Context, params storage.ListMessagesParams) (storage.MessagePage, error)
+	setReadPosition     func(ctx context.Context, channelID, userID, messageID uuid.UUID) error
 }
 
 var _ httpserver.Store = (*fakeStore)(nil)
@@ -392,4 +405,88 @@ func assertIdentical(t *testing.T, what string, a, b *httptest.ResponseRecorder)
 			}
 		}
 	}
+}
+
+func (f *fakeStore) CreateChannel(ctx context.Context, nc storage.NewChannel) (storage.Channel, error) {
+	if f.createChannel == nil {
+		return storage.Channel{}, errFakeUnwired
+	}
+	return f.createChannel(ctx, nc)
+}
+
+func (f *fakeStore) ChannelForUser(ctx context.Context, channelID, userID uuid.UUID) (storage.Channel, error) {
+	if f.channelForUser == nil {
+		return storage.Channel{}, errFakeUnwired
+	}
+	return f.channelForUser(ctx, channelID, userID)
+}
+
+func (f *fakeStore) UpdateChannelTopic(ctx context.Context, id uuid.UUID, topic string) (storage.Channel, error) {
+	if f.updateChannelTopic == nil {
+		return storage.Channel{}, errFakeUnwired
+	}
+	return f.updateChannelTopic(ctx, id, topic)
+}
+
+func (f *fakeStore) ListChannelsForUser(ctx context.Context, userID uuid.UUID, params storage.ListChannelsParams) ([]storage.Channel, error) {
+	if f.listChannelsForUser == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listChannelsForUser(ctx, userID, params)
+}
+
+func (f *fakeStore) OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID) (storage.Channel, bool, error) {
+	if f.openDirectMessage == nil {
+		return storage.Channel{}, false, errFakeUnwired
+	}
+	return f.openDirectMessage(ctx, callerID, peerID)
+}
+
+func (f *fakeStore) AddChannelMember(ctx context.Context, channelID, userID, addedBy uuid.UUID) error {
+	if f.addChannelMember == nil {
+		return errFakeUnwired
+	}
+	return f.addChannelMember(ctx, channelID, userID, addedBy)
+}
+
+func (f *fakeStore) RemoveChannelMember(ctx context.Context, channelID, userID uuid.UUID) error {
+	if f.removeChannelMember == nil {
+		return errFakeUnwired
+	}
+	return f.removeChannelMember(ctx, channelID, userID)
+}
+
+func (f *fakeStore) ListChannelMembers(ctx context.Context, channelID uuid.UUID, params storage.ListChannelMembersParams) ([]storage.User, error) {
+	if f.listChannelMembers == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listChannelMembers(ctx, channelID, params)
+}
+
+func (f *fakeStore) IsChannelMember(ctx context.Context, channelID, userID uuid.UUID) (bool, error) {
+	if f.isChannelMember == nil {
+		return false, errFakeUnwired
+	}
+	return f.isChannelMember(ctx, channelID, userID)
+}
+
+func (f *fakeStore) CreateMessage(ctx context.Context, nm storage.NewMessage) (storage.Message, bool, error) {
+	if f.createMessage == nil {
+		return storage.Message{}, false, errFakeUnwired
+	}
+	return f.createMessage(ctx, nm)
+}
+
+func (f *fakeStore) ListMessages(ctx context.Context, params storage.ListMessagesParams) (storage.MessagePage, error) {
+	if f.listMessages == nil {
+		return storage.MessagePage{}, errFakeUnwired
+	}
+	return f.listMessages(ctx, params)
+}
+
+func (f *fakeStore) SetReadPosition(ctx context.Context, channelID, userID, messageID uuid.UUID) error {
+	if f.setReadPosition == nil {
+		return errFakeUnwired
+	}
+	return f.setReadPosition(ctx, channelID, userID, messageID)
 }
