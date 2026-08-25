@@ -282,6 +282,58 @@ describe("the unread divider", () => {
 });
 
 describe("sending", () => {
+  it("leaves the channel in the order the messages were composed", async () => {
+    const user = await openDeploys();
+
+    // The server stamps created_at as each POST arrives, so the order they
+    // leave in IS the order history comes back in. Firing them concurrently
+    // was a real bug: three messages typed quickly raced, and the author saw
+    // their own words rearranged after a reload — optimistic rendering hid it
+    // until then.
+    const arrived: string[] = [];
+    let releaseFirst: () => void = () => undefined;
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    server.use(
+      http.post("/api/v1/channels/:channelId/messages", async ({ request }) => {
+        const body = (await request.json()) as { content: string; client_msg_id: string };
+        arrived.push(body.content);
+        // Hold the first request open. Anything that arrives while it is held
+        // proves the sends are not waiting for each other.
+        if (arrived.length === 1) {
+          await firstHeld;
+        }
+        return HttpResponse.json(
+          {
+            id: crypto.randomUUID(),
+            channel_id: CHAT_CHANNELS.deploys,
+            author: FIXTURE_ADMIN,
+            client_msg_id: body.client_msg_id,
+            content: body.content,
+            created_at: new Date().toISOString(),
+          },
+          { status: 201 },
+        );
+      }),
+    );
+
+    await user.type(composer(), "First.{Enter}");
+    await user.type(composer(), "Second.{Enter}");
+    await user.type(composer(), "Third.{Enter}");
+
+    // All three are on screen optimistically, and only the first has been
+    // sent — the other two are behind it rather than racing it.
+    expect(await screen.findByText("Third.")).toBeInTheDocument();
+    expect(arrived).toEqual(["First."]);
+
+    releaseFirst();
+    await waitFor(() => {
+      expect(arrived).toEqual(["First.", "Second.", "Third."]);
+    });
+  });
+
   it("appends the message optimistically and reconciles it by client_msg_id", async () => {
     const user = await openDeploys();
 

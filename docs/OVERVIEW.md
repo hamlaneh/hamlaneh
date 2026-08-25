@@ -162,6 +162,10 @@ installs it on its own server with one command and owns its communication comple
   falls back to REST backfill. The handshake is guarded by a strict Origin check — the
   cross-site-hijacking defense standing in for the CSRF header a browser cannot send on an
   upgrade — and a revoked session closes its sockets within a tested 10 seconds.
+- Messages leave a channel in the order they were composed. The client holds one send queue per
+  conversation, because the server stamps a message as it arrives: three sent quickly used to
+  race, and the author's own words could come back rearranged after a reload. Optimistic
+  rendering hid it until then, and the end-to-end suite is what caught it.
 - **Message search**, scoped by a join inside the query rather than a filter after it, so a
   conversation the caller is not in cannot reach the results, the count, or a snippet. It matches
   **substrings, not word stems** — a deliberate choice recorded in migration 0006: every

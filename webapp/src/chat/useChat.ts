@@ -331,6 +331,34 @@ export function useChat({
     [currentUserId, markReadFor],
   );
 
+  /**
+   * One promise chain per channel, so a channel's sends leave in the order
+   * they were composed.
+   *
+   * Firing them concurrently was a real bug, found end to end: three messages
+   * typed quickly produced three POSTs in flight at once, the server stamped
+   * created_at as each arrived, and history came back in an order the author
+   * never wrote. Optimistic rendering hid it until a reload. The offline
+   * queue made it worse, because that is precisely where several messages
+   * pile up before being drained together.
+   *
+   * Per channel rather than globally: order only means anything inside one
+   * conversation, and a slow send should not hold up a different one.
+   * attemptSend resolves rather than rejects, but the chain is guarded anyway
+   * — one rejection must not strand every later message behind it.
+   */
+  const sendChains = useRef(new Map<string, Promise<void>>());
+
+  const enqueueSend = useCallback(
+    (target: string, clientMsgId: string, content: string) => {
+      const chain = (sendChains.current.get(target) ?? Promise.resolve())
+        .catch(() => undefined)
+        .then(() => attemptSend(target, clientMsgId, content));
+      sendChains.current.set(target, chain);
+    },
+    [attemptSend],
+  );
+
   const sendMessage = useCallback(
     (content: string) => {
       const target = channelId;
@@ -349,9 +377,9 @@ export function useChat({
           status: "sending",
         },
       });
-      void attemptSend(target, clientMsgId, trimmed);
+      enqueueSend(target, clientMsgId, trimmed);
     },
-    [attemptSend, channelId],
+    [enqueueSend, channelId],
   );
 
   /** Queued messages send themselves when the connection returns. */
@@ -366,11 +394,14 @@ export function useChat({
     for (const [target, channelView] of Object.entries(stateRef.current.views)) {
       for (const pending of channelView.pending) {
         if (pending.status === "queued") {
-          void attemptSend(target, pending.clientMsgId, pending.content);
+          // Through the same chain: a drained queue must land in the order it
+          // was composed, which is the whole reason the queue kept the
+          // messages rather than dropping them.
+          enqueueSend(target, pending.clientMsgId, pending.content);
         }
       }
     }
-  }, [state.connection, attemptSend, stateRef]);
+  }, [state.connection, enqueueSend, stateRef]);
 
   /* ── message actions ────────────────────────────────────────────── */
 
