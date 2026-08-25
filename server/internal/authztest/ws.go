@@ -121,6 +121,12 @@ func WSRegistry() []WSEntry {
 		wsStub("channel_created", S2C, WSMember),
 		wsStub("channel_updated", S2C, WSMember),
 		wsStub("member_added", S2C, WSMember),
+		// Removal is two events because the audiences are disjoint: the
+		// remaining members may hear who left; the removed user is no longer
+		// a member, so the only thing a socket of theirs may be told is that
+		// the channel is gone for them (ws-protocol.md §4).
+		wsStub("member_removed", S2C, WSMember),
+		wsStub("channel_removed", S2C, WSSelf),
 		wsStub("read_position", S2C, WSSelf),
 		wsStub("typing", S2C, WSMember),
 		wsStub("presence", S2C, WSMemberDM),

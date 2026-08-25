@@ -202,11 +202,11 @@ history, send a message, and have it appear on someone else's screen without a r
       guessing ("try again in a few minutes") from a stale comment claiming the contract carried
       no such header. Found by the first e2e run, which read the real 429 through Caddy
 - [ ] **Authz harness rework first, before any handler.** Today's four columns are
-      instance-scoped (anonymous / member / member-must-change / admin) and cannot express the
-      question this phase turns on: *member of which channel?* Needs channel-scoped principals
-      (non-member / member / owner / admin-non-member / admin-member) over shared per-cell
-      fixtures. This is the contract every later slice registers into, so it is designed once,
-      deliberately, and not grown by accretion
+      instance-scoped and cannot express the question this phase turns on: *member of which
+      channel?* Designed in [ADR 002](adr/002-channel-scoped-authz-matrix.md): seven required
+      columns, authorship refinements, per-cell fixture bundles, private+dm kind coverage with
+      a single public tripwire row, and a completeness gate that refuses instance-scoped
+      registration of any `{channelId}` operation
 - [ ] Channels (public/private) and 1:1 DMs; membership and roles. **The instance is the
       organization** — no org or team layer, no group DMs (see
       [ADR 001](adr/001-instance-as-org-flat-channels.md))

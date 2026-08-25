@@ -46,6 +46,10 @@ the family. Revoking a family — logout, remote device revocation, password cha
 enforces this with a periodic revocation sweep, not only on the next inbound frame, so an idle
 socket cannot outlive its session.
 
+**No permessage-deflate.** The server does not negotiate WebSocket compression. Frame sizes
+are small (§2), and a shared compression context mixing one user's text with another's is a
+length side-channel this protocol simply refuses to have rather than reason about per-frame.
+
 **CSRF:** the `X-Hamlaneh-CSRF` double-submit header that guards mutating REST requests cannot
 be sent on a browser WebSocket handshake. The Origin check above is the equivalent control for
 this transport.
@@ -171,6 +175,8 @@ this socket has subscribed to).
 | `channel_created` | membership | no | `{channel}` — you created it, or somebody invited you. The sidebar adds a row. |
 | `channel_updated` | membership | yes | `{channel}` — topic changed, or `member_count` moved. |
 | `member_added` | membership | yes | `{chan, user}` — `UserSummary`. |
+| `member_removed` | membership | yes | `{chan, user}` — `UserSummary`. Delivered to the members that remain. |
+| `channel_removed` | own user | no | `{chan}` — this channel is gone *for you*: you were removed, or you left from another device. Drop the sidebar row and any subscription. |
 | `read_position` | own user | no | `{chan, message_id, read_at}` — sent only to the *same user's* other sockets. |
 | `typing` | subscription | no | `{user_id}` — expires client-side after ~5 s; there is no `typing_stopped`. |
 | `presence` | membership, DM channels only | no | `{user_id, state}` — `online`/`away`/`offline`. |
@@ -191,6 +197,13 @@ Notes that matter:
 - **`typing` has a protocol but no designed UI yet.** The frames are specified and implemented so
   the transport is settled; whether and how a typing indicator is drawn is a design question
   that has not been answered. Nothing renders it in Phase 1.2.
+- **Removal is two events because the audiences are disjoint.** The members that remain get
+  `member_removed` — they are still members, so `membership` scope reaches them. The removed
+  user is *not* a member any more, so no membership-scoped event can legally reach them; their
+  own sockets get `channel_removed` instead, which tells them only about their own state and
+  names nothing that is now none of their business. On removal the server also drops the
+  removed user's subscriptions to that channel itself — it must not wait for the client to be
+  polite about it.
 - **Events never leak across membership.** A socket receives an event for a channel only while
   its user is a member of that channel at send time. This is the WS half of the IDOR matrix and
   is tested per channel-scoped event type, not merely per endpoint.
@@ -227,6 +240,15 @@ For each requested channel the server either
   the client backfills over REST with
   `GET /api/v1/channels/{id}/messages?after=<after_cursor>` until the page returns no
   `after_cursor`. A `resync` event can also arrive mid-socket for a single channel.
+
+**Resume is not a back door around membership.** The `resume` list is the client's claim about
+what it once saw, and the server re-checks membership for every requested channel at `hello`
+time: a channel the user is not a member of *now* — removed while disconnected, or never a
+member at all — is never replayed. It is listed in `resync`, which reveals nothing (the list is
+derived from the client's own request), and the REST backfill answers 404 exactly as it would
+for any non-member, at which point the client drops the channel. Replayed events are ordinary
+sends under §4's membership rule; buffering an event earlier never grandfathers a socket into
+receiving it.
 
 Falling back to REST is the **normal** path, not the failure path. A client that treats `resync`
 as an error will be wrong most of the time it reconnects after a long sleep.
@@ -383,6 +405,8 @@ entry and on an entry without a row. Columns are fixed: `op`, `direction`, `scop
 | channel_created | s2c | channel | member |
 | channel_updated | s2c | channel | member |
 | member_added | s2c | channel | member |
+| member_removed | s2c | channel | member |
+| channel_removed | s2c | channel | self |
 | read_position | s2c | channel | self |
 | typing | s2c | channel | member |
 | presence | s2c | channel | member-dm |
