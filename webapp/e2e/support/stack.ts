@@ -103,6 +103,9 @@ function writeEnvFile(adminPassword: string): void {
     "HAMLANEH_DOMAIN=localhost",
     `HAMLANEH_E2E_HTTPS_PORT=${String(HTTPS_PORT)}`,
     `POSTGRES_PASSWORD=${secret()}`,
+    // The files origin refuses to boot without a signing key, exactly as a
+    // real install would; the throwaway stack generates one the same way.
+    `HAMLANEH_FILE_URL_KEY=${secret()}`,
     "HAMLANEH_ADMIN_USERNAME=e2eadmin",
     `HAMLANEH_ADMIN_PASSWORD=${adminPassword}`,
     "HAMLANEH_ADMIN_LOCALE=en",

@@ -133,12 +133,15 @@ func writeInvalidResetToken(w http.ResponseWriter, r *http.Request) {
 // session, to learn the password policy and whether reset is even
 // available.
 //
-// password_min_length comes from internal/uservalidate — the same constant
-// the server validates against, so the form and the check can never drift.
+// password_min_length comes from internal/uservalidate and
+// max_file_size_bytes from the constant UploadFile enforces — the same
+// constants the server validates against, so the form and the check can
+// never drift.
 // password_reset_available is false when no mail transport is configured,
 // so the screen omits a link that would go nowhere.
 func (s *apiServer) GetInstance(w http.ResponseWriter, r *http.Request) {
 	writeJSONValue(w, r, http.StatusOK, api.InstanceInfo{
+		MaxFileSizeBytes:       maxUploadBytes,
 		PasswordMinLength:      uservalidate.MinPasswordLen,
 		PasswordResetAvailable: s.reset != nil && s.reset.Available(),
 	})

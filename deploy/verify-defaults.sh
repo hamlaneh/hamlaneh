@@ -13,8 +13,10 @@
 #      checked HERE because the point is that they survive the proxy.
 #   2. The real web application is served — not a placeholder
 #   3. /healthz returns 200
-#   4. Postgres is NOT reachable from the host (localhost:5432 closed)
-#   5. caddy, server and db containers all run as a non-root UID
+#   4. The files origin refuses to let an uploaded file behave like a
+#      document: attachment + nosniff + a sandboxing CSP (ADR 003)
+#   5. Postgres is NOT reachable from the host (localhost:5432 closed)
+#   6. caddy, server and db containers all run as a non-root UID
 #
 # Prints every check; exits non-zero listing every failed one.
 
@@ -170,6 +172,72 @@ check_webapp_served() {
   fi
 }
 
+# The files origin (ADR 003), where uploaded bytes are served from.
+#
+# What is checkable at deploy time is the HEADERS, not a download: a fresh
+# install has no uploads, and a signed URL for one could not be forged here
+# anyway. That is the stronger assertion in any case. The serving code writes
+# this posture BEFORE it looks anything up, so a 404 for an attachment that
+# does not exist proves the same thing a real non-image download would — that
+# an opaque blob is handed to the browser as a file to save, with sniffing
+# off and scripting sandboxed, and can never behave like a document.
+#
+# The app origin is checked unconditionally, because bare-IP and home-mode
+# installs have no separate hostname and serve /files/* from it with the
+# identical headers. The separate origin is checked as well wherever one can
+# exist: it is defense in depth on top of these headers, never instead.
+check_files_origin() {
+  local probe="/files/00000000-0000-0000-0000-000000000000"
+
+  assert_opaque_blob_headers "app origin" "https://${DOMAIN}${probe}" "${CONNECT[@]}"
+
+  case "$DOMAIN" in
+    *:*)
+      printf 'SKIP: %s
+' "separate files origin (IPv6 literal — files are served from the app origin, checked above)"
+      ;;
+    *[!0-9.]*)
+      assert_opaque_blob_headers "files origin" "https://files.${DOMAIN}${probe}"         --connect-to "files.${DOMAIN}:443:127.0.0.1:443"
+      ;;
+    *)
+      printf 'SKIP: %s
+' "separate files origin (HAMLANEH_DOMAIN is a bare IP — files are served from the app origin, checked above)"
+      ;;
+  esac
+}
+
+# assert_opaque_blob_headers checks one file URL for the three headers every
+# file response carries. Extra arguments are passed to curl (the --connect-to
+# mapping differs per origin).
+assert_opaque_blob_headers() {
+  local label="$1" url="$2"
+  shift 2
+
+  local headers
+  if ! headers="$(curl -skI --max-time 10 "$@" "$url")"; then
+    failure "${label}: ${url} is unreachable"
+    return
+  fi
+
+  if grep -qi '^x-content-type-options:[[:space:]]*nosniff' <<<"$headers"; then
+    pass "${label}: file responses send X-Content-Type-Options: nosniff"
+  else
+    failure "${label}: file responses are missing X-Content-Type-Options: nosniff"
+  fi
+
+  if grep -qi '^content-disposition:[[:space:]]*attachment' <<<"$headers"; then
+    pass "${label}: a non-image file is served as an attachment, never as a document"
+  else
+    failure "${label}: file responses do not force Content-Disposition: attachment"
+  fi
+
+  if grep -qi '^content-security-policy:.*sandbox' <<<"$headers"; then
+    pass "${label}: file responses are sandboxed by CSP"
+  else
+    failure "${label}: file responses carry no sandboxing Content-Security-Policy"
+  fi
+}
+
 check_healthz() {
   local code
   code="$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' "${CONNECT[@]}" "https://${DOMAIN}/healthz" || true)"
@@ -261,6 +329,7 @@ main() {
   check_security_headers
   check_webapp_served
   check_healthz
+  check_files_origin
   check_auth_defaults
   check_db_not_exposed
   check_nonroot_containers

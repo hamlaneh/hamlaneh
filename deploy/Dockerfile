@@ -48,9 +48,17 @@ COPY --from=webbuild /src/webapp/dist/ ./internal/webassets/dist/
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
       -o /out/hamlaneh-server ./cmd/hamlaneh-server
 
+# The data directory, created here because the runtime stage is distroless
+# and has no shell to mkdir with. Docker seeds a fresh named volume from
+# whatever the image has at the mount point, ownership included, and that is
+# the only thing that lets the non-root server write to it — a volume Docker
+# creates from nothing is owned by root, and the container cannot chown it.
+RUN mkdir -p /out/data
+
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 COPY --from=build /out/hamlaneh-server /usr/local/bin/hamlaneh-server
+COPY --from=build --chown=65532:65532 /out/data /var/lib/hamlaneh
 
 # Numeric UID of the distroless "nonroot" user, stated explicitly so
 # runtime non-root checks are unambiguous.

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hamlaneh/hamlaneh/server/internal/blobstore"
 	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
 	"github.com/hamlaneh/hamlaneh/server/internal/password"
 	"github.com/hamlaneh/hamlaneh/server/internal/session"
@@ -256,7 +257,11 @@ func buildRequest(entry Entry, principal Principal, c cell) *http.Request {
 	}
 	req := httptest.NewRequest(entry.Method, entry.Target(c.fx), strings.NewReader(body))
 	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
+		contentType := entry.ContentType
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		req.Header.Set("Content-Type", contentType)
 	}
 	// Every cell speaks from its own address. The matrix asserts
 	// authorization, not budgets, and hundreds of cells sharing httptest's
@@ -290,7 +295,14 @@ func TestAuthzMatrix(t *testing.T) {
 	t.Parallel()
 
 	store, _ := testdb.New(t)
-	handler := httpserver.Handler(store)
+	// The upload row posts a real file, so the server under the matrix needs
+	// somewhere to put it. A per-run temporary directory keeps the grid from
+	// touching anything an install would.
+	blobs, err := blobstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("matrix blob store: %v", err)
+	}
+	handler := httpserver.Handler(store, httpserver.WithUploads(blobs, nil))
 	ctx := context.Background()
 
 	entries := Registry()

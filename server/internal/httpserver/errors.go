@@ -59,6 +59,16 @@ const (
 	// deleted: its row is the placeholder the design draws, and words must
 	// not reappear on one.
 	codeMessageDeleted errorCode = "message_deleted"
+	// Phase 1.3: files. codeFileTooLarge answers an upload over
+	// max_file_size_bytes, and codeContentTypeMismatch an upload whose bytes
+	// are not the image type it declared — the one refusal that keeps "only
+	// images are served inline" a statement about bytes rather than labels.
+	// codeAttachmentNotFound is the send's single answer to every way an
+	// attachment id can fail to be claimable, so nothing about other
+	// people's uploads leaks (ADR 003, openapi.yaml SendMessageRequest).
+	codeFileTooLarge        errorCode = "file_too_large"
+	codeContentTypeMismatch errorCode = "content_type_mismatch"
+	codeAttachmentNotFound  errorCode = "attachment_not_found"
 	// codeNotFound answers a path under /api that no contract route claims.
 	// It is the router's answer, not a resource's: the contract's
 	// resource-level 404s carry their own codes (session_not_found,
@@ -66,14 +76,12 @@ const (
 	codeNotFound errorCode = "not_found"
 )
 
-// codeNotImplemented marks a contract endpoint whose behavior has not
-// shipped. It left this file when slice 1.2b landed the last Phase 1.2
-// handler, and returned with the Phase 1.3 contract: uploadFile is specified
-// ahead of its implementation, exactly the contract-first shape the authz
-// matrix gate (authztest.notImplementedOperations) exists to make deliberate
-// — the operation is on that list, and a handler landing without tightening
-// its row turns the matrix red.
-const codeNotImplemented errorCode = "not_implemented"
+// There is no not_implemented code here any more: uploadFile was the last
+// contract endpoint specified ahead of its handler, and the Phase 1.3
+// pipeline landed it. The gate that made that shape deliberate is still
+// there and still empty — authztest.notImplementedOperations, which fails
+// the build both for a matrix cell expecting a 501 nobody declared and for a
+// declaration no cell still needs.
 
 // Stable messages for codes written from more than one call site.
 const (

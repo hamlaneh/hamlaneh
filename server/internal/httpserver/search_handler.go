@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
@@ -46,15 +48,49 @@ type messageSearcher interface {
 	SearchMessages(ctx context.Context, params storage.SearchMessagesParams) (storage.SearchPage, error)
 }
 
-var _ messageSearcher = (*storage.Store)(nil)
+// fileSearcher is the other tab's read, declared here for the same reason.
+type fileSearcher interface {
+	SearchFiles(ctx context.Context, params storage.SearchFilesParams) (storage.FileSearchPage, error)
+}
 
-// Search returns one page of message hits from the caller's own
-// conversations, newest first.
+var (
+	_ messageSearcher = (*storage.Store)(nil)
+	_ fileSearcher    = (*storage.Store)(nil)
+)
+
+// fileURLSigner mints the signed, expiring URLs an Attachment carries. The
+// files origin is cookie-less, so possession of a fresh URL is the
+// credential and every serialization mints its own (openapi.yaml,
+// Attachment) — which is why this is a call per result rather than a column.
+type fileURLSigner interface {
+	// AttachmentURLs returns the download URL and, for a row that has one,
+	// the thumbnail URL.
+	AttachmentURLs(id uuid.UUID, hasThumbnail bool) (url string, thumbnail *string)
+}
+
+// unsignedFileURLs is the fallback for a server wired without a signer: the
+// correctly shaped paths on the files origin, and no signature. It is a unit
+// -test fixture, never production — an unsigned URL is refused by the files
+// origin, which is the honest failure for a server that cannot sign.
+type unsignedFileURLs struct{}
+
+func (unsignedFileURLs) AttachmentURLs(id uuid.UUID, hasThumbnail bool) (string, *string) {
+	url := "/files/" + id.String()
+	if !hasThumbnail {
+		return url, nil
+	}
+	thumbnail := url + "/thumbnail"
+	return url, &thumbnail
+}
+
+// Search returns one page of hits from the caller's own conversations,
+// newest first: message bodies on the default tab, filenames on kind=files.
 //
-// kind=files is accepted and answers an empty page: the contract promises
-// the tab now and the upload pipeline is Phase 1.3 (openapi.yaml,
-// SearchKind). An empty page is not an error — the tab exists, it just has
-// nothing in it yet.
+// Both tabs answer the same shape and share one budget, because they are one
+// search box; what differs is which statement runs and, on files, that each
+// result carries its attachment. The scope paragraph above holds for both —
+// the files statement is the message statement's membership join with the
+// attachments hung off it (storage/filesearch.go).
 func (s *apiServer) Search(w http.ResponseWriter, r *http.Request, params api.SearchParams) {
 	// The route table gates this path with a session (classSession), and the
 	// principal is not incidental here: it is the search's entire scope. A
@@ -98,7 +134,22 @@ func (s *apiServer) Search(w http.ResponseWriter, r *http.Request, params api.Se
 	}
 
 	if kind == api.Files {
-		writeJSONValue(w, r, http.StatusOK, emptySearchPage(kind))
+		files, canSearchFiles := store.(fileSearcher)
+		if !canSearchFiles {
+			internalError(w, r, errors.New("store cannot search files"))
+			return
+		}
+		page, err := files.SearchFiles(r.Context(), storage.SearchFilesParams{
+			UserID: prin.user.ID,
+			Query:  query,
+			After:  after,
+			Limit:  limit,
+		})
+		if err != nil {
+			internalError(w, r, err)
+			return
+		}
+		writeJSONValue(w, r, http.StatusOK, s.apiFileSearchPage(kind, page))
 		return
 	}
 
@@ -152,9 +203,9 @@ func searchKind(w http.ResponseWriter, r *http.Request, requested *api.SearchKin
 	return *requested, true
 }
 
-// emptySearchPage is a well-formed page with nothing in it — the files tab
-// until Phase 1.3, and the shape every empty answer takes. results is an
-// empty array rather than null: the contract makes it required.
+// emptySearchPage is a well-formed page with nothing in it — the shape every
+// empty answer takes. results is an empty array rather than null: the
+// contract makes it required.
 func emptySearchPage(kind api.SearchKind) api.SearchPage {
 	return api.SearchPage{Kind: kind, Results: []api.SearchResult{}}
 }
@@ -195,6 +246,40 @@ func apiSearchResult(res storage.SearchResult) api.SearchResult {
 		CreatedAt: res.CreatedAt,
 		Snippet:   api.SearchSnippet{Parts: parts},
 	}
+}
+
+// apiFileSearchPage maps a storage file page onto the same contract
+// SearchPage the messages tab answers with. The cursor is the last result's
+// time paired with its ATTACHMENT's id, because that is the keyset the
+// statement pages on — one message can carry several files (storage/
+// filesearch.go).
+func (s *apiServer) apiFileSearchPage(kind api.SearchKind, page storage.FileSearchPage) api.SearchPage {
+	out := emptySearchPage(kind)
+	out.Total = page.Total
+	out.TotalCapped = page.Capped
+	out.Results = make([]api.SearchResult, 0, len(page.Results))
+	for _, res := range page.Results {
+		out.Results = append(out.Results, s.apiFileSearchResult(res))
+	}
+	if page.HasMore && len(page.Results) > 0 {
+		last := page.Results[len(page.Results)-1]
+		next := encodeTimeCursor(last.CreatedAt, last.Attachment.ID)
+		out.NextCursor = &next
+	}
+	return out
+}
+
+// apiFileSearchResult maps one filename hit: the message half's fields, plus
+// the attachment the contract says is present exactly on this tab. The card
+// goes through the same apiAttachment a message's own cards do, so a file
+// found by search and the same file seen in the conversation are one shape
+// with one freshly minted pair of URLs — for a caller the membership join
+// that produced the row has already proven entitled to it.
+func (s *apiServer) apiFileSearchResult(res storage.FileSearchResult) api.SearchResult {
+	out := apiSearchResult(res.SearchResult)
+	attachment := s.apiAttachment(res.Attachment)
+	out.Attachment = &attachment
+	return out
 }
 
 // apiChannelRef maps the label of a hit: a slug for a named channel, the

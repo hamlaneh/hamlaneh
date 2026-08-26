@@ -59,6 +59,14 @@ fetched through the same guard, stored as bounded derivatives, and served from t
 — a reader's browser is never made to fetch a stranger's server, and the `img-src 'self'` CSP
 already refuses it. Only ports 80/443 are dialed.
 
+**Preview images are their own lookup, not fake attachments.** A preview derivative has no
+`attachments` row on purpose: an attachments row would drag it into channel visibility rules,
+the orphan sweep, and file search, none of which apply to a thumbnail the server fetched for a
+card. The files origin therefore resolves an id twice — attachments first, then `link_previews`
+by `image_blob_id` — and serves preview images with the same inline-image headers as proven
+uploads (they were decoded and re-derived at ingest, so they are proven by construction).
+Signing is identical; the variant is `thumb`.
+
 **Preview enrichment is asynchronous and observable.** Send returns immediately; the first
 http(s) URL in the content is fetched off the request path, and a successful preview updates the
 message and emits `message_updated` — which is why ws-protocol §4's description of that event

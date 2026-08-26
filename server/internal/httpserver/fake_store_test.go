@@ -67,6 +67,7 @@ type fakeStore struct {
 	createMessage       func(ctx context.Context, nm storage.NewMessage) (storage.Message, bool, error)
 	listMessages        func(ctx context.Context, params storage.ListMessagesParams) (storage.MessagePage, error)
 	setReadPosition     func(ctx context.Context, channelID, userID, messageID uuid.UUID) error
+	createAttachment    func(ctx context.Context, na storage.NewAttachment) (storage.Attachment, error)
 }
 
 var _ httpserver.Store = (*fakeStore)(nil)
@@ -498,6 +499,13 @@ func (f *fakeStore) SetReadPosition(ctx context.Context, channelID, userID, mess
 		return errFakeUnwired
 	}
 	return f.setReadPosition(ctx, channelID, userID, messageID)
+}
+
+func (f *fakeStore) CreateAttachment(ctx context.Context, na storage.NewAttachment) (storage.Attachment, error) {
+	if f.createAttachment == nil {
+		return storage.Attachment{}, errFakeUnwired
+	}
+	return f.createAttachment(ctx, na)
 }
 
 func (f *fakeStore) UserByID(ctx context.Context, id uuid.UUID) (storage.User, error) {

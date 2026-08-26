@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -40,6 +41,18 @@ type Message struct {
 	CreatedAt   time.Time
 	EditedAt    *time.Time
 	DeletedAt   *time.Time
+	// Attachments are the message's file cards, oldest upload first. They
+	// are filled by the reads that serve a message to a client — a page of
+	// history, a send, an edit — in one query for the whole page, never one
+	// per message. A read that does not serve a client (MessageByID, which
+	// only feeds an authorization decision) leaves them nil.
+	Attachments []Attachment
+	// Preview is the message's link-preview card, filled by the same
+	// client-serving reads (one batched query per page) and set by the
+	// enricher before it announces — the announcement's frame is built from
+	// this struct, so a preview missing here would make message_updated
+	// erase the very card it exists to deliver.
+	Preview *LinkPreview
 }
 
 // NewMessage carries the fields for sending a message. ClientMsgID is the
@@ -51,6 +64,12 @@ type NewMessage struct {
 	AuthorID    uuid.UUID
 	ClientMsgID uuid.UUID
 	Content     string
+	// AttachmentIDs are files this author already uploaded to this channel
+	// and has not attached to anything, claimed atomically with the insert.
+	// Any id that is not all three answers ErrAttachmentNotFound and stores
+	// no message. Duplicates are the caller's to refuse; here they would
+	// simply fail the count.
+	AttachmentIDs []uuid.UUID
 }
 
 // MessageCursor is a keyset-pagination position in a channel's history: the
@@ -287,13 +306,26 @@ const sendAttempts = 3
 // somebody mentioned before they joined gets no "@" badge when they arrive —
 // they still get the message as plain unread, like the rest of the history
 // they missed.
+// A message with neither text nor files is nothing: ErrEmptyMessage, and
+// nothing is stored. The rule is enforced here rather than in the handler
+// because only here is it atomic with the claim — the database has allowed
+// empty content on a live message since migration 0007, so "at least one
+// attachment" is a promise about rows this transaction is still writing.
+//
+// Attachments are claimed by the same transaction that inserts the message
+// (see claimAttachmentsQuery): all of them, or no message at all. A resend
+// claims nothing — it inserts nothing, so there is nothing to attach to, and
+// the ids it names stay unattached rather than being stolen from the message
+// that already holds them. The stored message's own attachments come back
+// with it either way.
 func (s *Store) CreateMessage(ctx context.Context, nm NewMessage) (Message, bool, error) {
+	if nm.Content == "" && len(nm.AttachmentIDs) == 0 {
+		return Message{}, false, ErrEmptyMessage
+	}
 	mentioned := parseMentions(nm.Content)
 
 	for range sendAttempts {
-		row := s.pool.QueryRow(ctx, insertMessageQuery,
-			nm.ChannelID, nm.AuthorID, nm.ClientMsgID, nm.Content, mentioned)
-		msg, err := scanMessage(row)
+		msg, err := s.insertMessage(ctx, nm, mentioned)
 		if err == nil {
 			return msg, true, nil
 		}
@@ -318,14 +350,104 @@ func (s *Store) CreateMessage(ctx context.Context, nm NewMessage) (Message, bool
 		nm.ClientMsgID, sendAttempts)
 }
 
-// messageByKey reads the message an idempotency key names, or ErrNotFound.
+// insertMessage stores one message and claims its attachments, reporting
+// ErrNotFound when the idempotency key was already taken.
+//
+// A send with no files stays a single statement: a transaction there would
+// be two extra round trips on the hottest write path with nothing to make
+// atomic. A send with files needs both statements to succeed or neither, so
+// it takes one — messages first, then attachments, which is the package's
+// declared lock order (see the note at the top of storage.go).
+func (s *Store) insertMessage(ctx context.Context, nm NewMessage, mentioned []uuid.UUID) (Message, error) {
+	if len(nm.AttachmentIDs) == 0 {
+		return scanMessage(s.pool.QueryRow(ctx, insertMessageQuery,
+			nm.ChannelID, nm.AuthorID, nm.ClientMsgID, nm.Content, mentioned))
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Message{}, err
+	}
+	defer func() {
+		// Rollback after a successful Commit is a no-op that returns
+		// pgx.ErrTxClosed; nothing else here is worth reporting over the
+		// error the function is already returning.
+		_ = tx.Rollback(ctx)
+	}()
+
+	msg, err := scanMessage(tx.QueryRow(ctx, insertMessageQuery,
+		nm.ChannelID, nm.AuthorID, nm.ClientMsgID, nm.Content, mentioned))
+	if err != nil {
+		return Message{}, err
+	}
+
+	msg.Attachments, err = claimAttachments(ctx, tx, msg.ID, nm)
+	if err != nil {
+		return Message{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Message{}, err
+	}
+	return msg, nil
+}
+
+// claimAttachments attaches nm.AttachmentIDs to messageID, or reports
+// ErrAttachmentNotFound.
+//
+// The check is a count, not a per-id diagnosis: every way an id can fail —
+// no such file, another channel's, another person's, one already attached —
+// is one row that did not come back, and the caller must not be able to tell
+// which. Returning the ids that did match would leak precisely the fact the
+// single error code exists to hide.
+func claimAttachments(ctx context.Context, tx pgx.Tx, messageID uuid.UUID, nm NewMessage) ([]Attachment, error) {
+	rows, err := tx.Query(ctx, claimAttachmentsQuery,
+		messageID, nm.AttachmentIDs, nm.ChannelID, nm.AuthorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	claimed := []Attachment{}
+	for rows.Next() {
+		att, scanErr := scanAttachment(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		claimed = append(claimed, att)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(claimed) != len(nm.AttachmentIDs) {
+		return nil, ErrAttachmentNotFound
+	}
+
+	// Oldest upload first, matching attachmentsByMessagesQuery, so a message
+	// renders its cards in the same order however it was read. The id breaks
+	// ties: two files uploaded in the same instant share a created_at, and
+	// without it the order would differ between the send and the reload.
+	slices.SortFunc(claimed, func(a, b Attachment) int {
+		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+			return c
+		}
+		return bytes.Compare(a.ID[:], b.ID[:])
+	})
+	return claimed, nil
+}
+
+// messageByKey reads the message an idempotency key names, with its
+// attachments, or ErrNotFound.
 func (s *Store) messageByKey(ctx context.Context, nm NewMessage) (Message, error) {
 	row := s.pool.QueryRow(ctx, messageByKeyQuery, nm.ChannelID, nm.AuthorID, nm.ClientMsgID)
 	msg, err := scanMessage(row)
 	if err != nil {
 		return Message{}, fmt.Errorf("message by client key: %w", err)
 	}
-	return msg, nil
+	msgs := []Message{msg}
+	if err := s.loadMessageCards(ctx, msgs); err != nil {
+		return Message{}, fmt.Errorf("message by client key: %w", err)
+	}
+	return msgs[0], nil
 }
 
 // MessageByID reads one message of one channel, or ErrNotFound.
@@ -368,7 +490,14 @@ func (s *Store) UpdateMessageContent(ctx context.Context, channelID, messageID u
 	if err != nil {
 		return Message{}, fmt.Errorf("update message: %w", err)
 	}
-	return msg, nil
+	// An edit changes words, never files: the message keeps the attachments
+	// it was sent with, and the response has to carry them or a client that
+	// re-renders from it would drop the cards.
+	msgs := []Message{msg}
+	if err := s.loadMessageCards(ctx, msgs); err != nil {
+		return Message{}, fmt.Errorf("update message: %w", err)
+	}
+	return msgs[0], nil
 }
 
 // SoftDeleteMessage erases a message's content in place and records who did
@@ -460,6 +589,9 @@ func (s *Store) ListMessages(ctx context.Context, params ListMessagesParams) (Me
 	if probeErr != nil {
 		return MessagePage{}, fmt.Errorf("list messages: %w", probeErr)
 	}
+	if err := s.loadMessageCards(ctx, page.Messages); err != nil {
+		return MessagePage{}, fmt.Errorf("list messages: %w", err)
+	}
 	return page, nil
 }
 
@@ -521,6 +653,9 @@ func (s *Store) aroundPage(ctx context.Context, params ListMessagesParams) (Mess
 		// false: an empty page has no row to hang a cursor on, so a client
 		// offered one could not use it.
 		return MessagePage{Messages: page.Messages}, nil
+	}
+	if err := s.loadMessageCards(ctx, page.Messages); err != nil {
+		return MessagePage{}, fmt.Errorf("list messages around: %w", err)
 	}
 	return page, nil
 }

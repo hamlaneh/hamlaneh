@@ -342,19 +342,19 @@ as the credential on a cookie-less origin; bytes sniffed and labels decorative; 
 at ingest; blobs on the filesystem keyed by server ids only; a dial-time egress guard). Message
 search shipped in 1.2b; this phase adds files and previews.
 
-- [ ] **Attachment storage + upload pipeline** (`POST /api/v1/channels/{channelId}/files`,
+- [x] **Attachment storage + upload pipeline** (`POST /api/v1/channels/{channelId}/files`,
       today a deliberate 501 behind the matrix gate): size cap from the instance document,
       sniff-vs-label enforcement, EXIF strip, dimension caps before decode, thumbnails ≤512px,
       the 24-hour orphan sweep, and the send transaction claiming `attachment_ids` atomically —
       empty content allowed exactly when files ride along
-- [ ] **The files origin**: signed URL minting and verification, inline for proven images only,
+- [x] **The files origin**: signed URL minting and verification, inline for proven images only,
       attachment+nosniff+sandbox CSP for everything else and for the whole bare-IP/home mode;
       Caddy provisioning for `files.<domain>`; the URL-signing key generated at
       install/first-run
-- [ ] **Link previews** behind the egress guard of ADR 003 (dial-time IP validation, redirect
+- [x] **Link previews** behind the egress guard of ADR 003 (dial-time IP validation, redirect
       re-checks, timeouts, size caps, ports 80/443 only); preview images re-hosted as bounded
       derivatives; enrichment async, announced by `message_updated` without `edited_at`
-- [ ] **File search** (`kind=files`): filename trigrams over the 0006 fold (index already in
+- [x] **File search** (`kind=files`): filename trigrams over the 0006 fold (index already in
       0007), membership-scoped by the same join, the `attachment` field on `SearchResult`
 - [ ] **The webapp's half**: the paperclip enabled at last, upload progress and failure per
       file, image/file cards fed by real attachments, the preview card fed by enrichment

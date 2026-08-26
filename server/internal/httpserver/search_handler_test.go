@@ -23,6 +23,7 @@ import (
 type searchStore struct {
 	*fakeStore
 	searchMessages func(ctx context.Context, params storage.SearchMessagesParams) (storage.SearchPage, error)
+	searchFiles    func(ctx context.Context, params storage.SearchFilesParams) (storage.FileSearchPage, error)
 }
 
 var _ httpserver.Store = (*searchStore)(nil)
@@ -34,6 +35,15 @@ func (s *searchStore) SearchMessages(
 		return storage.SearchPage{}, errFakeUnwired
 	}
 	return s.searchMessages(ctx, params)
+}
+
+func (s *searchStore) SearchFiles(
+	ctx context.Context, params storage.SearchFilesParams,
+) (storage.FileSearchPage, error) {
+	if s.searchFiles == nil {
+		return storage.FileSearchPage{}, errFakeUnwired
+	}
+	return s.searchFiles(ctx, params)
 }
 
 // searchFixtureTime is every fixture result's timestamp; the cursor a page
@@ -254,20 +264,119 @@ func TestSearchCursorsToTheNextPage(t *testing.T) {
 	}
 }
 
-// TestSearchFilesKindIsAnEmptyPage pins the contract's promise for the tab
-// Phase 1.3 fills: accepted now, empty until then, and never an error. It
-// must also never reach storage — there is nothing there to ask.
-func TestSearchFilesKindIsAnEmptyPage(t *testing.T) {
+// filesSearchingStore answers every kind=files search with page, recording
+// the parameters the handler asked for. searchMessages stays unwired, so a
+// files request that reached the wrong statement fails loudly.
+func filesSearchingStore(page storage.FileSearchPage) (*searchStore, *storage.SearchFilesParams) {
+	var seen storage.SearchFilesParams
+	store := &searchStore{fakeStore: authedStore(fixtureUser())}
+	store.searchFiles = func(_ context.Context, params storage.SearchFilesParams) (storage.FileSearchPage, error) {
+		seen = params
+		return page, nil
+	}
+	return store, &seen
+}
+
+// fileSearchResultFixture is one filename hit on an image, so the mapping of
+// the fields only an image has is covered too.
+func fileSearchResultFixture() storage.FileSearchResult {
+	width, height := 1600, 900
+	message := searchResultFixture()
+	return storage.FileSearchResult{
+		SearchResult: message,
+		Attachment: storage.Attachment{
+			ID:           uuid.MustParse("dddddddd-0000-0000-0000-000000000001"),
+			ChannelID:    message.Channel.ID,
+			UploaderID:   message.Author.ID,
+			MessageID:    &message.MessageID,
+			Filename:     "deploy-diagram.png",
+			ContentType:  "image/png",
+			SizeBytes:    204800,
+			Width:        &width,
+			Height:       &height,
+			HasThumbnail: true,
+			CreatedAt:    searchFixtureTime,
+		},
+	}
+}
+
+// TestSearchFilesServesTheContractPage pins the files tab's mapping: the
+// same page shape as messages, plus the attachment the contract says is
+// present exactly here, with URLs minted for it.
+func TestSearchFilesServesTheContractPage(t *testing.T) {
 	t.Parallel()
 
-	store := &searchStore{fakeStore: authedStore(fixtureUser())} // searchMessages unwired: any call fails
+	result := fileSearchResultFixture()
+	store, seen := filesSearchingStore(storage.FileSearchPage{
+		Results: []storage.FileSearchResult{result},
+		Total:   4,
+	})
 	page := decodeSearchPage(t, store, "q=deploy&kind=files")
 
 	if page.Kind != api.Files {
 		t.Errorf("kind = %q, want files", page.Kind)
 	}
-	if len(page.Results) != 0 || page.Total != 0 || page.TotalCapped || page.NextCursor != nil {
-		t.Errorf("files page = %+v, want an empty page", page)
+	if seen.UserID != fixtureUser().ID || seen.Query != "deploy" {
+		t.Errorf("searched %+v, want the signed-in caller and %q", seen, "deploy")
+	}
+	if page.Total != 4 || page.TotalCapped {
+		t.Errorf("total = %d (capped %v), want 4 and not capped", page.Total, page.TotalCapped)
+	}
+	if len(page.Results) != 1 {
+		t.Fatalf("got %d results, want 1", len(page.Results))
+	}
+
+	got := page.Results[0]
+	if got.MessageId != result.MessageID {
+		t.Errorf("message_id = %s, want the message the file rode in on %s", got.MessageId, result.MessageID)
+	}
+	if got.Attachment == nil {
+		t.Fatalf("a files result carries no attachment: %+v", got)
+	}
+	att := *got.Attachment
+	if att.Id != result.Attachment.ID || att.Filename != result.Attachment.Filename ||
+		att.ContentType != result.Attachment.ContentType || att.SizeBytes != result.Attachment.SizeBytes {
+		t.Errorf("attachment = %+v, want it to carry %+v", att, result.Attachment)
+	}
+	if att.Width == nil || *att.Width != 1600 || att.Height == nil || *att.Height != 900 {
+		t.Errorf("dimensions = %v x %v, want 1600 x 900", att.Width, att.Height)
+	}
+	if att.Url == "" {
+		t.Error("the attachment carries no url; every serialization mints one")
+	}
+	if att.ThumbnailUrl == nil {
+		t.Error("an attachment with a thumbnail carries no thumbnail_url")
+	}
+}
+
+// TestSearchFilesCursorIsTheAttachments is the mapping's one real decision:
+// several files can ride on one message, so the cursor a files page hands
+// back must name the attachment, not the message — otherwise the next page
+// skips every card after the boundary.
+func TestSearchFilesCursorIsTheAttachments(t *testing.T) {
+	t.Parallel()
+
+	result := fileSearchResultFixture()
+	store, _ := filesSearchingStore(storage.FileSearchPage{
+		Results: []storage.FileSearchResult{result},
+		HasMore: true,
+	})
+	page := decodeSearchPage(t, store, "q=deploy&kind=files")
+	if page.NextCursor == nil {
+		t.Fatal("no next_cursor although another page exists")
+	}
+
+	// Feed it back: the handler must decode it into the attachment's id.
+	resumed, seen := filesSearchingStore(storage.FileSearchPage{})
+	decodeSearchPage(t, resumed, "q=deploy&kind=files&cursor="+*page.NextCursor)
+	if seen.After == nil {
+		t.Fatal("the cursor did not reach storage")
+	}
+	if seen.After.ID != result.Attachment.ID {
+		t.Errorf("resumed from %s, want the last attachment %s", seen.After.ID, result.Attachment.ID)
+	}
+	if !seen.After.CreatedAt.Equal(result.CreatedAt) {
+		t.Errorf("resumed at %s, want the last result's time %s", seen.After.CreatedAt, result.CreatedAt)
 	}
 }
 

@@ -161,6 +161,17 @@ installs it on its own server with one command and owns its communication comple
   falls back to REST backfill. The handshake is guarded by a strict Origin check — the
   cross-site-hijacking defense standing in for the CSRF header a browser cannot send on an
   upgrade — and a revoked session closes its sockets within a tested 10 seconds.
+- **Files (Phase 1.3 server half).** Upload is channel-scoped from birth, so a file is readable
+  exactly by its channel's members — the same one rule, the same 404 for everyone else. Bytes
+  are sniffed and labels are decoration: only proven images are ever served inline; everything
+  else, SVG and HTML included, is a download with nosniff and a sandboxing CSP, so uploaded
+  content can never run script. Images lose their metadata at ingest — a photo shared in a chat
+  must not quietly say where its author lives — and serving happens on a cookie-less files
+  origin through signed, expiring URLs, minted fresh for every entitled reader. Link previews
+  are fetched by the server through an egress guard that validates the address it dials (not
+  the name it resolved, which is where DNS rebinding lives), re-hosts the preview image, and
+  arrives asynchronously as a message_updated event. File search runs on filename trigrams with
+  the same fold and the same membership scoping as message search.
 - Messages leave a channel in the order they were composed. The client holds one send queue per
   conversation, because the server stamps a message as it arrives: three sent quickly used to
   race, and the author's own words could come back rearranged after a reload. Optimistic

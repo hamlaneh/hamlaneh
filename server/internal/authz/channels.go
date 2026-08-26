@@ -28,6 +28,12 @@ const (
 	MessageDelete Action = "message:delete"
 	// ReadPositionSet is moving the caller's own read position.
 	ReadPositionSet Action = "channel:read-position:set"
+	// FileUpload is uploading a file into a channel. It is its own action
+	// rather than a reuse of MessageSend because it happens before any
+	// message exists — the composer uploads while the caption is still being
+	// typed — and because a file is readable by the channel's members from
+	// that moment, whether or not a message ever claims it (ADR 003).
+	FileUpload Action = "channel:file:upload"
 )
 
 // Channel is the resource for channel-scoped actions: the channel plus the
@@ -75,7 +81,7 @@ func canChannel(user *storage.User, action Action, res Channel) bool {
 		return false
 	}
 	switch action {
-	case ChannelRead, ChannelUpdate, ChannelMemberAdd, MessageSend, ReadPositionSet:
+	case ChannelRead, ChannelUpdate, ChannelMemberAdd, MessageSend, ReadPositionSet, FileUpload:
 		// Any member. A direct message's fixed pair and its lack of a topic
 		// are refused by the handler as 400s: they are statements about the
 		// channel's shape, not about who is asking, and answering 403 would
@@ -111,7 +117,8 @@ func canMessage(user *storage.User, action Action, res Message) bool {
 		// The author, or an admin who is a member of this channel. Deletion
 		// removes words; it does not put new ones in somebody's mouth.
 		return res.Author || user.IsAdmin
-	case ChannelRead, ChannelUpdate, ChannelMemberAdd, ChannelMemberRemove, MessageSend, ReadPositionSet:
+	case ChannelRead, ChannelUpdate, ChannelMemberAdd, ChannelMemberRemove,
+		MessageSend, ReadPositionSet, FileUpload:
 		// Channel actions need a Channel resource; see canChannel.
 		return false
 	case AdminUsersList, AdminUsersCreate:

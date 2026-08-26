@@ -50,3 +50,44 @@
 	# parsing first, or login rate limiting becomes spoofable.
 	reverse_proxy server:8080
 }
+
+# The files origin (ADR 003). Uploaded bytes are served from a SEPARATE
+# hostname, routed to the same Go binary, so that a file can never script
+# against the app: a different origin means no cookies are sent with the
+# request, no app document shares a scripting context with it, and the
+# signed URL is therefore the only credential involved.
+#
+# The separate origin is defense in depth, NOT the defense. Every file
+# response carries Content-Disposition: attachment (for anything that is not
+# a proven image), X-Content-Type-Options: nosniff and a sandboxing CSP, set
+# by the Go server, on every serving mode — see files_origin.go. An install
+# that never reaches this block still gets all three.
+#
+# Bare-IP and localhost installs: "files.<ip>" is not a name anything can
+# certify meaningfully, and home mode has no proxy at all. Those installs
+# serve /files/* from the app origin instead, with the identical headers.
+# That is why deploy/verify-defaults.sh probes the app origin unconditionally
+# and this hostname only when the domain is a real one.
+files.{$HAMLANEH_DOMAIN:localhost} {
+	encode zstd gzip
+
+	# Same ownership rule as above: HSTS and hiding the server software are
+	# all this proxy sets. The file responses' own security headers come
+	# from the Go server, which is the only thing that knows whether the
+	# bytes it is about to write proved to be an image.
+	header {
+		Strict-Transport-Security "max-age=15552000"
+		-Server
+	}
+
+	# Only the two file routes exist here. Everything else on this hostname
+	# is 404 rather than a second copy of the application: the whole point
+	# of the origin is that it serves nothing that could script.
+	@files path /files/*
+	handle @files {
+		reverse_proxy server:8080
+	}
+	handle {
+		respond 404
+	}
+}

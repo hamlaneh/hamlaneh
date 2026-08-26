@@ -12,9 +12,14 @@
 package authztest
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/png"
 	"maps"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"sort"
 	"strings"
 
@@ -175,6 +180,12 @@ type Entry struct {
 	// nil for bodyless requests.
 	Body func(fx Fixture) string
 
+	// ContentType overrides the JSON default for entries whose body is not
+	// JSON — the file upload's multipart form is the only one so far. It
+	// must carry whatever parameters the body needs (a multipart boundary),
+	// which is why the body builder uses a fixed one.
+	ContentType string
+
 	// Want is the expected status per principal. Every principal the entry's
 	// shape requires must be present (checked by the completeness test and
 	// by the runner), and the runner executes exactly the keys that are.
@@ -277,8 +288,9 @@ const searchPath = "/api/v1/search"
 // matrix rows may expect a 501.
 //
 // It is empty: every operation in docs/api/openapi.yaml has a handler, and
-// nothing in this server answers 501 any more. Message edit and delete were
-// the last two, and slice 1.2b landed them.
+// nothing in this server answers 501 any more. uploadFile was the last one —
+// specified ahead of its pipeline on purpose — and the Phase 1.3 upload
+// slice landed it, tightening its rows from 501 into the real outcomes.
 //
 // The list stays because it is the gate, not the record. DiffNotImplemented
 // enforces it in both directions — a row expecting 501 for an unlisted
@@ -290,10 +302,7 @@ const searchPath = "/api/v1/search"
 // itself: a handler that lands while its row still says 501 gets asked,
 // answers for real, and turns the cell red.
 func notImplementedOperations() []Operation {
-	return []Operation{
-		// The Phase 1.3 upload pipeline: contract landed first, on purpose.
-		{Method: http.MethodPost, Path: "/api/v1/channels/{channelId}/files"},
-	}
+	return []Operation{}
 }
 
 // channelEntry builds one channel-scoped row. want carries the five channel
@@ -784,24 +793,61 @@ func channelRegistry() []Entry {
 	entries = append(entries, bothKinds(http.MethodPut, readPath, readBody,
 		members(done, done, done))...)
 
-	// Phase 1.3, specified ahead of its pipeline. Every relation expects 501
-	// deliberately, the non-member columns included: a stub has no membership
-	// check, so expecting the 404 a stranger is owed would claim a boundary
-	// nothing enforces yet. The operation is on notImplementedOperations, so
-	// the pipeline cannot land without these tightening into real outcomes —
-	// member 201, non-member 404 — and the gate naming the stale list.
-	stub501 := outcome{status: http.StatusNotImplemented, code: "not_implemented"}
-	entries = append(entries, bothKinds(http.MethodPost,
-		"/api/v1/channels/{channelId}/files", nil,
-		map[Principal]outcome{
-			ChannelNonMember: stub501,
-			AdminNonMember:   stub501,
-			ChannelMember:    stub501,
-			ChannelOwner:     stub501,
-			AdminMember:      stub501,
-		})...)
+	// Uploading a file into a channel: any member, and a stranger gets the
+	// channel's own 404 like everywhere else. The cell posts a real one-pixel
+	// PNG, so a 201 here means the whole pipeline ran — membership, the
+	// sniff, the strip, the row — rather than a handler that agreed to
+	// something it never did.
+	//
+	// The route is where a file's authorization is settled for its whole
+	// life (ADR 003): the file belongs to this channel from birth and is
+	// readable by its members, so these five columns are the only membership
+	// check the bytes will ever get.
+	uploads := bothKinds(http.MethodPost, "/api/v1/channels/{channelId}/files",
+		uploadBody, members(created, created, created))
+	for i := range uploads {
+		uploads[i].ContentType = uploadContentType
+	}
+	entries = append(entries, uploads...)
 
 	return entries
+}
+
+// matrixBoundary is the fixed multipart boundary the upload cells use. It is
+// fixed so the entry's Content-Type can be a constant.
+const matrixBoundary = "hamlaneh-authz-matrix-boundary"
+
+// uploadContentType is the header that goes with uploadBody.
+const uploadContentType = "multipart/form-data; boundary=" + matrixBoundary
+
+// uploadBody is the smallest thing the upload endpoint can be asked with
+// that a member is genuinely entitled to a 201 for: one `file` part holding
+// a real 1×1 PNG, declared as one.
+//
+// It has to be real. The handler sniffs the bytes before it stores anything,
+// so a placeholder body would answer 415 for every principal and the row
+// would pin nothing about who may upload.
+func uploadBody(Fixture) string {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if err := mw.SetBoundary(matrixBoundary); err != nil {
+		panic("authztest: set multipart boundary: " + err.Error())
+	}
+
+	header := textproto.MIMEHeader{}
+	header.Set("Content-Disposition", `form-data; name="file"; filename="matrix.png"`)
+	header.Set("Content-Type", "image/png")
+	part, err := mw.CreatePart(header)
+	if err != nil {
+		panic("authztest: create multipart part: " + err.Error())
+	}
+	if err := png.Encode(part, image.NewGray(image.Rect(0, 0, 1, 1))); err != nil {
+		panic("authztest: encode fixture PNG: " + err.Error())
+	}
+	if err := mw.Close(); err != nil {
+		panic("authztest: close multipart writer: " + err.Error())
+	}
+	return body.String()
 }
 
 // Operation identifies one (method, path) pair of the API contract.

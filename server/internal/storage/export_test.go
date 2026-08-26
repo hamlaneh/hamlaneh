@@ -18,6 +18,17 @@ const MentionTokenLen = mentionTokenLen
 // not a copy that could drift from it.
 const SearchPageQuery = searchPageQuery
 
+// FileSearchPageQuery is the same guard for the filename half: the real
+// statement, so the EXPLAIN test cannot pass against a copy that has drifted
+// from migration 0007's index expression.
+const FileSearchPageQuery = fileSearchPageQuery
+
+// NormalizedFilename is the folded-filename expression migration 0007
+// indexes. The test EXPLAINs it on its own, because whether the PLANNER
+// prefers that index over the message_id one is a cost decision that moves
+// with table size — what must never drift is the expression itself.
+const NormalizedFilename = normalizedFilename
+
 // FoldSearchText and SearchSnippet expose the two halves of the search
 // normalization: the fold that must agree with migration 0006's translate()
 // expression, and the splitter that turns a match into contract snippet

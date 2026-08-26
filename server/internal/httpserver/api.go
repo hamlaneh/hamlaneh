@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
+	"github.com/hamlaneh/hamlaneh/server/internal/blobstore"
 	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
 	"github.com/hamlaneh/hamlaneh/server/internal/ratelimit"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
@@ -94,6 +95,12 @@ type Store interface {
 	CreateMessage(ctx context.Context, nm storage.NewMessage) (storage.Message, bool, error)
 	ListMessages(ctx context.Context, params storage.ListMessagesParams) (storage.MessagePage, error)
 	SetReadPosition(ctx context.Context, channelID, userID, messageID uuid.UUID) error
+
+	// CreateAttachment records an upload whose bytes are already on disk.
+	// Reading attachments back is not a call of its own: they arrive with
+	// the messages that carry them, in one query per page rather than one
+	// per message (storage.Message.Attachments).
+	CreateAttachment(ctx context.Context, na storage.NewAttachment) (storage.Attachment, error)
 }
 
 // The production store satisfies the whole surface at compile time.
@@ -177,6 +184,27 @@ type apiServer struct {
 	// budgets holds one limiter per named per-endpoint budget, spent by
 	// rateLimitMiddleware against the route the request matched.
 	budgets map[budgetName]*ratelimit.Limiter
+
+	// previews is the asynchronous link-preview pipeline
+	// (preview_enricher.go). Nil means enrichment is not wired, and messages
+	// carry no preview cards.
+	previews PreviewEnricher
+
+	// files wires the cookie-less files origin (files_origin.go). Its zero
+	// value is an install with no upload pipeline configured, and the two
+	// file routes then answer 404 — which is what that install is.
+	files Files
+
+	// blobs holds uploaded file bytes. A nil one is a server wired without
+	// the upload pipeline — a unit-test fixture, never production — and
+	// UploadFile answers 500 rather than pretending to have stored anything.
+	blobs *blobstore.Store
+
+	// fileSigner mints the URLs every serialized Attachment carries. Never
+	// nil: it defaults to the unsigned placeholder, so serialization needs no
+	// nil check and no attachment can be written without the url the
+	// contract makes required.
+	fileSigner fileURLSigner
 }
 
 var _ api.ServerInterface = (*apiServer)(nil)
@@ -194,6 +222,7 @@ func newAPIServer(store Store, opts ...Option) *apiServer {
 		totpIPLimiter:          ratelimit.New(totpRateLimit, totpRateWindow),
 		totpAccountLimiter:     ratelimit.New(totpRateLimit, totpRateWindow),
 		budgets:                newBudgetLimiters(),
+		fileSigner:             unsignedFileURLs{},
 	}
 	for _, opt := range opts {
 		opt(s)

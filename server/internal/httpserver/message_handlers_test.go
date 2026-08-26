@@ -312,7 +312,6 @@ func TestSendMessage(t *testing.T) {
 			"empty object":       `{}`,
 			"no client_msg_id":   `{"content":"hello"}`,
 			"bad client_msg_id":  `{"client_msg_id":"nope","content":"hello"}`,
-			"empty content":      `{"client_msg_id":"` + testClientMsgID + `","content":""}`,
 			"content over 4000":  `{"client_msg_id":"` + testClientMsgID + `","content":"` + strings.Repeat("x", 4001) + `"}`,
 			"content wrong type": `{"client_msg_id":"` + testClientMsgID + `","content":42}`,
 			"not json":           `{`,
@@ -321,6 +320,104 @@ func TestSendMessage(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
 				rec := do(t, memberStore(), request(http.MethodPost, channelPath("/messages"), req,
+					withSessionCookie("tok"), withCSRF()))
+				wantError(t, rec, http.StatusBadRequest, "invalid_request")
+			})
+		}
+	})
+
+	t.Run("a message with neither text nor files is 400", func(t *testing.T) {
+		t.Parallel()
+		// Empty content is legal since Phase 1.3 — an image with no caption
+		// is an ordinary message — so the refusal is no longer the handler's
+		// to make on its own: only the send transaction knows whether an
+		// attachment was claimed. The fake answers as storage does.
+		store := memberStore()
+		var reached bool
+		store.createMessage = func(context.Context, storage.NewMessage) (storage.Message, bool, error) {
+			reached = true
+			return storage.Message{}, false, storage.ErrEmptyMessage
+		}
+		rec := do(t, store, request(http.MethodPost, channelPath("/messages"),
+			`{"client_msg_id":"`+testClientMsgID+`","content":""}`,
+			withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusBadRequest, "invalid_request")
+		if !reached {
+			t.Error("the handler refused an empty message on its own; the rule is storage's, where it is atomic")
+		}
+	})
+
+	t.Run("attaches the files the request names", func(t *testing.T) {
+		t.Parallel()
+		store := memberStore()
+		first, second := uuid.New(), uuid.New()
+		var got []uuid.UUID
+		store.createMessage = func(_ context.Context, nm storage.NewMessage) (storage.Message, bool, error) {
+			got = nm.AttachmentIDs
+			msg := fixtureMessage()
+			msg.Attachments = []storage.Attachment{{
+				ID: first, Filename: "a.png", ContentType: "image/png",
+				SizeBytes: 12, HasThumbnail: true,
+			}}
+			return msg, true, nil
+		}
+
+		body := `{"client_msg_id":"` + testClientMsgID + `","content":"","attachment_ids":["` +
+			first.String() + `","` + second.String() + `"]}`
+		rec := do(t, store, request(http.MethodPost, channelPath("/messages"), body,
+			withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+		}
+		if len(got) != 2 || got[0] != first || got[1] != second {
+			t.Errorf("storage got attachment ids %v, want the two the request named", got)
+		}
+
+		var msg api.Message
+		if err := json.Unmarshal(rec.Body.Bytes(), &msg); err != nil {
+			t.Fatalf("body is not a Message: %v", err)
+		}
+		if len(msg.Attachments) != 1 || msg.Attachments[0].Id != first {
+			t.Fatalf("message carries %d attachments, want the one storage claimed", len(msg.Attachments))
+		}
+		card := msg.Attachments[0]
+		if card.Filename != "a.png" || card.Url == "" || card.ThumbnailUrl == nil {
+			t.Errorf("attachment card = %+v, want name and freshly minted URLs", card)
+		}
+	})
+
+	t.Run("an unclaimable attachment is one 404 for every reason", func(t *testing.T) {
+		t.Parallel()
+		store := memberStore()
+		store.createMessage = func(context.Context, storage.NewMessage) (storage.Message, bool, error) {
+			return storage.Message{}, false, storage.ErrAttachmentNotFound
+		}
+		body := `{"client_msg_id":"` + testClientMsgID + `","content":"hi","attachment_ids":["` +
+			uuid.New().String() + `"]}`
+		rec := do(t, store, request(http.MethodPost, channelPath("/messages"), body,
+			withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusNotFound, "attachment_not_found")
+	})
+
+	t.Run("rejects an attachment list the contract forbids", func(t *testing.T) {
+		t.Parallel()
+		duplicate := uuid.New().String()
+		tooMany := make([]string, 11)
+		for i := range tooMany {
+			tooMany[i] = `"` + uuid.New().String() + `"`
+		}
+
+		tests := map[string]string{
+			"a repeated id": `["` + duplicate + `","` + duplicate + `"]`,
+			"the nil uuid":  `["00000000-0000-0000-0000-000000000000"]`,
+			"eleven ids":    "[" + strings.Join(tooMany, ",") + "]",
+		}
+		for name, ids := range tests {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				// createMessage stays unwired: these never reach storage.
+				body := `{"client_msg_id":"` + testClientMsgID + `","content":"hi","attachment_ids":` + ids + `}`
+				rec := do(t, memberStore(), request(http.MethodPost, channelPath("/messages"), body,
 					withSessionCookie("tok"), withCSRF()))
 				wantError(t, rec, http.StatusBadRequest, "invalid_request")
 			})

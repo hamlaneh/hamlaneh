@@ -16,6 +16,8 @@ require (
 	github.com/oapi-codegen/runtime v1.7.0
 	github.com/pquerna/otp v1.5.0
 	golang.org/x/crypto v0.55.0
+	golang.org/x/image v0.45.0
+	golang.org/x/net v0.57.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

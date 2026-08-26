@@ -39,6 +39,14 @@ func WithPasswordReset(svc *passwordreset.Service) Option {
 	return func(s *apiServer) { s.reset = svc }
 }
 
+// WithFiles wires the files origin: the URL signer that is the credential
+// on it, plus the metadata and blob reads that serve one. Omitting it —
+// or omitting any member — leaves GET /files/{id} answering 404 with the
+// same headers it would carry on a hit (files_origin.go says why).
+func WithFiles(f Files) Option {
+	return func(s *apiServer) { s.files = f }
+}
+
 // New returns an *http.Server bound to addr with the Hamlaneh router and
 // hardened timeouts configured. store backs everything stateful and may be
 // nil in unit tests (readyz then reports degraded and authenticated routes
@@ -59,6 +67,9 @@ func New(addr string, store Store, opts ...Option) *http.Server {
 //	GET /, /reset, /c/*  the built React application (webapp.go)
 //	GET /assets/*        its content-hashed bundle
 //	GET /brand/*         its unhashed public files
+//	GET /files/{id}      the cookie-less files origin: signed, expiring
+//	                     URLs for uploaded bytes, outside the contract on
+//	                     purpose (files_origin.go)
 //	GET /healthz         liveness probe, 200 {"status":"ok"}
 //	GET /readyz          readiness probe (database ping + schema version)
 //	/api/v1/*            contract endpoints (Phase 1.1 identity core; the
@@ -87,6 +98,11 @@ func handler(store Store, web fs.FS, opts ...Option) http.Handler {
 	routeWebapp(mux, web)
 
 	s := newAPIServer(store, opts...)
+	// Registered on the base mux, deliberately outside the contract router
+	// and its session middleware: the files origin carries no cookie to
+	// check (files_origin.go).
+	routeFilesOrigin(mux, s)
+
 	routed := api.HandlerWithOptions(s, api.StdHTTPServerOptions{
 		BaseRouter: mux,
 		// READ THE ORDER BACKWARDS. The generated wrapper folds this slice

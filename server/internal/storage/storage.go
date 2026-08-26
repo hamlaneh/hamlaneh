@@ -56,7 +56,7 @@
 //
 // The conversation tables extend the same order at the end:
 //
-//	… → sessions → channels → channel_members → messages
+//	… → sessions → channels → channel_members → messages → attachments
 //
 // No messaging operation calls lockAccount, and all but one of them take no
 // explicit row lock at all. That is deliberate rather than an oversight.
@@ -127,6 +127,25 @@
 // back in each other's way; a plain UPDATE of that row (UpdateChannelTopic)
 // already takes FOR NO KEY UPDATE implicitly, so it queues behind a removal
 // and holds nothing a removal wants.
+//
+// The second explicit lock is the attachment claim in CreateMessage. A send
+// carrying files inserts its message and then attaches its uploads in one
+// transaction — messages before attachments, as the order above says — and
+// the claim takes its rows with SELECT ... FOR UPDATE inside the UPDATE:
+//
+//	SELECT id FROM attachments WHERE id = ANY($ids) AND … ORDER BY id FOR UPDATE
+//
+// The ORDER BY is the whole point of doing it explicitly. Without it
+// PostgreSQL locks the matched rows in whatever order the scan yields, and
+// two sends claiming an overlapping set of ids could take the same two rows
+// in opposite orders — the one cycle this path could form. With it every
+// claim walks the ids in the same order, so the second sender queues behind
+// the first instead of crossing it, and then (READ COMMITTED re-evaluating
+// the predicate against the updated row) finds message_id no longer NULL,
+// returns a short count, and the send fails with ErrAttachmentNotFound. The
+// insert half adds no edge: it locks a row nobody else can name yet, plus
+// the KEY SHARE its foreign keys take, and the transaction never goes back
+// for anything a concurrent one holds.
 package storage
 
 import (

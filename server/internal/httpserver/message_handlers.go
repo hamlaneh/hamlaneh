@@ -74,7 +74,7 @@ func (s *apiServer) ListMessages(w http.ResponseWriter, r *http.Request, channel
 		internalError(w, r, err)
 		return
 	}
-	writeJSONValue(w, r, http.StatusOK, apiMessagePage(page))
+	writeJSONValue(w, r, http.StatusOK, s.apiMessagePage(page))
 }
 
 // messagePageQuery turns the three page cursors into one storage query.
@@ -165,20 +165,42 @@ func (s *apiServer) SendMessage(w http.ResponseWriter, r *http.Request, channelI
 			"content must be text that can be stored and returned unchanged")
 		return
 	}
-	if n := utf8.RuneCountInString(req.Content); n < 1 || n > maxContentLen {
+	if n := utf8.RuneCountInString(req.Content); n > maxContentLen {
 		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
-			fmt.Sprintf("content must be 1 to %d characters", maxContentLen))
+			fmt.Sprintf("content must be at most %d characters", maxContentLen))
+		return
+	}
+	attachmentIDs, ok := sendAttachmentIDs(w, r, req)
+	if !ok {
 		return
 	}
 
 	// The author is the session's user. Nothing in the request selects one,
 	// so no caller can post as somebody else.
 	msg, created, err := sc.store.CreateMessage(r.Context(), storage.NewMessage{
-		ChannelID:   channelID,
-		AuthorID:    sc.prin.user.ID,
-		ClientMsgID: req.ClientMsgId,
-		Content:     req.Content,
+		ChannelID:     channelID,
+		AuthorID:      sc.prin.user.ID,
+		ClientMsgID:   req.ClientMsgId,
+		Content:       req.Content,
+		AttachmentIDs: attachmentIDs,
 	})
+	if errors.Is(err, storage.ErrEmptyMessage) {
+		// A message with neither text nor files is nothing. The rule is
+		// storage's because only there is it atomic with the claim; the
+		// answer is the contract's 400.
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+			"a message must carry text or at least one attachment")
+		return
+	}
+	if errors.Is(err, storage.ErrAttachmentNotFound) {
+		// One answer for every miss — no such file, another channel's,
+		// another person's, one already attached — so nothing about other
+		// people's uploads leaks. Nothing was stored: the claim and the
+		// insert share a transaction.
+		writeError(w, r, http.StatusNotFound, codeAttachmentNotFound,
+			"one of the attachments is not available to attach")
+		return
+	}
 	if errors.Is(err, storage.ErrNotFound) {
 		// The channel went away between the authorization check and the
 		// insert; the caller learns exactly what a stranger would.
@@ -191,11 +213,50 @@ func (s *apiServer) SendMessage(w http.ResponseWriter, r *http.Request, channelI
 	}
 
 	if !created {
-		writeJSONValue(w, r, http.StatusOK, apiMessage(msg))
+		writeJSONValue(w, r, http.StatusOK, s.apiMessage(msg))
 		return
 	}
 	s.realtime.MessageCreated(channelID, msg)
-	writeJSONValue(w, r, http.StatusCreated, apiMessage(msg))
+	s.enrichPreview(channelID, msg)
+	writeJSONValue(w, r, http.StatusCreated, s.apiMessage(msg))
+}
+
+// maxAttachmentsPerMessage is the contract's bound on attachment_ids.
+const maxAttachmentsPerMessage = 10
+
+// sendAttachmentIDs validates the ids a send asks to claim.
+//
+// Only the two shape rules live here — how many, and no repeats. Whether an
+// id is actually claimable is not a question a handler can answer without
+// racing the answer, so it is not asked here: the send transaction decides
+// it while it holds the rows (storage.CreateMessage), and every way to fail
+// comes back as one 404.
+//
+// Duplicates are a 400 rather than a silent de-duplication, exactly as the
+// contract says. A list naming one file twice is a client bug, and quietly
+// attaching it once would hide the bug behind a message that does not match
+// what was sent.
+func sendAttachmentIDs(w http.ResponseWriter, r *http.Request, req api.SendMessageRequest) ([]uuid.UUID, bool) {
+	if req.AttachmentIds == nil {
+		return nil, true
+	}
+	ids := *req.AttachmentIds
+	if len(ids) > maxAttachmentsPerMessage {
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+			fmt.Sprintf("a message may carry at most %d attachments", maxAttachmentsPerMessage))
+		return nil, false
+	}
+
+	seen := make(map[uuid.UUID]bool, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil || seen[id] {
+			writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+				"attachment_ids must be distinct attachment ids")
+			return nil, false
+		}
+		seen[id] = true
+	}
+	return ids, true
 }
 
 // EditMessage replaces the content of the caller's own message.
@@ -254,7 +315,10 @@ func (s *apiServer) EditMessage(w http.ResponseWriter, r *http.Request, channelI
 	}
 
 	s.realtime.MessageUpdated(channelID, edited)
-	writeJSONValue(w, r, http.StatusOK, apiMessage(edited))
+	// An edit is also how a card is removed: content that no longer
+	// holds a URL must not keep a preview of one.
+	s.enrichPreview(channelID, edited)
+	writeJSONValue(w, r, http.StatusOK, s.apiMessage(edited))
 }
 
 // DeleteMessage soft-deletes a message: the row keeps its place with its
@@ -433,10 +497,10 @@ func (s *apiServer) SetReadPosition(w http.ResponseWriter, r *http.Request, chan
 // way. before_cursor anchors on the page's oldest row and after_cursor on
 // its newest — anchoring either on the wrong end would skip or repeat a
 // page's worth of conversation.
-func apiMessagePage(page storage.MessagePage) api.MessagePage {
+func (s *apiServer) apiMessagePage(page storage.MessagePage) api.MessagePage {
 	out := api.MessagePage{Messages: make([]api.Message, 0, len(page.Messages))}
 	for _, m := range page.Messages {
-		out.Messages = append(out.Messages, apiMessage(m))
+		out.Messages = append(out.Messages, s.apiMessage(m))
 	}
 	if len(page.Messages) == 0 {
 		return out
@@ -458,10 +522,11 @@ func apiMessagePage(page storage.MessagePage) api.MessagePage {
 // apiMessage maps a stored message onto the contract's Message schema.
 //
 // Attachments is an empty array rather than null: the contract requires the
-// field, and the Phase 1.3 upload pipeline is what will ever put anything
-// in it. link_preview stays absent until the same phase's preview proxy
-// exists.
-func apiMessage(m storage.Message) api.Message {
+// field. It is a method rather than a function because the file cards carry
+// URLs that have to be minted per serialization — the files origin is
+// cookie-less, so a fresh URL is the credential (ADR 003) and a stored one
+// would be a stale credential in a cache.
+func (s *apiServer) apiMessage(m storage.Message) api.Message {
 	return api.Message{
 		Id:        m.ID,
 		ChannelId: m.ChannelID,
@@ -475,6 +540,15 @@ func apiMessage(m storage.Message) api.Message {
 		CreatedAt:   m.CreatedAt,
 		EditedAt:    m.EditedAt,
 		DeletedAt:   m.DeletedAt,
-		Attachments: []api.Attachment{},
+		Attachments: s.apiAttachments(m.Attachments),
+		LinkPreview: s.apiMessagePreview(m),
 	}
+}
+
+// apiMessagePreview maps the message's preview card, if it carries one.
+func (s *apiServer) apiMessagePreview(m storage.Message) *api.LinkPreview {
+	if m.Preview == nil {
+		return nil
+	}
+	return apiLinkPreview(*m.Preview, s.fileSigner)
 }
