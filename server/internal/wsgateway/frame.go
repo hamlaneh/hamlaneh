@@ -16,10 +16,6 @@ import (
 
 // Frame types (§3 client -> server, §4 server -> client). typing, ping and
 // pong appear in both directions.
-//
-// message_updated and message_deleted are absent: nothing emits them yet.
-// Editing and soft-deleting a message is slice 1.2b, and the two frame types
-// arrive with the Realtime methods that announce them.
 const (
 	typeHello        = "hello"
 	typeHelloOK      = "hello_ok"
@@ -35,6 +31,8 @@ const (
 	typeError        = "error"
 
 	typeMessageCreated = "message_created"
+	typeMessageUpdated = "message_updated"
+	typeMessageDeleted = "message_deleted"
 	typeChannelCreated = "channel_created"
 	typeChannelUpdated = "channel_updated"
 	typeChannelRemoved = "channel_removed"

@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,16 +15,36 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
 
-// Message history, sending, and read positions. Everything these handlers
-// share — how a channel is resolved, why a non-member gets 404, how cursors
-// are encoded — is documented at the top of channel_handlers.go.
+// Message history, sending, editing, deleting, and read positions.
+// Everything these handlers share — how a channel is resolved, why a
+// non-member gets 404, how cursors are encoded — is documented at the top of
+// channel_handlers.go.
 //
-// Editing, deleting and searching messages are slice 1.2b and still answer
-// 501 (messaging_stubs.go); the storage layer has no operation behind any
-// of them yet.
+// The two moderation answers are not interchangeable and the contract names
+// them separately: editing is author-only, admins included, because
+// rewriting somebody else's words is impersonation; deleting is the author
+// or an admin who is a member of the channel, because deletion removes words
+// rather than putting new ones in somebody's mouth. Both decisions are
+// authz's (authz.MessageEdit, authz.MessageDelete); the handlers here only
+// load the facts and render the refusal.
 
 // maxContentLen is the contract's message bound, in characters.
 const maxContentLen = 4000
+
+// messageWriter is the storage half of editing and soft-deleting a message.
+//
+// It is declared here rather than added to Store for the reason
+// messageSearcher is (search_handler.go): slice 1.2b touches no shared file,
+// and the orchestrator folds both into Store when the branches meet.
+// *storage.Store satisfies it, checked below, so production can never take
+// the fail-closed path in resolveMessage.
+type messageWriter interface {
+	MessageByID(ctx context.Context, channelID, messageID uuid.UUID) (storage.Message, error)
+	UpdateMessageContent(ctx context.Context, channelID, messageID uuid.UUID, content string) (storage.Message, error)
+	SoftDeleteMessage(ctx context.Context, channelID, messageID, deletedBy uuid.UUID) (storage.Message, error)
+}
+
+var _ messageWriter = (*storage.Store)(nil)
 
 // ListMessages returns one page of a channel's history, always ascending by
 // (created_at, id) whichever direction it was paged in. Soft-deleted
@@ -59,10 +80,11 @@ func (s *apiServer) ListMessages(w http.ResponseWriter, r *http.Request, channel
 // messagePageQuery turns the three page cursors into one storage query.
 //
 // At most one of before, after and around may be given; two is a 400 rather
-// than a silently preferred one. `around` is in the contract but has no
-// storage behind it until permalinks land in slice 1.2b, so it is refused
-// explicitly — quietly serving the newest page instead would send a
-// permalink to the wrong place.
+// than a silently preferred one. `around` centres the page on its anchor and
+// includes it — it is how a copied message link resolves, and how the limit
+// splits either side of the anchor is storage's decision (see
+// storage.aroundPage), including what happens when the anchor sits near
+// either end of the channel.
 func messagePageQuery(w http.ResponseWriter, r *http.Request, channelID uuid.UUID, limit int, params api.ListMessagesParams) (storage.ListMessagesParams, bool) {
 	query := storage.ListMessagesParams{ChannelID: channelID, Limit: limit}
 
@@ -77,11 +99,6 @@ func messagePageQuery(w http.ResponseWriter, r *http.Request, channelID uuid.UUI
 			"before, after and around are mutually exclusive")
 		return query, false
 	}
-	if params.Around != nil {
-		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
-			"the around cursor is not supported yet")
-		return query, false
-	}
 
 	var ok bool
 	if params.Before != nil {
@@ -91,6 +108,11 @@ func messagePageQuery(w http.ResponseWriter, r *http.Request, channelID uuid.UUI
 	}
 	if params.After != nil {
 		if query.After, ok = messageCursor(w, r, *params.After); !ok {
+			return query, false
+		}
+	}
+	if params.Around != nil {
+		if query.Around, ok = messageCursor(w, r, *params.Around); !ok {
 			return query, false
 		}
 	}
@@ -169,6 +191,173 @@ func (s *apiServer) SendMessage(w http.ResponseWriter, r *http.Request, channelI
 	}
 	s.realtime.MessageCreated(channelID, msg)
 	writeJSONValue(w, r, http.StatusCreated, apiMessage(msg))
+}
+
+// EditMessage replaces the content of the caller's own message.
+//
+// Author-only, admins included: an org admin who is a member of the channel
+// still gets 403 not_message_author, because editing somebody else's words
+// is impersonation and no role makes that acceptable. The message keeps its
+// id and its place in history and gains an edited_at, which the design
+// renders as "(edited)". Editing a deleted message is 409: a deleted row is
+// the placeholder the design draws, and words must not reappear on one.
+func (s *apiServer) EditMessage(w http.ResponseWriter, r *http.Request, channelID api.ChannelId, messageID api.MessageId) {
+	sc, ok := s.resolveChannel(w, r, channelID)
+	if !ok {
+		return
+	}
+	writer, msg, ok := s.resolveMessage(w, r, sc, messageID)
+	if !ok {
+		return
+	}
+	if !authz.Can(r.Context(), &sc.prin.user, authz.MessageEdit, messageResource(sc, msg)) {
+		denyMessage(w, r, sc, codeNotMessageAuthor, "only a message's author may edit it")
+		return
+	}
+	// Permission first, then the message's state: a caller who may not edit
+	// this message learns nothing about whether it has been deleted.
+	if msg.DeletedAt != nil {
+		writeMessageDeleted(w, r)
+		return
+	}
+
+	var req api.EditMessageRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if n := utf8.RuneCountInString(req.Content); n < 1 || n > maxContentLen {
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+			fmt.Sprintf("content must be 1 to %d characters", maxContentLen))
+		return
+	}
+
+	edited, err := writer.UpdateMessageContent(r.Context(), channelID, messageID, req.Content)
+	if errors.Is(err, storage.ErrNotFound) {
+		// The message was deleted between the read above and this update.
+		// The answer is the one a read a moment later would have given.
+		writeMessageDeleted(w, r)
+		return
+	}
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
+
+	s.realtime.MessageUpdated(channelID, edited)
+	writeJSONValue(w, r, http.StatusOK, apiMessage(edited))
+}
+
+// DeleteMessage soft-deletes a message: the row keeps its place with its
+// content erased, which is what the dashed "Message removed" placeholder
+// renders.
+//
+// The author may delete their own; an org admin may delete any message in a
+// channel they are a member of (403 not_message_author_or_admin otherwise).
+// It is idempotent — deleting an already-deleted message is 204 again — and
+// the event fires only for the call that actually deleted, so a retry does
+// not announce a second deletion of the same message.
+func (s *apiServer) DeleteMessage(w http.ResponseWriter, r *http.Request, channelID api.ChannelId, messageID api.MessageId) {
+	sc, ok := s.resolveChannel(w, r, channelID)
+	if !ok {
+		return
+	}
+	writer, msg, ok := s.resolveMessage(w, r, sc, messageID)
+	if !ok {
+		return
+	}
+	if !authz.Can(r.Context(), &sc.prin.user, authz.MessageDelete, messageResource(sc, msg)) {
+		denyMessage(w, r, sc, codeNotMessageAuthorOrAdmin,
+			"only a message's author, or an admin who is a member of this channel, may delete it")
+		return
+	}
+	if msg.DeletedAt != nil {
+		// Already deleted, by this caller or another: 204, and nothing to
+		// announce — whoever deleted it first announced it.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	deleted, err := writer.SoftDeleteMessage(r.Context(), channelID, messageID, sc.prin.user.ID)
+	if errors.Is(err, storage.ErrNotFound) {
+		// Somebody else deleted it in between. Same answer, same silence.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
+
+	// The whole message, not just its id: the placeholder keeps the
+	// message's position and metadata (ws-protocol.md §4).
+	s.realtime.MessageDeleted(channelID, deleted)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// resolveMessage loads the message a message-scoped request acts on.
+//
+// A caller who is not in the channel is refused before anything is read on
+// their behalf: the answer is the channel's own 404 either way, and there is
+// nothing to look up for somebody who cannot see the conversation. The read
+// itself is scoped to the channel, so an id from another conversation
+// answers with that same 404 — no answer on this path can be used to probe
+// for messages elsewhere.
+//
+// It decides no permission: the message it returns is what the handler's
+// explicit authz.Can call decides on.
+func (s *apiServer) resolveMessage(w http.ResponseWriter, r *http.Request,
+	sc channelScope, messageID uuid.UUID,
+) (messageWriter, storage.Message, bool) {
+	if !sc.member {
+		sc.deny(w, r)
+		return nil, storage.Message{}, false
+	}
+	writer, ok := sc.store.(messageWriter)
+	if !ok {
+		internalError(w, r, errors.New("store cannot edit or delete messages"))
+		return nil, storage.Message{}, false
+	}
+
+	msg, err := writer.MessageByID(r.Context(), sc.channel.ID, messageID)
+	if errors.Is(err, storage.ErrNotFound) {
+		writeChannelNotFound(w, r)
+		return nil, storage.Message{}, false
+	}
+	if err != nil {
+		internalError(w, r, err)
+		return nil, storage.Message{}, false
+	}
+	return writer, msg, true
+}
+
+// messageResource is the authz resource for a message-scoped action: the
+// channel's facts plus whether the caller wrote the message.
+func messageResource(sc channelScope, msg storage.Message) authz.Message {
+	return authz.Message{
+		Channel: sc.resource(),
+		Author:  msg.Author.ID == sc.prin.user.ID,
+	}
+}
+
+// denyMessage answers a message action authz refused.
+//
+// A stranger to the channel gets its 404, exactly as every other
+// channel-scoped refusal does. A member who simply lacks this one power gets
+// 403 with the operation's own code: "not the author" and "not the author or
+// an admin" are different refusals, the contract names them separately, and
+// a client that showed one for the other would tell an admin they cannot
+// delete a message they can.
+func denyMessage(w http.ResponseWriter, r *http.Request, sc channelScope, code errorCode, message string) {
+	if !sc.member {
+		sc.deny(w, r)
+		return
+	}
+	writeError(w, r, http.StatusForbidden, code, message)
+}
+
+// writeMessageDeleted is the 409 an edit of a deleted message answers.
+func writeMessageDeleted(w http.ResponseWriter, r *http.Request) {
+	writeError(w, r, http.StatusConflict, codeMessageDeleted, "this message has been deleted")
 }
 
 // SetReadPosition moves the caller's read position in a channel — where the

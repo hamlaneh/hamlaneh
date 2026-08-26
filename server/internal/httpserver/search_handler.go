@@ -70,17 +70,11 @@ func (s *apiServer) Search(w http.ResponseWriter, r *http.Request, params api.Se
 		return
 	}
 
-	// Budgeted per account, not per address: what a search costs depends on
-	// how many messages this caller can reach, and one person behind a shared
-	// office address should not be able to spend everyone else's budget.
-	// Spent before the query is validated — a refused request that still runs
-	// the expensive part is not a rate limit.
-	accountKey := prin.user.ID.String()
-	if s.searchLimiter.Limited(accountKey) {
-		writeRateLimited(w, r, s.searchLimiter.RetryAfter(accountKey))
-		return
-	}
-	s.searchLimiter.Record(accountKey)
+	// The contract's 429 for this endpoint is already spent by the time the
+	// handler runs: budgetSearch in ratelimits.go, per account rather than
+	// per address, because what a search costs follows how many messages this
+	// caller can reach. It is spent before the handler on purpose — a refused
+	// request that still runs the expensive part is not a rate limit.
 
 	// Every parameter is validated before the kind is acted on, so a
 	// malformed request answers the same 400 on either tab.

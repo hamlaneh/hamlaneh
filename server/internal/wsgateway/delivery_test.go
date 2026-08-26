@@ -642,3 +642,102 @@ func TestUnsubscribeStopsEphemeralEventsAndRefusesStrangers(t *testing.T) {
 		}
 	}
 }
+
+// TestEditAndDeleteEventsNeverReachANonMember is the WS half of the IDOR
+// matrix for the two events slice 1.2b added: an edit and a soft delete are
+// membership-scoped exactly as the message itself was, so a socket that
+// never saw the message must not see what became of it either.
+//
+// It is what licenses message_updated and message_deleted being WSEnforced
+// in internal/authztest: the rule is asserted here against a real socket,
+// not merely intended.
+func TestEditAndDeleteEventsNeverReachANonMember(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	alice := h.store.addUser("alice")
+	bob := h.store.addUser("bob")
+	mallory := h.store.addUser("mallory")
+	private := h.store.addChannel(storage.ChannelKindPrivate, alice.ID, bob.ID)
+
+	bobSocket := h.dial(bob, h.store.addFamily(bob.ID))
+	bobSocket.hello()
+	mallorySocket := h.dial(mallory, h.store.addFamily(mallory.ID))
+	mallorySocket.hello()
+
+	edited := testMessage(private.ID, alice, "with the typo fixed")
+	editedAt := time.Now()
+	edited.EditedAt = &editedAt
+	h.gw.MessageUpdated(private.ID, edited)
+
+	frame := bobSocket.expect(typeMessageUpdated)
+	if frameChan(t, frame) != private.ID {
+		t.Errorf("message_updated carried chan %v, want %s", frame["chan"], private.ID)
+	}
+	if frame["seq"] == nil {
+		t.Error("message_updated carried no seq; a resume would page straight past it")
+	}
+	var updated messageData
+	remarshal(t, frame["data"], &updated)
+	if updated.Message.Id != edited.ID || updated.Message.Content != "with the typo fixed" {
+		t.Errorf("message_updated carried %+v, want the edited message", updated.Message)
+	}
+	if updated.Message.EditedAt == nil {
+		t.Error("message_updated carried no edited_at; the client cannot draw (edited)")
+	}
+
+	// The delete carries the whole message, not just an id: the placeholder
+	// keeps the message's position and metadata (§4).
+	removed := testMessage(private.ID, alice, "")
+	deletedAt := time.Now()
+	removed.DeletedAt = &deletedAt
+	h.gw.MessageDeleted(private.ID, removed)
+
+	frame = bobSocket.expect(typeMessageDeleted)
+	if frameChan(t, frame) != private.ID {
+		t.Errorf("message_deleted carried chan %v, want %s", frame["chan"], private.ID)
+	}
+	if frame["seq"] == nil {
+		t.Error("message_deleted carried no seq")
+	}
+	var gone messageData
+	remarshal(t, frame["data"], &gone)
+	if gone.Message.Id != removed.ID {
+		t.Errorf("message_deleted carried message %s, want %s", gone.Message.Id, removed.ID)
+	}
+	if gone.Message.DeletedAt == nil || gone.Message.Content != "" {
+		t.Errorf("message_deleted carried content=%q deleted_at=%v; the placeholder needs both",
+			gone.Message.Content, gone.Message.DeletedAt)
+	}
+	if gone.Message.Author.Id != alice.ID {
+		t.Errorf("message_deleted dropped the author: %+v", gone.Message.Author)
+	}
+
+	// Neither event reached the stranger, and the wait is the generous one:
+	// a leak test that passes because it gave up early proves nothing.
+	mallorySocket.expectNone()
+}
+
+// TestEditAndDeleteStopAtRemoval closes the other half: membership is read
+// at send time for these two events as well, so a user removed while
+// connected stops hearing about the messages of a channel they have left.
+func TestEditAndDeleteStopAtRemoval(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	alice := h.store.addUser("alice")
+	bob := h.store.addUser("bob")
+	ch := h.store.addChannel(storage.ChannelKindPrivate, alice.ID, bob.ID)
+
+	bobSocket := h.dial(bob, h.store.addFamily(bob.ID))
+	bobSocket.hello()
+
+	h.gw.MessageUpdated(ch.ID, testMessage(ch.ID, alice, "while a member"))
+	bobSocket.expect(typeMessageUpdated)
+
+	h.store.removeMember(ch.ID, bob.ID)
+
+	h.gw.MessageUpdated(ch.ID, testMessage(ch.ID, alice, "after removal"))
+	h.gw.MessageDeleted(ch.ID, testMessage(ch.ID, alice, ""))
+	bobSocket.expectNone()
+}

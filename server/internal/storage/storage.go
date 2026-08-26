@@ -58,9 +58,8 @@
 //
 //	… → sessions → channels → channel_members → messages
 //
-// Today nothing in channels.go or messages.go takes an explicit row lock:
-// there is no SELECT ... FOR UPDATE in either file, and no messaging
-// operation calls lockAccount. That is deliberate rather than an oversight.
+// No messaging operation calls lockAccount, and all but one of them take no
+// explicit row lock at all. That is deliberate rather than an oversight.
 // What these operations need to serialize on is a uniqueness claim — one DM
 // per user pair, one message per (channel, author, client_msg_id) — and a
 // unique index already serializes exactly that, at the row that matters,
@@ -80,15 +79,54 @@
 //   - The multi-statement transactions (CreateChannel, OpenDirectMessage)
 //     insert into channels before channel_members, matching the order above.
 //
-// A hazard for whoever adds membership rules in 1.2b: the contract's
-// removeChannelMember refuses to remove a channel's last member, and the
-// obvious race-free implementation — SELECT the channel FOR UPDATE, then
-// count and delete — deadlocks against a concurrent AddChannelMember. The
-// remover would hold channels FOR UPDATE and wait on the uncommitted
-// channel_members row; the adder would hold that row and wait for KEY SHARE
-// on channels behind the FOR UPDATE. That cycle is why the rule is not
-// enforced in this package, and why moving it here later needs a deliberate
-// design pass rather than a quick lock.
+// The one exception is RemoveChannelMember, which enforces the contract's
+// last_member refusal and so does take an explicit row lock. It needs one
+// because a unique index cannot express what it must serialize: two members
+// leaving at the same instant delete two different rows, nothing brings
+// those two statements into conflict, and both therefore read a member count
+// of two and both succeed — write skew, which READ COMMITTED does not
+// prevent. So the channels row is taken first, as the one thing both
+// removals must agree on:
+//
+//	SELECT kind FROM channels WHERE id = $1 FOR NO KEY UPDATE
+//
+// and the count and the delete follow it inside the same transaction. Two
+// removals of one channel then run strictly one after the other, and the
+// second counts what the first left behind — the count is a separate
+// statement, so under READ COMMITTED it takes a fresh snapshot once the wait
+// ends. RemoveChannelMember asks for that isolation level explicitly rather
+// than inheriting it, because at REPEATABLE READ the count would read the
+// snapshot from before the wait and the rule would silently stop holding.
+//
+// The lock strength is the entire design, and FOR UPDATE — the obvious
+// choice, and the one the hazard note this paragraph replaces was written
+// about — is the one that must not be used. Every AddChannelMember takes KEY
+// SHARE on this same channels row, because that is what its foreign key
+// check takes, and it takes it while already holding the channel_members row
+// it has just inserted. KEY SHARE conflicts with FOR UPDATE, so a removal
+// and an add on one channel would queue against each other on a row neither
+// of them changes: whichever arrives second waits for the first. A single
+// row cannot deadlock on its own, but a remover that can be made to wait for
+// an adder is the edge a cycle needs, and it is the edge the old hazard note
+// was about. KEY SHARE does not conflict with FOR NO KEY UPDATE, so under
+// this lock the two never queue there at all
+// (TestRemoveChannelMemberDoesNotBlockOnAddIntegration holds an add open at
+// exactly that instant and fails if a removal waits for it).
+//
+// The other direction is closed by construction rather than by lock
+// strength: the remover never waits on an adder anywhere. Under the lock it
+// reads channel_members with a plain snapshot read, which waits for nothing,
+// and then deletes one row it can already see — never a row an adder is
+// still inserting, which its snapshot cannot contain, and never a row an
+// adder holds, because ON CONFLICT DO NOTHING takes no lock on the committed
+// row it declines to touch. An adder may wait for a remover; a remover never
+// waits for an adder, and a cycle needs both.
+//
+// Anything that later wants to serialize on a channel takes the same lock at
+// the same strength. FOR UPDATE on channels is what puts removals and adds
+// back in each other's way; a plain UPDATE of that row (UpdateChannelTopic)
+// already takes FOR NO KEY UPDATE implicitly, so it queues behind a removal
+// and holds nothing a removal wants.
 package storage
 
 import (

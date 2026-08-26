@@ -244,8 +244,20 @@ history, send a message, and have it appear on someone else's screen without a r
 - [ ] Markdown through the strict sanitizer, server side as well as client side
 - [x] Strict baseline CSP on all app responses: `default-src 'self'`, no
       `unsafe-inline`/`unsafe-eval`, `object-src 'none'`
-- [ ] Generic rate-limit middleware with per-endpoint budgets, replacing the auth-specific
-      limiters: message send, WS connect/reconnect, and the existing login/reset/TOTP budgets
+- [x] Generic rate-limit middleware with per-endpoint budgets — a table keyed on `r.Pattern`
+      like the route-policy table, and **fails closed** the same way: an endpoint nobody
+      classified is refused, and a completeness gate makes that a red build rather than a
+      production 500. A second gate catches the fail-*open* variant a completeness test cannot
+      see, where a route names a budget that has no spec and so misses the limiter map entirely.
+      It runs after authentication (a per-account key needs an account) and before the handler
+      (a 429 written after the argon2id verification has already paid for what it refused).
+      The login, two-step and password-reset budgets stay where they are, deliberately: each
+      spends conditionally, or against a key that lives in the request body, or in a shape that
+      exists to keep the 429 from becoming an enumeration oracle — moving them into a tidier
+      place would have quietly changed what they protect
+- [ ] The **WS connect/reconnect** half of that budget is still open, and is the same item as
+      the `4429` close code below: `ws-protocol.md` §8 keys it per session family *and* per IP
+      and requires it enforceable on an already-open socket, which nothing request-scoped can do
 - Tests: **IDOR matrix over REST and WS** (user A must never read or write channel B — automated
   via the harness, both protocols); **WS security suite**: (a) connect without session rejected,
   (b) expired/revoked session rejected, (c) open socket terminated ≤10s after remote revocation,
@@ -269,7 +281,7 @@ history, send a message, and have it appear on someone else's screen without a r
 
 #### 1.2b Everything the chat shell draws but 1.2a does not fill
 
-- [ ] Message edit and soft delete (the design keeps a placeholder in place where a message was)
+- [x] Message edit and soft delete (the design keeps a placeholder in place where a message was)
 - [x] Message search (`kind=messages`), pulled forward from 1.3. The configuration decision
       migration 0003 deferred is made in **migration 0006**, with the reasoning in its header:
       **trigram substring matching (`pg_trgm`), not tsvector**, because every FTS option required
@@ -287,12 +299,19 @@ history, send a message, and have it appear on someone else's screen without a r
       the original text, so a windowed snippet would break it. At `limit=50` × 4000 characters
       that is ~200 KB worst case per page. Not a defect; a payload budget to revisit if pages
       get heavy
-- [ ] `around` cursor for permalinks
-- [ ] The contract's `last_member` refusal on `removeChannelMember`. Deliberately **not** in
-      the storage layer: the obvious race-free shape there (lock the channel, then count and
-      delete) deadlocks against a concurrent `AddChannelMember`, and the cycle is written out
-      in the `# Lock order` section of `storage.go`. It belongs above storage, or needs a
-      deliberate design pass
+- [x] `around` cursor for permalinks — the anchor is **in** its page, unlike `before`/`after`,
+      and at either end the page is simply shorter rather than widened on the far side: topping
+      up would answer "this is the start of the channel" with a screenful of later messages
+- [x] The contract's `last_member` refusal on `removeChannelMember`. It did need the deliberate
+      design pass this line asked for, and the answer was the **lock strength**: `FOR NO KEY
+      UPDATE` on the channels row, not `FOR UPDATE`. Two removals of one channel then serialize
+      on it — without which both read a member count of two and both succeed, emptying the
+      channel, which is write skew that READ COMMITTED does not prevent — while an
+      `AddChannelMember` holding an uncommitted membership row and wanting `KEY SHARE` on the
+      same channel never queues behind it, because `KEY SHARE` does not conflict with `FOR NO
+      KEY UPDATE`. The isolation level is asked for explicitly rather than inherited, since at
+      REPEATABLE READ the count would read the snapshot from before the wait. The `# Lock order`
+      section now describes what is true instead of the hazard it replaced
 - Tests: search authz (results never leak channels the user cannot see); edit/delete authorship
   and admin rules in the matrix; unread counts under concurrent read/send
 

@@ -83,9 +83,6 @@ func (s *apiServer) StartTotpSetup(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.spendTotpSettingsBudget(w, r, prin) {
-		return
-	}
 
 	secret := totp.NewSecret()
 	enrollment, err := totp.Enroll(secret, prin.user.Username)
@@ -118,9 +115,6 @@ func (s *apiServer) StartTotpSetup(w http.ResponseWriter, r *http.Request) {
 func (s *apiServer) VerifyTotpSetup(w http.ResponseWriter, r *http.Request) {
 	prin, store, ok := s.totpPrincipal(w, r, "totp verify")
 	if !ok {
-		return
-	}
-	if !s.spendTotpSettingsBudget(w, r, prin) {
 		return
 	}
 
@@ -196,11 +190,10 @@ func (s *apiServer) DisableTotp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Before confirmPassword, never after: the argon2id verification is the
-	// cost the budget exists to bound.
-	if !s.spendTotpSettingsBudget(w, r, prin) {
-		return
-	}
+	// The two-step settings budget was already spent by rateLimitMiddleware,
+	// which is what puts it ahead of confirmPassword: the argon2id
+	// verification below is the cost that budget exists to bound, and a 429
+	// written after it would have paid for what it refused.
 	if !s.confirmPassword(w, r, prin) {
 		return
 	}
@@ -225,11 +218,8 @@ func (s *apiServer) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	// Before confirmPassword, never after: the argon2id verification is the
-	// cost the budget exists to bound.
-	if !s.spendTotpSettingsBudget(w, r, prin) {
-		return
-	}
+	// Spent by rateLimitMiddleware before this handler ran, which is what
+	// keeps it ahead of the argon2id verification below — see DisableTotp.
 	if !s.confirmPassword(w, r, prin) {
 		return
 	}
@@ -449,24 +439,6 @@ func (s *apiServer) totpPrincipal(w http.ResponseWriter, r *http.Request, name s
 		return principal{}, nil, false
 	}
 	return prin, store, true
-}
-
-// spendTotpSettingsBudget enforces the contract's 429 on the four two-step
-// settings endpoints. It answers the refusal itself (with Retry-After, like
-// every other 429 in the server) and reports whether the caller may proceed.
-//
-// Every call spends a unit, successes included — see totpSettingsRateLimit
-// for why this budget counts work rather than failures. Callers must run it
-// BEFORE any argon2id verification, or the 429 arrives after the server has
-// already paid the cost it was meant to refuse.
-func (s *apiServer) spendTotpSettingsBudget(w http.ResponseWriter, r *http.Request, prin principal) bool {
-	key := prin.user.ID.String()
-	if s.totpSettingsLimiter.Limited(key) {
-		writeRateLimited(w, r, s.totpSettingsLimiter.RetryAfter(key))
-		return false
-	}
-	s.totpSettingsLimiter.Record(key)
-	return true
 }
 
 // confirmPassword enforces the re-authentication the contract requires

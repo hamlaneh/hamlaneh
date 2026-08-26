@@ -26,10 +26,11 @@ type MessageAuthor struct {
 // Message is a row of the messages table with its author's summary joined
 // in.
 //
-// EditedAt and DeletedAt are read here but never written: this slice sends
-// and reads messages, and only editing and deleting (slice 1.2b) set them.
-// They are on the struct because history must render a message a later
-// slice deleted — see ListMessages on how a deleted row surfaces.
+// EditedAt is set by UpdateMessageContent and DeletedAt by
+// SoftDeleteMessage; both are nil on a message that has only ever been sent.
+// deleted_by is deliberately not here: nothing renders who deleted a message
+// before the Phase 1.4 audit log, and a column nobody reads is a column that
+// can leak.
 type Message struct {
 	ID          uuid.UUID
 	ChannelID   uuid.UUID
@@ -53,8 +54,10 @@ type NewMessage struct {
 }
 
 // MessageCursor is a keyset-pagination position in a channel's history: the
-// (created_at, id) of the message a page is anchored on. The anchor itself
-// is never repeated in the page it anchors.
+// (created_at, id) of the message a page is anchored on. A Before or After
+// page never repeats the message it is anchored on; an Around page is the
+// exception and includes it, because that message is what the permalink
+// points at.
 //
 // The pair, not the timestamp alone, is the cursor: messages sent in the
 // same instant share a created_at, and a timestamp-only cursor either skips
@@ -66,15 +69,20 @@ type MessageCursor struct {
 
 // ListMessagesParams control one page of ListMessages.
 //
-// Before and After are mutually exclusive: Before pages into the past
-// (scrollback), After pages into the future (the reconnect backfill), and
-// neither asks for the newest page — the channel as it is opened. Limit
-// must be positive; callers own clamping it to the API contract.
+// Before, After and Around are mutually exclusive: Before pages into the
+// past (scrollback), After pages into the future (the reconnect backfill),
+// Around centres a page on the cursor (a permalink), and none of them asks
+// for the newest page — the channel as it is opened. Limit must be positive;
+// callers own clamping it to the API contract.
 type ListMessagesParams struct {
 	ChannelID uuid.UUID
 	Before    *MessageCursor
 	After     *MessageCursor
-	Limit     int
+	// Around is the one cursor whose own message is part of the page it
+	// anchors: a permalink that did not include the message it points at
+	// would send the reader to a page the message is missing from.
+	Around *MessageCursor
+	Limit  int
 }
 
 // MessagePage is one page of a channel's history.
@@ -126,6 +134,69 @@ const messageByKeyQuery = `SELECT ` + messageColumns + `
 	FROM messages m JOIN users u ON u.id = m.author_id
 	WHERE m.channel_id = $1 AND m.author_id = $2 AND m.client_msg_id = $3`
 
+// messageByIDQuery reads one message of one channel. The channel is part of
+// the key rather than a filter applied afterwards — see MessageByID.
+const messageByIDQuery = `SELECT ` + messageColumns + `
+	FROM messages m JOIN users u ON u.id = m.author_id
+	WHERE m.channel_id = $1 AND m.id = $2`
+
+// updateMessageQuery replaces a message's content and stamps edited_at,
+// unless the message is deleted — a deleted row is a placeholder, and words
+// must not reappear on one.
+//
+// The mentions are rewritten by the same statement, because migration 0003
+// says the rows are written "when a message is sent or edited" and because
+// CreateMessage's guarantee — the rows the sidebar's "@" badge counts can
+// never disagree with the message they came from — would otherwise last only
+// until somebody edited. $4 is the ids parsed from the new content: the
+// DELETE drops the rows it no longer names, and the INSERT adds the ones it
+// does, joined against channel_members exactly as a send is, so an edit can
+// no more mention a stranger to the channel than a send can. The two touch
+// disjoint sets of rows, so they cannot race each other inside the one
+// statement.
+//
+// $4 is coalesced in the DELETE because an edit that names nobody sends an
+// empty list, which arrives as SQL NULL: "not one of NULL" is NULL rather
+// than true, and every mention row would survive an edit that removed the
+// last mention. The INSERT needs no such guard — its join simply matches
+// nothing.
+const updateMessageQuery = `WITH updated AS (
+	    UPDATE messages
+	    SET content = $3, edited_at = now()
+	    WHERE channel_id = $1 AND id = $2 AND deleted_at IS NULL
+	    RETURNING id, channel_id, author_id, client_msg_id, content, created_at, edited_at, deleted_at
+	), dropped AS (
+	    DELETE FROM message_mentions
+	    WHERE message_id IN (SELECT id FROM updated)
+	      AND mentioned_user_id <> ALL(coalesce($4::uuid[], '{}'::uuid[]))
+	), added AS (
+	    INSERT INTO message_mentions (message_id, mentioned_user_id)
+	    SELECT up.id, cm.user_id
+	    FROM updated up
+	    JOIN channel_members cm
+	      ON cm.channel_id = up.channel_id AND cm.user_id = ANY($4::uuid[])
+	    ON CONFLICT DO NOTHING
+	)
+	SELECT ` + messageColumns + `
+	FROM updated m JOIN users u ON u.id = m.author_id`
+
+// softDeleteMessageQuery erases a message's content in place.
+//
+// An empty content together with a non-null deleted_at is the only shape
+// the messages_content_shape constraint accepts for a deleted row (migration
+// 0003): a delete that erased the text without stamping deleted_at, or
+// stamped it without erasing, is refused by the database rather than stored.
+// The deleted_at IS NULL guard is what makes a second delete a no-op instead
+// of a re-stamp, so the first deleter stays the one on record.
+const softDeleteMessageQuery = `WITH deleted AS (
+	    UPDATE messages
+	    SET content = '', deleted_at = now(), deleted_by = $3
+	    WHERE channel_id = $1 AND id = $2 AND deleted_at IS NULL
+	    RETURNING id, channel_id, author_id, client_msg_id, content, created_at, edited_at, deleted_at
+	)
+	SELECT ` + messageColumns + `
+	FROM deleted m JOIN users u ON u.id = m.author_id`
+
 // The three page queries. Each direction gets its own statement instead of
 // one statement with optional bounds, because a cursor bound written as
 // `(created_at, id) < ($2, $3)` is a range on messages_channel_created_idx
@@ -147,6 +218,15 @@ const (
 
 	messagesAfterQuery = messagePageSelect + `
 	  AND (m.created_at, m.id) > ($2::timestamptz, $3::uuid)
+	ORDER BY m.created_at, m.id
+	LIMIT $4`
+
+	// The newer half of an `around` page. It is >= rather than >, because
+	// the anchor of a permalink belongs in the page it anchors — and an
+	// anchor naming no message simply starts the half at the position it
+	// would have held.
+	messagesFromQuery = messagePageSelect + `
+	  AND (m.created_at, m.id) >= ($2::timestamptz, $3::uuid)
 	ORDER BY m.created_at, m.id
 	LIMIT $4`
 )
@@ -248,12 +328,77 @@ func (s *Store) messageByKey(ctx context.Context, nm NewMessage) (Message, error
 	return msg, nil
 }
 
+// MessageByID reads one message of one channel, or ErrNotFound.
+//
+// The channel is part of the key rather than a filter the caller is trusted
+// to apply: a message id belonging to another conversation must answer
+// exactly like one that never existed, or a member of any channel could
+// reach any message on the instance by id. A soft-deleted message is
+// returned like any other — it exists, and the caller decides what a
+// deleted row means for the operation it is about to attempt.
+//
+// Access control is not this function's job: it says what a channel holds,
+// and the handler that asked has already decided who may ask.
+func (s *Store) MessageByID(ctx context.Context, channelID, messageID uuid.UUID) (Message, error) {
+	row := s.pool.QueryRow(ctx, messageByIDQuery, channelID, messageID)
+	msg, err := scanMessage(row)
+	if err != nil {
+		return Message{}, fmt.Errorf("message by id: %w", err)
+	}
+	return msg, nil
+}
+
+// UpdateMessageContent replaces a message's content, stamps edited_at, and
+// returns the message as it now stands.
+//
+// The message keeps its id and its created_at, so it keeps its place in
+// history: an edit is not a resend. Mentions are re-derived from the new
+// content by the same statement (see updateMessageQuery).
+//
+// ErrNotFound means the edit changed nothing, which is either of two
+// things: no such message in this channel, or a message that is deleted. The
+// caller has already read the row it is editing — that is where its
+// authorization decision came from — so it knows which, and a deletion that
+// landed in between is simply the answer a moment later. Content bounds are
+// the caller's to enforce; the messages_content_shape constraint is the
+// backstop.
+func (s *Store) UpdateMessageContent(ctx context.Context, channelID, messageID uuid.UUID, content string) (Message, error) {
+	row := s.pool.QueryRow(ctx, updateMessageQuery, channelID, messageID, content, parseMentions(content))
+	msg, err := scanMessage(row)
+	if err != nil {
+		return Message{}, fmt.Errorf("update message: %w", err)
+	}
+	return msg, nil
+}
+
+// SoftDeleteMessage erases a message's content in place and records who did
+// it, returning the row the "Message removed" placeholder renders from.
+//
+// The row is never removed: it keeps its id, its author and its created_at,
+// so history does not reshape around a deletion and every cursor either side
+// of it stays valid.
+//
+// ErrNotFound means nothing was deleted by this call — the message is not in
+// this channel, or it was already deleted. The caller answers 204 for the
+// second either way (deletion is idempotent), and the distinction that
+// matters to it is a different one: no row back means no event to announce,
+// because whoever deleted it first already announced one.
+func (s *Store) SoftDeleteMessage(ctx context.Context, channelID, messageID, deletedBy uuid.UUID) (Message, error) {
+	row := s.pool.QueryRow(ctx, softDeleteMessageQuery, channelID, messageID, deletedBy)
+	msg, err := scanMessage(row)
+	if err != nil {
+		return Message{}, fmt.Errorf("delete message: %w", err)
+	}
+	return msg, nil
+}
+
 // ListMessages returns one page of a channel's history, ascending by
 // (created_at, id) whichever direction it was paged in.
 //
-// With neither cursor it returns the newest Limit messages — the channel as
-// it is opened. Before pages into the past, After into the future; both are
-// exclusive of the message they name, and asking for both at once is an
+// With no cursor it returns the newest Limit messages — the channel as it is
+// opened. Before pages into the past, After into the future, and both are
+// exclusive of the message they name; Around centres the page on its anchor
+// and includes it (see aroundPage). Asking for more than one at once is an
 // error rather than a silently-preferred one.
 //
 // Soft-deleted messages stay in the page, with their content already empty
@@ -268,26 +413,16 @@ func (s *Store) messageByKey(ctx context.Context, nm NewMessage) (Message, error
 // indistinguishable from an empty one on purpose — history is a read, not a
 // lookup, and the handler has already resolved the channel.
 func (s *Store) ListMessages(ctx context.Context, params ListMessagesParams) (MessagePage, error) {
-	if params.Before != nil && params.After != nil {
-		return MessagePage{}, errors.New("list messages: before and after are mutually exclusive")
+	if cursors := boolCount(params.Before != nil, params.After != nil, params.Around != nil); cursors > 1 {
+		return MessagePage{}, errors.New("list messages: before, after and around are mutually exclusive")
+	}
+	if params.Around != nil {
+		return s.aroundPage(ctx, params)
 	}
 
 	query, args := messagePageQuery(params)
-	rows, err := s.pool.Query(ctx, query, args...)
+	messages, err := s.queryMessages(ctx, query, args...)
 	if err != nil {
-		return MessagePage{}, fmt.Errorf("list messages: %w", err)
-	}
-	defer rows.Close()
-
-	messages := []Message{}
-	for rows.Next() {
-		msg, scanErr := scanMessage(rows)
-		if scanErr != nil {
-			return MessagePage{}, fmt.Errorf("list messages: %w", scanErr)
-		}
-		messages = append(messages, msg)
-	}
-	if err := rows.Err(); err != nil {
 		return MessagePage{}, fmt.Errorf("list messages: %w", err)
 	}
 
@@ -326,6 +461,101 @@ func (s *Store) ListMessages(ctx context.Context, params ListMessagesParams) (Me
 		return MessagePage{}, fmt.Errorf("list messages: %w", probeErr)
 	}
 	return page, nil
+}
+
+// aroundPage centres a page on its anchor: the anchor message itself, plus
+// history either side of it. It is how a copied message link resolves.
+//
+// THE SPLIT. The anchor takes one of the Limit places and what is left
+// divides in two, the odd message going to the older side: Limit/2 older,
+// the rest newer. A limit of 1 is therefore the anchor alone, and the
+// default limit of 50 is 25 older, the anchor, and 24 newer. The older side
+// gets the odd one because a permalink is read from the message upwards —
+// the conversation that led to it is the context a reader arrives needing.
+//
+// THE ENDS OF A CHANNEL. A side holding less history than its share
+// contributes what it has, and the other side is NOT widened to compensate:
+// a permalink to the third message of a channel returns three messages, not
+// fifty. That is a decision, not a shortfall. The page is short exactly when
+// the channel really does end there, HasBefore and HasAfter say so, and a
+// client that renders the page learns where the anchor sits in its channel
+// from the shape of what it got. Topping up from the far side would answer
+// "this is the start of the conversation" with a screenful of later messages
+// that say nothing of the sort — and would still be short on a channel
+// holding fewer than Limit messages in total, so it would not even buy a
+// promise a client could rely on.
+//
+// Both halves are read in one direction each, so neither needs the boundary
+// probe ListMessages runs: the extra row each asks for is the answer.
+func (s *Store) aroundPage(ctx context.Context, params ListMessagesParams) (MessagePage, error) {
+	olderShare := params.Limit / 2
+	newerShare := params.Limit - 1 - olderShare
+
+	older, err := s.queryMessages(ctx, messagesBeforeQuery,
+		params.ChannelID, params.Around.CreatedAt, params.Around.ID, olderShare+1)
+	if err != nil {
+		return MessagePage{}, fmt.Errorf("list messages around: %w", err)
+	}
+	page := MessagePage{HasBefore: len(older) > olderShare}
+	if page.HasBefore {
+		older = older[:olderShare]
+	}
+	// The older half is read newest-first, like every backwards page.
+	slices.Reverse(older)
+
+	// The anchor is part of its own page, so the newer half asks for the
+	// anchor, its share, and one row past it.
+	newer, err := s.queryMessages(ctx, messagesFromQuery,
+		params.ChannelID, params.Around.CreatedAt, params.Around.ID, newerShare+2)
+	if err != nil {
+		return MessagePage{}, fmt.Errorf("list messages around: %w", err)
+	}
+	page.HasAfter = len(newer) > newerShare+1
+	if page.HasAfter {
+		newer = newer[:newerShare+1]
+	}
+
+	page.Messages = append(older, newer...)
+	if len(page.Messages) == 0 {
+		// An anchor with nothing on either side of it. Both flags go back to
+		// false: an empty page has no row to hang a cursor on, so a client
+		// offered one could not use it.
+		return MessagePage{Messages: page.Messages}, nil
+	}
+	return page, nil
+}
+
+// boolCount counts how many of its arguments are true.
+func boolCount(flags ...bool) int {
+	n := 0
+	for _, flag := range flags {
+		if flag {
+			n++
+		}
+	}
+	return n
+}
+
+// queryMessages runs one messageColumns query and scans its whole result.
+func (s *Store) queryMessages(ctx context.Context, query string, args ...any) ([]Message, error) {
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	messages := []Message{}
+	for rows.Next() {
+		msg, scanErr := scanMessage(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		messages = append(messages, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return messages, nil
 }
 
 // messagePageQuery picks the statement and arguments for one page. It asks

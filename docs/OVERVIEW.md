@@ -166,6 +166,18 @@ installs it on its own server with one command and owns its communication comple
   conversation, because the server stamps a message as it arrives: three sent quickly used to
   race, and the author's own words could come back rearranged after a reload. Optimistic
   rendering hid it until then, and the end-to-end suite is what caught it.
+- **Rate limiting is a table, not a habit.** Budgets are declared per endpoint, keyed on the
+  route pattern, and the middleware refuses any endpoint nobody classified — with a build-time
+  gate so an omission is caught by CI rather than by a 500. It runs after authentication, so a
+  budget can be keyed on the account rather than the address: one person behind a shared office
+  address cannot spend everyone else's. The sign-in, two-step and password-reset budgets stay in
+  their handlers on purpose — each spends conditionally, or on a key that only exists in the
+  request body, or in the particular shape that keeps its 429 from telling an attacker whether
+  an address has an account.
+- Emptying a channel is refused, and the refusal survives two people leaving at the same instant
+  — a case that needs a shared lock rather than a count, and a lock chosen so it cannot deadlock
+  against somebody being invited at the same moment. The reasoning is written out in the storage
+  package's lock-order section, and a test holds an invitation open at exactly that instant.
 - **Message search**, scoped by a join inside the query rather than a filter after it, so a
   conversation the caller is not in cannot reach the results, the count, or a snippet. It matches
   **substrings, not word stems** — a deliberate choice recorded in migration 0006: every
@@ -181,8 +193,15 @@ installs it on its own server with one command and owns its communication comple
   registry whose completeness is checked against the protocol document. Designed in
   [ADR 002](adr/002-channel-scoped-authz-matrix.md).
 
-**Not yet built:** message edit, delete and search (slice 1.2b, still answering 501); files;
-the admin dashboard (designed, not built); calls; E2EE — see the phase list below.
+Messages can be edited and deleted. Editing is the author's alone, admins included, because
+putting words in somebody else's mouth is impersonation; deleting allows an admin who is a
+member of the channel, since that removes words rather than inventing them. A deleted message
+keeps its place with its content erased, which is what the design's "Message removed"
+placeholder renders, and a permalink resolves through a cursor that centres the page on the
+message it names.
+
+**Not yet built:** files; the admin dashboard (designed, not built); calls; E2EE — see the phase
+list below.
 
 A DM now carries its peer, resolved by a join in the same query that draws the sidebar rather
 than a lookup per row; mentions are parsed from the contract's `<@{id}>` token when a message is

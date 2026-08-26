@@ -281,9 +281,18 @@ func TestNotImplementedExpectationsAreListed(t *testing.T) {
 func TestDiffNotImplementedDetectsBothDirections(t *testing.T) {
 	t.Parallel()
 
-	// A 501 expectation that nothing licenses: with an empty list, every
-	// stubbed cell in the real registry is unlisted.
-	unlisted, _ := DiffNotImplemented(nil, Registry())
+	// A 501 expectation that nothing licenses. The row is built here rather
+	// than taken from the registry, which no longer holds a single 501 cell:
+	// every contract operation has a handler now, and a drill that could
+	// only run while some stub happened to exist would have stopped
+	// exercising this gate the moment the last one landed.
+	stubbed := Entry{
+		Method: http.MethodPost,
+		Path:   "/api/v1/nothing",
+		Class:  ClassSession,
+		Want:   map[Principal]int{Member: http.StatusNotImplemented},
+	}
+	unlisted, _ := DiffNotImplemented(nil, []Entry{stubbed})
 	if len(unlisted) == 0 {
 		t.Error("an empty allow-list reported no unlisted 501 cells; the gate cannot see them")
 	}

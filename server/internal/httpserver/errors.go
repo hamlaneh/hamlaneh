@@ -48,23 +48,36 @@ const (
 	codeUserNotFound      errorCode = "user_not_found"
 	codeChannelSlugTaken  errorCode = "channel_slug_taken"
 	codeDMMembershipFixed errorCode = "dm_membership_fixed"
+	// The two message-moderation refusals. They are separate codes because
+	// they are separate rules: editing is the author's alone, admins
+	// included, while deleting is the author's or an admin member's. A
+	// client localizes by code, so collapsing them would tell an admin they
+	// cannot delete a message they can.
+	codeNotMessageAuthor        errorCode = "not_message_author"
+	codeNotMessageAuthorOrAdmin errorCode = "not_message_author_or_admin"
+	// codeMessageDeleted answers an edit of a message that is already
+	// deleted: its row is the placeholder the design draws, and words must
+	// not reappear on one.
+	codeMessageDeleted errorCode = "message_deleted"
 	// codeNotFound answers a path under /api that no contract route claims.
 	// It is the router's answer, not a resource's: the contract's
 	// resource-level 404s carry their own codes (session_not_found,
 	// channel_not_found, user_not_found).
 	codeNotFound errorCode = "not_found"
-	// codeNotImplemented marks a contract endpoint whose behavior has not
-	// shipped yet (see messaging_stubs.go). It is never an authorization
-	// answer: route-level gates run first and answer 401/403 themselves.
-	codeNotImplemented errorCode = "not_implemented"
 )
+
+// not_implemented is deliberately absent. It was the placeholder the Phase
+// 1.2 contract stubs answered with while their handlers were being written;
+// message edit and delete were the last two, and slice 1.2b landed them.
+// Nothing in this server answers 501 any more, and the authz matrix has a
+// gate (authztest.notImplementedOperations) that keeps a 501 from re-entering
+// the contract surface unnoticed.
 
 // Stable messages for codes written from more than one call site.
 const (
 	msgNotAuthenticated = "authentication required"
 	msgForbidden        = "not allowed"
 	msgInternalError    = "internal server error"
-	msgNotImplemented   = "endpoint not implemented yet"
 	msgNotFound         = "no such endpoint"
 )
 

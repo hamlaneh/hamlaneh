@@ -88,8 +88,19 @@ func handler(store Store, web fs.FS, opts ...Option) http.Handler {
 
 	s := newAPIServer(store, opts...)
 	routed := api.HandlerWithOptions(s, api.StdHTTPServerOptions{
-		BaseRouter:       mux,
-		Middlewares:      []api.MiddlewareFunc{s.securityMiddleware},
+		BaseRouter: mux,
+		// READ THE ORDER BACKWARDS. The generated wrapper folds this slice
+		// with handler = middleware(handler), so the LAST element ends up
+		// outermost and runs FIRST: securityMiddleware, then
+		// rateLimitMiddleware, then the handler.
+		//
+		// That order is required, not incidental. Every budget in
+		// ratelimits.go is keyed on the authenticated account, which only
+		// exists once securityMiddleware has put the principal in the
+		// request context — and the budget must still be spent before the
+		// handler does the work it exists to refuse.
+		// TestAuthenticationAnswersBeforeTheBudget pins it from outside.
+		Middlewares:      []api.MiddlewareFunc{s.rateLimitMiddleware, s.securityMiddleware},
 		ErrorHandlerFunc: requestErrorHandler,
 	})
 	return securityHeaders(routed)

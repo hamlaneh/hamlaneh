@@ -27,6 +27,16 @@ import (
 type Realtime interface {
 	// MessageCreated announces a new message to the channel's members.
 	MessageCreated(channelID uuid.UUID, message storage.Message)
+	// MessageUpdated announces an edit to the channel's members. The
+	// message carries its new content and the edited_at the "(edited)"
+	// marker renders from.
+	MessageUpdated(channelID uuid.UUID, message storage.Message)
+	// MessageDeleted announces a soft delete to the channel's members. It
+	// carries the whole message rather than an id, because the placeholder
+	// that replaces it keeps the message's position and metadata
+	// (ws-protocol.md §4) — a client that only learned the id would have to
+	// refetch the page to draw it.
+	MessageDeleted(channelID uuid.UUID, message storage.Message)
 	// ChannelCreated announces a channel to the users who can now see it.
 	ChannelCreated(userIDs []uuid.UUID, channel storage.Channel)
 	// ChannelUpdated announces a topic or member-count change.
@@ -52,6 +62,8 @@ type Realtime interface {
 type noRealtime struct{}
 
 func (noRealtime) MessageCreated(uuid.UUID, storage.Message)               {}
+func (noRealtime) MessageUpdated(uuid.UUID, storage.Message)               {}
+func (noRealtime) MessageDeleted(uuid.UUID, storage.Message)               {}
 func (noRealtime) ChannelCreated([]uuid.UUID, storage.Channel)             {}
 func (noRealtime) ChannelUpdated(uuid.UUID, storage.Channel)               {}
 func (noRealtime) MemberAdded(uuid.UUID, storage.User)                     {}

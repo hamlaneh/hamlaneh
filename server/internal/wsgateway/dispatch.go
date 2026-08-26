@@ -72,6 +72,31 @@ func (g *Gateway) MessageCreated(channelID uuid.UUID, message storage.Message) {
 	})
 }
 
+// MessageUpdated announces an edit to the channel's members.
+func (g *Gateway) MessageUpdated(channelID uuid.UUID, message storage.Message) {
+	g.enqueue(event{
+		typ:       typeMessageUpdated,
+		channelID: channelID,
+		ordered:   true,
+		payload:   messageData{Message: apiMessage(message)},
+	})
+}
+
+// MessageDeleted announces a soft delete to the channel's members.
+//
+// It carries the whole message, like the other two: the placeholder that
+// replaces it keeps the message's position and metadata (§4), and the
+// audience is the channel's membership at send time, so a deletion is no
+// more visible to a stranger than the message was.
+func (g *Gateway) MessageDeleted(channelID uuid.UUID, message storage.Message) {
+	g.enqueue(event{
+		typ:       typeMessageDeleted,
+		channelID: channelID,
+		ordered:   true,
+		payload:   messageData{Message: apiMessage(message)},
+	})
+}
+
 // ChannelCreated announces a channel to the users who can now see it. The
 // named audience is still checked against the membership table: an event is
 // delivered because the database says the recipient is a member, never

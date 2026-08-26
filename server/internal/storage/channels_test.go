@@ -7,8 +7,12 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
@@ -1065,4 +1069,298 @@ func TestChannelMembersIntegration(t *testing.T) {
 			t.Errorf("got %d members, want none", len(got))
 		}
 	})
+}
+
+// memberCount is the channel's membership as the database has it, read
+// outside any of the calls under test.
+func memberCount(ctx context.Context, t *testing.T, store *storage.Store, channelID uuid.UUID) int {
+	t.Helper()
+
+	ch, err := store.ChannelByID(ctx, channelID)
+	if err != nil {
+		t.Fatalf("ChannelByID: %v", err)
+	}
+	return ch.MemberCount
+}
+
+// TestChannelLastMemberIntegration pins the contract's last_member refusal:
+// a channel may not be emptied.
+//
+// The storage layer is not told whether somebody is leaving or being
+// removed — it is one call either way — so the rule applies to both, which
+// is what the contract says. What it must not do is refuse anything else,
+// and the trap is a bare count: a one-member channel plus a removal request
+// naming somebody who is not in it is still the idempotent no-op it has
+// always been.
+func TestChannelLastMemberIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, _ := testdb.New(t)
+	ctx := context.Background()
+	owner := mustCreateUser(ctx, t, store, newUser("owner"))
+	invitee := mustCreateUser(ctx, t, store, newUser("invitee"))
+	stranger := mustCreateUser(ctx, t, store, newUser("stranger"))
+
+	t.Run("the only member cannot be removed", func(t *testing.T) {
+		ch := mustCreateChannel(ctx, t, store, newChannel("solo", storage.ChannelKindPrivate, owner.ID))
+
+		if err := store.RemoveChannelMember(ctx, ch.ID, owner.ID); !errors.Is(err, storage.ErrLastMember) {
+			t.Errorf("got %v, want ErrLastMember", err)
+		}
+		if got := memberCount(ctx, t, store, ch.ID); got != 1 {
+			t.Errorf("the channel has %d members after the refusal, want 1", got)
+		}
+	})
+
+	t.Run("the second-to-last may go, the last may not", func(t *testing.T) {
+		ch := mustCreateChannel(ctx, t, store, newChannel("two-then-one", storage.ChannelKindPrivate, owner.ID))
+		if err := store.AddChannelMember(ctx, ch.ID, invitee.ID, owner.ID); err != nil {
+			t.Fatalf("AddChannelMember: %v", err)
+		}
+
+		if err := store.RemoveChannelMember(ctx, ch.ID, invitee.ID); err != nil {
+			t.Fatalf("removing one of two members: %v", err)
+		}
+		if got := usernamesOf(mustListMembers(ctx, t, store, ch.ID)); !slices.Equal(got, []string{"owner"}) {
+			t.Errorf("members = %v, want the survivor [owner]", got)
+		}
+		if err := store.RemoveChannelMember(ctx, ch.ID, owner.ID); !errors.Is(err, storage.ErrLastMember) {
+			t.Errorf("removing the survivor: got %v, want ErrLastMember", err)
+		}
+	})
+
+	t.Run("removing a non-member from a one-member channel is still a no-op", func(t *testing.T) {
+		ch := mustCreateChannel(ctx, t, store, newChannel("no-op", storage.ChannelKindPrivate, owner.ID))
+
+		if err := store.RemoveChannelMember(ctx, ch.ID, stranger.ID); err != nil {
+			t.Errorf("got %v, want nil — a non-member is not the last member", err)
+		}
+		if got := memberCount(ctx, t, store, ch.ID); got != 1 {
+			t.Errorf("the channel has %d members, want 1", got)
+		}
+	})
+
+	t.Run("a direct message answers on its shape, not on the count", func(t *testing.T) {
+		// Both DM participants are still in it, so the count is two and the
+		// last-member rule has nothing to say; the DM guard must still be the
+		// one that answers, and must answer before any counting.
+		dm := mustOpenDM(ctx, t, store, owner.ID, invitee.ID)
+
+		if err := store.RemoveChannelMember(ctx, dm.ID, owner.ID); !errors.Is(err, storage.ErrDMMembershipFixed) {
+			t.Errorf("got %v, want ErrDMMembershipFixed", err)
+		}
+	})
+}
+
+// TestRemoveChannelMemberConcurrentIntegration is the reason the rule needed
+// a design pass: two members of a two-member channel leaving at the same
+// instant.
+//
+// Counting and then deleting does not survive it. The two removals delete
+// two different rows, so nothing brings them into conflict — under READ
+// COMMITTED both read a member count of two, both decide they are not the
+// last, and the channel ends up empty. Exactly one of them must be refused.
+//
+// Each round is a fresh channel, and there are many rounds because a lost
+// race is a scheduling accident: one round proves little, and a hundred that
+// all leave one member behind is the claim.
+func TestRemoveChannelMemberConcurrentIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, _ := testdb.New(t)
+	ctx := context.Background()
+	alice := mustCreateUser(ctx, t, store, newUser("alice"))
+	bob := mustCreateUser(ctx, t, store, newUser("bob"))
+	leavers := [...]uuid.UUID{alice.ID, bob.ID}
+
+	const rounds = 40
+	for round := range rounds {
+		ch := mustCreateChannel(ctx, t, store,
+			newChannel(fmt.Sprintf("both-leave-%02d", round), storage.ChannelKindPrivate, alice.ID))
+		if err := store.AddChannelMember(ctx, ch.ID, bob.ID, alice.ID); err != nil {
+			t.Fatalf("round %d: AddChannelMember: %v", round, err)
+		}
+
+		errs := make([]error, len(leavers))
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i, leaver := range leavers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				errs[i] = store.RemoveChannelMember(ctx, ch.ID, leaver)
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		refused := 0
+		for i, err := range errs {
+			switch {
+			case err == nil:
+			case errors.Is(err, storage.ErrLastMember):
+				refused++
+			default:
+				t.Fatalf("round %d: leaver %d: %v", round, i, err)
+			}
+		}
+		if refused != 1 {
+			t.Fatalf("round %d: %d of %d leavers were refused, want exactly 1",
+				round, refused, len(leavers))
+		}
+		if got := memberCount(ctx, t, store, ch.ID); got != 1 {
+			t.Fatalf("round %d: the channel has %d members, want exactly 1", round, got)
+		}
+	}
+}
+
+// TestRemoveChannelMemberDoesNotBlockOnAddIntegration is the lock-strength
+// regression, and the one test here that fails if the channel lock is ever
+// strengthened to FOR UPDATE.
+//
+// It holds an AddChannelMember open at its most dangerous instant: the
+// membership row inserted, the foreign key's KEY SHARE on the channels row
+// taken, nothing committed. That is exactly the state the deadlock in the
+// old # Lock order note needed — the adder holding a channel_members row and
+// a lock on channels — and a removal that wants FOR UPDATE on that row must
+// queue behind it, because KEY SHARE and FOR UPDATE conflict.
+//
+// The removal must not queue. FOR NO KEY UPDATE does not conflict with KEY
+// SHARE, so the remover is granted the row immediately and never waits on an
+// adder at all — which is what makes a cycle between the two impossible
+// rather than merely unlikely. Under FOR UPDATE this test hangs until its
+// deadline.
+func TestRemoveChannelMemberDoesNotBlockOnAddIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, dsn := testdb.New(t)
+	ctx := context.Background()
+	owner := mustCreateUser(ctx, t, store, newUser("owner"))
+	keeper := mustCreateUser(ctx, t, store, newUser("keeper"))
+	joiner := mustCreateUser(ctx, t, store, newUser("joiner"))
+
+	ch := mustCreateChannel(ctx, t, store, newChannel("contended", storage.ChannelKindPrivate, owner.ID))
+	if err := store.AddChannelMember(ctx, ch.ID, keeper.ID, owner.ID); err != nil {
+		t.Fatalf("AddChannelMember(keeper): %v", err)
+	}
+
+	// The add, mid-flight and uncommitted. It is spelled out rather than
+	// driven through AddChannelMember because the point is to hold the locks
+	// that method takes and then stop, which a method that commits cannot do.
+	pool := assertPool(ctx, t, dsn)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the in-flight add: %v", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			t.Errorf("roll back the in-flight add: %v", err)
+		}
+	}()
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO channel_members (channel_id, user_id, added_by) VALUES ($1, $2, $3)`,
+		ch.ID, joiner.ID, owner.ID,
+	); err != nil {
+		t.Fatalf("insert the in-flight membership row: %v", err)
+	}
+
+	// Bounded, because the failure this guards against is a wait rather than
+	// an error: without the deadline a regression here hangs the suite.
+	removeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	if err := store.RemoveChannelMember(removeCtx, ch.ID, keeper.ID); err != nil {
+		t.Fatalf("the removal waited on an uncommitted add: %v", err)
+	}
+	if member, err := store.IsChannelMember(ctx, ch.ID, keeper.ID); err != nil {
+		t.Fatalf("IsChannelMember: %v", err)
+	} else if member {
+		t.Error("the removal reported success but the member is still there")
+	}
+}
+
+// TestRemoveChannelMemberAddRaceIntegration runs the same collision at
+// volume: many removals and many adds on one channel, released together,
+// round after round.
+//
+// It is the coarse net rather than the sharp one — the lock strength is
+// pinned by the test above — and it catches anything that closes a cycle
+// under contention rather than in the single hand-built interleaving. The
+// assertion is not "it did not hang": PostgreSQL breaks a deadlock itself
+// after deadlock_timeout and reports 40P01 to whichever transaction it
+// aborts, so the test fails on that error, and the context deadline catches
+// a wait that produces no error at all.
+//
+// Each round removes and re-adds the same users, so the removals and the
+// adds contend both on the channels row (every add's foreign key check) and
+// on individual channel_members rows (an add and a remove naming the same
+// person).
+func TestRemoveChannelMemberAddRaceIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, _ := testdb.New(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	owner := mustCreateUser(ctx, t, store, newUser("owner"))
+	ch := mustCreateChannel(ctx, t, store, newChannel("churn", storage.ChannelKindPrivate, owner.ID))
+	// A member who never leaves, alongside the creator: no round can reach
+	// the last-member refusal, so every error below is a real one.
+	keeper := mustCreateUser(ctx, t, store, newUser("keeper"))
+	if err := store.AddChannelMember(ctx, ch.ID, keeper.ID, owner.ID); err != nil {
+		t.Fatalf("seed keeper: %v", err)
+	}
+
+	const (
+		rounds  = 25
+		churner = 4
+	)
+	churners := make([]uuid.UUID, churner)
+	for i := range churners {
+		churners[i] = mustCreateUser(ctx, t, store, newUser(fmt.Sprintf("churner-%d", i))).ID
+	}
+
+	for round := range rounds {
+		for _, id := range churners {
+			if err := store.AddChannelMember(ctx, ch.ID, id, owner.ID); err != nil {
+				t.Fatalf("round %d: reset membership: %v", round, err)
+			}
+		}
+
+		// One remover and one adder per churner, all released together: the
+		// adder is inserting the very row the remover is deleting.
+		errs := make([]error, 2*churner)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i, id := range churners {
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				<-start
+				errs[2*i] = store.RemoveChannelMember(ctx, ch.ID, id)
+			}()
+			go func() {
+				defer wg.Done()
+				<-start
+				errs[2*i+1] = store.AddChannelMember(ctx, ch.ID, id, owner.ID)
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		for i, err := range errs {
+			if err == nil {
+				continue
+			}
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.DeadlockDetected {
+				t.Fatalf("round %d, worker %d: DEADLOCK between removal and add: %v", round, i, err)
+			}
+			t.Fatalf("round %d, worker %d: %v", round, i, err)
+		}
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("round %d: the round did not finish inside the deadline: %v", round, err)
+		}
+	}
 }

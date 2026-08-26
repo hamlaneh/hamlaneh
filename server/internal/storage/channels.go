@@ -31,6 +31,11 @@ var (
 	// ErrDMWithSelf reports an attempt to open a direct message with
 	// oneself.
 	ErrDMWithSelf = errors.New("storage: a direct message needs two different users")
+	// ErrLastMember reports an attempt to remove a channel's only remaining
+	// member. An empty channel is unreachable — nobody can open it and
+	// nobody can be invited back into it — so the contract refuses the
+	// removal that would produce one (code last_member).
+	ErrLastMember = errors.New("storage: a channel cannot be left with no members")
 )
 
 // ChannelKind is the flat channel taxonomy of ADR 001 — the instance is the
@@ -527,23 +532,68 @@ func (s *Store) AddChannelMember(ctx context.Context, channelID, userID, addedBy
 // for. A direct message's membership is fixed (ErrDMMembershipFixed), and an
 // unknown channel is ErrChannelNotFound.
 //
-// Whether the caller is allowed to remove this particular member, and
-// whether the channel may be left with nobody in it, are policy questions
-// for the authz layer; this method enforces the shape of the data, not the
-// rules about who may change it.
+// Who may remove this particular member stays the authz layer's question.
+// What the membership may become is this method's: removing the only
+// remaining member is ErrLastMember, refused for the caller leaving exactly
+// as for the caller removing somebody else, because an empty channel is a
+// property of the data rather than of who asked. It is enforced here because
+// nothing above storage can hold a count and a delete together, and two
+// members leaving at the same instant is precisely the case the rule exists
+// for.
+//
+// That case is also why this is a transaction with a lock in it rather than
+// a count followed by a delete. The two removals delete two different rows,
+// so under READ COMMITTED nothing brings them into conflict and both read a
+// member count of two — write skew, which only a shared lock prevents. The
+// channels row is that shared lock, and its strength is the whole design:
+// see the "# Lock order: the messaging tables" section in storage.go for why
+// it is FOR NO KEY UPDATE and why FOR UPDATE deadlocks.
 func (s *Store) RemoveChannelMember(ctx context.Context, channelID, userID uuid.UUID) error {
-	kind, err := s.channelKind(ctx, channelID)
-	if err != nil {
-		return fmt.Errorf("remove channel member: %w", err)
-	}
-	if kind == ChannelKindDM {
-		return fmt.Errorf("remove channel member: %w", ErrDMMembershipFixed)
-	}
+	// READ COMMITTED is asked for rather than inherited from the server
+	// default. The refusal below is correct because the count runs as a new
+	// statement — and so on a new snapshot — once the lock is granted; under
+	// REPEATABLE READ it would read the snapshot from before the wait and
+	// both removers would pass it.
+	err := pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
+		// One statement for three jobs: the channel exists, here is the kind
+		// the direct-message guard tests, and the row is now locked against
+		// another removal of this channel.
+		var kind ChannelKind
+		err := tx.QueryRow(ctx,
+			`SELECT kind FROM channels WHERE id = $1 FOR NO KEY UPDATE`, channelID).Scan(&kind)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrChannelNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("lock channel: %w", err)
+		}
+		if kind == ChannelKindDM {
+			return ErrDMMembershipFixed
+		}
 
-	if _, err := s.pool.Exec(ctx,
-		`DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
-		channelID, userID,
-	); err != nil {
+		// "Is this user the only member" — one question, not two. A count of
+		// one is not enough on its own: removing a non-member from a
+		// one-member channel is still the idempotent no-op it has always
+		// been, and refusing it would break that.
+		var sole bool
+		err = tx.QueryRow(ctx,
+			`SELECT count(*) = 1 AND count(*) FILTER (WHERE user_id = $2) = 1
+			 FROM channel_members WHERE channel_id = $1`,
+			channelID, userID,
+		).Scan(&sole)
+		if err != nil {
+			return fmt.Errorf("count members: %w", err)
+		}
+		if sole {
+			return ErrLastMember
+		}
+
+		_, err = tx.Exec(ctx,
+			`DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
+			channelID, userID)
+		return err
+	})
+	if err != nil {
 		return fmt.Errorf("remove channel member: %w", err)
 	}
 	return nil

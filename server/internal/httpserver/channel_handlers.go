@@ -54,6 +54,12 @@ const (
 	maxSlugLen          = 64
 )
 
+// codeLastMember answers removeChannelMember's refusal to empty a channel.
+// It is the one error code written from a single handler and declared beside
+// it rather than in errors.go, because nothing else in the API can produce
+// it.
+const codeLastMember errorCode = "last_member"
+
 // slugPattern is the contract's channel-name shape: a lowercase
 // alphanumeric start, then lowercase alphanumerics, underscore or dash.
 var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
@@ -532,9 +538,12 @@ func namedMember(ctx context.Context, store Store, channelID, userID uuid.UUID, 
 // removed from it. It is idempotent: removing somebody who is not a member
 // answers 204.
 //
-// The contract's last_member refusal is slice 1.2b (ROADMAP §1.2b): the
-// race-free shape deadlocks in the storage layer, so it needs a design pass
-// rather than a quick lock.
+// Emptying a channel is refused with 400 last_member. That refusal is not an
+// authorization answer and deliberately does not read as one: it is decided
+// after Can has already allowed the removal, it is the same answer for the
+// last member leaving as for somebody removing them, and it says something
+// about the channel rather than about the caller — the shape
+// dm_membership_fixed already has.
 func (s *apiServer) RemoveChannelMember(w http.ResponseWriter, r *http.Request, channelID api.ChannelId, userID openapitypes.UUID) {
 	sc, ok := s.resolveChannel(w, r, channelID)
 	if !ok {
@@ -579,6 +588,10 @@ func (s *apiServer) RemoveChannelMember(w http.ResponseWriter, r *http.Request, 
 	case errors.Is(err, storage.ErrDMMembershipFixed):
 		writeError(w, r, http.StatusBadRequest, codeDMMembershipFixed,
 			"a direct message's membership is fixed at two")
+		return
+	case errors.Is(err, storage.ErrLastMember):
+		writeError(w, r, http.StatusBadRequest, codeLastMember,
+			"a channel cannot be left with no members")
 		return
 	case errors.Is(err, storage.ErrChannelNotFound):
 		writeChannelNotFound(w, r)

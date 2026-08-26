@@ -268,57 +268,29 @@ func plus(want map[Principal]outcome, p Principal, o outcome) map[Principal]outc
 	return out
 }
 
-// notImplementedYet is what an endpoint nobody has written a handler for
-// answers every caller the route gates let through (messaging_stubs.go).
-//
-// It is never a permission decision, and no cell carrying it claims to be
-// one: the route-level gates still decide first — anonymous 401,
-// still-owes-a-password-change 403 — and nothing past them has looked at
-// membership or authorship, because there is no code there to look. A 501
-// says the feature is missing, never "you are allowed to do this".
-var notImplementedYet = refusal(http.StatusNotImplemented, "not_implemented")
-
-// stubbed rewrites a row's want map to what its missing handler actually
-// answers: 501 for every principal past the route gates, the two non-member
-// columns included — no membership check exists yet to produce the 404 a
-// stranger is owed.
-//
-// The contract's real per-channel outcomes stay written at the call site
-// instead of being deleted, so tightening the row when the handler lands is
-// removing this wrapper and the operation's entry from
-// notImplementedOperations — not reconstructing the answers from scratch.
-func stubbed(want map[Principal]outcome) map[Principal]outcome {
-	out := maps.Clone(want)
-	for p := range out {
-		out[p] = notImplementedYet
-	}
-	return out
-}
-
 // searchPath is message search's contract path, spelled as openapi.yaml
 // spells it. Its registry row and its entry below must name one operation,
 // not two strings that agree today.
 const searchPath = "/api/v1/search"
 
 // notImplementedOperations is the closed list of contract operations whose
-// matrix rows may expect a 501: the two that are slice 1.2b work
-// (docs/ROADMAP.md) and have no handler at all.
+// matrix rows may expect a 501.
 //
-// DiffNotImplemented enforces the list in both directions — a row expecting
-// 501 for an unlisted operation fails, so leaving a cell at "nobody wrote
-// this" is always a deliberate edit here; and a listed operation whose rows
-// no longer expect 501 fails too, so the list cannot outlive the stubs it
-// describes. The remaining direction is covered by TestAuthzMatrix itself: a
-// handler that lands while its row still says 501 gets asked, answers for
-// real, and turns the cell red.
+// It is empty: every operation in docs/api/openapi.yaml has a handler, and
+// nothing in this server answers 501 any more. Message edit and delete were
+// the last two, and slice 1.2b landed them.
 //
-// GET /api/v1/ws is deliberately absent. The gateway is being written now,
-// and its row pins the handshake's origin refusal rather than a 501.
+// The list stays because it is the gate, not the record. DiffNotImplemented
+// enforces it in both directions — a row expecting 501 for an unlisted
+// operation fails, so a cell parked at "nobody wrote this" is always a
+// deliberate edit here; and a listed operation no cell expects a 501 for
+// fails too, so the list cannot outlive the stubs it describes. With the
+// list empty, the first direction is the live one: a 501 cannot re-enter the
+// matrix unnoticed. The remaining direction is covered by TestAuthzMatrix
+// itself: a handler that lands while its row still says 501 gets asked,
+// answers for real, and turns the cell red.
 func notImplementedOperations() []Operation {
-	return []Operation{
-		{Method: http.MethodPatch, Path: messagePath},  // edit a message
-		{Method: http.MethodDelete, Path: messagePath}, // soft-delete a message
-	}
+	return nil
 }
 
 // channelEntry builds one channel-scoped row. want carries the five channel
@@ -790,19 +762,19 @@ func channelRegistry() []Entry {
 	// Editing is author-only, admins included: rewriting somebody else's
 	// words is impersonation, and no role makes that acceptable. Deleting is
 	// the author, or an admin who is a member of this channel — deletion
-	// removes words, it does not put new ones in somebody's mouth.
+	// removes words, it does not put new ones in somebody's mouth. That
+	// difference is the whole reason both rows declare MemberAuthor and the
+	// two admin columns: it is only visible where the same principal gets
+	// different answers from the two operations.
 	//
-	// Both are slice 1.2b (docs/ROADMAP.md) and neither handler exists, so
-	// what the server answers today is the stub's 501 and stubbed() says so.
-	// The wants inside it are the contract's real answers, kept here for the
-	// slice that makes them true: landing the handler is deleting the
-	// wrapper and the operation's entry in notImplementedOperations.
+	// Both handlers landed in slice 1.2b, so these are the contract's real
+	// answers now, asked of a real server.
 	editBody := func(Fixture) string { return `{"content":"an edited matrix message"}` }
 	entries = append(entries, bothKinds(http.MethodPatch, messagePath, editBody,
-		stubbed(plus(members(notAuthor, notAuthor, notAuthor), MemberAuthor, read)))...)
+		plus(members(notAuthor, notAuthor, notAuthor), MemberAuthor, read))...)
 
 	entries = append(entries, bothKinds(http.MethodDelete, messagePath, nil,
-		stubbed(plus(members(notMod, notMod, done), MemberAuthor, done)))...)
+		plus(members(notMod, notMod, done), MemberAuthor, done))...)
 
 	// A read position is the caller's own, so every member may move theirs
 	// and a stranger still gets the channel's 404.

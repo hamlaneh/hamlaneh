@@ -1181,6 +1181,36 @@ func TestRemoveChannelMember(t *testing.T) {
 		rec := do(t, store, request(http.MethodDelete, leavePath, "", withSessionCookie("tok"), withCSRF()))
 		wantError(t, rec, http.StatusBadRequest, "dm_membership_fixed")
 	})
+
+	// The last member is refused whether they are leaving or being removed,
+	// and both answers are the same 400 last_member — the refusal is about
+	// the channel, so it cannot depend on which of the two the caller asked
+	// for. Leaving reaches it through ChannelRead, which every member holds,
+	// so the 400 is the only thing standing between the caller and an empty
+	// channel.
+	t.Run("emptying a channel is refused: 400 last_member", func(t *testing.T) {
+		t.Parallel()
+		for name, path := range map[string]string{"leaving": leavePath, "removing somebody": removePath} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				store := channelStore(fixtureUser(), fixtureChannel(), true)
+				store.removeChannelMember = func(context.Context, uuid.UUID, uuid.UUID) error {
+					return storage.ErrLastMember
+				}
+				rt := &recordingRealtime{}
+
+				rec := doRealtime(t, store, rt, request(http.MethodDelete, path, "", withSessionCookie("tok"), withCSRF()))
+				wantError(t, rec, http.StatusBadRequest, "last_member")
+
+				// Nothing happened, so nothing is announced: a member_removed
+				// event here would tell every client to drop a member who is
+				// still in the channel.
+				if len(rt.memberRemoved) != 0 || len(rt.channelRemoved) != 0 {
+					t.Errorf("announced %+v / %+v on a refused removal", rt.memberRemoved, rt.channelRemoved)
+				}
+			})
+		}
+	})
 }
 
 // ptr is the address of a value, for the optional fields of a fixture.

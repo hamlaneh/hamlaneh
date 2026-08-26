@@ -127,44 +127,10 @@ const (
 	totpRateWindow = 5 * time.Minute
 )
 
-// Two-step settings rate limit: one sliding window per account across the
-// four endpoints the contract gives a 429 — totp/setup, totp/verify,
-// totp/disable and totp/recovery-codes.
-//
-// The budget is about server work, not guessing, which is why it is keyed
-// on the account alone and why every call spends a unit rather than only
-// the failures. Two of the four run a full argon2id password verification
-// (64 MiB) before they decide anything, and recovery-codes then hashes ten
-// more; a session that has been hijacked, or simply a stuck client, can
-// otherwise repeat that indefinitely. There is no IP key because there is
-// no anonymous reach here: all four sit behind a session, so the account IS
-// the caller.
-//
-// One window covers all four because an attacker who has a session picks
-// whichever endpoint is cheapest for them, and per-endpoint budgets would
-// just multiply the total. 10 in 5 minutes is far above any real use — a
-// user regenerates codes once — and far below what makes the argon2 cost
-// worth paying.
-const (
-	totpSettingsRateLimit  = 10
-	totpSettingsRateWindow = 5 * time.Minute
-)
-
-// Search is budgeted per account because its cost is not uniform. The
-// trigram index behind it needs three characters to work with; a one- or
-// two-character needle cannot use it and falls back to a sequential scan
-// over every message the caller can reach — measured at 240ms across 60,000
-// rows, and the contract allows a query that short on purpose, because
-// one- and two-character words are ordinary in Persian.
-//
-// So the endpoint is cheap to call and occasionally expensive to serve, from
-// an authenticated caller, in a loop. The contract already reserves 429 here;
-// this is what emits it. 30 in a minute is far above someone typing into a
-// search box and far below what a loop needs to hurt.
-const (
-	searchRateLimit  = 30
-	searchRateWindow = time.Minute
-)
+// Every other budget this server enforces — two-step settings, search, the
+// user directory, and the conversation and message writes — is per endpoint
+// and lives in the table in ratelimits.go, spent by middleware rather than by
+// hand inside a handler.
 
 // readyzTimeout bounds the whole readiness probe: a stalled database must
 // become a fast 503, not a hung request.
@@ -201,12 +167,16 @@ type apiServer struct {
 	// reset-complete is invalid.
 	reset *passwordreset.Service
 
+	// The budgets that cannot be decided from a route, spent by the handlers
+	// that own them (ratelimits.go explains why each one stayed).
 	loginIPLimiter         *ratelimit.Limiter
 	loginIdentifierLimiter *ratelimit.Limiter
 	totpIPLimiter          *ratelimit.Limiter
 	totpAccountLimiter     *ratelimit.Limiter
-	totpSettingsLimiter    *ratelimit.Limiter
-	searchLimiter          *ratelimit.Limiter
+
+	// budgets holds one limiter per named per-endpoint budget, spent by
+	// rateLimitMiddleware against the route the request matched.
+	budgets map[budgetName]*ratelimit.Limiter
 }
 
 var _ api.ServerInterface = (*apiServer)(nil)
@@ -223,8 +193,7 @@ func newAPIServer(store Store, opts ...Option) *apiServer {
 		loginIdentifierLimiter: ratelimit.New(loginRateLimit, loginRateWindow),
 		totpIPLimiter:          ratelimit.New(totpRateLimit, totpRateWindow),
 		totpAccountLimiter:     ratelimit.New(totpRateLimit, totpRateWindow),
-		totpSettingsLimiter:    ratelimit.New(totpSettingsRateLimit, totpSettingsRateWindow),
-		searchLimiter:          ratelimit.New(searchRateLimit, searchRateWindow),
+		budgets:                newBudgetLimiters(),
 	}
 	for _, opt := range opts {
 		opt(s)

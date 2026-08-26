@@ -87,17 +87,19 @@ type WSEntry struct {
 // WSRegistry returns the WebSocket authorization registry: one entry per row
 // of the operation table in docs/api/ws-protocol.md §10.
 //
-// The gateway landed in slice 1.2a, so all but two entries are WSEnforced:
-// internal/wsgateway's security suite asserts each rule against a real
-// socket — non-member sockets never receiving a private channel's events,
-// presence limited to DM peers, read positions delivered only to the same
-// user's other sockets, and the two removal events reaching disjoint
-// audiences.
+// Every entry is WSEnforced: internal/wsgateway's security suite asserts
+// each rule against a real socket — non-member sockets never receiving a
+// private channel's events, presence limited to DM peers, read positions
+// delivered only to the same user's other sockets, and the two removal
+// events reaching disjoint audiences.
 //
-// message_updated and message_deleted stay WSNotImplemented because editing
-// and deleting messages are slice 1.2b: the frames are specified and nothing
-// can emit them. Do not read WSNotImplemented as "allowed" — it is a
-// statement about missing code, never a permission decision.
+// message_updated and message_deleted joined them in slice 1.2b, licensed by
+// TestEditAndDeleteEventsNeverReachANonMember and TestEditAndDeleteStopAtRemoval
+// (internal/wsgateway/delivery_test.go): the first proves a stranger's socket
+// receives neither event while a member's receives both, the second that the
+// audience is read at send time, so a user removed mid-socket stops hearing
+// them. WSEnforced means exactly that — a test asserts the rule — and it is
+// not a claim to make ahead of one.
 func WSRegistry() []WSEntry {
 	return []WSEntry{
 		// Client → server.
@@ -115,8 +117,8 @@ func WSRegistry() []WSEntry {
 		wsEnforced("subscribed", S2C, WSMember),
 		wsEnforced("unsubscribed", S2C, WSMember),
 		wsEnforced("message_created", S2C, WSMember),
-		wsStub("message_updated", S2C, WSMember),
-		wsStub("message_deleted", S2C, WSMember),
+		wsEnforced("message_updated", S2C, WSMember),
+		wsEnforced("message_deleted", S2C, WSMember),
 		wsEnforced("channel_created", S2C, WSMember),
 		wsEnforced("channel_updated", S2C, WSMember),
 		wsEnforced("member_added", S2C, WSMember),
