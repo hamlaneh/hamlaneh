@@ -172,6 +172,38 @@ func TestWebappRoutes(t *testing.T) {
 			wantBodyContain:  `id="root"`,
 		},
 		{
+			// The invitation link is {base}/invite#token=..., the same
+			// fragment trick /reset uses.
+			name:             "invitation redemption path serves the document",
+			path:             "/invite",
+			wantStatus:       http.StatusOK,
+			wantContentType:  "text/html; charset=utf-8",
+			wantCacheControl: "no-cache",
+			wantBodyContain:  `id="root"`,
+		},
+		{
+			// The account menu links here with a plain anchor, so this is a
+			// hard navigation, not a client-side push. It 404'd for the whole
+			// of 1.4: the dashboard shipped and could not be opened.
+			name:             "admin dashboard path serves the document",
+			path:             "/admin",
+			wantStatus:       http.StatusOK,
+			wantContentType:  "text/html; charset=utf-8",
+			wantCacheControl: "no-cache",
+			wantBodyContain:  `id="root"`,
+		},
+		{
+			// The panes are bookmarkable and survive a refresh, so the
+			// subtree has to answer, not just the bare path. The client
+			// routes /admin/* — matching that is the whole job.
+			name:             "admin pane path serves the document",
+			path:             "/admin/audit",
+			wantStatus:       http.StatusOK,
+			wantContentType:  "text/html; charset=utf-8",
+			wantCacheControl: "no-cache",
+			wantBodyContain:  `id="root"`,
+		},
+		{
 			name:             "hashed script is cached forever",
 			path:             fixtureScript,
 			wantStatus:       http.StatusOK,

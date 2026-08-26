@@ -68,6 +68,13 @@ type webapp struct {
 //	/invite   the redemption screen an invitation link lands on. Like /reset,
 //	          its token rides in the URL fragment (invite_handlers.go), so
 //	          the server only ever sees this bare path
+//	/admin    webapp/src/screens/AdminApp.tsx — the account menu links to it
+//	          with a plain anchor, so it is a real navigation the server has
+//	          to answer, and the pane routes below it (invites, settings,
+//	          audit) are bookmarkable, so the subtree has to answer too.
+//	          Serving the document is not an authorization decision: the
+//	          dashboard's data comes from /api/v1/admin, which refuses
+//	          non-admins, and the shell renders nothing without it
 //
 // — and adding a route to the app means adding it here in the same change.
 func routeWebapp(mux *http.ServeMux, files fs.FS) {
@@ -77,6 +84,8 @@ func routeWebapp(mux *http.ServeMux, files fs.FS) {
 	mux.HandleFunc("GET /reset", a.serveIndex)
 	mux.HandleFunc("GET /invite", a.serveIndex)
 	mux.HandleFunc("GET /c/", a.serveIndex)
+	mux.HandleFunc("GET /admin", a.serveIndex)
+	mux.HandleFunc("GET /admin/", a.serveIndex)
 
 	mux.HandleFunc("GET /assets/", a.serveHashedAsset)
 	mux.HandleFunc("GET /brand/", a.servePublicFile)
