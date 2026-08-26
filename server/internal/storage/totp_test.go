@@ -363,6 +363,49 @@ func TestTotpSetupLifecycleIntegration(t *testing.T) {
 	})
 }
 
+func TestDisableTotpRefusedWhileOrgRequiresItIntegration(t *testing.T) {
+	t.Parallel()
+
+	// Its own store: org_settings is a single row per database, so flipping
+	// the policy here would otherwise reach every other test sharing it.
+	store, _ := testdb.New(t)
+	ctx := context.Background()
+
+	user := mustCreateUser(ctx, t, store, newUser("orgrequires"))
+	enableTotp(ctx, t, store, user.ID, totpCodeHashes("req", 10))
+
+	required := true
+	if _, err := store.UpdateOrgSettings(ctx, storage.OrgSettingsPatch{RequireTotp: &required}); err != nil {
+		t.Fatalf("UpdateOrgSettings: %v", err)
+	}
+
+	// The hole this closes: enforcement binds when a session is minted, so an
+	// account that switched its factor off while already signed in would never
+	// meet the gate again.
+	if err := store.DisableTotp(ctx, user.ID); !errors.Is(err, storage.ErrTotpRequiredByOrg) {
+		t.Fatalf("DisableTotp: %v, want ErrTotpRequiredByOrg", err)
+	}
+	if _, err := store.TotpByUser(ctx, user.ID); err != nil {
+		t.Errorf("the refused disable removed the secret anyway: %v", err)
+	}
+	remaining, total, err := store.RecoveryCodeCounts(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("RecoveryCodeCounts: %v", err)
+	}
+	if remaining == 0 || total == 0 {
+		t.Errorf("the refused disable voided the recovery codes anyway: %d of %d", remaining, total)
+	}
+
+	// And it is the policy doing the refusing, not something permanent.
+	required = false
+	if _, err := store.UpdateOrgSettings(ctx, storage.OrgSettingsPatch{RequireTotp: &required}); err != nil {
+		t.Fatalf("UpdateOrgSettings: %v", err)
+	}
+	if err := store.DisableTotp(ctx, user.ID); err != nil {
+		t.Fatalf("DisableTotp once the policy is off: %v", err)
+	}
+}
+
 func TestTotpDisableAndRegenerateIntegration(t *testing.T) {
 	t.Parallel()
 

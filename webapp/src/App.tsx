@@ -18,6 +18,7 @@ import { RedeemInviteScreen } from "./screens/RedeemInviteScreen";
 import { ResetPasswordScreen } from "./screens/ResetPasswordScreen";
 import { ResetRequestScreen } from "./screens/ResetRequestScreen";
 import { TotpChallengeScreen } from "./screens/TotpChallengeScreen";
+import { TotpEnrolmentScreen } from "./screens/TotpEnrolmentScreen";
 
 type User = components["schemas"]["User"];
 
@@ -258,9 +259,26 @@ function App() {
     // Forced mode: while the flag is set this branch always wins — the only
     // exits are completing the change or signing out (wrong account). A
     // voluntary change is Settings → Security instead.
+    //
+    // PRECEDENCE, when a session carries this AND totp_enrollment_required
+    // (an admin-created account, first sign-in, on an instance that requires
+    // two-step verification): the password goes first. A temporary password is
+    // a credential the account holder does not yet exclusively hold — whoever
+    // issued it knows it — and binding a second factor to an account somebody
+    // else can still sign into is the weaker order of the two. The password
+    // change also revokes every other session, so enrolment then happens on a
+    // session nobody else could have.
     return (
       <ChangePasswordScreen onSuccess={handlePasswordChanged} onSignOut={handleLogout} />
     );
+  }
+
+  if (session.user.totp_enrollment_required) {
+    // The same forced pattern as above, one flag later: the organization
+    // requires two-step verification and this account has none. Activation
+    // clears the flag on the server, so refetching the session is what lets
+    // the app continue into chat without a second sign-in.
+    return <TotpEnrolmentScreen onEnrolled={refreshSession} onSignOut={handleLogout} />;
   }
 
   // The chat shell is the authenticated app; only it needs a URL, so the

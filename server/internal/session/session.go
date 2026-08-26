@@ -24,7 +24,9 @@ const (
 	// AccessTTL bounds how long a stolen access token works.
 	AccessTTL = 15 * time.Minute
 	// RefreshTTL bounds how long a session survives without use; each
-	// rotation starts a fresh refresh window.
+	// rotation starts a fresh refresh window. Since ADR 004 it is the
+	// CEILING on that window, not the value: the org's configured
+	// session_lifetime_hours is read at each mint and clamped to it.
 	RefreshTTL = 30 * 24 * time.Hour
 )
 

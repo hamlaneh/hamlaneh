@@ -134,6 +134,11 @@
       "unexpected": "The password could not be changed. Try again."
     }
   },
+  "totpRequired": {
+    "title": "Set up two-step verification",
+    "body": "Your organization now asks every account for a second step at sign-in, so the rest of Hamlaneh waits until this is done. You will need an authenticator app on a phone or computer — the first step below says which ones work and what to do with them.",
+    "signOut": "Sign out instead"
+  },
   "account": {
     "title": "Account",
     "signedInAs": "Signed in as {{name}}",

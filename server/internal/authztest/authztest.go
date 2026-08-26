@@ -38,6 +38,24 @@ const (
 	Member Principal = "member"
 	// MemberMustChange is authenticated with must_change_password set.
 	MemberMustChange Principal = "member-must-change"
+	// MemberTotpPending is authenticated with a session flagged
+	// totp_enrollment_required: minted while the org required two-step
+	// verification and the account had none activated (ADR 004). It is a
+	// required column on EVERY entry so the gate is proved against the whole
+	// surface, not just the endpoints somebody remembered — a flagged
+	// session may reach only logout, reading users/me, and the four TOTP
+	// enrolment endpoints; everywhere else it gets 403
+	// totp_enrollment_required, the WebSocket route included.
+	MemberTotpPending Principal = "member-totp-pending"
+	// MemberMustChangeTotpPending carries BOTH flags: an admin-created
+	// account signing in for the first time on an instance that requires
+	// two-step verification. The contract makes the two gates sequential —
+	// while must_change_password is set, only the password gate applies —
+	// because the two allow-lists intersect at almost nothing and enforcing
+	// both at once would leave the person able to satisfy neither demand.
+	// This column is what proves the sequencing: its change-password cell is
+	// a 204, which no single-flag column can assert.
+	MemberMustChangeTotpPending Principal = "member-must-change-totp-pending"
 	// Admin is an authenticated admin.
 	Admin Principal = "admin"
 )
@@ -73,7 +91,8 @@ const (
 // least the ones its shape requires (Entry.RequiredPrincipals).
 func Principals() []Principal {
 	return []Principal{
-		Anonymous, Member, MemberMustChange, Admin,
+		Anonymous, Member, MemberMustChange, MemberTotpPending,
+		MemberMustChangeTotpPending, Admin,
 		ChannelNonMember, ChannelMember, ChannelOwner,
 		AdminNonMember, AdminMember, MemberAuthor,
 	}
@@ -82,16 +101,18 @@ func Principals() []Principal {
 // InstancePrincipals are the columns every instance-scoped entry must
 // declare.
 func InstancePrincipals() []Principal {
-	return []Principal{Anonymous, Member, MemberMustChange, Admin}
+	return []Principal{
+		Anonymous, Member, MemberMustChange, MemberTotpPending,
+		MemberMustChangeTotpPending, Admin,
+	}
 }
 
-// ChannelPrincipals are the seven columns ADR 002 requires of every
-// channel-scoped entry: the two route-gate columns, unchanged, plus the five
-// channel relations. MemberAuthor is a refinement on top, not one of the
-// seven.
+// ChannelPrincipals are the columns ADR 002 requires of every channel-scoped
+// entry: the route-gate columns, unchanged, plus the five channel relations.
+// MemberAuthor is a refinement on top, not one of them.
 func ChannelPrincipals() []Principal {
 	return []Principal{
-		Anonymous, MemberMustChange,
+		Anonymous, MemberMustChange, MemberTotpPending, MemberMustChangeTotpPending,
 		ChannelNonMember, ChannelMember, ChannelOwner,
 		AdminNonMember, AdminMember,
 	}
@@ -306,9 +327,11 @@ func notImplementedOperations() []Operation {
 }
 
 // channelEntry builds one channel-scoped row. want carries the five channel
-// relations and any refinement; the two route-gate columns are identical on
+// relations and any refinement; the route-gate columns are identical on
 // every channel-scoped endpoint — anonymous 401, still-owes-a-password-change
-// 403 — and are filled in here so no row can quietly disagree about them.
+// 403, a totp-enrolment-pending session 403, and the both-flags session the
+// password gate's 403 (the gates are sequential; the password comes first) —
+// and are filled in here so no row can quietly disagree about them.
 func channelEntry(method, path string, kind storage.ChannelKind,
 	body func(Fixture) string, want map[Principal]outcome,
 ) Entry {
@@ -319,12 +342,16 @@ func channelEntry(method, path string, kind storage.ChannelKind,
 		Kind:   kind,
 		Body:   body,
 		Want: map[Principal]int{
-			Anonymous:        http.StatusUnauthorized,
-			MemberMustChange: http.StatusForbidden,
+			Anonymous:                   http.StatusUnauthorized,
+			MemberMustChange:            http.StatusForbidden,
+			MemberTotpPending:           http.StatusForbidden,
+			MemberMustChangeTotpPending: http.StatusForbidden,
 		},
 		WantCode: map[Principal]string{
-			Anonymous:        "not_authenticated",
-			MemberMustChange: "password_change_required",
+			Anonymous:                   "not_authenticated",
+			MemberMustChange:            "password_change_required",
+			MemberTotpPending:           "totp_enrollment_required",
+			MemberMustChangeTotpPending: "password_change_required",
 		},
 	}
 	for p, o := range want {
@@ -362,15 +389,22 @@ func adminEntry(method, path, target string, body func(Fixture) string, want int
 		RequestTarget: target,
 		Body:          body,
 		Want: map[Principal]int{
-			Anonymous:        http.StatusUnauthorized,
-			Member:           http.StatusForbidden,
-			MemberMustChange: http.StatusForbidden,
-			Admin:            want,
+			Anonymous:                   http.StatusUnauthorized,
+			Member:                      http.StatusForbidden,
+			MemberMustChange:            http.StatusForbidden,
+			MemberTotpPending:           http.StatusForbidden,
+			MemberMustChangeTotpPending: http.StatusForbidden,
+			Admin:                       want,
 		},
 		WantCode: map[Principal]string{
 			Anonymous:        "not_authenticated",
 			Member:           "forbidden",
 			MemberMustChange: "password_change_required",
+			// The enrolment gate answers before the admin check does — the
+			// column that proves a flagged session's gate runs BEFORE admin
+			// authz, exactly as the must-change column proves for its gate.
+			MemberTotpPending:           "totp_enrollment_required",
+			MemberMustChangeTotpPending: "password_change_required",
 		},
 	}
 	if code != "" {
@@ -420,19 +454,39 @@ func sessionEntry(method, path, target string, body func(Fixture) string, want i
 		RequestTarget: target,
 		Body:          body,
 		Want: map[Principal]int{
-			Anonymous:        http.StatusUnauthorized,
-			MemberMustChange: http.StatusForbidden,
-			Member:           want,
-			Admin:            want,
+			Anonymous:                   http.StatusUnauthorized,
+			MemberMustChange:            http.StatusForbidden,
+			MemberTotpPending:           http.StatusForbidden,
+			MemberMustChangeTotpPending: http.StatusForbidden,
+			Member:                      want,
+			Admin:                       want,
 		},
 		WantCode: map[Principal]string{
-			Anonymous:        "not_authenticated",
-			MemberMustChange: "password_change_required",
+			Anonymous:                   "not_authenticated",
+			MemberMustChange:            "password_change_required",
+			MemberTotpPending:           "totp_enrollment_required",
+			MemberMustChangeTotpPending: "password_change_required",
 		},
 	}
 	if code != "" {
 		e.WantCode[Member] = code
 		e.WantCode[Admin] = code
+	}
+	return e
+}
+
+// totpEnrollmentReachable marks one session row as part of the TOTP
+// enrolment path: the flagged principal gets the member's own answer
+// instead of the gate's 403, because these four endpoints ARE the way out
+// of the gate. The both-flags column deliberately stays on the password
+// gate's 403 — the gates are sequential and the password comes first
+// (contract, User.totp_enrollment_required).
+func totpEnrollmentReachable(e Entry) Entry {
+	e.Want[MemberTotpPending] = e.Want[Member]
+	if code, ok := e.WantCode[Member]; ok {
+		e.WantCode[MemberTotpPending] = code
+	} else {
+		delete(e.WantCode, MemberTotpPending)
 	}
 	return e
 }
@@ -500,7 +554,8 @@ func instanceRegistry() []Entry {
 			Class:  ClassPublic,
 			Want: map[Principal]int{
 				Anonymous: http.StatusOK, Member: http.StatusOK,
-				MemberMustChange: http.StatusOK, Admin: http.StatusOK,
+				MemberMustChange: http.StatusOK, MemberTotpPending: http.StatusOK,
+				MemberMustChangeTotpPending: http.StatusOK, Admin: http.StatusOK,
 			},
 		},
 		{
@@ -509,7 +564,8 @@ func instanceRegistry() []Entry {
 			Class:  ClassPublic,
 			Want: map[Principal]int{
 				Anonymous: http.StatusOK, Member: http.StatusOK,
-				MemberMustChange: http.StatusOK, Admin: http.StatusOK,
+				MemberMustChange: http.StatusOK, MemberTotpPending: http.StatusOK,
+				MemberMustChangeTotpPending: http.StatusOK, Admin: http.StatusOK,
 			},
 		},
 		{
@@ -521,30 +577,45 @@ func instanceRegistry() []Entry {
 			},
 			Want: map[Principal]int{
 				Anonymous: http.StatusOK, Member: http.StatusOK,
-				MemberMustChange: http.StatusOK, Admin: http.StatusOK,
+				MemberMustChange: http.StatusOK, MemberTotpPending: http.StatusOK,
+				MemberMustChangeTotpPending: http.StatusOK, Admin: http.StatusOK,
 			},
 		},
 		{
+			// Logout is on both gates' allow-lists: a session that may do
+			// nothing else may always end itself.
 			Method: http.MethodPost,
 			Path:   "/api/v1/auth/logout",
 			Class:  ClassSession,
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusNoContent,
-				MemberMustChange: http.StatusNoContent, Admin: http.StatusNoContent,
+				MemberMustChange: http.StatusNoContent, MemberTotpPending: http.StatusNoContent,
+				MemberMustChangeTotpPending: http.StatusNoContent, Admin: http.StatusNoContent,
 			},
 			WantCode: map[Principal]string{Anonymous: "not_authenticated"},
 		},
 		{
+			// Refresh is authenticated by the refresh cookie, not the
+			// session, so neither gate is in its path: a flagged session may
+			// keep itself alive while its holder enrols — and the rotated
+			// generation carries the flag forward, which the integration
+			// tests pin.
 			Method: http.MethodPost,
 			Path:   "/api/v1/auth/refresh",
 			Class:  ClassRefreshCookie,
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusNoContent,
-				MemberMustChange: http.StatusNoContent, Admin: http.StatusNoContent,
+				MemberMustChange: http.StatusNoContent, MemberTotpPending: http.StatusNoContent,
+				MemberMustChangeTotpPending: http.StatusNoContent, Admin: http.StatusNoContent,
 			},
 			WantCode: map[Principal]string{Anonymous: "not_authenticated"},
 		},
 		{
+			// The both-flags 204 is THE sequencing cell: the enrolment gate
+			// alone answers change-password 403, so only the password gate
+			// yielding to nothing — and the enrolment gate yielding to it —
+			// lets the person do the first thing being demanded of them. A
+			// single-flag column structurally cannot assert this.
 			Method: http.MethodPost,
 			Path:   "/api/v1/auth/change-password",
 			Class:  ClassSession,
@@ -553,9 +624,13 @@ func instanceRegistry() []Entry {
 			},
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusNoContent,
-				MemberMustChange: http.StatusNoContent, Admin: http.StatusNoContent,
+				MemberMustChange: http.StatusNoContent, MemberTotpPending: http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusNoContent, Admin: http.StatusNoContent,
 			},
-			WantCode: map[Principal]string{Anonymous: "not_authenticated"},
+			WantCode: map[Principal]string{
+				Anonymous:         "not_authenticated",
+				MemberTotpPending: "totp_enrollment_required",
+			},
 		},
 		{
 			Method: http.MethodGet,
@@ -563,24 +638,26 @@ func instanceRegistry() []Entry {
 			Class:  ClassSession,
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusOK,
-				MemberMustChange: http.StatusOK, Admin: http.StatusOK,
+				MemberMustChange: http.StatusOK, MemberTotpPending: http.StatusOK,
+				MemberMustChangeTotpPending: http.StatusOK, Admin: http.StatusOK,
 			},
 			WantCode: map[Principal]string{Anonymous: "not_authenticated"},
 		},
 		{
-			// The patch of the same path joins its GET in the must-change
-			// trio. It carries locale and nothing else, and the
-			// forced-change screen renders the language switcher: refusing
-			// the save there would leave a control that appears to work and
-			// silently does not. Each cell edits only the fixture that sent
-			// it, which is the property this row pins.
+			// The patch joins its GET on BOTH gates' allow-lists. It carries
+			// locale and nothing else, and both forced screens render the
+			// language switcher: refusing the save would leave a control that
+			// appears to work and silently does not, for somebody stuck on a
+			// screen in a language they cannot read. Each cell edits only the
+			// fixture that sent it, which is the property this row pins.
 			Method: http.MethodPatch,
 			Path:   "/api/v1/users/me",
 			Class:  ClassSession,
 			Body:   func(Fixture) string { return `{"locale":"fa"}` },
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusOK,
-				MemberMustChange: http.StatusOK, Admin: http.StatusOK,
+				MemberMustChange: http.StatusOK, MemberTotpPending: http.StatusOK,
+				MemberMustChangeTotpPending: http.StatusOK, Admin: http.StatusOK,
 			},
 			WantCode: map[Principal]string{Anonymous: "not_authenticated"},
 		},
@@ -590,12 +667,15 @@ func instanceRegistry() []Entry {
 			Class:  ClassAdmin,
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusForbidden,
-				MemberMustChange: http.StatusForbidden, Admin: http.StatusOK,
+				MemberMustChange: http.StatusForbidden, MemberTotpPending: http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusForbidden, Admin: http.StatusOK,
 			},
 			WantCode: map[Principal]string{
-				Anonymous:        "not_authenticated",
-				Member:           "forbidden",
-				MemberMustChange: "password_change_required",
+				Anonymous:                   "not_authenticated",
+				Member:                      "forbidden",
+				MemberMustChange:            "password_change_required",
+				MemberTotpPending:           "totp_enrollment_required",
+				MemberMustChangeTotpPending: "password_change_required",
 			},
 		},
 		{
@@ -608,12 +688,15 @@ func instanceRegistry() []Entry {
 			Class:  ClassAdmin,
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusForbidden,
-				MemberMustChange: http.StatusForbidden, Admin: http.StatusOK,
+				MemberMustChange: http.StatusForbidden, MemberTotpPending: http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusForbidden, Admin: http.StatusOK,
 			},
 			WantCode: map[Principal]string{
-				Anonymous:        "not_authenticated",
-				Member:           "forbidden",
-				MemberMustChange: "password_change_required",
+				Anonymous:                   "not_authenticated",
+				Member:                      "forbidden",
+				MemberMustChange:            "password_change_required",
+				MemberTotpPending:           "totp_enrollment_required",
+				MemberMustChangeTotpPending: "password_change_required",
 			},
 		},
 		{
@@ -625,12 +708,15 @@ func instanceRegistry() []Entry {
 			},
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusForbidden,
-				MemberMustChange: http.StatusForbidden, Admin: http.StatusCreated,
+				MemberMustChange: http.StatusForbidden, MemberTotpPending: http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusForbidden, Admin: http.StatusCreated,
 			},
 			WantCode: map[Principal]string{
-				Anonymous:        "not_authenticated",
-				Member:           "forbidden",
-				MemberMustChange: "password_change_required",
+				Anonymous:                   "not_authenticated",
+				Member:                      "forbidden",
+				MemberMustChange:            "password_change_required",
+				MemberTotpPending:           "totp_enrollment_required",
+				MemberMustChangeTotpPending: "password_change_required",
 			},
 		},
 
@@ -726,13 +812,22 @@ func instanceRegistry() []Entry {
 		// verify, activate, disable or reissue. Each carries the body that gets
 		// it past request validation to that decision — a 400 here would pin
 		// the shape of the request instead of the security answer.
-		sessionEntry(http.MethodGet, "/api/v1/users/me/totp", "", nil, http.StatusOK, ""),
-		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/setup", "", nil, http.StatusOK, ""),
-		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/verify", "",
-			func(Fixture) string { return `{"code":"123456"}` },
-			http.StatusConflict, "totp_setup_expired"),
-		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/activate", "", nil,
-			http.StatusConflict, "totp_setup_not_verified"),
+		// The first four are the enrolment path and stay reachable for a
+		// totp-pending session — they are the way out of the gate, so the
+		// flagged column gets the member's own answer. disable and
+		// recovery-codes stay behind it: neither removing a second factor
+		// nor minting fresh sign-in codes is enrolment.
+		totpEnrollmentReachable(
+			sessionEntry(http.MethodGet, "/api/v1/users/me/totp", "", nil, http.StatusOK, "")),
+		totpEnrollmentReachable(
+			sessionEntry(http.MethodPost, "/api/v1/users/me/totp/setup", "", nil, http.StatusOK, "")),
+		totpEnrollmentReachable(
+			sessionEntry(http.MethodPost, "/api/v1/users/me/totp/verify", "",
+				func(Fixture) string { return `{"code":"123456"}` },
+				http.StatusConflict, "totp_setup_expired")),
+		totpEnrollmentReachable(
+			sessionEntry(http.MethodPost, "/api/v1/users/me/totp/activate", "", nil,
+				http.StatusConflict, "totp_setup_not_verified")),
 		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/disable", "", passwordBody,
 			http.StatusConflict, "totp_not_enabled"),
 		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/recovery-codes", "", passwordBody,
@@ -758,10 +853,12 @@ func instanceRegistry() []Entry {
 			Path:   "/api/v1/instance",
 			Class:  ClassPublic,
 			Want: map[Principal]int{
-				Anonymous:        http.StatusOK,
-				MemberMustChange: http.StatusOK,
-				Member:           http.StatusOK,
-				Admin:            http.StatusOK,
+				Anonymous:                   http.StatusOK,
+				MemberMustChange:            http.StatusOK,
+				MemberTotpPending:           http.StatusOK,
+				MemberMustChangeTotpPending: http.StatusOK,
+				Member:                      http.StatusOK,
+				Admin:                       http.StatusOK,
 			},
 		},
 		{
@@ -776,16 +873,18 @@ func instanceRegistry() []Entry {
 				return `{"email":"nobody` + fx.Unique + `@example.invalid"}`
 			},
 			Want: map[Principal]int{
-				Anonymous:        http.StatusAccepted,
-				MemberMustChange: http.StatusAccepted,
-				Member:           http.StatusAccepted,
-				Admin:            http.StatusAccepted,
+				Anonymous:                   http.StatusAccepted,
+				MemberMustChange:            http.StatusAccepted,
+				MemberTotpPending:           http.StatusAccepted,
+				MemberMustChangeTotpPending: http.StatusAccepted,
+				Member:                      http.StatusAccepted,
+				Admin:                       http.StatusAccepted,
 			},
 		},
 		{
 			// A garbage token answers exactly as an expired, superseded or
-			// already-used one does: one code for all four, so a replayed link
-			// never reveals which of them it hit.
+			// already-used one does: one code for every principal, so a
+			// replayed link never reveals which of them it hit.
 			Method: http.MethodPost,
 			Path:   "/api/v1/auth/reset-complete",
 			Class:  ClassPublic,
@@ -794,22 +893,26 @@ func instanceRegistry() []Entry {
 					`","new_password":"a matrix passphrase"}`
 			},
 			Want: map[Principal]int{
-				Anonymous:        http.StatusUnauthorized,
-				MemberMustChange: http.StatusUnauthorized,
-				Member:           http.StatusUnauthorized,
-				Admin:            http.StatusUnauthorized,
+				Anonymous:                   http.StatusUnauthorized,
+				MemberMustChange:            http.StatusUnauthorized,
+				MemberTotpPending:           http.StatusUnauthorized,
+				MemberMustChangeTotpPending: http.StatusUnauthorized,
+				Member:                      http.StatusUnauthorized,
+				Admin:                       http.StatusUnauthorized,
 			},
 			WantCode: map[Principal]string{
-				Anonymous:        "invalid_reset_token",
-				MemberMustChange: "invalid_reset_token",
-				Member:           "invalid_reset_token",
-				Admin:            "invalid_reset_token",
+				Anonymous:                   "invalid_reset_token",
+				MemberMustChange:            "invalid_reset_token",
+				MemberTotpPending:           "invalid_reset_token",
+				MemberMustChangeTotpPending: "invalid_reset_token",
+				Member:                      "invalid_reset_token",
+				Admin:                       "invalid_reset_token",
 			},
 		},
 
 		{
 			// Gated by the two-step challenge cookie, not a session. No fixture
-			// holds a challenge, so all four principals answer 401
+			// holds a challenge, so every principal answers 401
 			// not_authenticated — identically, the signed-in ones included.
 			// That uniformity IS the class: a session is not authority here,
 			// and only the half-authenticated state a 202 login mints is.
@@ -820,16 +923,20 @@ func instanceRegistry() []Entry {
 			Path:   "/api/v1/auth/login/totp",
 			Class:  ClassChallengeCookie,
 			Want: map[Principal]int{
-				Anonymous:        http.StatusUnauthorized,
-				MemberMustChange: http.StatusUnauthorized,
-				Member:           http.StatusUnauthorized,
-				Admin:            http.StatusUnauthorized,
+				Anonymous:                   http.StatusUnauthorized,
+				MemberMustChange:            http.StatusUnauthorized,
+				MemberTotpPending:           http.StatusUnauthorized,
+				MemberMustChangeTotpPending: http.StatusUnauthorized,
+				Member:                      http.StatusUnauthorized,
+				Admin:                       http.StatusUnauthorized,
 			},
 			WantCode: map[Principal]string{
-				Anonymous:        "not_authenticated",
-				MemberMustChange: "not_authenticated",
-				Member:           "not_authenticated",
-				Admin:            "not_authenticated",
+				Anonymous:                   "not_authenticated",
+				MemberMustChange:            "not_authenticated",
+				MemberTotpPending:           "not_authenticated",
+				MemberMustChangeTotpPending: "not_authenticated",
+				Member:                      "not_authenticated",
+				Admin:                       "not_authenticated",
 			},
 		},
 	}

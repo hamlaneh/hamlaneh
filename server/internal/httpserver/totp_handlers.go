@@ -199,6 +199,11 @@ func (s *apiServer) DisableTotp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := store.DisableTotp(r.Context(), prin.user.ID)
+	if errors.Is(err, storage.ErrTotpRequiredByOrg) {
+		writeError(w, r, http.StatusForbidden, codeTOTPRequiredByOrg,
+			"your organisation requires two-step verification")
+		return
+	}
 	if errors.Is(err, storage.ErrTotpNotEnabled) {
 		writeError(w, r, http.StatusConflict, codeTOTPNotEnabled, "two-step verification is not on")
 		return
@@ -318,19 +323,21 @@ func (s *apiServer) CompleteTotpLogin(w http.ResponseWriter, r *http.Request) {
 	// comparisons and a recovery code is never checked against the clock.
 	// A code that is neither shape still costs an attempt.
 	now := time.Now()
+	method := "totp"
 	switch normalized, isRecovery := totp.NormalizeRecoveryCode(req.Code); {
 	case totp.IsAuthenticatorCode(req.Code):
 		att.CheckCode = func(secret []byte, lastUsedStep *int64) (int64, bool) {
 			return totp.Verify(secret, req.Code, now, lastUsedStep)
 		}
 	case isRecovery:
+		method = "recovery_code"
 		att.MatchRecoveryCode = func(storedHash string) bool {
 			matched, _, matchErr := password.Verify(normalized, storedHash)
 			return matchErr == nil && matched
 		}
 	}
 
-	user, _, outcome, err := store.CompleteTotpChallenge(r.Context(), att)
+	user, sess, outcome, err := store.CompleteTotpChallenge(r.Context(), att)
 	if err != nil {
 		internalError(w, r, err)
 		return
@@ -340,9 +347,10 @@ func (s *apiServer) CompleteTotpLogin(w http.ResponseWriter, r *http.Request) {
 	case storage.TotpChallengeCompleted:
 		// A completed sign-in records nothing, matching Login's rule that
 		// only attempts an attacker would want to repeat spend budget.
+		s.recordSignIn(r, user, method)
 		http.SetCookie(w, challengeCookie("", -1))
 		session.SetCookies(w, cookies)
-		writeJSONValue(w, r, http.StatusOK, apiUser(user))
+		writeJSONValue(w, r, http.StatusOK, apiSessionUser(user, sess))
 	case storage.TotpChallengeRejected:
 		// The challenge survives: the cells clear and the caller retries.
 		s.recordTotpFailure(ipKey, accountKey)

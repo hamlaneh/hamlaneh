@@ -63,6 +63,13 @@ function accountFromUri(otpauthUri: string): string {
 interface TwoFactorSetupProps {
   onCancel: () => void;
   onActivated: () => void;
+  /**
+   * What leaving this flow is called, on the step header and the cancel
+   * buttons. Defaults to the settings wording ("Security" / "Cancel"); forced
+   * enrolment overrides it, because there the only way out is signing out and
+   * a button labelled "Cancel" would be lying about what it does.
+   */
+  cancelLabel?: string | undefined;
 }
 
 /**
@@ -77,7 +84,7 @@ interface TwoFactorSetupProps {
  * A wrong code in step 2 does not restart setup — the secret stays valid, the
  * cells clear and focus returns to the first.
  */
-export function TwoFactorSetup({ onCancel, onActivated }: TwoFactorSetupProps) {
+export function TwoFactorSetup({ onCancel, onActivated, cancelLabel }: TwoFactorSetupProps) {
   const { t } = useTranslation();
   const [step, setStep] = useState<Step>({ kind: "starting" });
   const [error, setError] = useState<SetupError>("none");
@@ -263,7 +270,7 @@ export function TwoFactorSetup({ onCancel, onActivated }: TwoFactorSetupProps) {
   return (
     <>
       <StepHeader
-        backLabel={t("settings.nav.security")}
+        backLabel={cancelLabel ?? t("settings.nav.security")}
         onBack={onCancel}
         step={stepNumber}
         total={3}
@@ -295,6 +302,7 @@ export function TwoFactorSetup({ onCancel, onActivated }: TwoFactorSetupProps) {
             setStep({ kind: "verify", setup: step.setup });
           }}
           onCancel={onCancel}
+          cancelLabel={cancelLabel}
         />
       ) : (
         <>
@@ -331,7 +339,10 @@ export function TwoFactorSetup({ onCancel, onActivated }: TwoFactorSetupProps) {
                 busyLabel={t("settings.totp.verify.submitting")}
                 busy={busy}
               />
-              <SettingsButton label={t("settings.cancel")} onClick={onCancel} />
+              <SettingsButton
+                label={cancelLabel ?? t("settings.cancel")}
+                onClick={onCancel}
+              />
             </div>
           </form>
         </>
@@ -344,10 +355,11 @@ interface ScanStepProps {
   setup: TotpSetup;
   onContinue: () => void;
   onCancel: () => void;
+  cancelLabel?: string | undefined;
 }
 
 /** Step 1: the QR, the always-visible manual key, and what to do with them. */
-function ScanStep({ setup, onContinue, onCancel }: ScanStepProps) {
+function ScanStep({ setup, onContinue, onCancel, cancelLabel }: ScanStepProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
 
@@ -449,7 +461,10 @@ function ScanStep({ setup, onContinue, onCancel }: ScanStepProps) {
               tone="primary"
               onClick={onContinue}
             />
-            <SettingsButton label={t("settings.cancel")} onClick={onCancel} />
+            <SettingsButton
+              label={cancelLabel ?? t("settings.cancel")}
+              onClick={onCancel}
+            />
           </div>
         </div>
       </div>

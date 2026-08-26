@@ -246,3 +246,101 @@ func TestUpdatePasswordRevokesOtherFamiliesIntegration(t *testing.T) {
 		t.Errorf("bystander's session died: %v", err)
 	}
 }
+
+// TestSessionLifetimeFromOrgSettingsIntegration pins that the org's
+// session_lifetime_hours is read at every mint — the family's first
+// generation and each rotation — clamped to the caller's RefreshTTL, which
+// is the server's ceiling (ADR 004; the contract says a value above the
+// ceiling is clamped rather than refused).
+func TestSessionLifetimeFromOrgSettingsIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, _ := testdb.New(t)
+	ctx := context.Background()
+	user := mustCreateUser(ctx, t, store, newUser("lifetimeuser"))
+
+	setLifetime := func(hours int) {
+		t.Helper()
+		if _, err := store.UpdateOrgSettings(ctx, storage.OrgSettingsPatch{SessionLifetimeHours: &hours}); err != nil {
+			t.Fatalf("set session_lifetime_hours=%d: %v", hours, err)
+		}
+	}
+	// refreshWindow is the minted refresh window measured by the database's
+	// own clock: both timestamps come from now() in the insert statement.
+	refreshWindow := func(sess storage.Session) time.Duration {
+		return sess.RefreshExpiresAt.Sub(sess.CreatedAt)
+	}
+	wantWindow := func(sess storage.Session, want time.Duration) {
+		t.Helper()
+		if got := refreshWindow(sess); got < want-time.Minute || got > want+time.Minute {
+			t.Errorf("refresh window %s, want about %s", got, want)
+		}
+	}
+
+	// Shorter than the ceiling: the org value wins, at mint and at rotation.
+	setLifetime(2)
+	sess := mustCreateSession(ctx, t, store, user.ID, tokensFor("lt-a1", "lt-r1"))
+	wantWindow(sess, 2*time.Hour)
+
+	next, outcome, err := store.RotateSession(ctx, hashOf("lt-r1"), tokensFor("lt-a2", "lt-r2"))
+	if err != nil || outcome != storage.RotateOutcomeRotated {
+		t.Fatalf("rotate: outcome %v, err %v", outcome, err)
+	}
+	wantWindow(next, 2*time.Hour)
+
+	// Above the ceiling: the CHECK constraint's maximum is 8760 hours, a
+	// year; the caller's 30-day RefreshTTL clamps it.
+	setLifetime(8760)
+	sess = mustCreateSession(ctx, t, store, user.ID, tokensFor("lt-a3", "lt-r3"))
+	wantWindow(sess, 30*24*time.Hour)
+}
+
+// TestSessionTotpFlagAtMintIntegration pins where the enrolment flag is
+// decided — the mint itself — and that a rotation carries it verbatim
+// rather than recomputing the policy.
+func TestSessionTotpFlagAtMintIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, _ := testdb.New(t)
+	ctx := context.Background()
+	user := mustCreateUser(ctx, t, store, newUser("flaguser"))
+
+	setPolicy := func(on bool) {
+		t.Helper()
+		if _, err := store.UpdateOrgSettings(ctx, storage.OrgSettingsPatch{RequireTotp: &on}); err != nil {
+			t.Fatalf("set require_totp=%v: %v", on, err)
+		}
+	}
+
+	// Policy off: unflagged.
+	sess := mustCreateSession(ctx, t, store, user.ID, tokensFor("fl-a1", "fl-r1"))
+	if sess.TotpEnrollmentRequired {
+		t.Error("mint with the policy off flagged the session")
+	}
+
+	// Policy on, no activated second factor: flagged — and the flag comes
+	// back on the authentication read, which is what the middleware acts on.
+	setPolicy(true)
+	sess = mustCreateSession(ctx, t, store, user.ID, tokensFor("fl-a2", "fl-r2"))
+	if !sess.TotpEnrollmentRequired {
+		t.Fatal("mint with the policy on did not flag the session")
+	}
+	authSess, _, err := store.SessionUserByAccessHash(ctx, hashOf("fl-a2"))
+	if err != nil {
+		t.Fatalf("authenticate flagged session: %v", err)
+	}
+	if !authSess.TotpEnrollmentRequired {
+		t.Error("authentication read lost the flag")
+	}
+
+	// A rotation carries the flag; flipping the policy off first changes
+	// nothing, because a rotation is not a sign-in and does not re-read it.
+	setPolicy(false)
+	next, outcome, err := store.RotateSession(ctx, hashOf("fl-r2"), tokensFor("fl-a3", "fl-r3"))
+	if err != nil || outcome != storage.RotateOutcomeRotated {
+		t.Fatalf("rotate: outcome %v, err %v", outcome, err)
+	}
+	if !next.TotpEnrollmentRequired {
+		t.Error("rotation laundered the enrolment flag away")
+	}
+}

@@ -32,6 +32,14 @@ func (r *recordingAudit) Record(_ context.Context, ev httpserver.AuditEvent) {
 	r.events = append(r.events, ev)
 }
 
+// snapshot returns a copy of everything recorded so far, safe to range over
+// while later requests keep recording.
+func (r *recordingAudit) snapshot() []httpserver.AuditEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]httpserver.AuditEvent{}, r.events...)
+}
+
 func (r *recordingAudit) actions() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

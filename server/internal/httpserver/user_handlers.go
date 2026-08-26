@@ -39,7 +39,7 @@ func (s *apiServer) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 		internalError(w, r, errors.New("users/me reached without principal"))
 		return
 	}
-	writeJSONValue(w, r, http.StatusOK, apiUser(prin.user))
+	writeJSONValue(w, r, http.StatusOK, apiSessionUser(prin.user, prin.session))
 }
 
 // UpdateCurrentUser applies the caller's own patch of their account: only
@@ -73,7 +73,7 @@ func (s *apiServer) UpdateCurrentUser(w http.ResponseWriter, r *http.Request) {
 		internalError(w, r, err)
 		return
 	}
-	writeJSONValue(w, r, http.StatusOK, apiUser(updated))
+	writeJSONValue(w, r, http.StatusOK, apiSessionUser(updated, prin.session))
 }
 
 // validateProfileUpdate enforces every UpdateCurrentUserRequest bound and
@@ -237,6 +237,17 @@ func validateCreateUser(w http.ResponseWriter, r *http.Request, req api.AdminCre
 		nu.IsAdmin = *req.IsAdmin
 	}
 	return nu, true
+}
+
+// apiSessionUser is apiUser plus the one field that belongs to the caller's
+// session rather than the account: totp_enrollment_required. Responses that
+// describe the signed-in caller go through here; responses about somebody
+// else's account (admin create) have no session in scope and use apiUser,
+// whose false is the honest value for "this session".
+func apiSessionUser(u storage.User, sess storage.Session) api.User {
+	out := apiUser(u)
+	out.TotpEnrollmentRequired = sess.TotpEnrollmentRequired
+	return out
 }
 
 // apiUser maps a storage user onto the contract's User schema. The password

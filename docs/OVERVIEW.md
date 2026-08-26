@@ -247,6 +247,15 @@ was not entitled to read the message it points at.
   session a page it should not have. Every screen is checked at 375px in both directions, and
   the Persian UI sets every app-generated number in ASCII digits, which is one rule in one
   module (`src/i18n/digits.ts`) rather than a ternary copied into three.
+- **Organisation security policies that actually bind (Phase 1.6).** `require_totp` and
+  `session_lifetime_hours` were stored, editable and displayed from 1.4 and read by nothing — an
+  administrator turned on enforced two-step verification, the screen agreed, the audit log
+  recorded it, and every account without a second factor kept signing in unchanged. Enforcement
+  is now a flag decided once when a session is minted, which is what makes "at the next sign-in,
+  never mid-session" true rather than aspirational: turning the policy on strands nobody who is
+  already working, including the administrator who turned it on. Switching a required second
+  factor back off is refused, because otherwise the policy would hold for everyone except the
+  people it is aimed at. Sign-ins are audited from here on, which they were not before.
 
 ## What's next
 

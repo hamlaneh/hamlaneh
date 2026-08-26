@@ -130,16 +130,35 @@ func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 	tokens.UserAgent = sanitizedUserAgent(r)
 	tokens.IP = ipParam(addr)
 
-	if _, err := s.store.CreateSession(r.Context(), storage.NewSession{
+	sess, err := s.store.CreateSession(r.Context(), storage.NewSession{
 		UserID:        user.ID,
 		SessionTokens: tokens,
-	}); err != nil {
+	})
+	if err != nil {
 		internalError(w, r, err)
 		return
 	}
 
+	s.recordSignIn(r, user, "password")
 	session.SetCookies(w, cookies)
-	writeJSONValue(w, r, http.StatusOK, apiUser(user))
+	writeJSONValue(w, r, http.StatusOK, apiSessionUser(user, sess))
+}
+
+// recordSignIn audits one completed sign-in: user.signed_in, with the method
+// that finished it (PLAN.md §6.7 promises logins in the log). Only the two
+// session-MINTING sites record one — password login here, the two-step
+// completion in totp_handlers.go. A refresh rotation is deliberately not a
+// sign-in: it presents no credential, only possession of a token an earlier
+// sign-in earned, and logging every 15-minute rotation would bury the events
+// the log exists to show.
+func (s *apiServer) recordSignIn(r *http.Request, user storage.User, method string) {
+	s.record(r, AuditEvent{
+		Action:      "user.signed_in",
+		ActorID:     user.ID,
+		TargetID:    user.ID,
+		TargetLabel: user.Username,
+		Detail:      map[string]any{"method": method},
+	})
 }
 
 // consumeLoginBudget counts one login attempt against both login rate-limit
@@ -269,6 +288,10 @@ func (s *apiServer) ChangePassword(w http.ResponseWriter, r *http.Request) {
 
 // mintSessionTokens generates the access, refresh, and CSRF tokens for a
 // fresh login, returning the storage-side hashes and the cookies to set.
+// RefreshTTL is the server's ceiling; the store clamps the org's configured
+// session lifetime to it at mint (ADR 004). Cookie Max-Age deliberately
+// stays at the ceiling — the database clock is what actually ends a
+// session, and a cookie outliving its token costs one clean 401.
 func mintSessionTokens() (storage.SessionTokens, []*http.Cookie) {
 	accessRaw, accessHash := session.NewToken()
 	refreshRaw, refreshHash := session.NewToken()

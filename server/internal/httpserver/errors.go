@@ -24,12 +24,19 @@ const (
 	codePasswordChangeRequired errorCode = "password_change_required"
 	codeInvalidCurrentPassword errorCode = "invalid_current_password"
 
+	// Phase 1.6: the session was minted under an enforced two-step policy
+	// the account does not yet satisfy; only logout, reading and patching
+	// users/me, and the TOTP enrolment endpoints answer anything else
+	// (ADR 004).
+	codeTOTPEnrollmentRequired errorCode = "totp_enrollment_required"
+
 	// Phase 1.1b: two-step verification, password reset, session management.
 	codeInvalidTOTPCode      errorCode = "invalid_totp_code"
 	codeTOTPAlreadyEnabled   errorCode = "totp_already_enabled"
 	codeTOTPSetupExpired     errorCode = "totp_setup_expired"
 	codeTOTPSetupNotVerified errorCode = "totp_setup_not_verified"
 	codeTOTPNotEnabled       errorCode = "totp_not_enabled"
+	codeTOTPRequiredByOrg    errorCode = "totp_required_by_org"
 	// One answer for unknown, expired and already-used reset tokens, so a
 	// replayed link cannot tell an attacker which of the three it hit.
 	codeInvalidResetToken   errorCode = "invalid_reset_token"

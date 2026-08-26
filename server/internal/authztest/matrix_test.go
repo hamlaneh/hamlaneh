@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/audit"
 	"github.com/hamlaneh/hamlaneh/server/internal/blobstore"
@@ -36,31 +37,34 @@ var cellSeq atomic.Int64
 
 // relation is what one principal is to the fixture channel and to the
 // instance. It is the whole principal model: the provisioner realizes these
-// six facts against the entry's channel kind, and nothing else distinguishes
+// facts against the entry's channel kind, and nothing else distinguishes
 // one column from another.
 type relation struct {
-	session    bool
-	admin      bool
-	mustChange bool
-	member     bool
-	creator    bool
-	author     bool
+	session     bool
+	admin       bool
+	mustChange  bool
+	totpPending bool
+	member      bool
+	creator     bool
+	author      bool
 }
 
 // relations maps every matrix column to the world its cell is provisioned
-// in. The channel columns differ only here — which is what makes the seven
-// of them one mechanism instead of seven special cases.
+// in. The channel columns differ only here — which is what makes them one
+// mechanism instead of a case per column.
 var relations = map[Principal]relation{
-	Anonymous:        {},
-	Member:           {session: true},
-	MemberMustChange: {session: true, mustChange: true},
-	Admin:            {session: true, admin: true},
-	ChannelNonMember: {session: true},
-	ChannelMember:    {session: true, member: true},
-	ChannelOwner:     {session: true, member: true, creator: true},
-	AdminNonMember:   {session: true, admin: true},
-	AdminMember:      {session: true, admin: true, member: true},
-	MemberAuthor:     {session: true, member: true, author: true},
+	Anonymous:                   {},
+	Member:                      {session: true},
+	MemberMustChange:            {session: true, mustChange: true},
+	MemberTotpPending:           {session: true, totpPending: true},
+	MemberMustChangeTotpPending: {session: true, mustChange: true, totpPending: true},
+	Admin:                       {session: true, admin: true},
+	ChannelNonMember:            {session: true},
+	ChannelMember:               {session: true, member: true},
+	ChannelOwner:                {session: true, member: true, creator: true},
+	AdminNonMember:              {session: true, admin: true},
+	AdminMember:                 {session: true, admin: true, member: true},
+	MemberAuthor:                {session: true, member: true, author: true},
 }
 
 // cell is one provisioned matrix cell: the acting user's fixture, its live
@@ -81,7 +85,7 @@ type cell struct {
 // entry a channel of that entry's kind with its own members and message.
 // Cells mutate — a removal, an edit, a send — and sharing any of this across
 // cells would make a failure depend on the order they ran in.
-func provisionCell(ctx context.Context, t *testing.T, store *storage.Store, entry Entry, principal Principal) cell {
+func provisionCell(ctx context.Context, t *testing.T, store *storage.Store, pool *pgxpool.Pool, entry Entry, principal Principal) cell {
 	t.Helper()
 
 	rel, known := relations[principal]
@@ -106,6 +110,9 @@ func provisionCell(ctx context.Context, t *testing.T, store *storage.Store, entr
 	c := cell{seq: seq}
 	if rel.session {
 		c.accessToken, c.refreshToken = newFixtureSession(ctx, t, store, actor.ID)
+		if rel.totpPending {
+			flagSessionTotpPending(ctx, t, pool, actor.ID)
+		}
 	}
 
 	if entry.ChannelScoped() {
@@ -238,6 +245,27 @@ func newFixtureSession(ctx context.Context, t *testing.T, store *storage.Store,
 	return accessRaw, refreshRaw
 }
 
+// flagSessionTotpPending puts the cell's session in the state a sign-in
+// under an enforced two-step policy mints: totp_enrollment_required set.
+//
+// The row is written directly because the flag's only production writer is
+// the mint reading org_settings, and org_settings is one row per database —
+// flipping require_totp on for one cell would flag every session the
+// parallel cells mint in the window. Direct row state is the same
+// through-storage provisioning the rest of this file does; the flag's
+// production semantics are pinned by the integration tests in
+// internal/httpserver and internal/storage, not here.
+func flagSessionTotpPending(ctx context.Context, t *testing.T, pool *pgxpool.Pool, userID uuid.UUID) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx,
+		`UPDATE sessions SET totp_enrollment_required = true WHERE user_id = $1`,
+		userID,
+	); err != nil {
+		t.Fatalf("flag fixture session totp-pending: %v", err)
+	}
+}
+
 // addFixtureMember puts a user in the cell's channel.
 func addFixtureMember(ctx context.Context, t *testing.T, store *storage.Store,
 	channelID, userID, addedBy uuid.UUID,
@@ -295,7 +323,14 @@ func buildRequest(entry Entry, principal Principal, c cell) *http.Request {
 func TestAuthzMatrix(t *testing.T) {
 	t.Parallel()
 
-	store, _ := testdb.New(t)
+	store, dsn := testdb.New(t)
+	// A raw connection beside the store, for the one fixture state no
+	// storage API mints on demand: the totp-pending session flag.
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("matrix raw pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
 	// The upload row posts a real file, so the server under the matrix needs
 	// somewhere to put it. A per-run temporary directory keeps the grid from
 	// touching anything an install would.
@@ -335,7 +370,7 @@ func TestAuthzMatrix(t *testing.T) {
 			t.Run(fmt.Sprintf("%s as %s", entryName(entry), principal), func(t *testing.T) {
 				t.Parallel()
 
-				c := provisionCell(ctx, t, store, entry, principal)
+				c := provisionCell(ctx, t, store, pool, entry, principal)
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, buildRequest(entry, principal, c))
 

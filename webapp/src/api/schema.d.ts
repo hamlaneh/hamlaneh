@@ -306,6 +306,7 @@ export interface paths {
         /**
          * Turn two-step verification off.
          * @description Re-asks for the password (the design's confirm dialog). Removes the secret and invalidates every recovery code. Sessions are deliberately NOT revoked: the threat is a hijacked session entrenching itself, and revoking other families would punish only the legitimate user's devices while the attacker's own session survives. The password prompt, the rate limit and the audit log are the defences.
+         *     Refused outright while the organisation requires two-step verification. Enforcement binds when a session is minted, so without this an account could enrol, sign in unflagged, switch the factor back off and keep refreshing — the policy would hold for everyone except the people it is aimed at.
          */
         post: operations["disableTotp"];
         delete?: never;
@@ -886,8 +887,14 @@ export interface components {
             /** @enum {string} */
             locale: "en" | "fa";
             is_admin: boolean;
-            /** @description True until the user replaces their admin-assigned temporary password. While true, every endpoint except change-password, logout, and users/me returns 403 with code password_change_required. */
+            /** @description True until the user replaces their admin-assigned temporary password. While true, every endpoint except change-password, logout, reading and patching users/me returns 403 with code password_change_required. */
             must_change_password: boolean;
+            /**
+             * @description True when this session was minted while the organisation requires two-step verification and this account has none activated. While true, every endpoint except logout, reading and patching users/me, and the TOTP enrolment endpoints returns 403 with code totp_enrollment_required, and the WebSocket refuses the upgrade. Patching is admitted for the same reason the password gate admits it: the only field it carries is locale, and somebody whose account language is wrong would otherwise be stuck reading a screen they cannot change in a language they cannot read.
+             *     It is a property of the session rather than of the account, which is what makes "at the next sign-in, never mid-session" true: turning the policy on strands nobody who is already working, including the administrator who turned it on.
+             *     The two gates are sequential, not simultaneous: while must_change_password is also true, only that gate applies. An account an administrator created on an instance that requires two-step carries both flags on its first sign-in, and the two allow-lists intersect at almost nothing -- enforcing both at once would leave that person able to do neither thing being demanded of them. The password comes first because a temporary password is a credential its holder does not yet exclusively hold, and changing it revokes every other session, so enrolment then happens on a session nobody else could be sharing.
+             */
+            totp_enrollment_required: boolean;
             /** Format: date-time */
             created_at: string;
         };
@@ -1195,10 +1202,14 @@ export interface components {
              */
             default_locale: "en" | "fa";
             registration_mode: components["schemas"]["RegistrationMode"];
-            /** @description Enforced at the next sign-in, never mid-session — turning it on must not lock out the admin who turned it on. */
+            /** @description Enforced at the next sign-in, never mid-session — turning it on must not lock out the admin who turned it on. The mechanism is User.totp_enrollment_required, which is decided once when a session is minted; see that field. */
             require_totp: boolean;
             /** @description How many accounts enforcement would affect. Read-only, and the reason the screen can say who it hits before it is turned on. */
             accounts_without_totp?: number;
+            /**
+             * @description How long a session may live before its refresh token expires, read at every mint, including the rotation a refresh performs. Shortening it does not retroactively end an already-issued window, so an idle session keeps the window it has.
+             *     Read what it governs carefully: it bounds how long a session may go UNUSED, not how long it may exist. A client that keeps refreshing renews its window each time and can stay signed in indefinitely — which is also why "enforced at the next sign-in" can, for a continuously active client, mean a long time. Ending a specific session now is what the device list and administrative deactivation are for. The server's own maximum is the ceiling, so a value above it is clamped rather than refused.
+             */
             session_lifetime_hours: number;
         };
         /** @description Only the fields present are changed; each saves on its own. */
@@ -1884,7 +1895,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
-            /** @description Password incorrect (code invalid_current_password). */
+            /** @description Password incorrect (code invalid_current_password), or the organisation requires two-step verification (code totp_required_by_org). */
             403: {
                 headers: {
                     [name: string]: unknown;

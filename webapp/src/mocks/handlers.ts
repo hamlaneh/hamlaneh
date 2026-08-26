@@ -70,6 +70,26 @@ export const FIXTURE_TWOSTEP_CREDENTIALS = {
   password: "fixture-twostep-password-mock",
 } as const;
 
+/**
+ * An account signing in under an org that requires two-step verification,
+ * with no authenticator activated: its session carries
+ * `totp_enrollment_required`.
+ */
+export const FIXTURE_ENROL_CREDENTIALS = {
+  identifier: "fixture.enrol",
+  password: "fixture-enrol-password-mock",
+} as const;
+
+/**
+ * Both forced states at once — an admin-issued temporary password *and* the
+ * enrolment policy. Reachable in production the first time an admin creates an
+ * account on an instance that requires two-step verification.
+ */
+export const FIXTURE_BOTH_CREDENTIALS = {
+  identifier: "fixture.both",
+  password: "fixture-both-temporary-password-mock",
+} as const;
+
 /** The only authenticator code the mock accepts, at login and at setup. */
 export const FIXTURE_TOTP_CODE = "123456";
 
@@ -104,6 +124,7 @@ export const FIXTURE_ADMIN: User = {
   locale: "en",
   is_admin: true,
   must_change_password: false,
+  totp_enrollment_required: false,
   created_at: "2020-01-01T00:00:00Z",
 };
 
@@ -115,6 +136,7 @@ export const FIXTURE_MEMBER: User = {
   locale: "fa",
   is_admin: false,
   must_change_password: false,
+  totp_enrollment_required: false,
   created_at: "2020-01-02T00:00:00Z",
 };
 
@@ -126,6 +148,7 @@ export const FIXTURE_NEWHIRE: User = {
   locale: "en",
   is_admin: false,
   must_change_password: true,
+  totp_enrollment_required: false,
   created_at: "2020-01-03T00:00:00Z",
 };
 
@@ -137,7 +160,32 @@ export const FIXTURE_TWOSTEP_USER: User = {
   locale: "en",
   is_admin: false,
   must_change_password: false,
+  totp_enrollment_required: false,
   created_at: "2020-01-05T00:00:00Z",
+};
+
+export const FIXTURE_ENROL_USER: User = {
+  id: "00000000-0000-4000-8000-000000000005",
+  username: "fixture.enrol",
+  email: "fixture.enrol@example.invalid",
+  display_name: "Fixture Enrol",
+  locale: "en",
+  is_admin: false,
+  must_change_password: false,
+  totp_enrollment_required: true,
+  created_at: "2020-01-06T00:00:00Z",
+};
+
+export const FIXTURE_BOTH_USER: User = {
+  id: "00000000-0000-4000-8000-000000000006",
+  username: "fixture.both",
+  email: "fixture.both@example.invalid",
+  display_name: "Fixture Both",
+  locale: "en",
+  is_admin: false,
+  must_change_password: true,
+  totp_enrollment_required: true,
+  created_at: "2020-01-07T00:00:00Z",
 };
 
 const FIXTURE_CREATED_USER_ID = "00000000-0000-4000-8000-000000000099";
@@ -196,6 +244,8 @@ const FIXTURE_ACCOUNTS: readonly FixtureAccount[] = [
   { user: FIXTURE_MEMBER, password: FIXTURE_MEMBER_CREDENTIALS.password },
   { user: FIXTURE_NEWHIRE, password: FIXTURE_NEWHIRE_CREDENTIALS.password },
   { user: FIXTURE_TWOSTEP_USER, password: FIXTURE_TWOSTEP_CREDENTIALS.password },
+  { user: FIXTURE_ENROL_USER, password: FIXTURE_ENROL_CREDENTIALS.password },
+  { user: FIXTURE_BOTH_USER, password: FIXTURE_BOTH_CREDENTIALS.password },
 ];
 
 /**
@@ -336,12 +386,57 @@ function notAuthenticated() {
 }
 
 /**
+ * What a session carrying `totp_enrollment_required` may still reach, per the
+ * User schema: logout, reading users/me, and the three TOTP enrolment calls.
+ *
+ * Two additions the contract sentence does not spell out, both of which the
+ * webapp would deadlock without:
+ *
+ *   - the rest of `/auth/` — refresh (the client's transparent retry path) and
+ *     change-password, which a session carrying BOTH forced flags has to reach
+ *     to clear the first one;
+ *   - `/instance`, which needs no session at all and so cannot be gated by a
+ *     property of one.
+ */
+function enrolmentGateAdmits(method: string, pathname: string): boolean {
+  if (pathname === "/api/v1/instance" || pathname.startsWith("/api/v1/auth/")) {
+    return true;
+  }
+  if (pathname === "/api/v1/users/me") {
+    // Reading, not patching: the language switcher is 403 here.
+    return method === "GET";
+  }
+  return ["setup", "verify", "activate"].some(
+    (step) => pathname === `/api/v1/users/me/totp/${step}`,
+  );
+}
+
+/**
  * Contract mocks for the Phase 1.1 API surface, typed against the generated
  * schema. Stateful just enough for the auth flows: login/logout maintain the
  * single mock session and change-password updates the stored password and
  * clears must_change_password.
  */
 export const handlers = [
+  // First, so it can refuse before any handler below answers: while the
+  // signed-in session owes an enrolment, everything outside the allowlist is
+  // 403 totp_enrollment_required. Returning undefined falls through to the
+  // real handler, which keeps `onUnhandledRequest: "error"` working for
+  // everything else.
+  http.all("/api/v1/*", ({ request }) => {
+    if (activeUser()?.totp_enrollment_required !== true) {
+      return undefined;
+    }
+    const { pathname } = new URL(request.url);
+    return enrolmentGateAdmits(request.method, pathname)
+      ? undefined
+      : errorResponse(
+          403,
+          "totp_enrollment_required",
+          "Set up two-step verification to continue.",
+        );
+  }),
+
   http.get<never, never, HealthStatus>("/healthz", () =>
     HttpResponse.json({ status: "ok" }),
   ),
@@ -617,13 +712,17 @@ export const handlers = [
   ),
 
   http.post<never, never, ApiError | null>("/api/v1/users/me/totp/activate", () => {
-    if (activeUser() === null) {
+    const user = activeUser();
+    if (user === null) {
       return notAuthenticated();
     }
     if (auth.pendingTotp !== "verified") {
       return errorResponse(409, "totp_setup_not_verified", "Nothing to activate.");
     }
     auth.pendingTotp = "none";
+    // The debt this session was carrying is paid: the account now has an
+    // activated authenticator, so the gate opens without a new sign-in.
+    user.totp_enrollment_required = false;
     auth.totp = {
       enabled: true,
       activated_at: "2026-08-21T10:00:00Z",
@@ -744,6 +843,9 @@ export const handlers = [
           is_admin: body.is_admin ?? false,
           // Contract: admin-created users must replace the initial password.
           must_change_password: true,
+          // A property of a session, and this account has none yet: it is
+          // decided when they first sign in, not when they are created.
+          totp_enrollment_required: false,
           created_at: "2020-01-04T00:00:00Z",
         },
         { status: 201 },

@@ -413,7 +413,7 @@ public registration is off by default, it is **the** way users come into existen
 
 ### 1.6 Enterprise identity (may overlap Phase 2–4, must ship before public launch)
 
-- [ ] **Org policies actually bind** (pre-work, no SSO code — see `docs/adr/004-enterprise-identity.md`).
+- [x] **Org policies actually bind** (pre-work, no SSO code — see `docs/adr/004-enterprise-identity.md`).
       `require_totp` and `session_lifetime_hours` are stored and editable since 1.4 and read by
       nothing: an admin turns on enforced two-step, the screen agrees, and the instance does not
       change. Enforcement lands per session at mint, so flipping the policy strands no live

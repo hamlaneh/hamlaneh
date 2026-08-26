@@ -50,10 +50,16 @@ const (
 )
 
 // routePolicy classifies one contract endpoint. action names the authz
-// action for classAdmin routes.
+// action for classAdmin routes. totpEnrollmentAllowed marks the routes a
+// session flagged totp_enrollment_required may still reach — logout,
+// reading and patching users/me, and the TOTP enrolment endpoints (ADR
+// 004); everything else answers 403 totp_enrollment_required. It is a field
+// on the policy rather than a second table so a route's whole security
+// posture is decided in one entry.
 type routePolicy struct {
-	class  routeClass
-	action authz.Action
+	class                 routeClass
+	action                authz.Action
+	totpEnrollmentAllowed bool
 }
 
 // routePolicies is the route-level security table for every contract
@@ -74,13 +80,14 @@ var routePolicies = map[string]routePolicy{
 	"GET /readyz":                       {class: classPublic},
 	"POST /api/v1/auth/login":           {class: classPublic},
 	"POST /api/v1/auth/refresh":         {class: classRefreshCookie},
-	"POST /api/v1/auth/logout":          {class: classSessionMustChangeAllowed},
+	"POST /api/v1/auth/logout":          {class: classSessionMustChangeAllowed, totpEnrollmentAllowed: true},
 	"POST /api/v1/auth/change-password": {class: classSessionMustChangeAllowed},
-	"GET /api/v1/users/me":              {class: classSessionMustChangeAllowed},
-	// The patch is deliberately NOT in the must-change trio: reading the
-	// forced-change screen needs the account (the GET above), editing the
-	// account does not, and the change comes first.
-	"PATCH /api/v1/users/me":           {class: classSessionMustChangeAllowed},
+	"GET /api/v1/users/me":              {class: classSessionMustChangeAllowed, totpEnrollmentAllowed: true},
+	// The patch carries locale and nothing else, so both gates admit it:
+	// somebody whose account language is wrong must not be stuck on a
+	// forced screen they cannot read with the switcher inert (contract,
+	// User.totp_enrollment_required).
+	"PATCH /api/v1/users/me":           {class: classSessionMustChangeAllowed, totpEnrollmentAllowed: true},
 	"GET /api/v1/instance":             {class: classPublic},
 	"POST /api/v1/auth/reset-request":  {class: classPublic},
 	"POST /api/v1/auth/reset-complete": {class: classPublic},
@@ -111,10 +118,16 @@ var routePolicies = map[string]routePolicy{
 	// Phase 1.1b self-service security. All session-gated; none joins the
 	// must-change trio, because a user who owes a password change fixes that
 	// before touching their second factor or their device list.
-	"GET /api/v1/users/me/totp":                    {class: classSession},
-	"POST /api/v1/users/me/totp/setup":             {class: classSession},
-	"POST /api/v1/users/me/totp/verify":            {class: classSession},
-	"POST /api/v1/users/me/totp/activate":          {class: classSession},
+	//
+	// The first four are the enrolment path — status, setup, verify,
+	// activate — and stay reachable under the totp-enrolment gate: they ARE
+	// the way out of it. disable and recovery-codes are deliberately not:
+	// the gate exists to make an account grow a second factor, and neither
+	// removing one nor minting fresh sign-in codes is enrolment.
+	"GET /api/v1/users/me/totp":                    {class: classSession, totpEnrollmentAllowed: true},
+	"POST /api/v1/users/me/totp/setup":             {class: classSession, totpEnrollmentAllowed: true},
+	"POST /api/v1/users/me/totp/verify":            {class: classSession, totpEnrollmentAllowed: true},
+	"POST /api/v1/users/me/totp/activate":          {class: classSession, totpEnrollmentAllowed: true},
 	"POST /api/v1/users/me/totp/disable":           {class: classSession},
 	"POST /api/v1/users/me/totp/recovery-codes":    {class: classSession},
 	"GET /api/v1/users/me/sessions":                {class: classSession},
@@ -168,9 +181,9 @@ func principalFrom(ctx context.Context) (principal, bool) {
 
 // securityMiddleware enforces the route-level security policy on every
 // contract endpoint, in order: CSRF double-submit, session authentication,
-// the must-change-password gate, and the admin authz gate. Handlers behind
-// it receive the principal via the request context and perform only their
-// own resource-level authz.Can checks.
+// the must-change-password gate, the totp-enrolment gate, and the admin
+// authz gate. Handlers behind it receive the principal via the request
+// context and perform only their own resource-level authz.Can checks.
 //
 // The policy is looked up by the matched route pattern. A request that
 // reached a handler without one — an empty Pattern, or a pattern nobody
@@ -206,6 +219,22 @@ func (s *apiServer) securityMiddleware(next http.Handler) http.Handler {
 		if prin.user.MustChangePassword && pol.class != classSessionMustChangeAllowed {
 			writeError(w, r, http.StatusForbidden, codePasswordChangeRequired,
 				"password change required before using this endpoint")
+			return
+		}
+		// The totp-enrolment gate mirrors the must-change gate: the flag was
+		// decided ONCE, when this session was minted — the middleware only
+		// reads it off the session row, never org settings, which is what
+		// keeps "at the next sign-in, never mid-session" true (ADR 004).
+		//
+		// It yields to an active must-change gate: an account carrying both
+		// flags changes its password first (reachable above), then enrols —
+		// gating change-password here instead would deadlock the account out
+		// of both obligations. It runs before the admin check so a flagged
+		// admin is gated exactly like a flagged member.
+		if !prin.user.MustChangePassword && prin.session.TotpEnrollmentRequired &&
+			!pol.totpEnrollmentAllowed {
+			writeError(w, r, http.StatusForbidden, codeTOTPEnrollmentRequired,
+				"two-step verification must be set up before using this endpoint")
 			return
 		}
 		if pol.class == classAdmin && !authz.Can(r.Context(), &prin.user, pol.action, nil) {
