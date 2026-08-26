@@ -1118,6 +1118,31 @@
   gap: 7px; /* off-scale (artboard) */
 }
 
+/* UNDESIGNED — no artboard draws a file waiting in the composer. Layout only:
+   the cards inside are the delivered ones, and nothing here introduces a
+   colour, radius or type value the token sheet does not already carry. */
+.hm-composer__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hm-composer__attachment {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* The cards carry their own top margin for the space under a bubble; inside
+   the tray the list gap already provides it. */
+.hm-composer__attachment .hm-card,
+.hm-composer__attachment .hm-image-card {
+  margin-block-start: 0;
+}
+
 .hm-composer__box {
   display: flex;
   align-items: flex-end;

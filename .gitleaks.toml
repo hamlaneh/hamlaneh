@@ -33,3 +33,15 @@ regexes = [
   '''^0123456789abcdef0123456789abcdef012345678$''',
   '''^KZ4W9TQR2MHD7FJXKZ4W9TQR2MHD7FJX$''',
 ]
+
+[[allowlists]]
+description = """
+The file-URL signing-key fixture: 32 bytes of 0-9a-f counted twice over,
+shared by the filesign tests and the files-origin tests. Structurally
+impossible as a secret and wired to nothing — the servers under test are
+constructed with it in-process, and the real key is generated at install
+into an untracked .env. Value-scoped like the other fixtures: any edit to
+the value fails the scan again, which is the point."""
+regexes = [
+  '''^0123456789abcdef0123456789abcdef$''',
+]

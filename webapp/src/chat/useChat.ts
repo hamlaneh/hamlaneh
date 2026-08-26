@@ -5,7 +5,7 @@ import { RealtimeClient, realtimeUrl } from "./realtime";
 import type { RealtimeOptions, ServerFrame } from "./realtime";
 import { chatReducer, emptyView, initialChatState } from "./store";
 import type { ChannelView, ChatState, SearchKind } from "./store";
-import type { Channel, Message, UserSummary } from "./types";
+import type { Attachment, Channel, Message, UserSummary } from "./types";
 import { newUuid } from "./uuid";
 
 /** Test seam: production supplies neither, and gets the real socket and backoff. */
@@ -22,7 +22,8 @@ export interface ChatController {
   view: ChannelView;
   /** Everyone the shell can name: authors, members, DM peers and the caller. */
   resolveMention: (userId: string) => string | null;
-  sendMessage: (content: string) => void;
+  /** `content` may be empty exactly when `attachments` is not (openapi.yaml). */
+  sendMessage: (content: string, attachments?: Attachment[]) => void;
   editMessage: (messageId: string, content: string) => Promise<boolean>;
   deleteMessage: (messageId: string) => Promise<boolean>;
   loadOlder: () => void;
@@ -301,14 +302,27 @@ export function useChat({
   /* ── sending ────────────────────────────────────────────────────── */
 
   const attemptSend = useCallback(
-    async (target: string, clientMsgId: string, content: string) => {
+    async (
+      target: string,
+      clientMsgId: string,
+      content: string,
+      attachments: readonly Attachment[],
+    ) => {
       dispatch({ type: "pending/sending", channelId: target, clientMsgId });
       try {
         const { data } = await api.POST("/api/v1/channels/{channelId}/messages", {
           params: { path: { channelId: target } },
           // The idempotency key is reused verbatim on every retry: a resend
           // returns the message that already exists instead of a duplicate.
-          body: { client_msg_id: clientMsgId, content },
+          // The ids are attached atomically with the send, so a message and
+          // its files can never half-exist.
+          body: {
+            client_msg_id: clientMsgId,
+            content,
+            ...(attachments.length === 0
+              ? {}
+              : { attachment_ids: attachments.map((entry) => entry.id) }),
+          },
         });
         if (data === undefined) {
           dispatch({ type: "pending/queue", channelId: target, clientMsgId });
@@ -350,20 +364,28 @@ export function useChat({
   const sendChains = useRef(new Map<string, Promise<void>>());
 
   const enqueueSend = useCallback(
-    (target: string, clientMsgId: string, content: string) => {
+    (
+      target: string,
+      clientMsgId: string,
+      content: string,
+      attachments: readonly Attachment[],
+    ) => {
       const chain = (sendChains.current.get(target) ?? Promise.resolve())
         .catch(() => undefined)
-        .then(() => attemptSend(target, clientMsgId, content));
+        .then(() => attemptSend(target, clientMsgId, content, attachments));
       sendChains.current.set(target, chain);
     },
     [attemptSend],
   );
 
   const sendMessage = useCallback(
-    (content: string) => {
+    (content: string, attachments: Attachment[] = []) => {
       const target = channelId;
       const trimmed = content.trim();
-      if (target === undefined || trimmed === "") {
+      // Empty content is legal exactly when files ride along — an image with
+      // no caption is an ordinary message, a message with neither is nothing
+      // (openapi.yaml -> SendMessageRequest.content).
+      if (target === undefined || (trimmed === "" && attachments.length === 0)) {
         return;
       }
       const clientMsgId = newUuid();
@@ -373,11 +395,12 @@ export function useChat({
         pending: {
           clientMsgId,
           content: trimmed,
+          attachments,
           createdAt: new Date().toISOString(),
           status: "sending",
         },
       });
-      enqueueSend(target, clientMsgId, trimmed);
+      enqueueSend(target, clientMsgId, trimmed, attachments);
     },
     [enqueueSend, channelId],
   );
@@ -397,7 +420,7 @@ export function useChat({
           // Through the same chain: a drained queue must land in the order it
           // was composed, which is the whole reason the queue kept the
           // messages rather than dropping them.
-          enqueueSend(target, pending.clientMsgId, pending.content);
+          enqueueSend(target, pending.clientMsgId, pending.content, pending.attachments);
         }
       }
     }

@@ -306,15 +306,47 @@ describe("a permalink", () => {
 });
 
 describe("the composer", () => {
-  it("announces why attaching is unavailable, not only in a tooltip", async () => {
-    await openDeploys();
+  it("uploads a picked file, then sends it with the message", async () => {
+    const user = await openDeploys();
 
-    // aria-label wins over title for the accessible name, and a disabled
-    // button shows no tooltip in Firefox: the reason has to be in the name.
-    const attach = screen.getByRole("button", {
-      name: en.chat.composer.attachUnavailableLabel,
+    const picker = document.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(picker).not.toBeNull();
+    const file = new File(["checklist"], "rollout.txt", { type: "text/plain" });
+    await user.upload(picker as HTMLInputElement, file);
+
+    // The pending card is the delivered file card, filled from the 201.
+    expect(await screen.findByText("rollout.txt")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.chat.composer.send }));
+
+    // A message whose only payload is a file: the send path must not refuse
+    // it for having no text.
+    await waitFor(() => {
+      const sent = mockMessages(CHAT_CHANNELS.deploys).at(-1);
+      expect(sent?.attachments.map((entry) => entry.filename)).toEqual(["rollout.txt"]);
+      expect(sent?.content).toBe("");
     });
-    expect(attach).toBeDisabled();
+  });
+
+  it("refuses a file larger than the instance accepts, without a request", async () => {
+    const user = await openDeploys();
+    const before = mockMessages(CHAT_CHANNELS.deploys).length;
+
+    const picker = document.querySelector<HTMLInputElement>('input[type="file"]');
+    const huge = new File(["x"], "huge.bin", { type: "application/octet-stream" });
+    // userEvent.upload reads File.size, which is derived from the parts; the
+    // property is redefined rather than allocating 26 MiB in a unit test.
+    Object.defineProperty(huge, "size", { value: 26 * 1024 * 1024 });
+    await user.upload(picker as HTMLInputElement, huge);
+
+    expect(
+      await screen.findByText(
+        en.chat.composer.uploadTooLarge.replace("{{limit}}", "25 MB"),
+      ),
+    ).toBeInTheDocument();
+    // Send stays shut until the failed file is removed — it must never be
+    // dropped silently from the message.
+    expect(screen.getByRole("button", { name: en.chat.composer.send })).toBeDisabled();
+    expect(mockMessages(CHAT_CHANNELS.deploys)).toHaveLength(before);
   });
 });
 

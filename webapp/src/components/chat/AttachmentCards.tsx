@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -13,10 +14,15 @@ import { DownloadIcon, FileTextIcon, ImageIcon } from "../icons";
 /**
  * The file, image and link-preview cards from chat-components.
  *
- * Both arrays are always empty in Phase 1.2 — attachments arrive with the
- * upload pipeline and previews with the egress proxy (openapi.yaml). The
- * cards are implemented now because the design draws them and the contract
- * types them; nothing here fetches anything on its own.
+ * Nothing here fetches anything on its own: an Attachment arrives with its
+ * url and thumbnail_url already signed, and `AttachmentList` is also what the
+ * composer's pending tray and the optimistic bubble render, so an uploaded
+ * file looks the same before the send as after it.
+ *
+ * Signed URLs expire in about an hour and the contract says never to store
+ * them. This component stores nothing, but the chat store keeps message
+ * objects for as long as the tab lives — see `ImageCard` below and
+ * docs/design/STATUS.md for what that means once an hour has passed.
  */
 
 function isImage(attachment: Attachment): boolean {
@@ -69,6 +75,11 @@ function FileCard({ attachment }: { attachment: Attachment }) {
 
 function ImageCard({ attachment }: { attachment: Attachment }) {
   const { i18n } = useTranslation();
+  // A thumbnail URL that has outlived its signature answers 404, and a broken
+  // <img> glyph is nobody's design. Falling back to the frame the card
+  // already draws for an attachment that has no thumbnail keeps the failure
+  // inside a delivered state instead of inventing one.
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const dimensions =
     attachment.width !== undefined &&
     attachment.width !== null &&
@@ -83,13 +94,18 @@ function ImageCard({ attachment }: { attachment: Attachment }) {
   return (
     <div className="hm-image-card">
       <div className="hm-image-card__frame">
-        {attachment.thumbnail_url === undefined || attachment.thumbnail_url === null ? (
+        {attachment.thumbnail_url === undefined ||
+        attachment.thumbnail_url === null ||
+        thumbnailFailed ? (
           <ImageIcon size={30} strokeWidth={1.4} />
         ) : (
           <img
             className="hm-image-card__preview"
             src={attachment.thumbnail_url}
             alt={attachment.filename}
+            onError={() => {
+              setThumbnailFailed(true);
+            }}
           />
         )}
       </div>
@@ -138,17 +154,26 @@ function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
   );
 }
 
-export function AttachmentCards({ message }: { message: Message }) {
+/** The cards for a list of attachments — a stored message's, or a pending one's. */
+export function AttachmentList({ attachments }: { attachments: readonly Attachment[] }) {
   return (
     <>
-      {message.attachments.map((attachment) =>
+      {attachments.map((attachment) =>
         isImage(attachment) ? (
           <ImageCard key={attachment.id} attachment={attachment} />
         ) : (
           <FileCard key={attachment.id} attachment={attachment} />
         ),
       )}
-      {message.link_preview === undefined ? null : (
+    </>
+  );
+}
+
+export function AttachmentCards({ message }: { message: Message }) {
+  return (
+    <>
+      <AttachmentList attachments={message.attachments} />
+      {message.link_preview === undefined || message.link_preview === null ? null : (
         <LinkPreviewCard preview={message.link_preview} />
       )}
     </>

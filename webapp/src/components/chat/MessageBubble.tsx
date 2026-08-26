@@ -5,7 +5,7 @@ import { messageLink } from "../../chat/links";
 import type { MentionResolver } from "../../chat/mentions";
 import type { Message, PendingMessage } from "../../chat/types";
 import { LinkIcon, PencilIcon, TrashIcon } from "../icons";
-import { AttachmentCards } from "./AttachmentCards";
+import { AttachmentCards, AttachmentList } from "./AttachmentCards";
 import { MessageContent } from "./MessageContent";
 
 interface MessageBubbleProps {
@@ -185,7 +185,10 @@ export function PendingBubble({ pending, first }: PendingBubbleProps) {
   return (
     <div className="hm-msg" data-first={first}>
       <div className="hm-msg__bubble" data-queued={queued}>
-        {queued ? (
+        {/* An empty body is legal here: a message may carry files and no
+            text, and drawing an empty paragraph for one would be a bubble
+            that says nothing while the cards below say everything. */}
+        {pending.content === "" ? null : queued ? (
           <span className="hm-msg__queued-body" dir="auto">
             {pending.content}
           </span>
@@ -194,6 +197,7 @@ export function PendingBubble({ pending, first }: PendingBubbleProps) {
             <p>{pending.content}</p>
           </div>
         )}
+        <AttachmentList attachments={pending.attachments} />
       </div>
     </div>
   );

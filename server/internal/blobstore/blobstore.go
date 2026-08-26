@@ -59,7 +59,14 @@ func New(dir string) (*Store, error) {
 	if dir == "" {
 		return nil, errors.New("blobstore: empty data directory")
 	}
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
+	// gosec reports G703 here because dir reaches the filesystem from
+	// outside. It is HAMLANEH_DATA_DIR — the operator's own configuration,
+	// exactly as trusted as the DSN beside it; nothing a user sends ever
+	// names a path in this package. Per-file locations are decided by path()
+	// below from a server-generated UUID alone, which is what makes
+	// traversal from user input structurally impossible (ADR 003).
+	if err := os.MkdirAll(dir, dirPerm); err != nil { // #nosec G703 -- operator config, not user input; per-file paths are UUID-derived only
+
 		return nil, fmt.Errorf("blobstore: create data directory: %w", err)
 	}
 	return &Store{root: dir}, nil

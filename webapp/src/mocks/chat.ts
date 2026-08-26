@@ -85,11 +85,13 @@ export const FIXTURE_FILE: Attachment = {
 };
 
 /**
- * No `thumbnail_url`: the deployed CSP is `img-src 'self'` (deploy/Caddyfile)
- * while the files origin is deliberately a separate, cookie-less one, so where
- * thumbnails may be loaded from is a Phase 1.3 decision. The card draws its
- * designed no-preview glyph until then, which is a real drawn state rather
- * than a broken image.
+ * No `thumbnail_url`: the fixture is static, so a URL here would name bytes
+ * the mock server does not have. The card draws its designed no-preview glyph
+ * instead, which is a real drawn state rather than a broken image — and the
+ * same state an expired thumbnail URL falls back to (AttachmentCards).
+ *
+ * Real attachment URLs are origin-relative (`/files/{id}?exp=…&sig=…`,
+ * server/internal/filesign), so `img-src 'self'` covers them.
  */
 export const FIXTURE_IMAGE: Attachment = {
   id: "00000000-0000-4000-8000-0000000000f2",
@@ -277,9 +279,18 @@ function seedState(): ChatState {
 
 let chat = seedState();
 
+/**
+ * Files uploaded but not yet attached to a message — the server's own
+ * bookkeeping, so that an attachment_id naming nothing answers 404 here too.
+ */
+let uploaded = new Map<string, Attachment>();
+let uploadSequence = 0;
+
 /** Tests call this between cases to drop mock conversation state. */
 export function resetMockChat(): void {
   chat = seedState();
+  uploaded = new Map();
+  uploadSequence = 0;
 }
 
 /** The fixture history of one channel, for assertions in tests. */
@@ -479,15 +490,54 @@ export const chatHandlers = [
       if (existing !== undefined) {
         return HttpResponse.json(existing, { status: 200 });
       }
+      if (body.content === "" && (body.attachment_ids ?? []).length === 0) {
+        return errorResponse(400, "invalid_request", "A message needs text or files.");
+      }
+      const attachments = (body.attachment_ids ?? []).map((id) => uploaded.get(id));
+      if (attachments.some((entry) => entry === undefined)) {
+        return errorResponse(404, "attachment_not_found", "No such attachment.");
+      }
       const created = message(
         params.channelId,
         CHAT_USERS.me,
         body.content,
         new Date().toISOString(),
+        { attachments: attachments.filter((entry) => entry !== undefined) },
       );
       created.client_msg_id = body.client_msg_id;
       messages.push(created);
       return HttpResponse.json(created, { status: 201 });
+    },
+  ),
+
+  http.post<{ channelId: string }, never, Attachment | ApiError>(
+    "/api/v1/channels/:channelId/files",
+    async ({ params, request }) => {
+      if (mockChannel(params.channelId) === undefined) {
+        return notFound();
+      }
+      const form = await request.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) {
+        return errorResponse(400, "invalid_request", "No file part.");
+      }
+      // The size cap is the instance document's; the mock instance serves the
+      // same 25 MiB default the fallback assumes.
+      if (file.size > 25 * 1024 * 1024) {
+        return errorResponse(413, "file_too_large", "The file is too large.");
+      }
+      uploadSequence += 1;
+      const id = `00000000-0000-4000-8000-${String(uploadSequence).padStart(12, "f")}`;
+      const attachment: Attachment = {
+        id,
+        filename: file.name,
+        content_type: file.type === "" ? "application/octet-stream" : file.type,
+        size_bytes: file.size,
+        // Origin-relative and signature-shaped, exactly as filesign mints it.
+        url: `/files/${id}?exp=0&sig=mock`,
+      };
+      uploaded.set(id, attachment);
+      return HttpResponse.json(attachment, { status: 201 });
     },
   ),
 
