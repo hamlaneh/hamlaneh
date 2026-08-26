@@ -24,13 +24,16 @@ import (
 const (
 	waitFor = 3 * time.Second
 	// presenceWaitFor is longer than waitFor because presence is the slowest
-	// path here: a socket drop has to be noticed by the sweeper, a grace
-	// timer has to be consulted, and the result fans out to the peer. Under
-	// the whole module running with -race on a two-core CI runner, three
-	// seconds was not always enough, and the resulting failure said nothing
-	// about the state machine these tests exist to pin. Waiting longer for a
-	// frame that must arrive is the same claim, not a weaker one.
-	presenceWaitFor = 15 * time.Second
+	// path here: a sweeper tick, a grace timer, and a fan-out to the peer.
+	//
+	// It was once fifteen seconds, on the theory that the failures were a
+	// loaded runner. They were not — the reconnect was landing before the
+	// server had seen the drop, so no transition happened and no budget would
+	// ever have been long enough. waitForDisconnect fixes that at the source;
+	// this stays a few seconds above waitFor for the fan-out itself, and if a
+	// presence test ever fails on time again the answer is a missing
+	// precondition rather than a bigger number.
+	presenceWaitFor = 6 * time.Second
 	waitNone        = 300 * time.Millisecond
 )
 
@@ -494,6 +497,33 @@ func (c *wsClient) closeNow() {
 // waitForSeq blocks until the dispatcher has assigned a channel at least
 // this sequence number, so a test can announce events and then reconnect
 // without racing the queue.
+// waitForDisconnect blocks until the gateway has noticed that a user's last
+// socket is gone.
+//
+// Closing a client is not the same event as the server observing it: the
+// close travels, the read loop unblocks, and only then does deregister run.
+// A test that drops a socket and immediately reconnects is racing that, and
+// under load it wins — the reconnect lands while the old socket is still
+// registered, the user was therefore never offline, and no presence
+// transition happens at all. That is the server being right; it is the test
+// that assumed otherwise. Any test whose premise is "dropped, then back"
+// has to wait for the first half to actually happen.
+func (h *harness) waitForDisconnect(t *testing.T, userID uuid.UUID) {
+	t.Helper()
+
+	deadline := time.Now().Add(waitFor)
+	for time.Now().Before(deadline) {
+		h.gw.mu.Lock()
+		_, live := h.gw.sockets[userID]
+		h.gw.mu.Unlock()
+		if !live {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("the gateway still holds a socket for %s after %s", userID, waitFor)
+}
+
 func (h *harness) waitForSeq(channelID uuid.UUID, seq uint64) {
 	h.t.Helper()
 	deadline := time.Now().Add(waitFor)

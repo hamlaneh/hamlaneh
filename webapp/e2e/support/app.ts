@@ -196,10 +196,28 @@ export class App {
     return this.composerForm.getByRole("textbox");
   }
 
-  /** Types a message and sends it with Enter, as the hint row promises. */
+  /**
+   * Types a message, sends it with Enter as the hint row promises, and waits
+   * for the server to have stored it.
+   *
+   * The wait is not padding. The composer renders optimistically, so the text
+   * is on screen before the request has been made — and since the client
+   * holds one send queue per channel, a second message typed straight after
+   * the first is still behind it. A test that only waited for the text could
+   * reload before anything had been sent and find an empty channel, which is
+   * exactly what happened on CI. "Sent" has to mean sent for a helper with
+   * this name.
+   */
   async sendMessage(content: string): Promise<void> {
+    const stored = this.page.waitForResponse(
+      (response) =>
+        /\/api\/v1\/channels\/[^/]+\/messages$/.test(new URL(response.url()).pathname) &&
+        response.request().method() === "POST" &&
+        response.ok(),
+    );
     await this.composerField.fill(content);
     await this.composerField.press("Enter");
+    await stored;
   }
 
   /** Inserts a `<@{user_id}>` mention token through the composer's picker. */

@@ -319,8 +319,11 @@ func TestPresenceAfterAReconnectInsideTheGrace(t *testing.T) {
 	expectPresence(t, peer, alice.ID, presenceAway)
 
 	// Dropped and back well inside the grace, so the remembered state is
-	// still there to be got wrong.
+	// still there to be got wrong. The wait is the premise, not padding:
+	// reconnecting before the server has seen the drop means the user was
+	// never offline and there is no transition to get wrong.
 	first.closeNow()
+	h.waitForDisconnect(t, alice.ID)
 	second := h.dial(alice, familyID)
 	second.hello()
 	expectPresence(t, peer, alice.ID, presenceOnline)
