@@ -333,20 +333,39 @@ history, send a message, and have it appear on someone else's screen without a r
 - Tests: search authz (results never leak channels the user cannot see); edit/delete authorship
   and admin rules in the matrix; unread counts under concurrent read/send
 
-### 1.3 Files, previews, search
+### 1.3 Files, previews, file search
 
-- [ ] Upload pipeline: content-type enforcement, size caps, EXIF strip, sandboxed processing.
-      Served from a **separate cookie-less origin** (e.g. `files.<domain>`, provisioned by
-      Caddy); where a separate origin is impossible (bare-IP/home mode), serve uploads with
-      `Content-Disposition: attachment` + `nosniff` + sandboxing CSP
-- [ ] Link previews via isolated egress proxy: private-IP ranges blocked, timeouts, size caps
-- [ ] Message + file search (Postgres FTS to start)
-- Tests: upload negatives — over-cap → 413; content-type spoof (EXE bytes as image/png)
-  rejected; uploaded SVG/HTML/XML **never executes script** (Playwright, both serving modes);
-  path traversal (`../../`) neutralized; zip/decompression bomb bounded; EXIF GPS absent from
-  stored derivative. Upload fuzz (malformed images/archives). SSRF suite (169.254.x, 10.x,
-  redirect-to-private, DNS rebinding). Search authz (results never leak channels the user
-  can't see)
+The contract is finalized (openapi.yaml v0.4.0, migration 0007, and
+[ADR 003](adr/003-file-serving-and-egress.md), which fixes the security model: one
+authorization rule — a file is readable exactly by its channel's members; signed expiring URLs
+as the credential on a cookie-less origin; bytes sniffed and labels decorative; images stripped
+at ingest; blobs on the filesystem keyed by server ids only; a dial-time egress guard). Message
+search shipped in 1.2b; this phase adds files and previews.
+
+- [ ] **Attachment storage + upload pipeline** (`POST /api/v1/channels/{channelId}/files`,
+      today a deliberate 501 behind the matrix gate): size cap from the instance document,
+      sniff-vs-label enforcement, EXIF strip, dimension caps before decode, thumbnails ≤512px,
+      the 24-hour orphan sweep, and the send transaction claiming `attachment_ids` atomically —
+      empty content allowed exactly when files ride along
+- [ ] **The files origin**: signed URL minting and verification, inline for proven images only,
+      attachment+nosniff+sandbox CSP for everything else and for the whole bare-IP/home mode;
+      Caddy provisioning for `files.<domain>`; the URL-signing key generated at
+      install/first-run
+- [ ] **Link previews** behind the egress guard of ADR 003 (dial-time IP validation, redirect
+      re-checks, timeouts, size caps, ports 80/443 only); preview images re-hosted as bounded
+      derivatives; enrichment async, announced by `message_updated` without `edited_at`
+- [ ] **File search** (`kind=files`): filename trigrams over the 0006 fold (index already in
+      0007), membership-scoped by the same join, the `attachment` field on `SearchResult`
+- [ ] **The webapp's half**: the paperclip enabled at last, upload progress and failure per
+      file, image/file cards fed by real attachments, the preview card fed by enrichment
+- Tests: upload negatives — over-cap → 413; EXE bytes declared image/png → 415; uploaded
+  SVG/HTML/XML **never executes script** (Playwright, both serving modes); traversal names
+  neutralized structurally (server ids, proven by test); image bomb bounded before decode;
+  EXIF GPS absent from the stored original *and* the thumbnail; upload fuzz (malformed
+  images). SSRF suite: 169.254.x, 10.x, 127.x, fe80::, redirect-to-private, DNS rebinding
+  (resolve-then-swap), IPv6 literals, port 22. Signed-URL suite: tampered signature, expired,
+  variant swap, id swap → 404. File-search authz: a filename in a channel the caller cannot
+  see never appears in results, count, or snippet
 
 ### 1.4 Admin dashboard & org policies
 

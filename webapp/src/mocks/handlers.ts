@@ -220,7 +220,11 @@ function freshAuthState(): MockAuthState {
     challengeFor: null,
     // Reset is available by default so the sign-in screen offers the link;
     // a test that wants the other instance overrides this endpoint.
-    instance: { password_min_length: 12, password_reset_available: true },
+    instance: {
+      password_min_length: 12,
+      password_reset_available: true,
+      max_file_size_bytes: 25 * 1024 * 1024,
+    },
     totp: { enabled: false },
     pendingTotp: "none",
     sessions: FIXTURE_SESSIONS.map((session) => ({ ...session })),

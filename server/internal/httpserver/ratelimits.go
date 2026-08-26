@@ -122,6 +122,7 @@ const (
 	budgetMessageSend       budgetName = "message-send"
 	budgetConversationWrite budgetName = "conversation-write"
 	budgetDirectory         budgetName = "directory"
+	budgetUpload            budgetName = "upload"
 )
 
 // budgetSpec is one budget: how many requests fit its sliding window, and
@@ -167,6 +168,14 @@ var budgetSpecs = map[budgetName]budgetSpec{
 	// someone typing into a search box and far below what a loop needs to
 	// hurt.
 	budgetSearch: {limit: 30, window: time.Minute},
+
+	// Uploads move the most bytes per request of anything in the contract,
+	// and each one costs disk that only the 24-hour orphan sweep reclaims if
+	// no message ever references it. 20 a minute is a person dragging a
+	// folder's worth of screenshots into a channel; a loop filling the disk
+	// wants thousands. Declared with the contract stub so the pipeline
+	// inherits a decided number instead of shipping with none.
+	budgetUpload: {limit: 20, window: time.Minute},
 
 	// Message send is the cheapest way to make this server write: one row,
 	// plus a fan-out to every socket in the channel. Per account, because a
@@ -263,6 +272,7 @@ var endpointBudgets = map[string]budgetName{
 	"GET /api/v1/users":                          budgetDirectory,
 	"GET /api/v1/search":                         budgetSearch,
 	"POST /api/v1/channels/{channelId}/messages": budgetMessageSend,
+	"POST /api/v1/channels/{channelId}/files":    budgetUpload,
 	"POST /api/v1/channels":                      budgetConversationWrite,
 	"POST /api/v1/dms":                           budgetConversationWrite,
 	"POST /api/v1/channels/{channelId}/members":  budgetConversationWrite,

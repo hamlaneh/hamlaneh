@@ -182,7 +182,7 @@ this socket has subscribed to).
 | `subscribed` | socket | no | `{}` — echoes `id` and `chan`. |
 | `unsubscribed` | socket | no | `{}` — echoes `id` and `chan`. |
 | `message_created` | membership | yes | `{message}` — the `Message` schema from `openapi.yaml`. |
-| `message_updated` | membership | yes | `{message}` — an edit; `edited_at` is set. |
+| `message_updated` | membership | yes | `{message}` — an edit, or a server-side enrichment (a link preview arriving). `edited_at` is set only by a real edit; enrichment must not stamp somebody's message "(edited)" for a card the server added. |
 | `message_deleted` | membership | yes | `{message}` — soft delete; `deleted_at` set, `content` empty. Sent as the full message so the placeholder keeps its position and metadata. |
 | `channel_created` | membership | no | `{channel}` — you created it, or somebody invited you. The sidebar adds a row. |
 | `channel_updated` | membership | yes | `{channel}` — topic changed, or `member_count` moved. |

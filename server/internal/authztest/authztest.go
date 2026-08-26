@@ -290,7 +290,10 @@ const searchPath = "/api/v1/search"
 // itself: a handler that lands while its row still says 501 gets asked,
 // answers for real, and turns the cell red.
 func notImplementedOperations() []Operation {
-	return nil
+	return []Operation{
+		// The Phase 1.3 upload pipeline: contract landed first, on purpose.
+		{Method: http.MethodPost, Path: "/api/v1/channels/{channelId}/files"},
+	}
 }
 
 // channelEntry builds one channel-scoped row. want carries the five channel
@@ -780,6 +783,23 @@ func channelRegistry() []Entry {
 	// and a stranger still gets the channel's 404.
 	entries = append(entries, bothKinds(http.MethodPut, readPath, readBody,
 		members(done, done, done))...)
+
+	// Phase 1.3, specified ahead of its pipeline. Every relation expects 501
+	// deliberately, the non-member columns included: a stub has no membership
+	// check, so expecting the 404 a stranger is owed would claim a boundary
+	// nothing enforces yet. The operation is on notImplementedOperations, so
+	// the pipeline cannot land without these tightening into real outcomes —
+	// member 201, non-member 404 — and the gate naming the stale list.
+	stub501 := outcome{status: http.StatusNotImplemented, code: "not_implemented"}
+	entries = append(entries, bothKinds(http.MethodPost,
+		"/api/v1/channels/{channelId}/files", nil,
+		map[Principal]outcome{
+			ChannelNonMember: stub501,
+			AdminNonMember:   stub501,
+			ChannelMember:    stub501,
+			ChannelOwner:     stub501,
+			AdminMember:      stub501,
+		})...)
 
 	return entries
 }

@@ -95,6 +95,7 @@ var routePolicies = map[string]routePolicy{
 	"GET /api/v1/channels/{channelId}/members":                 {class: classSession},
 	"POST /api/v1/channels/{channelId}/members":                {class: classSession},
 	"DELETE /api/v1/channels/{channelId}/members/{userId}":     {class: classSession},
+	"POST /api/v1/channels/{channelId}/files":                  {class: classSession},
 	"GET /api/v1/channels/{channelId}/messages":                {class: classSession},
 	"POST /api/v1/channels/{channelId}/messages":               {class: classSession},
 	"PATCH /api/v1/channels/{channelId}/messages/{messageId}":  {class: classSession},

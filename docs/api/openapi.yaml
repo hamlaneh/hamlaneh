@@ -47,7 +47,7 @@ info:
     WebSocket upgrade that carries realtime delivery. Phase 1.1b completes the
     identity surface: email password reset, TOTP two-step verification with
     recovery codes, and self-service session management.
-  version: 0.3.0
+  version: 0.4.0
   license:
     name: AGPL-3.0
     url: https://www.gnu.org/licenses/agpl-3.0.html
@@ -1189,6 +1189,85 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/v1/channels/{channelId}/files:
+    post:
+      operationId: uploadFile
+      summary: Upload one file into a channel.
+      description: >
+        Backs the composer's paperclip. One file per request — the composer
+        uploads several as several requests, each with its own progress and
+        its own failure. The file is scoped to this channel from birth:
+        membership is checked here, the later message references it by id,
+        and a file never attached to a message is swept after 24 hours. That
+        one rule — a file is readable exactly by the members of its channel —
+        keeps the authorization story identical to every other channel
+        resource.
+
+        The declared content type is kept as the card's label, but the server
+        trusts the bytes, not the label: a declared image/* whose bytes do
+        not sniff as that image type is refused (415, content_type_mismatch),
+        because images are the one kind served inline. Everything else is
+        stored as an opaque blob and always served as a download —
+        Content-Disposition attachment, nosniff, sandboxing CSP — so an
+        uploaded SVG, HTML page or anything else that can carry script is a
+        file the reader saves, never a page their browser runs. Images have
+        their metadata stripped at ingest: EXIF carries GPS coordinates, and
+        a photo shared in a chat must not quietly say where its author lives.
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/ChannelId"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: >
+            Stored. The attachment's url and thumbnail_url are signed and
+            expiring — the files origin is cookie-less, so possession of a
+            fresh URL is the credential, and every serialization of an
+            Attachment mints fresh ones.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Attachment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No such channel — including one the caller is not in.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: The file exceeds max_file_size_bytes (code file_too_large).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "415":
+          description: >
+            Declared image bytes that are not that image (code
+            content_type_mismatch).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /api/v1/channels/{channelId}/read:
     parameters:
       - $ref: "#/components/parameters/ChannelId"
@@ -1515,8 +1594,16 @@ components:
         into the client; password_reset_available is false when no mail
         transport is configured, so the sign-in screen can omit the link
         instead of offering one that goes nowhere.
-      required: [password_min_length, password_reset_available]
+      required: [password_min_length, password_reset_available, max_file_size_bytes]
       properties:
+        max_file_size_bytes:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            The per-file upload cap, published so a client can refuse a file
+            before spending the user's bandwidth on a doomed request. The
+            server enforces it regardless; this is a courtesy, not the check.
         password_min_length:
           type: integer
           minimum: 8
@@ -1946,11 +2033,19 @@ components:
           nullable: true
         url:
           type: string
-          description: Download target. Served from the cookie-less files origin (Phase 1.3).
+          description: >
+            Download target on the cookie-less files origin. Signed and
+            expiring (about an hour): that origin carries no cookies, so a
+            fresh URL is the credential, minted every time an Attachment is
+            serialized for somebody entitled to see it. Stale ones answer 404
+            — re-fetch the message for fresh links, never store these.
         thumbnail_url:
           type: string
           nullable: true
-          description: Images only — the card's preview.
+          description: >
+            Images only — the card's preview, signed and expiring like url.
+            Thumbnails are derivatives generated at ingest from the stripped
+            original, bounded to 512px on the long edge.
 
     LinkPreview:
       type: object
@@ -1971,6 +2066,13 @@ components:
         image_url:
           type: string
           nullable: true
+          description: >
+            Always on this instance's own files origin, never the remote
+            site: the preview image is fetched by the server through the same
+            egress guard as the page, stored as a bounded derivative, and
+            served signed like any attachment. A reader's browser must never
+            be made to fetch a stranger's server — and the strict img-src
+            'self' CSP would refuse it anyway.
 
     Message:
       type: object
@@ -2046,6 +2148,20 @@ components:
       type: object
       required: [client_msg_id, content]
       properties:
+        attachment_ids:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            format: uuid
+          description: >
+            Files previously uploaded to this channel by this caller and not
+            yet attached to any message, attached atomically with the send. An
+            id that names anything else — another channel's file, another
+            person's, one already attached — answers 404 attachment_not_found,
+            one code for every miss so nothing about other people's uploads
+            leaks. Duplicates in the list are a 400.
+
         client_msg_id:
           type: string
           format: uuid
@@ -2054,10 +2170,13 @@ components:
             every retry. Unique per (channel, author).
         content:
           type: string
-          minLength: 1
+          minLength: 0
           maxLength: 4000
           description: >
-            Markdown as authored, with one extension: a mention is the literal
+            Markdown as authored. May be empty only when attachment_ids is
+            non-empty — an image with no caption is an ordinary message, a
+            message with neither text nor files is nothing (400). One
+            extension: a mention is the literal
             token `<@{user_id}>`. The composer's picker inserts the token and
             renders it as the person's display name; the server parses tokens
             (never display names) to populate mention counts. Display names are
@@ -2087,8 +2206,8 @@ components:
     SearchKind:
       type: string
       description: >
-        The two tabs above the results. `files` is accepted from Phase 1.2 but
-        returns an empty page until the Phase 1.3 upload pipeline exists.
+        The two tabs above the results. `files` searches filenames, scoped by
+        channel membership exactly as messages are.
       enum: [messages, files]
       default: messages
 
@@ -2118,8 +2237,11 @@ components:
     SearchResult:
       type: object
       description: >
-        One message hit: where it was said, by whom, when, and the matching run
-        of text. The result shape for kind=files arrives with Phase 1.3.
+        One hit. For kind=messages: where it was said, by whom, when, and the
+        matching run of text. For kind=files the same shape carries the
+        attachment, and the snippet runs over the filename — same matching,
+        same honesty about it (substrings, not stems). message_id points at
+        the message the file rode in on, which is where a click lands.
       required: [message_id, channel, author, created_at, snippet]
       properties:
         message_id:
@@ -2134,6 +2256,10 @@ components:
           format: date-time
         snippet:
           $ref: "#/components/schemas/SearchSnippet"
+        attachment:
+          allOf:
+            - $ref: "#/components/schemas/Attachment"
+          description: Present exactly when kind is files.
 
     SearchPage:
       type: object

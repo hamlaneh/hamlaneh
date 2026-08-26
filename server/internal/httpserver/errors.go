@@ -66,12 +66,14 @@ const (
 	codeNotFound errorCode = "not_found"
 )
 
-// not_implemented is deliberately absent. It was the placeholder the Phase
-// 1.2 contract stubs answered with while their handlers were being written;
-// message edit and delete were the last two, and slice 1.2b landed them.
-// Nothing in this server answers 501 any more, and the authz matrix has a
-// gate (authztest.notImplementedOperations) that keeps a 501 from re-entering
-// the contract surface unnoticed.
+// codeNotImplemented marks a contract endpoint whose behavior has not
+// shipped. It left this file when slice 1.2b landed the last Phase 1.2
+// handler, and returned with the Phase 1.3 contract: uploadFile is specified
+// ahead of its implementation, exactly the contract-first shape the authz
+// matrix gate (authztest.notImplementedOperations) exists to make deliberate
+// — the operation is on that list, and a handler landing without tightening
+// its row turns the matrix red.
+const codeNotImplemented errorCode = "not_implemented"
 
 // Stable messages for codes written from more than one call site.
 const (

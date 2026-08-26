@@ -191,10 +191,10 @@ type Attachment struct {
 	Id          openapi_types.UUID `json:"id"`
 	SizeBytes   int64              `json:"size_bytes"`
 
-	// ThumbnailUrl Images only — the card's preview.
+	// ThumbnailUrl Images only — the card's preview, signed and expiring like url. Thumbnails are derivatives generated at ingest from the stripped original, bounded to 512px on the long edge.
 	ThumbnailUrl *string `json:"thumbnail_url,omitempty"`
 
-	// Url Download target. Served from the cookie-less files origin (Phase 1.3).
+	// Url Download target on the cookie-less files origin. Signed and expiring (about an hour): that origin carries no cookies, so a fresh URL is the credential, minted every time an Attachment is serialized for somebody entitled to see it. Stale ones answer 404 — re-fetch the message for fresh links, never store these.
 	Url string `json:"url"`
 
 	// Width Images only — the card's "1600 × 900" line.
@@ -302,16 +302,20 @@ type HealthStatusStatus string
 
 // InstanceInfo What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere.
 type InstanceInfo struct {
-	PasswordMinLength      int  `json:"password_min_length"`
-	PasswordResetAvailable bool `json:"password_reset_available"`
+	// MaxFileSizeBytes The per-file upload cap, published so a client can refuse a file before spending the user's bandwidth on a doomed request. The server enforces it regardless; this is a courtesy, not the check.
+	MaxFileSizeBytes       int64 `json:"max_file_size_bytes"`
+	PasswordMinLength      int   `json:"password_min_length"`
+	PasswordResetAvailable bool  `json:"password_reset_available"`
 }
 
 // LinkPreview The link-preview card: image, title, description, and the host line the client derives from url. Read-only, and always absent until the Phase 1.3 egress preview proxy exists.
 type LinkPreview struct {
 	Description *string `json:"description,omitempty"`
-	ImageUrl    *string `json:"image_url,omitempty"`
-	Title       *string `json:"title,omitempty"`
-	Url         string  `json:"url"`
+
+	// ImageUrl Always on this instance's own files origin, never the remote site: the preview image is fetched by the server through the same egress guard as the page, stored as a bounded derivative, and served signed like any attachment. A reader's browser must never be made to fetch a stranger's server — and the strict img-src 'self' CSP would refuse it anyway.
+	ImageUrl *string `json:"image_url,omitempty"`
+	Title    *string `json:"title,omitempty"`
+	Url      string  `json:"url"`
 }
 
 // LoginRequest defines model for LoginRequest.
@@ -398,12 +402,12 @@ type RecoveryCodes struct {
 	Codes []string `json:"codes"`
 }
 
-// SearchKind The two tabs above the results. `files` is accepted from Phase 1.2 but returns an empty page until the Phase 1.3 upload pipeline exists.
+// SearchKind The two tabs above the results. `files` searches filenames, scoped by channel membership exactly as messages are.
 type SearchKind string
 
 // SearchPage defines model for SearchPage.
 type SearchPage struct {
-	// Kind The two tabs above the results. `files` is accepted from Phase 1.2 but returns an empty page until the Phase 1.3 upload pipeline exists.
+	// Kind The two tabs above the results. `files` searches filenames, scoped by channel membership exactly as messages are.
 	Kind SearchKind `json:"kind"`
 
 	// NextCursor Present when another page exists.
@@ -417,8 +421,11 @@ type SearchPage struct {
 	TotalCapped bool `json:"total_capped"`
 }
 
-// SearchResult One message hit: where it was said, by whom, when, and the matching run of text. The result shape for kind=files arrives with Phase 1.3.
+// SearchResult One hit. For kind=messages: where it was said, by whom, when, and the matching run of text. For kind=files the same shape carries the attachment, and the snippet runs over the filename — same matching, same honesty about it (substrings, not stems). message_id points at the message the file rode in on, which is where a click lands.
 type SearchResult struct {
+	// Attachment Present exactly when kind is files.
+	Attachment *Attachment `json:"attachment,omitempty"`
+
 	// Author The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
 	Author UserSummary `json:"author"`
 
@@ -445,10 +452,13 @@ type SearchSnippetPart struct {
 
 // SendMessageRequest defines model for SendMessageRequest.
 type SendMessageRequest struct {
+	// AttachmentIds Files previously uploaded to this channel by this caller and not yet attached to any message, attached atomically with the send. An id that names anything else — another channel's file, another person's, one already attached — answers 404 attachment_not_found, one code for every miss so nothing about other people's uploads leaks. Duplicates in the list are a 400.
+	AttachmentIds *[]openapi_types.UUID `json:"attachment_ids,omitempty"`
+
 	// ClientMsgId Generated by the client once per message and reused verbatim on every retry. Unique per (channel, author).
 	ClientMsgId openapi_types.UUID `json:"client_msg_id"`
 
-	// Content Markdown as authored, with one extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name.
+	// Content Markdown as authored. May be empty only when attachment_ids is non-empty — an image with no caption is an ordinary message, a message with neither text nor files is nothing (400). One extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name.
 	Content string `json:"content"`
 }
 
@@ -611,6 +621,11 @@ type ListChannelsParams struct {
 	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
+// UploadFileMultipartBody defines parameters for UploadFile.
+type UploadFileMultipartBody struct {
+	File openapi_types.File `json:"file"`
+}
+
 // ListChannelMembersParams defines parameters for ListChannelMembers.
 type ListChannelMembersParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
@@ -675,6 +690,9 @@ type CreateChannelJSONRequestBody = CreateChannelRequest
 
 // UpdateChannelJSONRequestBody defines body for UpdateChannel for application/json ContentType.
 type UpdateChannelJSONRequestBody = UpdateChannelRequest
+
+// UploadFileMultipartRequestBody defines body for UploadFile for multipart/form-data ContentType.
+type UploadFileMultipartRequestBody UploadFileMultipartBody
 
 // AddChannelMemberJSONRequestBody defines body for AddChannelMember for application/json ContentType.
 type AddChannelMemberJSONRequestBody = AddChannelMemberRequest
@@ -741,6 +759,9 @@ type ServerInterface interface {
 	// UpdateChannel Set the channel topic.
 	// (PATCH /api/v1/channels/{channelId})
 	UpdateChannel(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// UploadFile Upload one file into a channel.
+	// (POST /api/v1/channels/{channelId}/files)
+	UploadFile(w http.ResponseWriter, r *http.Request, channelId ChannelId)
 	// ListChannelMembers Members of a channel (the count in the header).
 	// (GET /api/v1/channels/{channelId}/members)
 	ListChannelMembers(w http.ResponseWriter, r *http.Request, channelId ChannelId, params ListChannelMembersParams)
@@ -1088,6 +1109,32 @@ func (siw *ServerInterfaceWrapper) UpdateChannel(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateChannel(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UploadFile operation middleware
+func (siw *ServerInterfaceWrapper) UploadFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UploadFile(w, r, channelId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1924,6 +1971,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages", wrapper.SendMessage)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages/{messageId}", wrapper.DeleteMessage)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages/{messageId}", wrapper.EditMessage)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/files", wrapper.UploadFile)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/channels/{channelId}/read", wrapper.SetReadPosition)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/search", wrapper.Search)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/ws", wrapper.ConnectWebSocket)

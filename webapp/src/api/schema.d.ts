@@ -610,6 +610,27 @@ export interface paths {
         patch: operations["editMessage"];
         trace?: never;
     };
+    "/api/v1/channels/{channelId}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload one file into a channel.
+         * @description Backs the composer's paperclip. One file per request — the composer uploads several as several requests, each with its own progress and its own failure. The file is scoped to this channel from birth: membership is checked here, the later message references it by id, and a file never attached to a message is swept after 24 hours. That one rule — a file is readable exactly by the members of its channel — keeps the authorization story identical to every other channel resource.
+         *     The declared content type is kept as the card's label, but the server trusts the bytes, not the label: a declared image/* whose bytes do not sniff as that image type is refused (415, content_type_mismatch), because images are the one kind served inline. Everything else is stored as an opaque blob and always served as a download — Content-Disposition attachment, nosniff, sandboxing CSP — so an uploaded SVG, HTML page or anything else that can carry script is a file the reader saves, never a page their browser runs. Images have their metadata stripped at ingest: EXIF carries GPS coordinates, and a photo shared in a chat must not quietly say where its author lives.
+         */
+        post: operations["uploadFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels/{channelId}/read": {
         parameters: {
             query?: never;
@@ -743,6 +764,11 @@ export interface components {
         };
         /** @description What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere. */
         InstanceInfo: {
+            /**
+             * Format: int64
+             * @description The per-file upload cap, published so a client can refuse a file before spending the user's bandwidth on a doomed request. The server enforces it regardless; this is a courtesy, not the check.
+             */
+            max_file_size_bytes: number;
             password_min_length: number;
             password_reset_available: boolean;
         };
@@ -935,9 +961,9 @@ export interface components {
             /** @description Images only — the card's "1600 × 900" line. */
             width?: number | null;
             height?: number | null;
-            /** @description Download target. Served from the cookie-less files origin (Phase 1.3). */
+            /** @description Download target on the cookie-less files origin. Signed and expiring (about an hour): that origin carries no cookies, so a fresh URL is the credential, minted every time an Attachment is serialized for somebody entitled to see it. Stale ones answer 404 — re-fetch the message for fresh links, never store these. */
             url: string;
-            /** @description Images only — the card's preview. */
+            /** @description Images only — the card's preview, signed and expiring like url. Thumbnails are derivatives generated at ingest from the stripped original, bounded to 512px on the long edge. */
             thumbnail_url?: string | null;
         };
         /** @description The link-preview card: image, title, description, and the host line the client derives from url. Read-only, and always absent until the Phase 1.3 egress preview proxy exists. */
@@ -945,6 +971,7 @@ export interface components {
             url: string;
             title?: string | null;
             description?: string | null;
+            /** @description Always on this instance's own files origin, never the remote site: the preview image is fetched by the server through the same egress guard as the page, stored as a bounded derivative, and served signed like any attachment. A reader's browser must never be made to fetch a stranger's server — and the strict img-src 'self' CSP would refuse it anyway. */
             image_url?: string | null;
         };
         Message: {
@@ -986,12 +1013,14 @@ export interface components {
             after_cursor?: string;
         };
         SendMessageRequest: {
+            /** @description Files previously uploaded to this channel by this caller and not yet attached to any message, attached atomically with the send. An id that names anything else — another channel's file, another person's, one already attached — answers 404 attachment_not_found, one code for every miss so nothing about other people's uploads leaks. Duplicates in the list are a 400. */
+            attachment_ids?: string[];
             /**
              * Format: uuid
              * @description Generated by the client once per message and reused verbatim on every retry. Unique per (channel, author).
              */
             client_msg_id: string;
-            /** @description Markdown as authored, with one extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name. */
+            /** @description Markdown as authored. May be empty only when attachment_ids is non-empty — an image with no caption is an ordinary message, a message with neither text nor files is nothing (400). One extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name. */
             content: string;
         };
         EditMessageRequest: {
@@ -1005,7 +1034,7 @@ export interface components {
             message_id: string;
         };
         /**
-         * @description The two tabs above the results. `files` is accepted from Phase 1.2 but returns an empty page until the Phase 1.3 upload pipeline exists.
+         * @description The two tabs above the results. `files` searches filenames, scoped by channel membership exactly as messages are.
          * @default messages
          * @enum {string}
          */
@@ -1019,7 +1048,7 @@ export interface components {
         SearchSnippet: {
             parts: components["schemas"]["SearchSnippetPart"][];
         };
-        /** @description One message hit: where it was said, by whom, when, and the matching run of text. The result shape for kind=files arrives with Phase 1.3. */
+        /** @description One hit. For kind=messages: where it was said, by whom, when, and the matching run of text. For kind=files the same shape carries the attachment, and the snippet runs over the filename — same matching, same honesty about it (substrings, not stems). message_id points at the message the file rode in on, which is where a click lands. */
         SearchResult: {
             /** Format: uuid */
             message_id: string;
@@ -1028,6 +1057,8 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             snippet: components["schemas"]["SearchSnippet"];
+            /** @description Present exactly when kind is files. */
+            attachment?: components["schemas"]["Attachment"];
         };
         SearchPage: {
             kind: components["schemas"]["SearchKind"];
@@ -2182,6 +2213,67 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    uploadFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Stored. The attachment's url and thumbnail_url are signed and expiring — the files origin is cookie-less, so possession of a fresh URL is the credential, and every serialization of an Attachment mints fresh ones. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Attachment"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such channel — including one the caller is not in. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The file exceeds max_file_size_bytes (code file_too_large). */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Declared image bytes that are not that image (code content_type_mismatch). */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
         };
     };
     setReadPosition: {
