@@ -333,16 +333,24 @@ close codes:
 | `4401` | Session expired or revoked (§7). | Stop reconnecting; return to sign-in. |
 | `4408` | Heartbeat timeout (§6). | Reconnect with backoff and resume. |
 | `4413` | Frame exceeded the 64 KiB cap. | Not retry the frame. |
-| `4429` | Rate limited (§ below). | Reconnect after the backoff, slower. |
+| `4429` | Rate limited. **Reserved, and unreachable by this design** — see the note below. | Reconnect after the backoff, slower. |
 
 **Reconnect backoff** is exponential with full jitter, starting at 1 s, capped at 30 s. The
 "No connection. Retrying in 8 s." banner in the design counts down this timer, so the client
 owns the schedule and shows it rather than hiding it.
 
+**`4429` is reserved and nothing sends it.** The close-code table lists it because a rate limit
+that terminated a live socket would need one, but no such rule exists here: the connect budget
+decides *before* the upgrade, when there is no socket to close and an HTTP `429` is the answer,
+and the per-frame budgets deliberately keep the socket open and reply with an `error` frame —
+a subscribe-storm is a client bug, not grounds to drop a connection somebody is reading in. The
+code stays in the table so a future rule that does close a socket has one to use, and so nobody
+reinvents a different number for it.
+
 **Rate limits** apply per session family and per IP to: WebSocket connect and reconnect,
 `subscribe` (a subscribe-storm is a cheap way to hammer membership checks), and `typing`.
 Exceeding the per-frame budgets yields an `error` frame with code `rate_limited`; exceeding the
-connect budget yields `429` on the handshake or `4429` on an open socket. Message send and
+connect budget yields `429` on the handshake. Message send and
 search are rate-limited on their REST endpoints.
 
 ---

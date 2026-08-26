@@ -52,10 +52,13 @@ const (
 	closeFrameTooLarge websocket.StatusCode = 4413
 )
 
-// 4429 (rate limited) is deliberately absent. §8 spends it on the connect
-// budget, which belongs to the generic per-endpoint rate-limit middleware
-// this phase still owes; the per-frame budgets this package does enforce
-// answer with an error frame and keep the socket open.
+// 4429 (rate limited) is deliberately absent, and now permanently so. The
+// connect budget lives in this package (connectbudget.go) and refuses before
+// the upgrade, where there is no socket to close and the answer is an HTTP
+// 429; the per-frame budgets keep the socket open and reply with an error
+// frame, because a subscribe-storm is a client bug rather than grounds to
+// drop a connection somebody is reading in. §8 records the same conclusion —
+// the code is reserved for a future rule that does close a socket.
 
 // Error frame codes. channel_not_found is deliberately the answer to both
 // "no such channel" and "not yours" (§3), the same non-leaking answer the

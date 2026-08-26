@@ -257,6 +257,9 @@ func validateCreateChannel(w http.ResponseWriter, r *http.Request, req api.Creat
 
 	nc := storage.NewChannel{Kind: kind, Slug: req.Slug, CreatedBy: creator}
 	if req.Topic != nil {
+		if !storableText(*req.Topic) {
+			return fail("topic must be text that can be stored and returned unchanged")
+		}
 		if utf8.RuneCountInString(*req.Topic) > maxTopicLen {
 			return fail(fmt.Sprintf("topic must be at most %d characters", maxTopicLen))
 		}
@@ -352,6 +355,11 @@ func (s *apiServer) UpdateChannel(w http.ResponseWriter, r *http.Request, channe
 
 	var req api.UpdateChannelRequest
 	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if !storableText(req.Topic) {
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+			"topic must be text that can be stored and returned unchanged")
 		return
 	}
 	if utf8.RuneCountInString(req.Topic) > maxTopicLen {

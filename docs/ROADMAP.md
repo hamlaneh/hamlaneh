@@ -238,10 +238,30 @@ history, send a message, and have it appear on someone else's screen without a r
       handler that adds a member cannot name the person, so it announces nothing. Blocked on the
       same missing piece as `dm_peer` until `UserByID` reached the `Store` interface; now only
       the two announce calls are missing
-- [ ] WebSocket connect-flood budget (close code `4429`). The per-frame budgets for `subscribe`
-      and `typing` are enforced; the connect budget belongs with the generic rate-limit
-      middleware below, and `4429` is unused until it lands
-- [ ] Markdown through the strict sanitizer, server side as well as client side
+- [x] WebSocket connect-flood budget — in the gateway, not the request-scoped table, because
+      §8 keys it per session family **and** per IP and both windows outlive any single request.
+      Refused with HTTP 429 and a `Retry-After` on the handshake. Both halves are checked before
+      either is recorded, so a refusal never counts an attempt that was not admitted — the same
+      mistake `internal/passwordreset` already avoids — and the wait is the longer of the two.
+      **`4429` turned out to be unreachable by design** and is now documented as reserved: a
+      connect budget decides before a socket exists, and the per-frame budgets keep the socket
+      open on purpose, because a subscribe-storm is a client bug rather than grounds to drop a
+      connection somebody is reading in. §8 says so now instead of naming a code nothing sends
+- [x] Markdown through the strict sanitizer, server side as well as client side — **restated,
+      because the original wording asked for the wrong thing.** The server stores markdown *as
+      authored*, which is what the contract says a message is, and it renders none: the web
+      client renders through `react-markdown` with an allowlist and raw HTML never parsed, and
+      search snippets are a `{text, match}` parts array the client draws. Rewriting markdown on
+      the way in would corrupt what somebody wrote, irreversibly, to defend a rendering step
+      this server does not perform.
+      What the server does owe is that text it accepts can be stored and handed back unchanged,
+      and that promise was being broken: a message containing a NUL passed every check and
+      failed inside PostgreSQL with SQLSTATE 22021, which the handler could only answer as a
+      500. Every field a client writes prose into — message content on send *and* edit, a
+      channel topic on create *and* update, the search needle, the directory filter — now
+      refuses unstorable text with a 400. Persian's zero-width non-joiner, bidi isolates,
+      tabs, newlines and emoji are all accepted, pinned by their own test, because a validator
+      that refuses what people actually type is worse than none
 - [x] Strict baseline CSP on all app responses: `default-src 'self'`, no
       `unsafe-inline`/`unsafe-eval`, `object-src 'none'`
 - [x] Generic rate-limit middleware with per-endpoint budgets — a table keyed on `r.Pattern`
@@ -255,9 +275,7 @@ history, send a message, and have it appear on someone else's screen without a r
       spends conditionally, or against a key that lives in the request body, or in a shape that
       exists to keep the 429 from becoming an enumeration oracle — moving them into a tidier
       place would have quietly changed what they protect
-- [ ] The **WS connect/reconnect** half of that budget is still open, and is the same item as
-      the `4429` close code below: `ws-protocol.md` §8 keys it per session family *and* per IP
-      and requires it enforceable on an already-open socket, which nothing request-scoped can do
+- [x] The **WS connect/reconnect** half of that budget lives in the gateway — see the item above
 - Tests: **IDOR matrix over REST and WS** (user A must never read or write channel B — automated
   via the harness, both protocols); **WS security suite**: (a) connect without session rejected,
   (b) expired/revoked session rejected, (c) open socket terminated ≤10s after remote revocation,

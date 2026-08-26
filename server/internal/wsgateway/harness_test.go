@@ -201,9 +201,16 @@ func (f *fakeStore) ListSessionFamilies(_ context.Context, userID, _ uuid.UUID) 
 	return out, nil
 }
 
-// harness is a gateway behind a test HTTP server that performs the same two
-// gates httpserver.ConnectWebSocket does: the strict Origin check and the
-// hand-off with an authenticated principal.
+// harness is a gateway behind a test HTTP server that performs the same
+// gates httpserver.ConnectWebSocket does, in the same order: the strict
+// Origin check, the §8 connect budget, and the hand-off with an
+// authenticated principal.
+//
+// The budget is here for fidelity rather than to be tested here — a harness
+// that skipped a gate the real endpoint runs would let a socket exist in
+// these tests that could never exist in production. What it answers a
+// refusal with is deliberately crude; the contract's 429 and its Retry-After
+// are httpserver's to write, and httpstack_test.go proves it does.
 type harness struct {
 	t      *testing.T
 	store  *fakeStore
@@ -245,6 +252,10 @@ func newHarness(t *testing.T, opts ...Option) *harness {
 		}
 		userID := uuid.MustParse(r.Header.Get(testUserHeader))
 		familyID := uuid.MustParse(r.Header.Get(testFamilyHeader))
+		if _, allowed := h.gw.ConnectAllowed(familyID, r.RemoteAddr); !allowed {
+			http.Error(w, "connect budget exhausted", http.StatusTooManyRequests)
+			return
+		}
 		store.mu.Lock()
 		user := store.users[userID]
 		store.mu.Unlock()

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +86,7 @@ const requestDeadline = 700 * time.Millisecond
 type stack struct {
 	server *httptest.Server
 	store  *stackStore
+	gw     *wsgateway.Gateway
 	origin string
 	token  string
 }
@@ -122,7 +124,7 @@ func newStack(t *testing.T) *stack {
 		}
 		server.Close()
 	})
-	return &stack{server: server, store: store, origin: origin, token: token}
+	return &stack{server: server, store: store, gw: gw, origin: origin, token: token}
 }
 
 // upgrade attempts the handshake and returns the response for the cases that
@@ -244,6 +246,113 @@ func TestHandshakeSucceedsThroughTheWholeStack(t *testing.T) {
 	if !strings.Contains(string(raw), `"type":"pong"`) {
 		t.Fatalf("second server frame = %s, want pong", raw)
 	}
+}
+
+// maxBurn bounds the loop below. It is far above either connect limit and
+// exists so a budget that never refuses fails the test instead of hanging.
+const maxBurn = 10_000
+
+// burnConnectBudget fills one address's whole connect budget, taking a fresh
+// session family for every connect so the per-family half never bites first.
+// That is one address with many signed-in devices behind it — the shape the
+// address half of the budget exists for.
+func burnConnectBudget(t *testing.T, gw *wsgateway.Gateway, ip string) {
+	t.Helper()
+
+	for range maxBurn {
+		if _, allowed := gw.ConnectAllowed(uuid.New(), ip); !allowed {
+			return
+		}
+	}
+	t.Fatalf("the connect budget admitted %d connects from %s without refusing one", maxBurn, ip)
+}
+
+// TestHandshakeOverTheConnectBudgetIsRefusedWithRetryAfter is the §8 connect
+// flood, refused where §8 says it is refused: an HTTP 429 on the handshake
+// response, before any socket exists, so there is no close code involved.
+//
+// The Retry-After matters as much as the status. Every 429 this server
+// answers carries one, because they all go through one writer — and a
+// handshake refusal that skipped it would leave a client guessing at exactly
+// the moment it is already backing off blind.
+func TestHandshakeOverTheConnectBudgetIsRefusedWithRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	s := newStack(t)
+	// The test client dials over loopback and sends no X-Forwarded-For, so
+	// the address the budget keys on is the peer's own.
+	burnConnectBudget(t, s.gw, "127.0.0.1")
+
+	conn, resp, err := s.upgrade(t, s.header(s.origin, s.token))
+	assertRefused(t, conn, resp, err, http.StatusTooManyRequests, "rate_limited")
+
+	retryAfter := resp.Header.Get("Retry-After")
+	if retryAfter == "" {
+		t.Fatal("the handshake's 429 carried no Retry-After header")
+	}
+	seconds, convErr := strconv.Atoi(retryAfter)
+	if convErr != nil {
+		t.Fatalf("Retry-After = %q, want whole seconds: %v", retryAfter, convErr)
+	}
+	if seconds < 1 {
+		t.Fatalf("Retry-After = %d, which invites an immediate retry of what was just refused", seconds)
+	}
+}
+
+// TestConnectBudgetKeysOnTheForwardedClientAddress pins the derivation, not a
+// copy of it: the budget must identify the client the same way every other
+// per-address budget in this server does (httpserver.clientIP), which means
+// trusting the leftmost X-Forwarded-For value when — and only when — the
+// direct peer is the reverse proxy on the private network.
+//
+// Getting this wrong is not a cosmetic bug in either direction. Keying on the
+// peer would put the whole instance behind Caddy into one bucket and let any
+// one client flood every colleague out of a socket. Trusting a header from an
+// untrusted peer would let a flooder change addresses at will.
+func TestConnectBudgetKeysOnTheForwardedClientAddress(t *testing.T) {
+	t.Parallel()
+
+	const flooder = "198.51.100.9"
+
+	s := newStack(t)
+	burnConnectBudget(t, s.gw, flooder)
+
+	forwarded := func(ip string) http.Header {
+		h := s.header(s.origin, s.token)
+		h.Set("X-Forwarded-For", ip)
+		return h
+	}
+
+	t.Run("the flooding client is recognised through the proxy", func(t *testing.T) {
+		conn, resp, err := s.upgrade(t, forwarded(flooder))
+		assertRefused(t, conn, resp, err, http.StatusTooManyRequests, "rate_limited")
+	})
+
+	t.Run("a colleague behind the same proxy still connects", func(t *testing.T) {
+		conn, resp, err := s.upgrade(t, forwarded("203.0.113.4"))
+		if resp != nil && resp.Body != nil {
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				t.Errorf("close handshake response: %v", closeErr)
+			}
+		}
+		if err != nil {
+			t.Fatalf("a second client behind the same proxy was refused: %v", err)
+		}
+		if closeErr := conn.CloseNow(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+			t.Errorf("close: %v", closeErr)
+		}
+	})
+
+	t.Run("the origin check still answers first", func(t *testing.T) {
+		// A cross-site handshake is refused for what is wrong with it, and a
+		// budget the request never reached cannot be spent by one.
+		conn, resp, err := s.upgrade(t, func() http.Header {
+			h := forwarded(flooder)
+			h.Set("Origin", "https://evil.example.com")
+			return h
+		}())
+		assertRefused(t, conn, resp, err, http.StatusForbidden, "origin_not_allowed")
+	})
 }
 
 func assertRefused(t *testing.T, conn *websocket.Conn, resp *http.Response, err error, status int, code string) {

@@ -166,6 +166,12 @@ installs it on its own server with one command and owns its communication comple
   conversation, because the server stamps a message as it arrives: three sent quickly used to
   race, and the author's own words could come back rearranged after a reload. Optimistic
   rendering hid it until then, and the end-to-end suite is what caught it.
+- The server **validates** the prose a client sends and never rewrites it. Markdown is stored as
+  authored, because the server renders none — the client renders through an allowlist with raw
+  HTML never parsed, and search snippets are data the client draws. What is checked is that the
+  text can be stored and handed back unchanged: a message containing a NUL used to reach
+  PostgreSQL and come back as a 500, and now answers 400 like the client mistake it is. Persian's
+  zero-width non-joiner, bidi isolates and emoji all pass, pinned by their own test.
 - **Rate limiting is a table, not a habit.** Budgets are declared per endpoint, keyed on the
   route pattern, and the middleware refuses any endpoint nobody classified — with a build-time
   gate so an omission is caught by CI rather than by a 500. It runs after authentication, so a

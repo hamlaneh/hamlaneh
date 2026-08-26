@@ -46,6 +46,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hamlaneh/hamlaneh/server/internal/ratelimit"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
 
@@ -172,6 +173,18 @@ func WithHelloTimeout(d time.Duration) Option {
 	}
 }
 
+// WithConnectClock replaces the clock the §8 connect budget's windows run on.
+// It exists for tests that need a minute of sliding window without a minute of
+// waiting, and for the one test that has to replay ten minutes of a client's
+// reconnect backoff against the production limits.
+func WithConnectClock(now func() time.Time) Option {
+	return func(g *Gateway) {
+		if now != nil {
+			g.connectNow = now
+		}
+	}
+}
+
 // WithPresenceGrace overrides how long a user with no sockets stays online
 // before the sweep announces them offline (§4).
 func WithPresenceGrace(d time.Duration) Option {
@@ -193,6 +206,13 @@ type Gateway struct {
 	heartbeatTimeout  time.Duration
 	helloTimeout      time.Duration
 	presenceGrace     time.Duration
+
+	// The §8 connect budget. See connectbudget.go for the numbers and the
+	// reconnect arithmetic behind them. connectNow is the clock both windows
+	// run on; only tests replace it.
+	connectNow      func() time.Time
+	connectByFamily *ratelimit.Limiter
+	connectByIP     *ratelimit.Limiter
 
 	events chan event
 
@@ -254,6 +274,7 @@ func New(store Store, origin string, opts ...Option) *Gateway {
 		heartbeatTimeout:  heartbeatTimeout,
 		helloTimeout:      helloTimeout,
 		presenceGrace:     defaultPresenceGrace,
+		connectNow:        time.Now,
 		events:            make(chan event, eventQueue),
 		ctx:               ctx,
 		cancel:            cancel,
@@ -265,6 +286,8 @@ func New(store Store, origin string, opts ...Option) *Gateway {
 	for _, opt := range opts {
 		opt(g)
 	}
+	// After the options, so a replaced clock reaches the windows.
+	g.connectByFamily, g.connectByIP = newConnectLimiters(g.connectNow)
 
 	g.wg.Add(2)
 	go g.dispatchLoop()

@@ -124,6 +124,11 @@ func (s *apiServer) Search(w http.ResponseWriter, r *http.Request, params api.Se
 // characters rather than bytes — a 200-character Persian query is twice that
 // many bytes, and a limit that counted bytes would refuse half of it.
 func searchQuery(w http.ResponseWriter, r *http.Request, requested string) (string, bool) {
+	if !storableText(requested) {
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+			"the search query must be text that can be stored and returned unchanged")
+		return "", false
+	}
 	if n := utf8.RuneCountInString(requested); n < 1 || n > maxSearchQueryLen {
 		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
 			fmt.Sprintf("q must be between 1 and %d characters", maxSearchQueryLen))

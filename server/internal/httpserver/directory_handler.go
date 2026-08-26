@@ -89,6 +89,11 @@ func directoryQuery(w http.ResponseWriter, r *http.Request, requested *string) (
 	if requested == nil {
 		return "", true
 	}
+	if !storableText(*requested) {
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+			"the filter must be text that can be stored and returned unchanged")
+		return "", false
+	}
 	if n := utf8.RuneCountInString(*requested); n < 1 || n > maxDirectoryQueryLen {
 		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
 			fmt.Sprintf("q must be between 1 and %d characters", maxDirectoryQueryLen))

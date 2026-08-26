@@ -160,6 +160,11 @@ func (s *apiServer) SendMessage(w http.ResponseWriter, r *http.Request, channelI
 		writeError(w, r, http.StatusBadRequest, codeInvalidRequest, "client_msg_id is required")
 		return
 	}
+	if !storableText(req.Content) {
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+			"content must be text that can be stored and returned unchanged")
+		return
+	}
 	if n := utf8.RuneCountInString(req.Content); n < 1 || n > maxContentLen {
 		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
 			fmt.Sprintf("content must be 1 to %d characters", maxContentLen))
@@ -223,6 +228,11 @@ func (s *apiServer) EditMessage(w http.ResponseWriter, r *http.Request, channelI
 
 	var req api.EditMessageRequest
 	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if !storableText(req.Content) {
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+			"content must be text that can be stored and returned unchanged")
 		return
 	}
 	if n := utf8.RuneCountInString(req.Content); n < 1 || n > maxContentLen {
