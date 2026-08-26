@@ -8,9 +8,10 @@ sharing, voice/video calls, screen share, and conferencing. One-line install, se
 - `docs/PLAN.md` — master plan: vision, architecture, security plan, business model. Strategy lives there.
 - `docs/ROADMAP.md` — executable phases with test gates. Execution lives there.
 
-**Current status:** Phase 1.1 in progress. Phase 0 is complete (hardened compose stack,
-contract-first codegen, CI); slice 1.1a shipped the identity core (argon2id, rotating sessions
-with reuse detection, CSRF, authz matrix harness). Next: 1.1b (password reset, TOTP).
+**Current status:** Phase 1.2 is complete — chat works end to end, proven by Playwright against
+the real stack. Phase 0 (hardened compose stack, contract-first codegen, CI) and Phase 1.1
+(identity core, password reset, two-step verification, session management) shipped before it.
+Next: 1.3 (file upload, link previews, file search).
 `docs/OVERVIEW.md` always carries the current picture — read it, not this line, for detail.
 
 ## Tech stack (decided — see "Changing a decision" below for the only way to relitigate)

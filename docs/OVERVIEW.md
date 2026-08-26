@@ -51,8 +51,7 @@ installs it on its own server with one command and owns its communication comple
   code from it (oapi-codegen for Go, openapi-typescript for the webapp); CI fails if
   generated code drifts. The realtime half is [`docs/api/ws-protocol.md`](api/ws-protocol.md),
   which OpenAPI cannot describe; its operation table is machine-read by the same completeness
-  gate. Of the Phase 1.2 messaging surface, only message edit, delete and search still answer
-  501 — all three are slice 1.2b.
+  gate. Every operation in the contract now has a handler behind it — nothing answers 501.
 - **Real authentication (Phase 1.1a identity core):** argon2id passwords; opaque
   access/refresh tokens in HttpOnly+Secure+SameSite=Strict cookies with rotation and
   reuse detection (a replayed refresh token revokes its whole session family); CSRF
@@ -217,10 +216,17 @@ was not entitled to read the message it points at.
 
 ## What's next
 
-**The 1.2 messaging core** — the backend behind the chat shell that already exists: channels and
-DMs, the WebSocket gateway (delivery, presence, typing, read positions, reconnect/resume),
-history paging, edit and soft delete, idempotent send, and message search. Then 1.3
-files/search, 1.4 the admin dashboard, 1.5 PWA baseline, 1.6 SSO/SCIM.
+**Phase 1.3 — files, previews and file search.** The upload pipeline with content-type
+enforcement, size caps, EXIF stripping and sandboxed processing, served from a cookie-less
+origin; link previews behind an isolated egress proxy that refuses private address ranges; and
+the `kind=files` half of search, which the contract already accepts and answers with an empty
+page. Then 1.4 the admin dashboard, 1.5 PWA baseline, 1.6 SSO/SCIM.
+
+**Phase 1.2 is done.** Chat works end to end and a Playwright suite proves it against the real
+stack rather than against mocks — two browsers, two accounts, a message crossing live. Two
+things are recorded as accepted limitations rather than unfinished work: search matches
+characters and not word stems, in either language, and a search snippet is the whole message
+because the contract's parts array has to reconstruct it.
 
 **All Phase 1 designs are delivered** — auth, chat, admin dashboard, user settings — so from
 here the backend is the pacing item, not the design.
