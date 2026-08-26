@@ -179,7 +179,7 @@ export function Composer({ channelId, target, disabled, disabledReason, onSend }
       {tooMany ? (
         <p className="hm-composer__reason" role="status">
           <CircleAlertIcon size={14} strokeWidth={2} />
-          {t("chat.composer.uploadTooMany", { count: MAX_ATTACHMENTS })}
+          {t("chat.composer.uploadTooMany", { max: MAX_ATTACHMENTS })}
         </p>
       ) : null}
 

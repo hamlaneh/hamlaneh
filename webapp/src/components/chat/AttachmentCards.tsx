@@ -173,7 +173,7 @@ export function AttachmentCards({ message }: { message: Message }) {
   return (
     <>
       <AttachmentList attachments={message.attachments} />
-      {message.link_preview === undefined || message.link_preview === null ? null : (
+      {message.link_preview === undefined ? null : (
         <LinkPreviewCard preview={message.link_preview} />
       )}
     </>

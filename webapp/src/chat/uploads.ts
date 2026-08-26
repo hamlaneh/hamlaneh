@@ -49,7 +49,10 @@ export async function uploadAttachment(channelId: string, file: File): Promise<U
       body: { file: file as unknown as string },
       bodySerializer: (body: { file: unknown }) => {
         const form = new FormData();
-        form.append("file", body.file as Blob);
+        // The filename is passed explicitly rather than left to the File: the
+        // contract stores it as the card's label, and it is the one part of
+        // the part header nothing else can reconstruct.
+        form.append("file", body.file as Blob, file.name);
         return form;
       },
     });

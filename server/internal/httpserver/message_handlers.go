@@ -527,28 +527,5 @@ func (s *apiServer) apiMessagePage(page storage.MessagePage) api.MessagePage {
 // cookie-less, so a fresh URL is the credential (ADR 003) and a stored one
 // would be a stale credential in a cache.
 func (s *apiServer) apiMessage(m storage.Message) api.Message {
-	return api.Message{
-		Id:        m.ID,
-		ChannelId: m.ChannelID,
-		Author: api.UserSummary{
-			Id:          m.Author.ID,
-			Username:    m.Author.Username,
-			DisplayName: m.Author.DisplayName,
-		},
-		ClientMsgId: m.ClientMsgID,
-		Content:     m.Content,
-		CreatedAt:   m.CreatedAt,
-		EditedAt:    m.EditedAt,
-		DeletedAt:   m.DeletedAt,
-		Attachments: s.apiAttachments(m.Attachments),
-		LinkPreview: s.apiMessagePreview(m),
-	}
-}
-
-// apiMessagePreview maps the message's preview card, if it carries one.
-func (s *apiServer) apiMessagePreview(m storage.Message) *api.LinkPreview {
-	if m.Preview == nil {
-		return nil
-	}
-	return apiLinkPreview(*m.Preview, s.fileSigner)
+	return api.MessageOf(m, s.fileSigner)
 }

@@ -68,7 +68,7 @@ func (g *Gateway) MessageCreated(channelID uuid.UUID, message storage.Message) {
 		typ:       typeMessageCreated,
 		channelID: channelID,
 		ordered:   true,
-		payload:   messageData{Message: apiMessage(message)},
+		payload:   messageData{Message: apiMessage(message, g.signer)},
 	})
 }
 
@@ -78,7 +78,7 @@ func (g *Gateway) MessageUpdated(channelID uuid.UUID, message storage.Message) {
 		typ:       typeMessageUpdated,
 		channelID: channelID,
 		ordered:   true,
-		payload:   messageData{Message: apiMessage(message)},
+		payload:   messageData{Message: apiMessage(message, g.signer)},
 	})
 }
 
@@ -93,7 +93,7 @@ func (g *Gateway) MessageDeleted(channelID uuid.UUID, message storage.Message) {
 		typ:       typeMessageDeleted,
 		channelID: channelID,
 		ordered:   true,
-		payload:   messageData{Message: apiMessage(message)},
+		payload:   messageData{Message: apiMessage(message, g.signer)},
 	})
 }
 

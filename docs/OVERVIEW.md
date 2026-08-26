@@ -171,7 +171,10 @@ installs it on its own server with one command and owns its communication comple
   are fetched by the server through an egress guard that validates the address it dials (not
   the name it resolved, which is where DNS rebinding lives), re-hosts the preview image, and
   arrives asynchronously as a message_updated event. File search runs on filename trigrams with
-  the same fold and the same membership scoping as message search.
+  the same fold and the same membership scoping as message search. The composer's paperclip
+  uploads each picked file as its own request, holds them as pending cards until send, and
+  refuses one over the instance's cap before spending the bandwidth; a message may carry files
+  and no text at all.
 - Messages leave a channel in the order they were composed. The client holds one send queue per
   conversation, because the server stamps a message as it arrives: three sent quickly used to
   race, and the author's own words could come back rearranged after a reload. Optimistic

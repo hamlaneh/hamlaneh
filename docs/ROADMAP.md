@@ -356,7 +356,7 @@ search shipped in 1.2b; this phase adds files and previews.
       derivatives; enrichment async, announced by `message_updated` without `edited_at`
 - [x] **File search** (`kind=files`): filename trigrams over the 0006 fold (index already in
       0007), membership-scoped by the same join, the `attachment` field on `SearchResult`
-- [ ] **The webapp's half**: the paperclip enabled at last, upload progress and failure per
+- [x] **The webapp's half**: the paperclip enabled at last, upload progress and failure per
       file, image/file cards fed by real attachments, the preview card fed by enrichment
 - Tests: upload negatives — over-cap → 413; EXE bytes declared image/png → 415; uploaded
   SVG/HTML/XML **never executes script** (Playwright, both serving modes); traversal names

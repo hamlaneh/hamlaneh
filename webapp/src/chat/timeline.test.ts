@@ -137,6 +137,7 @@ describe("buildTimeline", () => {
     const pending: PendingMessage = {
       clientMsgId: "p1",
       content: "queued",
+      attachments: [],
       createdAt: "2026-08-21T09:10:00Z",
       status: "queued",
     };
@@ -161,6 +162,7 @@ describe("buildTimeline", () => {
     const pending: PendingMessage = {
       clientMsgId: "p1",
       content: "queued last night",
+      attachments: [],
       createdAt: "2026-08-20T12:30:00Z",
       status: "queued",
     };

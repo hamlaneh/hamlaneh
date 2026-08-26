@@ -15,7 +15,7 @@
  */
 import { randomBytes, randomUUID } from "node:crypto";
 
-import { expectOk, post, type ApiSession } from "./accounts";
+import { expectOk, post, postFile, type ApiSession } from "./accounts";
 
 /** Matches the contract's channel-slug shape, and carries no digits. */
 export function uniqueSlug(prefix = "chan"): string {
@@ -78,6 +78,35 @@ export async function sendMessageApi(
   );
   const { id } = (await response.json()) as { id: string };
   return id;
+}
+
+/**
+ * A stored attachment, reduced to the fields the file specs turn on. The URL
+ * is signed and expiring (about an hour), so it is used immediately and never
+ * kept — the contract's own rule.
+ */
+export interface UploadedFile {
+  id: string;
+  filename: string;
+  content_type: string;
+  url: string;
+}
+
+/**
+ * Uploads one file into a channel — arrangement for the specs whose subject is
+ * how the bytes come back OUT. The upload driven through the composer, which
+ * is the act, lives in the live-delivery spec.
+ */
+export async function uploadFileApi(
+  session: ApiSession,
+  channelId: string,
+  file: { name: string; mimeType: string; buffer: Buffer },
+): Promise<UploadedFile> {
+  const response = await expectOk(
+    await postFile(session, `/api/v1/channels/${channelId}/files`, file),
+    `file upload (${file.name})`,
+  );
+  return (await response.json()) as UploadedFile;
 }
 
 /** Opens (or reuses) the direct message between this session's user and one other. */

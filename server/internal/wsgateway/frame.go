@@ -256,22 +256,14 @@ type presenceEventData struct {
 // Message or Channel schema has to be made in both places until a slice
 // moves them somewhere both can import.
 
-func apiMessage(m storage.Message) api.Message {
-	return api.Message{
-		Id:        m.ID,
-		ChannelId: m.ChannelID,
-		Author: api.UserSummary{
-			Id:          m.Author.ID,
-			Username:    m.Author.Username,
-			DisplayName: m.Author.DisplayName,
-		},
-		ClientMsgId: m.ClientMsgID,
-		Content:     m.Content,
-		CreatedAt:   m.CreatedAt,
-		EditedAt:    m.EditedAt,
-		DeletedAt:   m.DeletedAt,
-		Attachments: []api.Attachment{},
-	}
+// apiMessage maps a stored message onto the contract's Message.
+//
+// It delegates to api.MessageOf, the one shared mapping. This package used
+// to keep its own copy, which hard-coded an empty attachments array and knew
+// nothing about link previews — so a message with files arrived live with no
+// cards, and an enrichment announced a preview its own frame did not carry.
+func apiMessage(m storage.Message, signer api.FileURLSigner) api.Message {
+	return api.MessageOf(m, signer)
 }
 
 // apiChannel carries dm_peer for the same reason the REST mapping does: a

@@ -277,7 +277,7 @@ func (s *apiServer) apiFileSearchPage(kind api.SearchKind, page storage.FileSear
 // that produced the row has already proven entitled to it.
 func (s *apiServer) apiFileSearchResult(res storage.FileSearchResult) api.SearchResult {
 	out := apiSearchResult(res.SearchResult)
-	attachment := s.apiAttachment(res.Attachment)
+	attachment := api.AttachmentOf(res.Attachment, s.fileSigner)
 	out.Attachment = &attachment
 	return out
 }

@@ -190,6 +190,7 @@ describe("message/upsert", () => {
         pending: {
           clientMsgId: stored.client_msg_id,
           content: stored.content,
+          attachments: [],
           createdAt: stored.created_at,
           status: "sending",
         },
@@ -422,5 +423,28 @@ describe("read/mark", () => {
     expect(updated?.unread_count).toBe(0);
     expect(updated?.mention_count).toBe(0);
     expect(updated?.last_read_message_id).toBe("m-newest");
+  });
+});
+
+describe("a link preview arriving by message_updated", () => {
+  const plain = { ...message("m1", OTHER, "2026-08-21T09:00:00.000Z"), content: "https://x.test/a" };
+
+  it("is kept when the enrichment lands, and dropped when the edit removes the URL", () => {
+    const enriched = { ...plain, link_preview: { url: "https://x.test/a", title: "A" } };
+    const withPreview = reduce(
+      initialChatState,
+      { type: "channels/loaded", channels: [channel()] },
+      upsert(plain, true),
+      // message_updated carries the whole message, so the upsert must replace
+      // rather than merge field by field — otherwise a preview could never
+      // arrive, and an edit could never take one away.
+      upsert(enriched, false),
+    );
+    expect(view(withPreview).messages[0]?.link_preview?.title).toBe("A");
+
+    const edited = reduce(withPreview, upsert({ ...plain, content: "never mind" }, false));
+    expect(view(edited).messages[0]?.link_preview).toBeUndefined();
+    // And the enrichment did not count as a new arrival.
+    expect(unreadCount(edited)).toBe(1);
   });
 });

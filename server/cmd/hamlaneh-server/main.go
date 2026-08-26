@@ -130,7 +130,10 @@ func run(args []string) error {
 		// in for the CSRF header a browser cannot send on a handshake, so it
 		// needs the instance's public origin; without one it allows nothing
 		// and every upgrade is refused, which is the right way to fail.
-		gateway := wsgateway.New(store, os.Getenv(passwordreset.EnvPublicURL))
+		gateway := wsgateway.New(store, os.Getenv(passwordreset.EnvPublicURL),
+			// Its message frames carry attachments and preview cards, whose
+			// URLs are minted per serialization like every other one.
+			wsgateway.WithURLSigner(attachmentURLs{signer}))
 		// Closed before serve returns, because http.Server.Shutdown does not
 		// wait for hijacked connections and a WebSocket is one. Without this,
 		// shutdown reports success while sockets are still being served.

@@ -23,7 +23,7 @@ type SetReadPositionRequest = components["schemas"]["SetReadPositionRequest"];
 type ApiError = components["schemas"]["Error"];
 
 /**
- * Contract mocks for the Phase 1.2 messaging surface, typed against the
+ * Contract mocks for the messaging and file surface, typed against the
  * generated schema. The fixture conversation mirrors the artboards
  * (chat-default's `#deploys`, the DM with Parisa, the empty `#design-tokens`)
  * so `VITE_API_MOCK=1 npm run dev` shows the design rather than lorem ipsum.
@@ -71,10 +71,9 @@ export const CHAT_CHANNELS = {
 const TODAY = "2026-08-21";
 
 /**
- * What the three cards on the component sheet render from. The real API
- * returns no attachments until the Phase 1.3 upload pipeline and no previews
- * until the Phase 1.3 egress proxy, so these fixtures are what the card code
- * is exercised against in the meantime.
+ * What the three cards on the component sheet render from — the fixed history
+ * the artboards draw. Uploads made during a session come back from the upload
+ * handler below with their own ids; these are the seeded ones.
  */
 export const FIXTURE_FILE: Attachment = {
   id: "00000000-0000-4000-8000-0000000000f1",
@@ -220,9 +219,8 @@ function seedState(): ChatState {
     message(deploys, nasrin, "Staging is green. Tag is `v1.2.0-rc3`", at("09:12")),
     message(deploys, nasrin, "Rolling to canary in ten minutes.", at("09:13")),
     message(deploys, me, "Nice. I'll watch the error rate.", at("09:14")),
-    // The file card the chat-default artboard draws. Attachments are always
-    // empty from the real API until the Phase 1.3 upload pipeline lands; the
-    // fixture carries one so the drawn card has a data source to render from.
+    // The file card the chat-default artboard draws, seeded so the fixture
+    // conversation shows what the artboard shows.
     message(deploys, omid, "Checklist for the rollout", at("09:20"), {
       edited_at: at("09:21"),
       attachments: [FIXTURE_FILE],
@@ -300,6 +298,40 @@ export function mockMessages(channelId: string): Message[] {
 
 export function mockChannel(channelId: string): Channel | undefined {
   return chat.channels.find((entry) => entry.id === channelId);
+}
+
+/**
+ * The one multipart part `uploadFile` takes, parsed by hand.
+ *
+ * `request.formData()` is what this should be, but under jsdom the File the
+ * app appends is jsdom's while the parser is Node's, and Node's asserts on its
+ * own class — a browser has no such seam. Parsing the part here keeps the
+ * workaround inside the mock instead of distorting the code under test.
+ *
+ * The same seam means a jsdom-created File arrives with its name and bytes
+ * flattened to an anonymous empty blob, so no test may assert on the filename
+ * or size a mocked upload comes back with. What a real browser sends is
+ * asserted end to end instead (webapp/e2e/specs/chat-files.e2e.ts).
+ */
+function singleFilePart(
+  raw: string,
+): { filename: string; contentType: string; size: number } | null {
+  const headEnd = raw.indexOf("\r\n\r\n");
+  if (headEnd === -1) {
+    return null;
+  }
+  const head = raw.slice(0, headEnd);
+  const filename = /filename="([^"]*)"/u.exec(head)?.[1];
+  if (filename === undefined || filename === "") {
+    return null;
+  }
+  const closing = raw.lastIndexOf("\r\n--");
+  const body = raw.slice(headEnd + 4, closing === -1 ? undefined : closing);
+  return {
+    filename,
+    contentType: /content-type:\s*([^\r\n]+)/iu.exec(head)?.[1] ?? "application/octet-stream",
+    size: new TextEncoder().encode(body).length,
+  };
 }
 
 function errorResponse(status: number, code: string, message: string) {
@@ -516,9 +548,8 @@ export const chatHandlers = [
       if (mockChannel(params.channelId) === undefined) {
         return notFound();
       }
-      const form = await request.formData();
-      const file = form.get("file");
-      if (!(file instanceof File)) {
+      const file = singleFilePart(await request.text());
+      if (file === null) {
         return errorResponse(400, "invalid_request", "No file part.");
       }
       // The size cap is the instance document's; the mock instance serves the
@@ -530,8 +561,8 @@ export const chatHandlers = [
       const id = `00000000-0000-4000-8000-${String(uploadSequence).padStart(12, "f")}`;
       const attachment: Attachment = {
         id,
-        filename: file.name,
-        content_type: file.type === "" ? "application/octet-stream" : file.type,
+        filename: file.filename,
+        content_type: file.contentType,
         size_bytes: file.size,
         // Origin-relative and signature-shaped, exactly as filesign mints it.
         url: `/files/${id}?exp=0&sig=mock`,

@@ -8,10 +8,9 @@ import { FIXTURE_FILE, FIXTURE_IMAGE, FIXTURE_LINK_PREVIEW } from "../../mocks/c
 import { AttachmentCards } from "./AttachmentCards";
 
 /**
- * The file, image and link-preview cards from chat-components. The API returns
- * none of these until Phase 1.3, so the fixtures are the only data source they
- * have — which is exactly why they are tested here rather than left to the
- * slice that will finally feed them.
+ * The file, image and link-preview cards from chat-components, against fixed
+ * fixtures. What a real upload produces is asserted end to end instead
+ * (webapp/e2e/specs/chat-files.e2e.ts); these pin the rendering.
  */
 
 const AUTHOR: UserSummary = { id: "u-other", username: "omid", display_name: "Omid" };

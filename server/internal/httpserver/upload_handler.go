@@ -116,7 +116,7 @@ func (s *apiServer) UploadFile(w http.ResponseWriter, r *http.Request, channelID
 		internalError(w, r, err)
 		return
 	}
-	writeJSONValue(w, r, http.StatusCreated, s.apiAttachment(att))
+	writeJSONValue(w, r, http.StatusCreated, api.AttachmentOf(att, s.fileSigner))
 }
 
 // storeBlob streams an opaque upload straight to disk, filling in the size
@@ -318,37 +318,6 @@ func WithUploads(blobs *blobstore.Store, signer fileURLSigner) Option {
 		if signer != nil {
 			s.fileSigner = signer
 		}
-	}
-}
-
-// apiAttachments maps a message's file cards. It is an empty slice rather
-// than nil for the same reason the contract makes the field required: a
-// client rendering a message list must never have to distinguish "no files"
-// from "no answer".
-func (s *apiServer) apiAttachments(atts []storage.Attachment) []api.Attachment {
-	out := make([]api.Attachment, 0, len(atts))
-	for _, a := range atts {
-		out = append(out, s.apiAttachment(a))
-	}
-	return out
-}
-
-// apiAttachment maps one stored attachment onto the contract's Attachment.
-//
-// The URLs are minted here, on every serialization, and never stored: the
-// files origin is cookie-less, so a fresh URL is the credential and a cached
-// one is an expired credential (ADR 003).
-func (s *apiServer) apiAttachment(a storage.Attachment) api.Attachment {
-	fileURL, thumbnailURL := s.fileSigner.AttachmentURLs(a.ID, a.HasThumbnail)
-	return api.Attachment{
-		Id:           a.ID,
-		Filename:     a.Filename,
-		ContentType:  a.ContentType,
-		SizeBytes:    a.SizeBytes,
-		Width:        a.Width,
-		Height:       a.Height,
-		Url:          fileURL,
-		ThumbnailUrl: thumbnailURL,
 	}
 }
 

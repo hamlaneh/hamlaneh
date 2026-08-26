@@ -377,7 +377,7 @@
       "uploadFailed": "Could not be uploaded. Remove it and try again.",
       "uploadTooLarge": "Larger than the {{limit}} this instance accepts.",
       "uploadTypeMismatch": "The contents are not the kind of image the name claims.",
-      "uploadTooMany": "A message carries at most {{count}} files.",
+      "uploadTooMany": "A message carries at most {{max}} files.",
       "closed": "The connection was closed. Reload the page to send again."
     },
     "connection": {

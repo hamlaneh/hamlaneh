@@ -219,8 +219,8 @@ channel-member management. None are in §2.
 
 **Deliberate deviations from the drawn chrome, for honesty (unchanged):**
 
-- The **attach control** is drawn enabled, but uploads arrive in Phase 1.3, so it renders disabled
-  with its reason — following the component sheet's own rule that the reason travels with the
-  disabled state.
+- The **attach control** is live as of Phase 1.3 and matches the artboard. What the artboards do
+  not draw is a file *between* pick and send, so the composer's attachment tray is assembled from
+  delivered parts only and is filed `awaiting-design` in STATUS.md with the open questions.
 - The **admin-dashboard shield** is not rendered: the admin surface does not exist yet, and a
   control that goes nowhere is worse than an absent one. Restore it with the admin slice.

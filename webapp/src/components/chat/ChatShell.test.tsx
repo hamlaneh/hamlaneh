@@ -104,6 +104,18 @@ function messageWith(text: string | RegExp): HTMLElement {
   return element;
 }
 
+/**
+ * The composer's hidden file input. The paperclip opens it in a browser;
+ * jsdom has no picker, so the test hands the file to the input directly.
+ */
+function filePicker(): HTMLInputElement {
+  const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+  if (input === null) {
+    throw new Error("the composer has no file input");
+  }
+  return input;
+}
+
 async function openDeploys(
   realtime: { retryDelayMs: () => number } = FAST_RETRY,
 ): Promise<UserEvent> {
@@ -309,34 +321,41 @@ describe("the composer", () => {
   it("uploads a picked file, then sends it with the message", async () => {
     const user = await openDeploys();
 
-    const picker = document.querySelector<HTMLInputElement>('input[type="file"]');
-    expect(picker).not.toBeNull();
     const file = new File(["checklist"], "rollout.txt", { type: "text/plain" });
-    await user.upload(picker as HTMLInputElement, file);
+    await user.upload(filePicker(), file);
 
-    // The pending card is the delivered file card, filled from the 201.
-    expect(await screen.findByText("rollout.txt")).toBeInTheDocument();
+    // Waited on by the card's download control rather than by the filename:
+    // the filename is drawn while the upload is still in flight too, and a
+    // click then would find send correctly disabled and prove nothing. The
+    // download link exists only on the delivered card, once the 201 is in.
+    const tray = await screen.findByRole("list", { name: en.chat.composer.attachments });
+    expect(await within(tray).findByRole("link")).toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: en.chat.composer.send }));
 
     // A message whose only payload is a file: the send path must not refuse
-    // it for having no text.
+    // it for having no text. (Filename and size are not asserted — see the
+    // mock's singleFilePart for why a mocked upload loses both.)
     await waitFor(() => {
       const sent = mockMessages(CHAT_CHANNELS.deploys).at(-1);
-      expect(sent?.attachments.map((entry) => entry.filename)).toEqual(["rollout.txt"]);
+      expect(sent?.attachments).toHaveLength(1);
       expect(sent?.content).toBe("");
     });
+    // The tray empties with the send; the files now live on the message.
+    expect(
+      screen.queryByRole("list", { name: en.chat.composer.attachments }),
+    ).not.toBeInTheDocument();
   });
 
   it("refuses a file larger than the instance accepts, without a request", async () => {
     const user = await openDeploys();
     const before = mockMessages(CHAT_CHANNELS.deploys).length;
 
-    const picker = document.querySelector<HTMLInputElement>('input[type="file"]');
     const huge = new File(["x"], "huge.bin", { type: "application/octet-stream" });
-    // userEvent.upload reads File.size, which is derived from the parts; the
-    // property is redefined rather than allocating 26 MiB in a unit test.
+    // File.size is derived from the parts; redefining it beats allocating
+    // 26 MiB inside a unit test to prove a comparison.
     Object.defineProperty(huge, "size", { value: 26 * 1024 * 1024 });
-    await user.upload(picker as HTMLInputElement, huge);
+    await user.upload(filePicker(), huge);
 
     expect(
       await screen.findByText(

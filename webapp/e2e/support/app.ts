@@ -220,6 +220,27 @@ export class App {
     await stored;
   }
 
+  /**
+   * Attaches one file through the paperclip, and waits for its upload to land.
+   *
+   * The picker is opened by clicking the control the design draws rather than
+   * by setting the hidden input directly: a paperclip that stopped opening the
+   * picker would still pass the second way, and that is the regression this
+   * helper exists to catch. The wait is on the upload's own response, because
+   * a file that is still in flight is deliberately not sendable.
+   */
+  async attachFile(file: { name: string; mimeType: string; buffer: Buffer }): Promise<void> {
+    const uploaded = this.page.waitForResponse(
+      (response) =>
+        /\/api\/v1\/channels\/[^/]+\/files$/.test(new URL(response.url()).pathname) &&
+        response.request().method() === "POST",
+    );
+    const chooser = this.page.waitForEvent("filechooser");
+    await this.composerForm.getByRole("button", { name: this.t("chat.composer.attach") }).click();
+    await (await chooser).setFiles([file]);
+    await uploaded;
+  }
+
   /** Inserts a `<@{user_id}>` mention token through the composer's picker. */
   async mentionInComposer(displayName: string): Promise<void> {
     await this.composerForm

@@ -46,6 +46,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hamlaneh/hamlaneh/server/internal/api"
 	"github.com/hamlaneh/hamlaneh/server/internal/ratelimit"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
@@ -200,6 +201,10 @@ func WithPresenceGrace(d time.Duration) Option {
 type Gateway struct {
 	store  Store
 	origin string
+	// signer mints the expiring URLs an Attachment carries. Nil on a server
+	// with no signing key, which yields cards without links rather than no
+	// cards — the honest degradation, and the same one the REST side makes.
+	signer api.FileURLSigner
 
 	sweepInterval     time.Duration
 	heartbeatInterval time.Duration
@@ -255,6 +260,17 @@ type Gateway struct {
 type presenceState struct {
 	state  string
 	goneAt time.Time
+}
+
+// WithURLSigner gives the gateway the signer its message frames need to
+// carry attachment and preview links. Without it the frames still describe
+// the files; they just cannot be fetched from the event alone.
+func WithURLSigner(signer api.FileURLSigner) Option {
+	return func(g *Gateway) {
+		if signer != nil {
+			g.signer = signer
+		}
+	}
 }
 
 // New returns a running gateway. origin is the instance's configured public

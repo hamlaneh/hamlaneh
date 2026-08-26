@@ -104,6 +104,21 @@ export async function post(session: ApiSession, url: string, data?: unknown): Pr
   });
 }
 
+/**
+ * The multipart half of `post`, for the one endpoint that takes a file
+ * (openapi.yaml -> uploadFile). Same CSRF rule; only the encoding differs.
+ */
+export async function postFile(
+  session: ApiSession,
+  url: string,
+  file: { name: string; mimeType: string; buffer: Buffer },
+): Promise<APIResponse> {
+  return session.context.post(url, {
+    headers: { [CSRF_HEADER]: await csrfToken(session.context) },
+    multipart: { file },
+  });
+}
+
 /** Ends the session's whole family server-side, not just the local cookies. */
 export async function logoutApi(session: ApiSession): Promise<void> {
   await expectOk(await post(session, "/api/v1/auth/logout"), "API sign-out");
