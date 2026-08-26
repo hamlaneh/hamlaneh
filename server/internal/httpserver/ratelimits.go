@@ -289,6 +289,10 @@ var endpointBudgets = map[string]budgetName{
 	"POST /api/v1/auth/logout":          budgetNone,
 	"POST /api/v1/auth/change-password": budgetNone,
 	"GET /api/v1/users/me":              budgetNone,
+	// The settings panel's own edit: one row, by the session that owns it,
+	// and the contract reserves no 429 on it. A language switch is a click,
+	// not a lever.
+	"PATCH /api/v1/users/me": budgetNone,
 
 	// Two-step verification settings: four endpoints, one window.
 	"POST /api/v1/users/me/totp/setup":          budgetTotpSettings,

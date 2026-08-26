@@ -3,8 +3,10 @@ package httpserver_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -46,6 +48,131 @@ func TestGetCurrentUser(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "argon2id") {
 		t.Error("response leaked the password hash")
 	}
+}
+
+func TestUpdateCurrentUserValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"unknown locale", `{"locale":"de"}`},
+		{"empty locale", `{"locale":""}`},
+		{"malformed body", `{`},
+		// display_name is not on this request. The decoder drops unknown
+		// members, which is this codebase's contract everywhere, so sending
+		// one is a no-op rather than a refusal — pinned in TestUpdateCurrentUser.
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// The store is deliberately unwired: a rejected request must not
+			// reach it, and errFakeUnwired would surface as a 500 if it did.
+			store := authedStore(fixtureUser())
+			rec := do(t, store, request(http.MethodPatch, "/api/v1/users/me", tt.body,
+				withSessionCookie("tok"), withCSRF()))
+			wantError(t, rec, http.StatusBadRequest, "invalid_request")
+		})
+	}
+}
+
+func TestUpdateCurrentUser(t *testing.T) {
+	t.Parallel()
+
+	// patchUser returns the patch storage received, plus the response, for a
+	// body sent by fixtureUser.
+	patchUser := func(t *testing.T, body string) (storage.UserProfileUpdate, *httptest.ResponseRecorder) {
+		t.Helper()
+		var got storage.UserProfileUpdate
+		var gotID uuid.UUID
+		store := authedStore(fixtureUser())
+		store.updateUserProfile = func(_ context.Context, userID uuid.UUID, upd storage.UserProfileUpdate) (storage.User, error) {
+			got, gotID = upd, userID
+			u := fixtureUser()
+			if upd.Locale != nil {
+				u.Locale = *upd.Locale
+			}
+			if upd.DisplayName != nil {
+				u.DisplayName = *upd.DisplayName
+			}
+			return u, nil
+		}
+		rec := do(t, store, request(http.MethodPatch, "/api/v1/users/me", body,
+			withSessionCookie("tok"), withCSRF()))
+		if gotID != fixtureUser().ID {
+			t.Errorf("patched user %s, want the caller %s", gotID, fixtureUser().ID)
+		}
+		return got, rec
+	}
+
+	t.Run("a locale patch names the locale and nothing else", func(t *testing.T) {
+		t.Parallel()
+		got, rec := patchUser(t, `{"locale":"fa"}`)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		if got.Locale == nil || *got.Locale != "fa" {
+			t.Errorf("storage got locale %v, want fa", got.Locale)
+		}
+		// The field the request never mentioned stays nil all the way down:
+		// that is what keeps a language change from blanking a display name.
+		if got.DisplayName != nil {
+			t.Errorf("storage got display_name %q for a locale-only patch", *got.DisplayName)
+		}
+
+		var updated api.User
+		if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+			t.Fatalf("body is not the contract User shape: %v", err)
+		}
+		if updated.Locale != api.UserLocaleFa {
+			t.Errorf("response locale = %q, want fa", updated.Locale)
+		}
+	})
+
+	t.Run("a display_name in the body is ignored, not applied", func(t *testing.T) {
+		t.Parallel()
+		// The request carries locale and nothing else. The decoder drops
+		// unknown members rather than refusing them — the whole codebase
+		// works that way — so the risk worth pinning is not a 400, it is a
+		// name silently reaching storage from a field the contract removed.
+		got, rec := patchUser(t, `{"locale":"fa","display_name":"someone else"}`)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		if got.DisplayName != nil {
+			t.Errorf("storage got display_name %q from a field the request does not carry", *got.DisplayName)
+		}
+		if got.Locale == nil || *got.Locale != "fa" {
+			t.Errorf("storage got locale %v, want fa", got.Locale)
+		}
+	})
+
+	t.Run("an empty patch changes nothing", func(t *testing.T) {
+		t.Parallel()
+		got, rec := patchUser(t, `{}`)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		if got.Locale != nil || got.DisplayName != nil {
+			t.Errorf("empty patch reached storage as %+v, want every field nil", got)
+		}
+	})
+
+	t.Run("storage failure is a 500, not a partial success", func(t *testing.T) {
+		t.Parallel()
+		store := authedStore(fixtureUser())
+		store.updateUserProfile = func(context.Context, uuid.UUID, storage.UserProfileUpdate) (storage.User, error) {
+			return storage.User{}, errors.New("connection reset")
+		}
+		rec := do(t, store, request(http.MethodPatch, "/api/v1/users/me", `{"locale":"fa"}`,
+			withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusInternalServerError, "internal_error")
+	})
 }
 
 func adminStore() *fakeStore {
@@ -183,6 +310,12 @@ func TestAdminCreateUserValidation(t *testing.T) {
 		{"password too long", `{"username":"newuser","password":"` + strings.Repeat("a", 1025) + `"}`},
 		{"invalid email", `{"username":"newuser","password":"a valid password","email":"not-an-email"}`},
 		{"display name too long", `{"username":"newuser","password":"a valid password","display_name":"` + strings.Repeat("d", 121) + `"}`},
+		// PostgreSQL cannot store a NUL at all, so without this the row is
+		// refused inside the driver and the caller gets a 500 for what is
+		// plainly a bad request. A newline is refused for a different reason:
+		// the name gets one line wherever it is shown.
+		{"display name carries a NUL", `{"username":"newuser","password":"a valid password","display_name":"Ali\u0000Reza"}`},
+		{"display name spans two lines", `{"username":"newuser","password":"a valid password","display_name":"Ali\nReza"}`},
 		{"invalid locale", `{"username":"newuser","password":"a valid password","locale":"de"}`},
 	}
 

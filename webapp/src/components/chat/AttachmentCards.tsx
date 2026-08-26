@@ -50,7 +50,8 @@ function DownloadLink({ url, filename }: DownloadLinkProps) {
 }
 
 function FileCard({ attachment }: { attachment: Attachment }) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const size = formatFileSize(attachment.size_bytes, i18n.language);
   return (
     <div className="hm-card">
       <span className="hm-card__glyph">
@@ -62,10 +63,9 @@ function FileCard({ attachment }: { attachment: Attachment }) {
           {attachment.filename}
         </span>
         <span className="hm-card__meta">
-          {`${fileTypeLabel(attachment.content_type)} · ${formatFileSize(
-            attachment.size_bytes,
-            i18n.language,
-          )}`}
+          {`${fileTypeLabel(attachment.content_type)} · ${t(size.unitKey, {
+            value: size.value,
+          })}`}
         </span>
       </div>
       <DownloadLink url={attachment.url} filename={attachment.filename} />
@@ -74,7 +74,7 @@ function FileCard({ attachment }: { attachment: Attachment }) {
 }
 
 function ImageCard({ attachment }: { attachment: Attachment }) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   // A thumbnail URL that has outlived its signature answers 404, and a broken
   // <img> glyph is nobody's design. Falling back to the frame the card
   // already draws for an attachment that has no thumbnail keeps the failure
@@ -90,6 +90,7 @@ function ImageCard({ attachment }: { attachment: Attachment }) {
           i18n.language,
         )}`
       : "";
+  const size = formatFileSize(attachment.size_bytes, i18n.language);
 
   return (
     <div className="hm-image-card">
@@ -115,10 +116,9 @@ function ImageCard({ attachment }: { attachment: Attachment }) {
             {attachment.filename}
           </span>
           <span className="hm-card__meta">
-            {`${fileTypeLabel(attachment.content_type)} · ${formatFileSize(
-              attachment.size_bytes,
-              i18n.language,
-            )}${dimensions}`}
+            {`${fileTypeLabel(attachment.content_type)} · ${t(size.unitKey, {
+              value: size.value,
+            })}${dimensions}`}
           </span>
         </div>
         <DownloadLink url={attachment.url} filename={attachment.filename} />

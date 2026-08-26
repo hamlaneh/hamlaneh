@@ -11,6 +11,7 @@ import fa from "../../locales/fa/common.json";
 import {
   enableMockTotp,
   FIXTURE_CREDENTIALS,
+  FIXTURE_MEMBER_CREDENTIALS,
   FIXTURE_RECOVERY_CODES,
   FIXTURE_RETRY_AFTER_SECONDS,
   FIXTURE_TOTP_CODE,
@@ -32,18 +33,25 @@ afterAll(() => {
   server.close();
 });
 
-/** Signs in and opens the settings panel from the sidebar gear. */
-async function openSettings(user: UserEvent, locale: typeof en | typeof fa = en) {
+/**
+ * Signs in and opens the settings panel from the sidebar gear.
+ *
+ * The account decides the language from sign-in on (i18n/useLanguage.ts), so
+ * a case that wants a Persian panel signs in as the account that reads
+ * Persian rather than only choosing Persian on the sign-in screen.
+ */
+async function openSettings(
+  user: UserEvent,
+  locale: typeof en | typeof fa = en,
+  credentials: { identifier: string; password: string } = FIXTURE_CREDENTIALS,
+) {
   render(<App />);
   await screen.findByRole("heading", { name: locale.login.title });
   await user.type(
     screen.getByLabelText(locale.login.identifierLabel),
-    FIXTURE_CREDENTIALS.identifier,
+    credentials.identifier,
   );
-  await user.type(
-    screen.getByLabelText(locale.login.passwordLabel),
-    FIXTURE_CREDENTIALS.password,
-  );
+  await user.type(screen.getByLabelText(locale.login.passwordLabel), credentials.password);
   await user.click(screen.getByRole("button", { name: locale.login.submit }));
   await screen.findByRole("navigation", { name: locale.chat.sidebar.label });
   await user.click(screen.getByRole("button", { name: locale.chat.footer.account }));
@@ -557,7 +565,7 @@ describe("language and appearance", () => {
   it("renders the panel mirrored, in Persian, when the language is fa", async () => {
     const user = userEvent.setup({ delay: null });
     await i18n.changeLanguage("fa");
-    const panel = await openSettings(user, fa);
+    const panel = await openSettings(user, fa, FIXTURE_MEMBER_CREDENTIALS);
 
     expect(document.documentElement.dir).toBe("rtl");
     expect(document.documentElement.lang).toBe("fa");

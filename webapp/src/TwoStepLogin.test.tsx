@@ -323,8 +323,11 @@ describe("recovery codes at sign-in", () => {
 
     await user.click(screen.getByRole("button", { name: fa.totp.submit }));
 
+    // Signing in hands the interface to the account's own locale, and this
+    // fixture's account reads English — the Persian above was this browser's
+    // choice, not this person's (i18n/useLanguage.ts).
     expect(
-      await screen.findByRole("navigation", { name: fa.chat.sidebar.label }),
+      await screen.findByRole("navigation", { name: en.chat.sidebar.label }),
     ).toBeInTheDocument();
     expect(submitted).toEqual([RECOVERY_CODE.replace("-", "")]);
   });

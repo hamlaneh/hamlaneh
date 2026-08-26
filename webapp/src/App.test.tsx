@@ -65,6 +65,7 @@ describe("App", () => {
     expect(screen.getByLabelText(en.login.passwordLabel)).toBeInTheDocument();
     expect(document.documentElement.lang).toBe("en");
     expect(document.documentElement.dir).toBe("ltr");
+    expect(document.title).toBe(en.app.name);
     expect(document.documentElement.style.getPropertyValue("--hm-font-ui")).toBe(
       "var(--font-ui)",
     );
@@ -83,6 +84,8 @@ describe("App", () => {
 
     expect(document.documentElement.lang).toBe("fa");
     expect(document.documentElement.dir).toBe("rtl");
+    // The browser tab is chrome, not markup — it has to be told separately.
+    expect(document.title).toBe(fa.app.name);
     expect(document.documentElement.style.getPropertyValue("--hm-font-ui")).toBe(
       "var(--font-ui-fa)",
     );
@@ -99,7 +102,16 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders an interpolated number in Persian digits, not Latin ones", async () => {
+    /*
+   * Persian UI, ASCII digits — docs/design/CHAT_HANDOFF.md, "Numerals", the
+   * locked correction of 2026-08-21 that supersedes the artboards mixing the
+   * two systems. These two tests asserted the opposite until 1.5, when the
+   * catalogue's hand-written numerals and i18next's `number` formatter were
+   * both brought onto the rule (src/i18n/digits.ts). They are kept pointing
+   * the other way rather than deleted: the interesting case is still that the
+   * digits are NOT whatever CLDR picks for `fa` on its own.
+   */
+  it("renders an interpolated number in Latin digits, not Persian ones", async () => {
     const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
     await user.click(languageOption("fa"));
@@ -114,25 +126,28 @@ describe("App", () => {
       FIXTURE_NEWHIRE_CREDENTIALS.password,
     );
     await user.click(screen.getByRole("button", { name: fa.login.submit }));
+    // Sign-in hands the interface to the account's locale, and this fixture's
+    // account reads English (i18n/useLanguage.ts) — so choose Persian again,
+    // on the screen that actually carries the number.
+    await screen.findByRole("heading", { name: en.changePassword.title });
+    await user.click(languageOption("fa"));
     await screen.findByRole("heading", { name: fa.changePassword.title });
 
-    const persianMinimum = new Intl.NumberFormat("fa").format(PASSWORD_MIN_LENGTH);
-    // Guards the runtime's ICU data as much as the app's formatter.
-    expect(persianMinimum).toMatch(/^[۰-۹]+$/u);
+    const latinMinimum = String(PASSWORD_MIN_LENGTH);
     expect(
-      screen.getByText(fa.password.minLength.replace("{{minimum, number}}", persianMinimum)),
+      screen.getByText(fa.password.minLength.replace("{{minimum, number}}", latinMinimum)),
     ).toBeInTheDocument();
+
+    // The half that would go quietly wrong: `fa` on its own yields Persian
+    // digits, so this fails the moment the latn pin is dropped.
+    const cldrDefault = new Intl.NumberFormat("fa").format(PASSWORD_MIN_LENGTH);
+    expect(cldrDefault).toMatch(/^[۰-۹]+$/u);
     expect(
-      screen.queryByText(
-        fa.password.minLength.replace(
-          "{{minimum, number}}",
-          String(PASSWORD_MIN_LENGTH),
-        ),
-      ),
+      screen.queryByText(fa.password.minLength.replace("{{minimum, number}}", cldrDefault)),
     ).not.toBeInTheDocument();
   });
 
-  it("states the rate-limit wait in Persian, in Persian digits", async () => {
+  it("states the rate-limit wait in Persian, in Latin digits", async () => {
     const user = userEvent.setup({ delay: null });
     await renderAppAtLogin();
     await user.click(languageOption("fa"));
@@ -145,11 +160,10 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: fa.login.submit }));
 
     const minutes = Math.ceil(FIXTURE_RETRY_AFTER_SECONDS / 60);
-    const persianMinutes = new Intl.NumberFormat("fa").format(minutes);
-    expect(persianMinutes).toMatch(/^[۰-۹]+$/u);
+    expect(new Intl.NumberFormat("fa").format(minutes)).toMatch(/^[۰-۹]+$/u);
     const notice = await screen.findByRole("status");
     expect(notice).toHaveTextContent(
-      fa.login.error.rateLimitedMinutes_other.replace("{{count, number}}", persianMinutes),
+      fa.login.error.rateLimitedMinutes_other.replace("{{count, number}}", String(minutes)),
     );
     // The undated Persian wording is what this replaces, not what it repeats.
     expect(notice).not.toHaveTextContent(fa.login.error.rateLimited);

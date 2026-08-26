@@ -47,7 +47,7 @@ info:
     WebSocket upgrade that carries realtime delivery. Phase 1.1b completes the
     identity surface: email password reset, TOTP two-step verification with
     recovery codes, and self-service session management.
-  version: 0.5.0
+  version: 0.6.0
   license:
     name: AGPL-3.0
     url: https://www.gnu.org/licenses/agpl-3.0.html
@@ -352,6 +352,45 @@ paths:
                 $ref: "#/components/schemas/User"
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+    patch:
+      tags: [users]
+      operationId: updateCurrentUser
+      summary: Change your own account settings.
+      description: >
+        Locale belongs on the account rather than only in the browser: a
+        person who reads Persian reads it on their phone too, and a
+        preference that lives in localStorage silently reverts on every new
+        device and every cleared browser. The client still applies its local
+        choice immediately — the round trip must not make the interface
+        wait — and this is what makes the choice follow the person.
+
+        Unlike its siblings this stays open while must_change_password is
+        set. The forced-change screen renders the language switcher, so
+        refusing the save there would leave a control that appears to work
+        and silently does not; and choosing which language to read the
+        password rules in is not something the gate exists to prevent.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCurrentUserRequest"
+      responses:
+        "200":
+          description: The updated account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /api/v1/users/me/totp:
     get:
@@ -2351,6 +2390,17 @@ components:
           type: string
           description: Present when another page exists.
 
+    UpdateCurrentUserRequest:
+      type: object
+      description: >
+        Only the fields present are changed. Locale is the only one: a screen
+        that edits your own display name does not exist yet, and an endpoint
+        that accepts a field nothing sends is a field nothing tests.
+      properties:
+        locale:
+          type: string
+          enum: [en, fa]
+
     AdminUserPage:
       type: object
       required: [users]
@@ -2469,7 +2519,12 @@ components:
             The same bound every other password field carries. A shorter one
             here would refuse a passphrase at redemption that the account
             could set five minutes later.
-        display_name: { type: string, maxLength: 64 }
+        # 120 is the database's CHECK on users.display_name, and every schema
+        # carrying the field states that same bound. This one said 64 until
+        # 1.5, which made an invitation the one way to be given a name you
+        # could not accept: an administrator could set 65-120 characters
+        # through AdminCreateUserRequest, and redemption refused it.
+        display_name: { type: string, maxLength: 120 }
 
     RegistrationMode:
       type: string

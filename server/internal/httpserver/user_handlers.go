@@ -22,7 +22,9 @@ import (
 // Admin-create contract bounds (openapi.yaml AdminCreateUserRequest).
 // Username and password bounds live in internal/uservalidate.
 const (
-	maxEmailLen       = 320
+	maxEmailLen = 320
+
+	// See displayNameRefusal in text.go for the bound and why it is one.
 	maxDisplayNameLen = 120
 
 	defaultListLimit = 50
@@ -38,6 +40,62 @@ func (s *apiServer) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSONValue(w, r, http.StatusOK, apiUser(prin.user))
+}
+
+// UpdateCurrentUser applies the caller's own patch of their account: only
+// the fields the request carries change (openapi.yaml updateCurrentUser).
+//
+// Which account it touches is decided entirely by the session — the id comes
+// from the principal, and the request body carries no id to tamper with, so
+// there is no account here but the caller's own.
+func (s *apiServer) UpdateCurrentUser(w http.ResponseWriter, r *http.Request) {
+	prin, ok := principalFrom(r.Context())
+	if !ok {
+		internalError(w, r, errors.New("users/me patch reached without principal"))
+		return
+	}
+	store, ok := s.requireStore(w, r)
+	if !ok {
+		return
+	}
+
+	var req api.UpdateCurrentUserRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	upd, ok := validateProfileUpdate(w, r, req)
+	if !ok {
+		return
+	}
+
+	updated, err := store.UpdateUserProfile(r.Context(), prin.user.ID, upd)
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
+	writeJSONValue(w, r, http.StatusOK, apiUser(updated))
+}
+
+// validateProfileUpdate enforces every UpdateCurrentUserRequest bound and
+// maps the request onto a storage.UserProfileUpdate. A field the request
+// omits stays nil, which is what "only the fields present are changed"
+// means by the time it reaches storage. On a violation it answers 400 and
+// reports false.
+func validateProfileUpdate(w http.ResponseWriter, r *http.Request, req api.UpdateCurrentUserRequest) (storage.UserProfileUpdate, bool) {
+	fail := func(message string) (storage.UserProfileUpdate, bool) {
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest, message)
+		return storage.UserProfileUpdate{}, false
+	}
+
+	var upd storage.UserProfileUpdate
+	if req.Locale != nil {
+		if !req.Locale.Valid() {
+			return fail("locale must be one of: en, fa")
+		}
+		locale := string(*req.Locale)
+		upd.Locale = &locale
+	}
+	return upd, true
 }
 
 // AdminListUsers returns one page of users with keyset cursor pagination.
@@ -164,8 +222,8 @@ func validateCreateUser(w http.ResponseWriter, r *http.Request, req api.AdminCre
 		nu.Email = &email
 	}
 	if req.DisplayName != nil {
-		if utf8.RuneCountInString(*req.DisplayName) > maxDisplayNameLen {
-			return fail("display_name must be at most 120 characters")
+		if msg := displayNameRefusal(*req.DisplayName); msg != "" {
+			return fail(msg)
 		}
 		nu.DisplayName = *req.DisplayName
 	}

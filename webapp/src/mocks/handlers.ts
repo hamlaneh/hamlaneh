@@ -11,6 +11,7 @@ type ChangePasswordRequest = components["schemas"]["ChangePasswordRequest"];
 type User = components["schemas"]["User"];
 type UserPage = components["schemas"]["UserPage"];
 type AdminCreateUserRequest = components["schemas"]["AdminCreateUserRequest"];
+type UpdateCurrentUserRequest = components["schemas"]["UpdateCurrentUserRequest"];
 type InstanceInfo = components["schemas"]["InstanceInfo"];
 type TwoFactorChallenge = components["schemas"]["TwoFactorChallenge"];
 type TotpLoginRequest = components["schemas"]["TotpLoginRequest"];
@@ -39,6 +40,12 @@ const FIXTURE_CSRF_VALUE = "fixture-csrf-not-a-real-token";
 export const FIXTURE_CREDENTIALS = {
   identifier: "fixture.admin",
   password: "fixture-password-only-for-mocks",
+} as const;
+
+/** A member whose account reads Persian — the locale-follows-the-person case. */
+export const FIXTURE_MEMBER_CREDENTIALS = {
+  identifier: "fixture.member",
+  password: "fixture-member-password-mock",
 } as const;
 
 /** A user still on their admin-assigned temporary password (forced change). */
@@ -186,7 +193,7 @@ interface FixtureAccount {
 
 const FIXTURE_ACCOUNTS: readonly FixtureAccount[] = [
   { user: FIXTURE_ADMIN, password: FIXTURE_CREDENTIALS.password },
-  { user: FIXTURE_MEMBER, password: "fixture-member-password-mock" },
+  { user: FIXTURE_MEMBER, password: FIXTURE_MEMBER_CREDENTIALS.password },
   { user: FIXTURE_NEWHIRE, password: FIXTURE_NEWHIRE_CREDENTIALS.password },
   { user: FIXTURE_TWOSTEP_USER, password: FIXTURE_TWOSTEP_CREDENTIALS.password },
 ];
@@ -471,6 +478,25 @@ export const handlers = [
     }
     return HttpResponse.json(user);
   }),
+
+  // Saving the account's language. Deliberately answered for a user who owes
+  // a password change too: the route is classSessionMustChangeAllowed, and a
+  // mock that refused there would hide the switcher the forced-change screen
+  // actually renders.
+  http.patch<never, UpdateCurrentUserRequest, User | ApiError>(
+    "/api/v1/users/me",
+    async ({ request }) => {
+      const user = activeUser();
+      if (user === null) {
+        return notAuthenticated();
+      }
+      const body = await request.json();
+      if (body.locale !== undefined) {
+        user.locale = body.locale;
+      }
+      return HttpResponse.json(user);
+    },
+  ),
 
   http.get<never, never, InstanceInfo>("/api/v1/instance", () =>
     HttpResponse.json(auth.instance),

@@ -180,6 +180,24 @@ func (e TwoFactorChallengeMethods) Valid() bool {
 	}
 }
 
+// Defines values for UpdateCurrentUserRequestLocale.
+const (
+	UpdateCurrentUserRequestLocaleEn UpdateCurrentUserRequestLocale = "en"
+	UpdateCurrentUserRequestLocaleFa UpdateCurrentUserRequestLocale = "fa"
+)
+
+// Valid indicates whether the value is a known member of the UpdateCurrentUserRequestLocale enum.
+func (e UpdateCurrentUserRequestLocale) Valid() bool {
+	switch e {
+	case UpdateCurrentUserRequestLocaleEn:
+		return true
+	case UpdateCurrentUserRequestLocaleFa:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UpdateOrgSettingsRequestDefaultLocale.
 const (
 	UpdateOrgSettingsRequestDefaultLocaleEn UpdateOrgSettingsRequestDefaultLocale = "en"
@@ -713,6 +731,14 @@ type UpdateChannelRequest struct {
 	Topic string `json:"topic"`
 }
 
+// UpdateCurrentUserRequest Only the fields present are changed. Locale is the only one: a screen that edits your own display name does not exist yet, and an endpoint that accepts a field nothing sends is a field nothing tests.
+type UpdateCurrentUserRequest struct {
+	Locale *UpdateCurrentUserRequestLocale `json:"locale,omitempty"`
+}
+
+// UpdateCurrentUserRequestLocale defines model for UpdateCurrentUserRequest.Locale.
+type UpdateCurrentUserRequestLocale string
+
 // UpdateOrgSettingsRequest Only the fields present are changed; each saves on its own.
 type UpdateOrgSettingsRequest struct {
 	DefaultLocale *UpdateOrgSettingsRequestDefaultLocale `json:"default_locale,omitempty"`
@@ -938,6 +964,9 @@ type OpenDirectMessageJSONRequestBody = OpenDirectMessageRequest
 // RedeemInviteJSONRequestBody defines body for RedeemInvite for application/json ContentType.
 type RedeemInviteJSONRequestBody = RedeemInviteRequest
 
+// UpdateCurrentUserJSONRequestBody defines body for UpdateCurrentUser for application/json ContentType.
+type UpdateCurrentUserJSONRequestBody = UpdateCurrentUserRequest
+
 // DisableTotpJSONRequestBody defines body for DisableTotp for application/json ContentType.
 type DisableTotpJSONRequestBody = PasswordConfirmRequest
 
@@ -1060,6 +1089,9 @@ type ServerInterface interface {
 	// GetCurrentUser The authenticated user.
 	// (GET /api/v1/users/me)
 	GetCurrentUser(w http.ResponseWriter, r *http.Request)
+	// UpdateCurrentUser Change your own account settings.
+	// (PATCH /api/v1/users/me)
+	UpdateCurrentUser(w http.ResponseWriter, r *http.Request)
 	// ListMySessions Every device signed in to the caller's account.
 	// (GET /api/v1/users/me/sessions)
 	ListMySessions(w http.ResponseWriter, r *http.Request)
@@ -2185,6 +2217,20 @@ func (siw *ServerInterfaceWrapper) GetCurrentUser(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// UpdateCurrentUser operation middleware
+func (siw *ServerInterfaceWrapper) UpdateCurrentUser(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateCurrentUser(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListMySessions operation middleware
 func (siw *ServerInterfaceWrapper) ListMySessions(w http.ResponseWriter, r *http.Request) {
 
@@ -2496,6 +2542,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/reset-request", wrapper.RequestPasswordReset)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/reset-complete", wrapper.CompletePasswordReset)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me", wrapper.GetCurrentUser)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/users/me", wrapper.UpdateCurrentUser)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me/totp", wrapper.GetTotpStatus)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/setup", wrapper.StartTotpSetup)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/verify", wrapper.VerifyTotpSetup)

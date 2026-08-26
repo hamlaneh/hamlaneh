@@ -241,6 +241,36 @@ func (s *Store) CountUsers(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
+// UserProfileUpdate is a user's patch of their own account. A nil field is
+// one the request did not mention and this call must not change.
+type UserProfileUpdate struct {
+	DisplayName *string
+	Locale      *string
+}
+
+// UpdateUserProfile applies a user's patch of their own account and returns
+// the stored row. ErrNotFound reports an account that is already gone.
+//
+// No lock and no transaction: this is one row, and nothing here is a fact
+// about a set the way the admin flags are — a display name and a locale
+// cannot leave the instance in a state no one can recover from.
+func (s *Store) UpdateUserProfile(ctx context.Context, userID uuid.UUID, upd UserProfileUpdate) (User, error) {
+	row := s.pool.QueryRow(ctx,
+		`UPDATE users
+		 SET display_name = COALESCE($1::text, display_name),
+		     locale       = COALESCE($2::text, locale),
+		     updated_at   = now()
+		 WHERE id = $3
+		 RETURNING `+userColumns,
+		upd.DisplayName, upd.Locale, userID,
+	)
+	u, err := scanUser(row)
+	if err != nil {
+		return User{}, fmt.Errorf("update user profile: %w", err)
+	}
+	return u, nil
+}
+
 // AdminUserUpdate is the admin dashboard's patch of one account. A nil field
 // is one the request did not mention and this call must not change.
 type AdminUserUpdate struct {

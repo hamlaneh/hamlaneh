@@ -70,9 +70,23 @@ export function translate(
 }
 
 /**
+ * Locale tag with Latin digits forced, matching `src/chat/format.ts`.
+ *
+ * The Persian UI uses ASCII 0-9 for every app-generated number. That is the
+ * designer's locked correction of 2026-08-21 (docs/design/CHAT_HANDOFF.md,
+ * "Numerals"), which explicitly supersedes the artboards that show Persian
+ * digits — so do not re-derive this from an artboard. A bare
+ * `Intl.NumberFormat("fa")` yields ۱۲, which is what the screen used to do
+ * and no longer does.
+ */
+function latinDigitLocale(locale: string): string {
+  return locale.startsWith("fa") ? "fa-u-nu-latn" : locale;
+}
+
+/**
  * i18next placeholders, including the formatted `{{count, number}}` form.
- * Numbers go through Intl exactly as i18next's own number formatter does,
- * so Persian renders ۱۲ and a spec can assert the string the screen shows.
+ * Numbers go through Intl exactly as i18next's own number formatter does, so
+ * a spec asserts the string the screen actually shows.
  */
 function interpolate(
   locale: TestOptions["uiLocale"],
@@ -87,7 +101,7 @@ function interpolate(
         return whole;
       }
       return format === "number"
-        ? new Intl.NumberFormat(locale).format(Number(value))
+        ? new Intl.NumberFormat(latinDigitLocale(locale)).format(Number(value))
         : String(value);
     },
   );

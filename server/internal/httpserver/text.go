@@ -60,3 +60,38 @@ func hasControlRunes(s string) bool {
 func storableText(s string) bool {
 	return utf8.ValidString(s) && !hasControlRunes(s)
 }
+
+// storableLine is storableText for a field that is one line.
+//
+// storableText exempts tab, newline and carriage return because a message
+// body is built on them. A display name is not: it sits in a member list, a
+// message header and an audit row, all of which give it one line, so a name
+// carrying newlines can only push those layouts around. Same storability
+// promise, stricter about what counts as writing.
+func storableLine(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsFunc(s, func(r rune) bool {
+		return r < 0x20 || r == 0x7f
+	})
+}
+
+// displayNameRefusal reports why a display name cannot be accepted, or "" if
+// it can. The message is the 400's body, so it is written for the client.
+//
+// One function for every path that carries a display name — admin creation
+// and invite redemption — because they disagreeing is not hypothetical:
+// redemption bounded it at 64 while admin creation allowed 120, which made
+// an invitation the one way to be handed a name you could not accept. The
+// bound is the database's CHECK on users.display_name; anything tighter is a
+// value the store would have kept and this layer threw away.
+func displayNameRefusal(name string) string {
+	if utf8.RuneCountInString(name) > maxDisplayNameLen {
+		return "display_name must be at most 120 characters"
+	}
+	// The same storability rule the rest of the client's free text goes
+	// through: a name PostgreSQL cannot hold is a 400, never a 500 from
+	// inside the driver.
+	if !storableLine(name) {
+		return "display_name carries characters that cannot be stored"
+	}
+	return ""
+}

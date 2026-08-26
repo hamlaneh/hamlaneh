@@ -77,12 +77,16 @@ var routePolicies = map[string]routePolicy{
 	"POST /api/v1/auth/logout":          {class: classSessionMustChangeAllowed},
 	"POST /api/v1/auth/change-password": {class: classSessionMustChangeAllowed},
 	"GET /api/v1/users/me":              {class: classSessionMustChangeAllowed},
-	"GET /api/v1/instance":              {class: classPublic},
-	"POST /api/v1/auth/reset-request":   {class: classPublic},
-	"POST /api/v1/auth/reset-complete":  {class: classPublic},
-	"POST /api/v1/auth/login/totp":      {class: classChallengeCookie},
-	"GET /api/v1/admin/users":           {class: classAdmin, action: authz.AdminUsersList},
-	"POST /api/v1/admin/users":          {class: classAdmin, action: authz.AdminUsersCreate},
+	// The patch is deliberately NOT in the must-change trio: reading the
+	// forced-change screen needs the account (the GET above), editing the
+	// account does not, and the change comes first.
+	"PATCH /api/v1/users/me":           {class: classSessionMustChangeAllowed},
+	"GET /api/v1/instance":             {class: classPublic},
+	"POST /api/v1/auth/reset-request":  {class: classPublic},
+	"POST /api/v1/auth/reset-complete": {class: classPublic},
+	"POST /api/v1/auth/login/totp":     {class: classChallengeCookie},
+	"GET /api/v1/admin/users":          {class: classAdmin, action: authz.AdminUsersList},
+	"POST /api/v1/admin/users":         {class: classAdmin, action: authz.AdminUsersCreate},
 
 	// Phase 1.2 messaging surface. Every one of these carries sessionCookie
 	// in the contract, none is admin-only, and none joins the must-change

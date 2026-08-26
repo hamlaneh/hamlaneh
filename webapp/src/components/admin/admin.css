@@ -1129,3 +1129,112 @@
   align-items: center;
   gap: var(--spacing-2);
 }
+
+/* ── below the drawn artboard width ────────────────────────────────── */
+
+/* No mobile artboard exists for this dashboard (docs/design/STATUS.md), so
+ * nothing here invents a visual design: it is the delivered set surviving a
+ * narrow viewport, built from the same tokens and from the pattern the
+ * settings panel already uses at this breakpoint — the navigation rail
+ * becomes a horizontal strip above the content it drives.
+ *
+ * The one structural difference: the two panes stop scrolling independently
+ * and the document scrolls as a whole. A 260px rail beside a 375px viewport
+ * leaves 115px for a table, and nested scroll regions inside a phone-height
+ * viewport are the other way this breaks. Everything keeps its DOM order, so
+ * the tab order is unchanged.
+ *
+ * 899 is the tier the delivered chat and settings sets already break at
+ * (CHAT_HANDOFF "Responsive tiers": >=1280 / 900-1279 / <=899). */
+@media (max-width: 899px) {
+  .hm-admin {
+    --hm-admin-gutter: var(--spacing-4);
+
+    flex-direction: column;
+    block-size: auto;
+    min-block-size: 100dvh;
+    overflow: visible;
+  }
+
+  .hm-admin__sidebar {
+    inline-size: 100%;
+    flex: 0 0 auto;
+    border-inline-end: 0;
+    border-block-end: 1px solid var(--color-border-subtle);
+  }
+
+  /* The exit and the org identity share one row instead of stacking. */
+  .hm-admin__head {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-3);
+    padding: var(--spacing-2) var(--spacing-3);
+    border-block-end: 0;
+  }
+
+  .hm-admin__exit {
+    flex: 0 0 auto;
+  }
+
+  .hm-admin__org {
+    min-inline-size: 0;
+    padding-inline: 0;
+  }
+
+  .hm-admin__nav {
+    flex: 0 0 auto;
+    min-block-size: 0;
+    padding: 0 var(--spacing-2) var(--spacing-2);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .hm-admin__nav-list {
+    flex-direction: row;
+  }
+
+  .hm-admin__nav-row {
+    white-space: nowrap;
+  }
+
+  .hm-admin__nav-label {
+    flex: 0 0 auto;
+  }
+
+  .hm-admin__content {
+    flex: 1 0 auto;
+    overflow: visible;
+  }
+
+  .hm-admin__header {
+    flex-wrap: wrap;
+    padding-block: var(--spacing-6) var(--spacing-4);
+  }
+
+  .hm-admin__body {
+    min-block-size: 0;
+    overflow-y: visible;
+  }
+
+  /* Two fields drawn side by side have ~160px each at this width; below the
+   * drawn column they stack. */
+  .hm-admin-modal__row {
+    flex-wrap: wrap;
+  }
+
+  .hm-admin-modal__row > * {
+    flex: 1 1 220px;
+  }
+
+  .hm-admin-modal__header,
+  .hm-admin-modal__body,
+  .hm-admin-modal__footer {
+    padding-inline: var(--spacing-4);
+  }
+
+  .hm-admin-modal__footer,
+  .hm-admin-paging {
+    flex-wrap: wrap;
+  }
+}

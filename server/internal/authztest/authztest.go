@@ -568,6 +568,23 @@ func instanceRegistry() []Entry {
 			WantCode: map[Principal]string{Anonymous: "not_authenticated"},
 		},
 		{
+			// The patch of the same path joins its GET in the must-change
+			// trio. It carries locale and nothing else, and the
+			// forced-change screen renders the language switcher: refusing
+			// the save there would leave a control that appears to work and
+			// silently does not. Each cell edits only the fixture that sent
+			// it, which is the property this row pins.
+			Method: http.MethodPatch,
+			Path:   "/api/v1/users/me",
+			Class:  ClassSession,
+			Body:   func(Fixture) string { return `{"locale":"fa"}` },
+			Want: map[Principal]int{
+				Anonymous: http.StatusUnauthorized, Member: http.StatusOK,
+				MemberMustChange: http.StatusOK, Admin: http.StatusOK,
+			},
+			WantCode: map[Principal]string{Anonymous: "not_authenticated"},
+		},
+		{
 			Method: http.MethodGet,
 			Path:   "/api/v1/admin/users",
 			Class:  ClassAdmin,

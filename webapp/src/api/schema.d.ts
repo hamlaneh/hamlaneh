@@ -209,7 +209,12 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change your own account settings.
+         * @description Locale belongs on the account rather than only in the browser: a person who reads Persian reads it on their phone too, and a preference that lives in localStorage silently reverts on every new device and every cleared browser. The client still applies its local choice immediately — the round trip must not make the interface wait — and this is what makes the choice follow the person.
+         *     Unlike its siblings this stays open while must_change_password is set. The forced-change screen renders the language switcher, so refusing the save there would leave a control that appears to work and silently does not; and choosing which language to read the password rules in is not something the gate exists to prevent.
+         */
+        patch: operations["updateCurrentUser"];
         trace?: never;
     };
     "/api/v1/users/me/totp": {
@@ -1102,6 +1107,11 @@ export interface components {
             /** @description Present when another page exists. */
             next_cursor?: string;
         };
+        /** @description Only the fields present are changed. Locale is the only one: a screen that edits your own display name does not exist yet, and an endpoint that accepts a field nothing sends is a field nothing tests. */
+        UpdateCurrentUserRequest: {
+            /** @enum {string} */
+            locale?: "en" | "fa";
+        };
         AdminUserPage: {
             users: components["schemas"]["AdminUser"][];
             /** @description Present when another page exists. */
@@ -1695,6 +1705,33 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    updateCurrentUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCurrentUserRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated account. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     getTotpStatus: {

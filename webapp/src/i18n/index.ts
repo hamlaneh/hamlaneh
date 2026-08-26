@@ -1,6 +1,8 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
+import { latinDigitLocale } from "./digits";
+
 import en from "../locales/en/common.json";
 import fa from "../locales/fa/common.json";
 
@@ -13,6 +15,7 @@ export const LANGUAGE_STORAGE_KEY = "hamlaneh.language";
 export function isLanguage(value: unknown): value is Language {
   return (SUPPORTED_LANGUAGES as readonly unknown[]).includes(value);
 }
+
 
 function readStoredLanguage(): Language {
   try {
@@ -59,6 +62,21 @@ void i18n.use(initReactI18next).init({
     escapeValue: false,
   },
 });
+
+/*
+ * i18next's built-in `number` formatter asks Intl for the language's own
+ * numbering system, which puts Persian digits in every {{x, number}} the
+ * Persian UI renders. Replacing it by name is how the digit policy above
+ * reaches the ~19 interpolated numbers in the catalogue. Options are passed
+ * through, so {{x, number(minimumFractionDigits: 2)}} keeps working.
+ */
+i18n.services.formatter?.add(
+  "number",
+  // i18next hands the formatter's options through as `any`; naming the shape
+  // here is what keeps that `any` from reaching Intl unchecked.
+  (value: unknown, lng: string | undefined, options: Intl.NumberFormatOptions) =>
+    new Intl.NumberFormat(latinDigitLocale(lng ?? FALLBACK_LANGUAGE), options).format(Number(value)),
+);
 
 i18n.on("languageChanged", (language) => {
   if (isLanguage(language)) {

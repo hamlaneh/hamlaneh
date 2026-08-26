@@ -42,8 +42,12 @@ const onCI = process.env.CI !== undefined;
  * in — so it lives in its own project, which `dependencies` puts last.
  */
 const RATE_LIMIT_SPEC = "**/rate-limit.e2e.ts";
-/** Persian-only assertions; running them under the `en` project is meaningless. */
-const PERSIAN_SPEC = "**/fa-smoke.e2e.ts";
+/**
+ * Persian-only assertions; running them under the `en` project is meaningless
+ * — and for the snapshot suite it is worse than meaningless, because a second
+ * project would ask for a second set of committed baselines nobody wants.
+ */
+const PERSIAN_SPECS = ["**/fa-smoke.e2e.ts", "**/fa-rtl-snapshots.e2e.ts"];
 
 /**
  * `.e2e.ts`, not `.spec.ts`: Vitest's default include is
@@ -81,7 +85,7 @@ export default defineConfig<TestOptions>({
     {
       name: "en",
       use: { ...devices["Desktop Chrome"], uiLocale: "en" },
-      testIgnore: [RATE_LIMIT_SPEC, PERSIAN_SPEC],
+      testIgnore: [RATE_LIMIT_SPEC, ...PERSIAN_SPECS],
     },
     {
       name: "fa",

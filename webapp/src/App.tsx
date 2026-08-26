@@ -8,6 +8,7 @@ import { readInviteToken } from "./auth/inviteToken";
 import { consumeResetToken } from "./auth/resetToken";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AuthShell } from "./components/auth/AuthShell";
+import { useAccountLanguage } from "./i18n/useLanguage";
 import { InstanceProvider } from "./instance/InstanceProvider";
 import { ChangePasswordScreen } from "./screens/ChangePasswordScreen";
 import { ChatApp } from "./screens/ChatApp";
@@ -117,6 +118,20 @@ function App() {
     // Session bootstrap: resolve the initial "loading" state.
     refreshSession();
   }, [refreshSession]);
+
+  // The language follows the person, not the browser: the account's locale
+  // takes over the moment there is an account, and every later switch is
+  // saved back to it. See useAccountLanguage for why the account outranks
+  // what this browser remembered.
+  useAccountLanguage(session.status === "authenticated" ? session.user.locale : null);
+
+  useEffect(() => {
+    // index.html ships an English <title> the app never revisited, so the tab
+    // read "Hamlaneh" while the whole interface was in Persian. `lang`/`dir`
+    // are the i18n module's to set; this is the same idea for the one piece of
+    // chrome that lives outside React's tree.
+    document.title = t("app.name");
+  }, [t]);
 
   const handleAuthenticated = (user: User) => {
     setFlow({ screen: "login" });

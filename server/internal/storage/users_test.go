@@ -154,6 +154,57 @@ func TestUsersIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("UpdateUserProfile changes only the fields the patch names", func(t *testing.T) {
+		created := mustCreateUser(ctx, t, store, newUser("ivan"))
+		if created.Locale != "en" {
+			t.Fatalf("fixture locale = %q, want en", created.Locale)
+		}
+
+		// A language change: the display name must survive it untouched.
+		locale := "fa"
+		updated, err := store.UpdateUserProfile(ctx, created.ID,
+			storage.UserProfileUpdate{Locale: &locale})
+		if err != nil {
+			t.Fatalf("UpdateUserProfile(locale): %v", err)
+		}
+		if updated.Locale != "fa" {
+			t.Errorf("locale = %q, want fa", updated.Locale)
+		}
+		if updated.DisplayName != created.DisplayName {
+			t.Errorf("display_name = %q, want the untouched %q", updated.DisplayName, created.DisplayName)
+		}
+
+		// And the mirror image: a rename must not send the reader back to
+		// English.
+		name := "ایوان"
+		updated, err = store.UpdateUserProfile(ctx, created.ID,
+			storage.UserProfileUpdate{DisplayName: &name})
+		if err != nil {
+			t.Fatalf("UpdateUserProfile(display_name): %v", err)
+		}
+		if updated.DisplayName != name {
+			t.Errorf("display_name = %q, want %q", updated.DisplayName, name)
+		}
+		if updated.Locale != "fa" {
+			t.Errorf("locale = %q, want the untouched fa", updated.Locale)
+		}
+
+		// Nothing else moved: this patch owns two columns and no more.
+		if updated.Username != created.Username || updated.IsAdmin != created.IsAdmin ||
+			updated.MustChangePassword != created.MustChangePassword ||
+			updated.PasswordHash != created.PasswordHash {
+			t.Errorf("patch reached beyond its two columns: %+v", updated)
+		}
+	})
+
+	t.Run("UpdateUserProfile of an unknown user is ErrNotFound", func(t *testing.T) {
+		locale := "fa"
+		_, err := store.UpdateUserProfile(ctx, uuid.New(), storage.UserProfileUpdate{Locale: &locale})
+		if !errors.Is(err, storage.ErrNotFound) {
+			t.Errorf("got %v, want ErrNotFound", err)
+		}
+	})
+
 	t.Run("CountUsers counts", func(t *testing.T) {
 		before, err := store.CountUsers(ctx)
 		if err != nil {

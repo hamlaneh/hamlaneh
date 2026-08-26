@@ -43,6 +43,10 @@ type Store interface {
 	// UserSummary, and broadcasting one with an empty username is worse than
 	// not broadcasting at all.
 	UserByID(ctx context.Context, id uuid.UUID) (storage.User, error)
+	// UpdateUserProfile is the settings panel's own edit of the caller's
+	// account — the locale among them, so a language choice follows the
+	// person rather than the browser it was made in.
+	UpdateUserProfile(ctx context.Context, userID uuid.UUID, upd storage.UserProfileUpdate) (storage.User, error)
 
 	CreateSession(ctx context.Context, ns storage.NewSession) (storage.Session, error)
 	SessionUserByAccessHash(ctx context.Context, accessHash []byte) (storage.Session, storage.User, error)

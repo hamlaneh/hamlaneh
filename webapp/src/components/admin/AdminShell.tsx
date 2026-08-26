@@ -22,15 +22,22 @@ const SECTIONS = [
   { to: "/admin/audit", end: false, key: "audit", Icon: ScrollTextIcon },
 ] as const;
 
+type SectionKey = (typeof SECTIONS)[number]["key"];
+
 export interface AdminShellProps {
   currentUser: User;
   organizationName: string;
   /**
-   * Row counts for the nav. A screen supplies only the count it has actually
-   * loaded — the users screen knows how many users there are, and nothing
-   * else fetches a list it does not draw just to put a number beside it.
+   * Row counts for the nav, keyed by section. A screen supplies only the
+   * count it has actually loaded — the users screen knows how many users
+   * there are, and nothing else fetches a list it does not draw just to put
+   * a number beside it.
+   *
+   * Keyed rather than a field per section so the lookup below cannot go out
+   * of step with SECTIONS: a ternary here handed `org` and `audit` the
+   * invites count, and the invites screen drew `0` beside all three.
    */
-  counts?: { users?: number | undefined; invites?: number | undefined };
+  counts?: Partial<Record<SectionKey, number | undefined>>;
   /** Page title, subtitle and the one action the artboard puts beside them. */
   title: string;
   subtitle: string;
@@ -83,7 +90,7 @@ export function AdminShell({
         <div className="hm-admin__nav">
           <ul className="hm-admin__nav-list">
             {SECTIONS.map(({ to, end, key, Icon }) => {
-              const count = key === "users" ? counts?.users : counts?.invites;
+              const count = counts?.[key];
               return (
                 <li key={key}>
                   <NavLink className="hm-admin__nav-row" to={to} end={end}>

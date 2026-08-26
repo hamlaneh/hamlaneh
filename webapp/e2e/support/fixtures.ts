@@ -78,6 +78,10 @@ export const test = base.extend<Fixtures & TestOptions, WorkerFixtures>({
    * than clicked in the switcher: a Persian test must start in Persian, not
    * pass through an English screen first, and it must not depend on the
    * switcher working in order to test something else.
+   *
+   * This settles only the screens before sign-in. Once a session exists the
+   * interface follows the account's locale, which is why the account factory
+   * is handed the same locale — see AccountFactory's constructor.
    */
   context: async ({ context, uiLocale }, provide) => {
     await seedLanguage(context, uiLocale);
@@ -111,8 +115,8 @@ export const test = base.extend<Fixtures & TestOptions, WorkerFixtures>({
     await provide(translator(uiLocale));
   },
 
-  accounts: async ({ adminSession }, provide) => {
-    const factory = new AccountFactory(readStackState().baseURL, adminSession);
+  accounts: async ({ adminSession, uiLocale }, provide) => {
+    const factory = new AccountFactory(readStackState().baseURL, adminSession, uiLocale);
     await provide(factory);
     await factory.dispose();
   },

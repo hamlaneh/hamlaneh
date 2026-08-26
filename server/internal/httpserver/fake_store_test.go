@@ -55,6 +55,7 @@ type fakeStore struct {
 	completeTotpChallenge        func(ctx context.Context, att storage.TotpChallengeAttempt) (storage.User, storage.Session, storage.TotpChallengeOutcome, error)
 
 	userByID            func(ctx context.Context, id uuid.UUID) (storage.User, error)
+	updateUserProfile   func(ctx context.Context, userID uuid.UUID, upd storage.UserProfileUpdate) (storage.User, error)
 	createChannel       func(ctx context.Context, nc storage.NewChannel) (storage.Channel, error)
 	channelForUser      func(ctx context.Context, channelID, userID uuid.UUID) (storage.Channel, error)
 	updateChannelTopic  func(ctx context.Context, id uuid.UUID, topic string) (storage.Channel, error)
@@ -544,6 +545,13 @@ func (f *fakeStore) UserByID(ctx context.Context, id uuid.UUID) (storage.User, e
 		return storage.User{}, errFakeUnwired
 	}
 	return f.userByID(ctx, id)
+}
+
+func (f *fakeStore) UpdateUserProfile(ctx context.Context, userID uuid.UUID, upd storage.UserProfileUpdate) (storage.User, error) {
+	if f.updateUserProfile == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.updateUserProfile(ctx, userID, upd)
 }
 
 func (f *fakeStore) UpdateUserAdmin(ctx context.Context, userID uuid.UUID, upd storage.AdminUserUpdate) (storage.User, error) {

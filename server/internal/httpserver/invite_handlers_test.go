@@ -359,7 +359,17 @@ func TestRedeemInviteRefusals(t *testing.T) {
 			`{"username":"newcomer","password":"` + strings.Repeat("p", 201) + `"}`,
 			nil, http.StatusBadRequest, "invalid_request"},
 		{"display name too long",
-			`{"username":"newcomer","password":"a redemption passphrase","display_name":"` + strings.Repeat("d", 65) + `"}`,
+			`{"username":"newcomer","password":"a redemption passphrase","display_name":"` + strings.Repeat("d", 121) + `"}`,
+			nil, http.StatusBadRequest, "invalid_request"},
+		// A NUL is storage-refused: PostgreSQL cannot hold one, so without the
+		// check the row fails inside the transaction and the caller gets a 500
+		// for what is plainly a bad request. A newline is layout-refused: the
+		// name gets one line everywhere it is shown.
+		{"display name carries a NUL",
+			`{"username":"newcomer","password":"a redemption passphrase","display_name":"Ali\u0000Reza"}`,
+			nil, http.StatusBadRequest, "invalid_request"},
+		{"display name spans two lines",
+			`{"username":"newcomer","password":"a redemption passphrase","display_name":"Ali\nReza"}`,
 			nil, http.StatusBadRequest, "invalid_request"},
 		{"username taken", `{"username":"newcomer","password":"a redemption passphrase"}`,
 			storage.ErrUsernameTaken, http.StatusConflict, "username_taken"},

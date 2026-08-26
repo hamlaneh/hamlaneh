@@ -401,10 +401,11 @@ public registration is off by default, it is **the** way users come into existen
 
 ### 1.5 Bilingual UI + PWA baseline
 
-- [ ] All Phase 1 screens fully translated (`fa`), RTL-correct, no hard-coded strings
-- [ ] Language switcher; per-user locale preference
-- [ ] PWA baseline: web manifest, installability, mobile-responsive pass (interim mobile story
-      per PLAN.md §11 until native apps)
+- [x] All Phase 1 screens fully translated (`fa`), RTL-correct, no hard-coded strings
+- [x] Language switcher; per-user locale preference
+- [x] PWA baseline: web manifest, installability, mobile-responsive pass (interim mobile story
+      per PLAN.md §11 until native apps) — no service worker, deliberately: cookie auth plus a
+      realtime socket makes a cached shell a correctness hazard, not an offline story
 - Tests: e2e per the CLAUDE.md tiering (full `en` + `fa` smoke per PR; full both nightly);
   CI fails on locale key divergence; **RTL snapshot tests**: Playwright in `fa` asserts
   `<html dir="rtl" lang="fa">` and compares committed screenshots of the 5 core screens —
@@ -412,8 +413,15 @@ public registration is off by default, it is **the** way users come into existen
 
 ### 1.6 Enterprise identity (may overlap Phase 2–4, must ship before public launch)
 
+- [ ] **Org policies actually bind** (pre-work, no SSO code — see `docs/adr/004-enterprise-identity.md`).
+      `require_totp` and `session_lifetime_hours` are stored and editable since 1.4 and read by
+      nothing: an admin turns on enforced two-step, the screen agrees, and the instance does not
+      change. Enforcement lands per session at mint, so flipping the policy strands no live
+      session. Sign-ins become audited at the same time — they are not today.
 - [ ] SSO: OIDC first (SAML post-v1 unless a Managed pre-sale demands it) — free, per PLAN.md §6.3
 - [ ] SCIM provisioning — deprovisioning kills all sessions/devices instantly
+- [ ] SSO just-in-time provisioning, its own org setting, default off — last on purpose: it is
+      the widest door, and it lands after every gate it must respect is tested
 - Tests: SCIM deprovision → every session and WS socket of that user dead within 60s;
   SSO-created users still subject to org 2FA policy; SSO cannot bypass registration-off logic
 

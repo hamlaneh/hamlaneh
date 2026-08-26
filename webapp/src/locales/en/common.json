@@ -546,6 +546,13 @@
       "cancel": "Cancel",
       "close": "Close"
     },
+    "fileSize": {
+      "b": "{{value}} B",
+      "kb": "{{value}} KB",
+      "mb": "{{value}} MB",
+      "gb": "{{value}} GB",
+      "tb": "{{value}} TB"
+    },
     "noConversations": "You are not in any conversation yet. Create a channel to start one.",
     "conversationsFailed": "We could not load your conversations. Reload the page to try again.",
     "conversationUnavailable": "That conversation is not available to you. Pick one from the list to carry on.",
@@ -704,7 +711,7 @@
       "password": "Your password must be at least {{minimum}} characters.",
       "mismatch": "The two passwords do not match.",
       "unusable": "This invitation cannot be used any more.",
-      "rateLimited": "Too many attempts. Try again in {{count, number}} seconds.",
+      "rateLimited": "Too many attempts. Try again in a few minutes.",
       "unexpected": "Something went wrong. Try again."
     }
   }

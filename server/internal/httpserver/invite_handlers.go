@@ -27,7 +27,6 @@ const (
 	defaultInviteHours    = 168
 	maxInviteHours        = 720
 	maxInviteNoteLen      = 200
-	maxInviteDisplayName  = 64
 	maxInvitePasswordLen  = 200
 	minInviteTokenLen     = 20
 	maxInviteTokenLen     = 128
@@ -313,8 +312,8 @@ func validateRedemption(w http.ResponseWriter, r *http.Request, req api.RedeemIn
 
 	nu := storage.NewUser{Username: req.Username, Locale: locale}
 	if req.DisplayName != nil {
-		if utf8.RuneCountInString(*req.DisplayName) > maxInviteDisplayName {
-			return fail("display_name must be at most 64 characters")
+		if msg := displayNameRefusal(*req.DisplayName); msg != "" {
+			return fail(msg)
 		}
 		nu.DisplayName = *req.DisplayName
 	}

@@ -1,0 +1,42 @@
+/*
+ * Injected into the page immediately before every committed screenshot
+ * (specs/fa-rtl-snapshots.e2e.ts, via toHaveScreenshot's `stylePath`).
+ *
+ * Everything here neutralises a value that genuinely cannot be pinned from a
+ * test, and each rule is written to take away as little as possible: a mask
+ * would hide the whole region including any regression inside it, while these
+ * leave the element's box, position and mirroring under test and remove only
+ * the part that differs between two identical runs.
+ *
+ * Anything that CAN be pinned is pinned in the spec instead — fixed display
+ * names, fixed channel slugs, fixed message text, a fixed viewport and UTC.
+ */
+
+/*
+ * Avatar tint is a hash of the server-generated user id (src/chat/avatar.ts),
+ * so it is a different one of the four fills on every run. Forced to one fill
+ * rather than masked, which keeps the initial, the size, the presence dot and
+ * the mirrored position of the avatar under test.
+ */
+.hm-avatar__initial {
+  background: var(--color-brand-primary) !important;
+}
+
+/*
+ * A message carries the time the SERVER stored it, so it reads as the wall
+ * clock of the run. Hidden rather than masked because the digits are the only
+ * unpinnable part: the element keeps its box, so the meta row's layout — which
+ * is what mirrors — still has to be right.
+ */
+.hm-msg-group__time {
+  visibility: hidden !important;
+}
+
+/*
+ * The text caret blinks on a timer no test controls, so a screenshot of a
+ * focused field catches it on or off at random. The focus ring itself is left
+ * alone: that one is a design fact worth failing over.
+ */
+* {
+  caret-color: transparent !important;
+}

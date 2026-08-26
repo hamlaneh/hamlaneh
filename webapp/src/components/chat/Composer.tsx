@@ -68,10 +68,12 @@ export function Composer({ channelId, target, disabled, disabledReason, onSend }
 
   const failureText = (reason: UploadFailure): string => {
     switch (reason) {
-      case "tooLarge":
+      case "tooLarge": {
+        const limit = formatFileSize(info.max_file_size_bytes, i18n.language);
         return t("chat.composer.uploadTooLarge", {
-          limit: formatFileSize(info.max_file_size_bytes, i18n.language),
+          limit: t(limit.unitKey, { value: limit.value }),
         });
+      }
       case "typeMismatch":
         return t("chat.composer.uploadTypeMismatch");
       case "failed":

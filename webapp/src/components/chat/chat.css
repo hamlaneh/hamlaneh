@@ -81,8 +81,13 @@
   border-block-end: 1px solid var(--color-border-subtle);
 }
 
-/* Only the drawer has anything to close. */
-.hm-sidebar__close {
+/* Only the drawer has anything to close.
+ *
+ * The class list has to win against .hm-icon-button's own `display: flex`,
+ * which carries the same specificity and comes later in this file — so a bare
+ * .hm-sidebar__close lost, and the drawer's close button sat on the desktop
+ * sidebar. Both classes, then: higher specificity, no !important. */
+.hm-icon-button.hm-sidebar__close {
   display: none;
 }
 
@@ -1600,7 +1605,10 @@
 
   .hm-chat-header__drawer-toggle,
   .hm-chat-header__search-toggle,
-  .hm-sidebar__close {
+  /* Two classes, matching the rule that hides it above: a media query adds no
+   * specificity, so a bare .hm-sidebar__close here would lose to it and the
+   * drawer would have no way out. */
+  .hm-icon-button.hm-sidebar__close {
     display: flex;
     border-radius: var(--radius-md);
     color: var(--color-text-primary);

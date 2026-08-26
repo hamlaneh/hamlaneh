@@ -125,7 +125,9 @@ installs it on its own server with one command and owns its communication comple
   together in one browser and out of another.
 - The React webapp also has working en/fa i18n with RTL switching, a locale key-parity check,
   a typed API client with CSRF and transparent session refresh, and MSW mock handlers typed
-  against the generated schema (off by default).
+  against the generated schema (off by default). The interface language follows the **account**,
+  not the browser: `PATCH /api/v1/users/me` stores it, and localStorage answers only for the
+  screens before sign-in.
 - `deploy/install.sh` v0 (OS detect, Docker install, secret generation) and
   `deploy/verify-defaults.sh` (22 secure-default checks, all passing — including that the
   served page is the real bundle and not a placeholder).
@@ -238,23 +240,37 @@ than a lookup per row; mentions are parsed from the contract's `<@{id}>` token w
 sent, and only members of the conversation get a row — so no mention can ever name somebody who
 was not entitled to read the message it points at.
 
+- **Bilingual UI and the PWA baseline (Phase 1.5).** A web manifest with `any` and maskable
+  icons generated from the committed brand marks, an `apple-touch-icon`, and theme colours taken
+  from the token sheet — installable with no service worker, deliberately: authentication is
+  cookie-based and chat arrives over a WebSocket, so a cached shell would serve a revoked
+  session a page it should not have. Every screen is checked at 375px in both directions, and
+  the Persian UI sets every app-generated number in ASCII digits, which is one rule in one
+  module (`src/i18n/digits.ts`) rather than a ternary copied into three.
 
 ## What's next
 
-**Phase 1.3 — files, previews and file search.** The upload pipeline with content-type
-enforcement, size caps, EXIF stripping and sandboxed processing, served from a cookie-less
-origin; link previews behind an isolated egress proxy that refuses private address ranges; and
-the `kind=files` half of search, which the contract already accepts and answers with an empty
-page. Then 1.4 the admin dashboard, 1.5 PWA baseline, 1.6 SSO/SCIM.
+**Phase 1.6 — enterprise identity.** OIDC single sign-on first, free rather than paywalled
+(PLAN.md §6.3), with SAML held back unless a paying pre-sale asks for it; then SCIM
+provisioning, whose deprovision path has to kill every session and socket of the removed
+account, not merely mark it inactive. Two rules the slice exists to prove: an SSO-created
+account is still subject to the org's two-step policy, and single sign-on cannot walk around
+registration being off.
 
-**Phase 1.2 is done.** Chat works end to end and a Playwright suite proves it against the real
-stack rather than against mocks — two browsers, two accounts, a message crossing live. Two
-things are recorded as accepted limitations rather than unfinished work: search matches
-characters and not word stems, in either language, and a search snippet is the whole message
-because the contract's parts array has to reconstruct it.
+Then the Phase 1 gate, which is not a code task: two consecutive weeks of the project actually
+being used to run the project.
 
-**All Phase 1 designs are delivered** — auth, chat, admin dashboard, user settings — so from
-here the backend is the pacing item, not the design.
+**Everything through Phase 1.5 is done**, each proven by a Playwright suite against the real
+stack rather than against mocks — two browsers, two accounts, a message crossing live; and in
+Persian, five committed screenshots that fail on an unapproved pixel. Accepted limitations,
+recorded rather than left as unfinished work: search matches characters and not word stems in
+either language, and a search snippet is the whole message because the contract's parts array
+has to reconstruct it.
+
+**Desktop designs are delivered for every Phase 1 screen** — auth, chat, admin dashboard, user
+settings. Phone-width artboards are not: `docs/design/STATUS.md` is the authority on which
+screens still say `awaiting-design`, and it is the file to read rather than this sentence,
+which cannot know what was delivered after it was written.
 
 ## Architecture at a glance
 
