@@ -304,6 +304,7 @@
     },
     "noConversations": "You are not in any conversation yet. Create a channel to start one.",
     "conversationsFailed": "We could not load your conversations. Reload the page to try again.",
+    "conversationUnavailable": "That conversation is not available to you. Pick one from the list to carry on.",
     "sidebar": {
       "label": "Conversations",
       "channels": "Channels",
@@ -397,6 +398,8 @@
       "title": "This is the beginning of {{channel}}",
       "body": "Give it a topic so people know what belongs here, then invite the few who need it.",
       "bodyOwner": "You created this channel today. Give it a topic so people know what belongs here, then invite the few who need it.",
+      "dmTitle": "This is the beginning of your conversation with {{name}}.",
+      "dmBody": "Messages here stay between the two of you.",
       "invite": "Invite people",
       "setTopic": "Set a topic",
       "onlyYou": "Only you can see this channel until someone is invited."

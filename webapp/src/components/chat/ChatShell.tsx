@@ -226,18 +226,30 @@ export function ChatShell({
 
         {activeChannel === undefined ? (
           <div className="hm-messages">
-            {/* Three states, three sentences. A failed load used to fall into
-                the empty-account invitation, which told someone with twenty
-                channels that they had none — an outage is not an empty
-                account, and no artboard draws a control to retry from, so the
-                honest exit is the reload the composer already asks for when
-                its connection is gone. */}
+            {/* Four states, four sentences. Each of the last three used to
+                fall into the empty-account invitation, which told someone
+                with twenty channels that they had none.
+
+                An outage is not an empty account, and no artboard draws a
+                control to retry from, so the honest exit there is the reload
+                the composer already asks for when its connection is gone.
+
+                A URL naming a channel this reader cannot see is not an empty
+                account either — it is a stale permalink or a revoked
+                invitation. Its sentence says the conversation is unavailable
+                *to them* and points at the list, which commits to nothing
+                about whether the id names anything at all: a channel that
+                exists and one that never did answer identically everywhere
+                else, and the shell must not be the place that separates
+                them. */}
             <p className="hm-empty__body">
               {state.channelsStatus === "loading"
                 ? t("common.loading")
                 : state.channelsStatus === "error"
                   ? t("chat.conversationsFailed")
-                  : t("chat.noConversations")}
+                  : params.channelId !== undefined
+                    ? t("chat.conversationUnavailable")
+                    : t("chat.noConversations")}
             </p>
           </div>
         ) : view.status === "ready" &&

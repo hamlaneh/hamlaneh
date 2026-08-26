@@ -5,7 +5,7 @@ import { http, HttpResponse } from "msw";
 import { MemoryRouter } from "react-router";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { formatTime } from "../../chat/format";
+import { formatTime, isolateAuto } from "../../chat/format";
 import i18n from "../../i18n";
 import en from "../../locales/en/common.json";
 import fa from "../../locales/fa/common.json";
@@ -57,6 +57,16 @@ function withAnyCount(template: string, placeholder: string): RegExp {
  * budget shorter than the work only buys flakes.
  */
 const LONG_HISTORY = { timeout: 10_000 };
+
+/**
+ * A channel id that is in no list this account can see — a stale permalink, or
+ * an invitation that was revoked.
+ *
+ * Every channel-scoped path answers 404 to a non-member, exactly as it answers
+ * 404 to an id that never existed. The two are indistinguishable on purpose,
+ * and the shell must not distinguish them either.
+ */
+const UNSEEN_CHANNEL = "00000000-0000-4000-8000-0000000000ff";
 
 function renderChat(path = "/", realtime: { retryDelayMs: () => number } = FAST_RETRY) {
   return render(
@@ -158,6 +168,21 @@ describe("the conversation list", () => {
     expect(screen.queryByText(en.chat.noConversations)).not.toBeInTheDocument();
   });
 
+  it("says a conversation it cannot show is unavailable, not that the account is empty", async () => {
+    // What a stale permalink or a revoked invitation produces. The empty-account
+    // invitation was being shown here next to a sidebar listing the conversations
+    // the reader does have — a plain falsehood. The replacement says the
+    // conversation is not available to this reader and points at the list, which
+    // commits to nothing about whether the id names anything at all.
+    renderChat(`/c/${UNSEEN_CHANNEL}`);
+
+    expect(await screen.findByText(en.chat.conversationUnavailable)).toBeInTheDocument();
+    expect(screen.queryByText(en.chat.noConversations)).not.toBeInTheDocument();
+    expect(screen.queryByText(en.chat.conversationsFailed)).not.toBeInTheDocument();
+    // The sidebar the sentence sends the reader to really is beside it.
+    expect(within(sidebar()).getByRole("link", { name: /deploys/ })).toBeInTheDocument();
+  });
+
   it("says nothing about the list while it is still loading", async () => {
     // Held open by the test rather than by wall-clock delay, so a loaded runner
     // cannot miss the loading state.
@@ -228,7 +253,37 @@ describe("opening a channel", () => {
     ).toBeInTheDocument();
     // Honest copy: nothing here promises a browsable public channel.
     expect(screen.getByText(en.chat.empty.onlyYou)).toBeInTheDocument();
+    // Both actions the contract supports on a channel are offered.
     expect(screen.getByRole("button", { name: en.chat.empty.invite })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.chat.empty.setTopic })).toBeInTheDocument();
+  });
+
+  it("names the peer in an empty direct message and offers neither refused action", async () => {
+    // A DM has no slug, so the channel copy rendered as "the beginning of #",
+    // and it has no topic and fixed membership, so the server answers 400 to
+    // both actions the channel state offers. The closing note was false too:
+    // the other person is already here, invited by nobody.
+    server.use(
+      http.get("/api/v1/channels/:channelId/messages", () => HttpResponse.json({ messages: [] })),
+    );
+    renderChat(`/c/${CHAT_CHANNELS.dmParisa}`);
+
+    // Named by the peer, isolated first-strong exactly as MessageList isolates it.
+    expect(
+      await screen.findByText(
+        en.chat.empty.dmTitle.replace(
+          "{{name}}",
+          isolateAuto(CHAT_USERS.parisa.display_name),
+        ),
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(en.chat.empty.dmBody)).toBeInTheDocument();
+
+    expect(screen.queryByRole("button", { name: en.chat.empty.invite })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.chat.empty.setTopic })).not.toBeInTheDocument();
+    expect(screen.queryByText(en.chat.empty.onlyYou)).not.toBeInTheDocument();
+    expect(screen.queryByText(en.chat.empty.body)).not.toBeInTheDocument();
+    expect(screen.queryByText(en.chat.empty.bodyOwner)).not.toBeInTheDocument();
   });
 });
 
@@ -573,5 +628,35 @@ describe("the Persian mirror", () => {
     expect(await screen.findByText(fa.chat.conversationsFailed)).toBeInTheDocument();
     expect(screen.queryByText(fa.chat.noConversations)).not.toBeInTheDocument();
     expect(document.documentElement).toHaveAttribute("dir", "rtl");
+  });
+
+  it("says an unavailable conversation in Persian", async () => {
+    await i18n.changeLanguage("fa");
+    renderChat(`/c/${UNSEEN_CHANNEL}`);
+
+    expect(await screen.findByText(fa.chat.conversationUnavailable)).toBeInTheDocument();
+    expect(screen.queryByText(fa.chat.noConversations)).not.toBeInTheDocument();
+    expect(document.documentElement).toHaveAttribute("dir", "rtl");
+  });
+
+  it("names the peer of an empty direct message in Persian", async () => {
+    await i18n.changeLanguage("fa");
+    server.use(
+      http.get("/api/v1/channels/:channelId/messages", () => HttpResponse.json({ messages: [] })),
+    );
+    renderChat(`/c/${CHAT_CHANNELS.dmParisa}`);
+
+    // A Latin name inside a Persian sentence: the isolate is what keeps the
+    // punctuation on the right side of it.
+    expect(
+      await screen.findByText(
+        fa.chat.empty.dmTitle.replace(
+          "{{name}}",
+          isolateAuto(CHAT_USERS.parisa.display_name),
+        ),
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(fa.chat.empty.dmBody)).toBeInTheDocument();
+    expect(screen.queryByText(fa.chat.empty.onlyYou)).not.toBeInTheDocument();
   });
 });

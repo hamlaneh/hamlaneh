@@ -255,8 +255,9 @@ history, send a message, and have it appear on someone else's screen without a r
   sanitizer; CSP header regression test; message-send and WS-reconnect flood tests;
   race-detector clean under concurrent send
 
-- [ ] Two screens state something false, both found by the first end-to-end run and both needing
-      copy that does not exist yet:
+- [x] Two screens state something false, both found by the first end-to-end run and both fixed
+      with copy in the elements that already existed — the artboards for both states are filed in
+      `docs/design/STATUS.md` as `awaiting-design`:
       **(a)** opening `/c/{id}` for a channel you are not in renders "You are not in any
       conversation yet. Create a channel to start one." beside a sidebar listing your
       conversations. It leaks nothing — a channel that exists and one that does not answer
