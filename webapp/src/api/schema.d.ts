@@ -294,6 +294,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/oidc/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Begin single sign-on.
+         * @description Redirects to the configured identity provider's authorization endpoint with a fresh state, nonce and PKCE challenge, and sets a short-lived transaction cookie holding the values the callback must compare against.
+         *     That cookie is SameSite=Lax, and it is the one place this server departs from Strict: the callback arrives as a top-level cross-site navigation from the provider, and a Strict cookie would not be sent with it. It carries only server-minted randomness, so it discloses nothing and is compared rather than trusted.
+         *     There is no return-to parameter. The flow always lands on the application root, which removes the open-redirect class outright rather than defending against it.
+         */
+        get: operations["startOidcSignIn"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Return from the identity provider.
+         * @description Verifies the transaction cookie's state against the query parameter, exchanges the code with the PKCE verifier, validates the identity token's issuer, audience, signature and expiry, and compares its nonce to the cookie's. The cookie is single-use and is cleared either way.
+         *     Every outcome is a redirect, because this is a browser navigation rather than a client call, and every one of them lands on the application root. What differs is one query parameter, which the client reads once and strips from the address bar:
+         *     * signed in - no parameter. The session cookies are set. * `?sso=totp` - the account has a second factor. The two-step
+         *       challenge cookie is set and the client shows the challenge screen.
+         *       The value names the method so the parameter survives WebAuthn
+         *       arriving beside totp, the way TwoFactorChallenge.methods does.
+         *       Nothing else is needed: the challenge travels in the cookie, so the
+         *       screen sends only the code.
+         *     * `?sso_error=<code>` - it did not work, with exactly one of
+         *       sso_account_exists (the identity's email belongs to a local
+         *       password account), sso_account_unknown (it matches nobody and
+         *       just-in-time provisioning is off), or sso_failed (anything else).
+         *
+         *     Landing everything on the root rather than on distinct paths keeps the server's enumerated route list unchanged, and means a stale or shared callback URL can never resolve to a screen that implies a state the visitor is not in.
+         *     Text supplied by the provider is never reflected into the URL or the page; it goes to the server log. The three codes are a closed set, so a client meeting an unrecognised value treats it as sso_failed.
+         */
+        get: operations["completeOidcSignIn"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/oidc": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect single sign-on to this account.
+         * @description Answers with the provider redirect the browser should follow, and sets the same transaction cookie the sign-in flow uses, carrying the intent to link and the id of the signed-in account. The callback then records the identity against that account instead of minting a session.
+         *     Binding the account id into a server-minted HttpOnly cookie, and the state into both the cookie and the URL, is what makes link fixation fail: the transaction exists only in the browser that started it.
+         */
+        post: operations["linkOidcIdentity"];
+        /**
+         * Disconnect single sign-on from this account.
+         * @description Refused when the account has no password, because unlinking would leave it with no way in at all. The recovery path for such an account is an administrator issuing a temporary password, which is also the break-glass door when the provider is unreachable.
+         */
+        delete: operations["unlinkOidcIdentity"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/me/totp/disable": {
         parameters: {
             query?: never;
@@ -889,6 +970,8 @@ export interface components {
             is_admin: boolean;
             /** @description True until the user replaces their admin-assigned temporary password. While true, every endpoint except change-password, logout, reading and patching users/me returns 403 with code password_change_required. */
             must_change_password: boolean;
+            /** @description Whether this account has a single sign-on identity attached. It is what the settings screen offers Connect or Disconnect from. */
+            sso_linked: boolean;
             /**
              * @description True when this session was minted while the organisation requires two-step verification and this account has none activated. While true, every endpoint except logout, reading and patching users/me, and the TOTP enrolment endpoints returns 403 with code totp_enrollment_required, and the WebSocket refuses the upgrade. Patching is admitted for the same reason the password gate admits it: the only field it carries is locale, and somebody whose account language is wrong would otherwise be stuck reading a screen they cannot change in a language they cannot read.
              *     It is a property of the session rather than of the account, which is what makes "at the next sign-in, never mid-session" true: turning the policy on strands nobody who is already working, including the administrator who turned it on.
@@ -936,6 +1019,17 @@ export interface components {
             max_file_size_bytes: number;
             password_min_length: number;
             password_reset_available: boolean;
+            sso?: components["schemas"]["SsoStatus"];
+        };
+        OidcRedirect: {
+            /** @description The provider authorization URL to send the browser to. */
+            redirect_url: string;
+        };
+        SsoStatus: {
+            /** @description False when no provider is configured. The sign-in screen renders the button only when the door exists, rather than offering one that goes nowhere. */
+            enabled: boolean;
+            /** @description What to call the provider on the button. Present whenever enabled is true, and absent otherwise - a configured provider always has a name, defaulting to a generic one, so a client never has to render a button it cannot label. */
+            provider_name?: string;
         };
         /** @description The 202 login answer for an account with two-step verification on. methods lists how the challenge may be completed; totp is the only method until WebAuthn arrives. */
         TwoFactorChallenge: {
@@ -1871,6 +1965,146 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    startOidcSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Go to the identity provider. */
+            302: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["RateLimited"];
+            /** @description Single sign-on is not configured, or the provider's discovery document could not be fetched (code sso_unavailable). Password sign-in is unaffected. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    completeOidcSignIn: {
+        parameters: {
+            query?: {
+                code?: string;
+                state?: string;
+                error?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed in, challenged, or sent back with an error code. */
+            302: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["RateLimited"];
+            /** @description Single sign-on is not configured (code sso_unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    linkOidcIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Follow this to the provider. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OidcRedirect"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description This account already has an identity linked (code sso_already_linked). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            /** @description Single sign-on is not configured (code sso_unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    unlinkOidcIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The identity is no longer linked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Nothing was linked (code sso_not_linked). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The account has no password, so this is its only way in (code sso_unlink_no_password). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
         };
     };
     disableTotp: {

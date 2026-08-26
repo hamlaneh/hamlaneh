@@ -939,6 +939,109 @@ func instanceRegistry() []Entry {
 				Admin:                       "not_authenticated",
 			},
 		},
+
+		{
+			// Phase 1.6 single sign-on: the two public halves of the flow.
+			// The matrix server configures no provider, so both answer their
+			// honest fail-closed 503 to everybody, sessions and admins
+			// included. What these rows pin is the classification — no gate
+			// answers before the handler — and that the unconfigured state is
+			// one uniform code rather than anything about the caller. The
+			// configured flow's authorization story (state, nonce, the refusal
+			// of unknown identities) is pinned by the integration tests in
+			// internal/httpserver, which need a live fake provider no matrix
+			// fixture provisions.
+			Method: http.MethodGet,
+			Path:   "/api/v1/auth/oidc/start",
+			Class:  ClassPublic,
+			Want: map[Principal]int{
+				Anonymous:                   http.StatusServiceUnavailable,
+				MemberMustChange:            http.StatusServiceUnavailable,
+				MemberTotpPending:           http.StatusServiceUnavailable,
+				MemberMustChangeTotpPending: http.StatusServiceUnavailable,
+				Member:                      http.StatusServiceUnavailable,
+				Admin:                       http.StatusServiceUnavailable,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:                   "sso_unavailable",
+				MemberMustChange:            "sso_unavailable",
+				MemberTotpPending:           "sso_unavailable",
+				MemberMustChangeTotpPending: "sso_unavailable",
+				Member:                      "sso_unavailable",
+				Admin:                       "sso_unavailable",
+			},
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v1/auth/oidc/callback",
+			Class:  ClassPublic,
+			Want: map[Principal]int{
+				Anonymous:                   http.StatusServiceUnavailable,
+				MemberMustChange:            http.StatusServiceUnavailable,
+				MemberTotpPending:           http.StatusServiceUnavailable,
+				MemberMustChangeTotpPending: http.StatusServiceUnavailable,
+				Member:                      http.StatusServiceUnavailable,
+				Admin:                       http.StatusServiceUnavailable,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:                   "sso_unavailable",
+				MemberMustChange:            "sso_unavailable",
+				MemberTotpPending:           "sso_unavailable",
+				MemberMustChangeTotpPending: "sso_unavailable",
+				Member:                      "sso_unavailable",
+				Admin:                       "sso_unavailable",
+			},
+		},
+		{
+			// Linking is session work, and both account gates hold it: a user
+			// who owes a password change or an enrolment fixes that first. The
+			// signed-in cells then hit the unconfigured 503 — the session gate
+			// answered first, which is what the 401/403 cells prove.
+			Method: http.MethodPost,
+			Path:   "/api/v1/users/me/oidc",
+			Class:  ClassSession,
+			Want: map[Principal]int{
+				Anonymous:                   http.StatusUnauthorized,
+				MemberMustChange:            http.StatusForbidden,
+				MemberTotpPending:           http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusForbidden,
+				Member:                      http.StatusServiceUnavailable,
+				Admin:                       http.StatusServiceUnavailable,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:                   "not_authenticated",
+				MemberMustChange:            "password_change_required",
+				MemberTotpPending:           "totp_enrollment_required",
+				MemberMustChangeTotpPending: "password_change_required",
+				Member:                      "sso_unavailable",
+				Admin:                       "sso_unavailable",
+			},
+		},
+		{
+			// Unlinking needs no provider — it is a database delete — so the
+			// signed-in cells reach the real answer: nothing is linked, 404.
+			// Every cell acts only on the caller's own account; there is no
+			// id anywhere in the request to point at somebody else's link.
+			Method: http.MethodDelete,
+			Path:   "/api/v1/users/me/oidc",
+			Class:  ClassSession,
+			Want: map[Principal]int{
+				Anonymous:                   http.StatusUnauthorized,
+				MemberMustChange:            http.StatusForbidden,
+				MemberTotpPending:           http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusForbidden,
+				Member:                      http.StatusNotFound,
+				Admin:                       http.StatusNotFound,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:                   "not_authenticated",
+				MemberMustChange:            "password_change_required",
+				MemberTotpPending:           "totp_enrollment_required",
+				MemberMustChangeTotpPending: "password_change_required",
+				Member:                      "sso_not_linked",
+				Admin:                       "sso_not_linked",
+			},
+		},
 	}
 }
 

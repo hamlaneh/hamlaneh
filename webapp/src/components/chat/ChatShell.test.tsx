@@ -5,7 +5,8 @@ import { http, HttpResponse } from "msw";
 import { MemoryRouter } from "react-router";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { formatTime, isolateAuto } from "../../chat/format";
+import { formatTime } from "../../chat/format";
+import { isolateAuto } from "../../i18n/bidi";
 import i18n from "../../i18n";
 import en from "../../locales/en/common.json";
 import fa from "../../locales/fa/common.json";

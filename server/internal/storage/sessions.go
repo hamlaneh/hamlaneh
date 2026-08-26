@@ -183,7 +183,8 @@ func (s *Store) SessionUserByAccessHash(ctx context.Context, accessHash []byte) 
 		`SELECT s.id, s.user_id, s.family_id, s.access_expires_at, s.refresh_expires_at, s.created_at,
 		        s.totp_enrollment_required,
 		        u.id, u.username, u.email, u.display_name, u.password_hash,
-		        u.locale, u.is_admin, u.is_active, u.must_change_password, u.created_at, u.updated_at
+		        u.locale, u.is_admin, u.is_active, u.must_change_password, u.created_at, u.updated_at,
+		        EXISTS (SELECT 1 FROM oidc_identities oi WHERE oi.user_id = u.id)
 		 FROM sessions s
 		 JOIN users u ON u.id = s.user_id
 		 WHERE s.access_token_hash = $1
@@ -199,6 +200,7 @@ func (s *Store) SessionUserByAccessHash(ctx context.Context, accessHash []byte) 
 		&sess.TotpEnrollmentRequired,
 		&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.PasswordHash,
 		&u.Locale, &u.IsAdmin, &u.IsActive, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt,
+		&u.SsoLinked,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, User{}, ErrNotFound

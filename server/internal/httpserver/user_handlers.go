@@ -260,6 +260,7 @@ func apiUser(u storage.User) api.User {
 		Locale:             api.UserLocale(u.Locale),
 		IsAdmin:            u.IsAdmin,
 		MustChangePassword: u.MustChangePassword,
+		SsoLinked:          u.SsoLinked,
 		CreatedAt:          u.CreatedAt,
 	}
 	if u.Email != nil {

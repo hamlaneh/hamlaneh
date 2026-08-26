@@ -104,6 +104,15 @@ services:
       HAMLANEH_SMTP_ENCRYPTION: ${HAMLANEH_SMTP_ENCRYPTION:-}
       HAMLANEH_SMTP_USERNAME: ${HAMLANEH_SMTP_USERNAME:-}
       HAMLANEH_SMTP_PASSWORD: ${HAMLANEH_SMTP_PASSWORD:-}
+      # Single sign-on: an empty issuer disables it, which is the zero-config
+      # default. Set issuer, client id and secret together — a partial set
+      # stops startup, and so does a configured provider with no public URL,
+      # because the redirect URI is built from that and never from a request
+      # header (see .env.example).
+      HAMLANEH_OIDC_ISSUER: ${HAMLANEH_OIDC_ISSUER:-}
+      HAMLANEH_OIDC_CLIENT_ID: ${HAMLANEH_OIDC_CLIENT_ID:-}
+      HAMLANEH_OIDC_CLIENT_SECRET: ${HAMLANEH_OIDC_CLIENT_SECRET:-}
+      HAMLANEH_OIDC_PROVIDER_NAME: ${HAMLANEH_OIDC_PROVIDER_NAME:-}
       # Signs the expiring URLs uploaded files are served by (ADR 003). The
       # files origin is cookie-less, so this key is what every file read is
       # authorized against; startup stops without it rather than inventing

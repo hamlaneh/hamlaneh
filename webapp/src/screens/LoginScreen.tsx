@@ -5,6 +5,8 @@ import { api } from "../api/client";
 import type { components } from "../api/schema";
 import { useRateLimitNotice } from "../auth/rateLimit";
 import type { RateLimitKeys } from "../auth/rateLimit";
+import { OIDC_START_PATH } from "../auth/sso";
+import { isolateAuto } from "../i18n/bidi";
 import { AuthForm } from "../components/auth/AuthForm";
 import { AuthShell } from "../components/auth/AuthShell";
 import { NoticeBanner } from "../components/auth/NoticeBanner";
@@ -36,7 +38,14 @@ interface LoginScreenProps {
 }
 
 export interface LoginNotice {
-  tone: "success" | "warning";
+  /**
+   * `danger` joined the two politely-announced tones when single sign-on
+   * started landing back here: the other notices report something that
+   * finished, this one reports a sign-in that did not happen, and `role="alert"`
+   * is what tells a screen-reader user why the form came back. It still does
+   * not take focus — only a failure raised on this screen does.
+   */
+  tone: "success" | "warning" | "danger";
   message: string;
 }
 
@@ -231,6 +240,40 @@ export function LoginScreen({
           busy={submitting}
           disabled={rateLimited}
         />
+        {/* UNDESIGNED SURFACE — no artboard draws a second way in, so this is
+            plain semantic HTML with no styling beyond structure
+            (docs/design/STATUS.md, "Single sign-on button on sign-in").
+
+            A link, not a button with an onClick: `GET /auth/oidc/start` is a
+            browser navigation. The server answers 302 to the provider and sets
+            a transaction cookie that the callback — a top-level cross-site
+            navigation back — must carry. A fetch would follow those redirects
+            invisibly and end up holding the provider's HTML.
+
+            Instance policy decides whether it exists at all, exactly as
+            `password_reset_available` does for the reset link, and for the same
+            stated reason: never offer a door that goes nowhere. Absent while
+            the instance document is still loading, so it never appears and
+            then vanishes. */}
+        {loaded && info.sso?.enabled === true ? (
+          <p>
+            <a href={OIDC_START_PATH}>
+              {t("login.sso.continueWith", {
+                // The provider's display name is data, not translation. FSI…PDI
+                // so a Latin name keeps its own direction inside the Persian
+                // sentence, and a Persian one is not forced the other way.
+                //
+                // The fallback is for the type, not for the server: the
+                // contract says provider_name is present whenever enabled is
+                // true, but OpenAPI cannot express a conditionally-required
+                // field without a oneOf that would read worse than the prose,
+                // so the generated type keeps it optional and this branch has
+                // to exist. It should never be reached.
+                provider: isolateAuto(info.sso.provider_name ?? t("sso.provider")),
+              })}
+            </a>
+          </p>
+        ) : null}
       </AuthForm>
     </AuthShell>
   );

@@ -6,6 +6,7 @@ import { api } from "./api/client";
 import type { components } from "./api/schema";
 import { readInviteToken } from "./auth/inviteToken";
 import { consumeResetToken } from "./auth/resetToken";
+import { consumeSsoLanding } from "./auth/sso";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AuthShell } from "./components/auth/AuthShell";
 import { useAccountLanguage } from "./i18n/useLanguage";
@@ -102,6 +103,14 @@ function App() {
     if (resetToken !== null) {
       return { screen: "resetPassword", token: resetToken };
     }
+    // A callback that came back owing a second factor. It needs no data of
+    // its own — the challenge travels in the cookie the callback set, which is
+    // exactly why the contract makes this a query parameter on the root rather
+    // than a route: there is nothing for a route to carry, and a path that
+    // resolved on its own would imply a state a stale link's visitor is not in.
+    if (consumeSsoLanding()?.outcome === "challenge") {
+      return { screen: "totp" };
+    }
     // A join link is the only way into an instance whose registration is
     // closed, so it outranks the sign-in screen the same way a reset link
     // does — somebody following an invitation has no account to sign in with.
@@ -109,6 +118,18 @@ function App() {
     return inviteToken === null
       ? { screen: "login" }
       : { screen: "redeemInvite", token: inviteToken };
+  });
+  /**
+   * How a single sign-on attempt failed, if one just did. Read (and scrubbed
+   * from the address bar) at the first render, like the reset token above.
+   *
+   * The *code* is held rather than the sentence, so the notice follows the
+   * language switcher the sign-in screen renders instead of freezing in
+   * whichever language the callback happened to land in.
+   */
+  const [ssoError, setSsoError] = useState(() => {
+    const landing = consumeSsoLanding();
+    return landing?.outcome === "error" ? landing.code : null;
   });
 
   const refreshSession = useCallback(() => {
@@ -136,6 +157,9 @@ function App() {
 
   const handleAuthenticated = (user: User) => {
     setFlow({ screen: "login" });
+    // Whatever went wrong on the way in is over; it must not be waiting on the
+    // sign-in screen again after a later sign-out.
+    setSsoError(null);
     setSession({ status: "authenticated", user });
   };
 
@@ -243,7 +267,16 @@ function App() {
   if (session.status === "unauthenticated") {
     return (
       <LoginScreen
-        notice={flow.notice}
+        notice={
+          // A failed single sign-on is a standing message from wherever the
+          // user arrived, which is exactly what `notice` is for. A notice this
+          // flow set itself (a completed reset, an expired challenge) is the
+          // more recent thing that happened, so it wins.
+          flow.notice ??
+          (ssoError === null
+            ? undefined
+            : { tone: "danger", message: t(`login.sso.error.${ssoError}`) })
+        }
         onAuthenticated={handleAuthenticated}
         onTwoStepRequired={() => {
           setFlow({ screen: "totp" });

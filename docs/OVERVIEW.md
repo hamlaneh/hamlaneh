@@ -256,6 +256,18 @@ was not entitled to read the message it points at.
   already working, including the administrator who turned it on. Switching a required second
   factor back off is refused, because otherwise the policy would hold for everyone except the
   people it is aimed at. Sign-ins are audited from here on, which they were not before.
+- **Single sign-on (Phase 1.6).** OpenID Connect against one provider per instance, configured by
+  environment and off by default, so the sign-in screen shows the button only when the door
+  exists. The identity provider's subject is the only login key: emails are mutable at the
+  provider and subjects are not, so looking an account up by email at each sign-in is the
+  account-takeover bug the schema is shaped to make impossible. An identity whose email belongs
+  to a local password account is refused rather than linked — the owner signs in with their
+  password and connects single sign-on from Settings, which costs one sign-in and removes a
+  primitive where the weakest email assertion on either side would become a session.
+  Just-in-time account creation does not exist yet, which is what makes "single sign-on cannot
+  bypass registration being off" true by construction rather than by a check. A single sign-on
+  lands in exactly the same session mint as a password one, so the two-step challenge, the
+  enforced-2FA gate and the organisation's session lifetime all apply unchanged.
 
 ## What's next
 

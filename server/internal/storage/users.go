@@ -43,6 +43,10 @@ type User struct {
 	MustChangePassword bool
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	// SsoLinked is true when a row in oidc_identities points at this
+	// account (the contract's sso_linked). Derived, not stored: every user
+	// read computes it, so no writer can forget to maintain it.
+	SsoLinked bool
 }
 
 // NewUser carries the fields for creating a user. Validation is the
@@ -58,8 +62,11 @@ type NewUser struct {
 }
 
 // userColumns is the canonical column list every user query selects, in the
-// order scanUser expects.
-const userColumns = `id, username, email, display_name, password_hash, locale, is_admin, is_active, must_change_password, created_at, updated_at`
+// order scanUser expects. The final expression derives SsoLinked; the
+// correlated users.id resolves against the row being selected or returned,
+// so the same list works in SELECT ... FROM users and in RETURNING on it.
+const userColumns = `id, username, email, display_name, password_hash, locale, is_admin, is_active, must_change_password, created_at, updated_at,
+	EXISTS (SELECT 1 FROM oidc_identities oi WHERE oi.user_id = users.id)`
 
 // CreateUser inserts a user and returns the stored row. Uniqueness
 // conflicts map to ErrUsernameTaken / ErrEmailTaken.
@@ -394,6 +401,7 @@ func scanUser(row pgx.Row) (User, error) {
 	err := row.Scan(
 		&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.PasswordHash,
 		&u.Locale, &u.IsAdmin, &u.IsActive, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt,
+		&u.SsoLinked,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound

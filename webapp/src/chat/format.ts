@@ -12,23 +12,6 @@ import { latinDigitLocale } from "../i18n/digits";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Bidi isolation for values interpolated into a sentence.
- *
- * The handoff requires channel slugs, filenames, version tags and URLs to be
- * isolated LTR runs inside Persian, and a person's name to follow its own
- * direction. Unicode isolates do exactly that without any markup, which is
- * what lets them sit inside a translated string: LRI/FSI ... PDI.
- */
-export function isolateLtr(value: string): string {
-  return `⁦${value}⁩`;
-}
-
-/** First-strong isolate: the run takes the direction of its own first letter. */
-export function isolateAuto(value: string): string {
-  return `⁨${value}⁩`;
-}
-
 /** "09:12" — 24-hour, zero-padded, as drawn on every artboard. */
 export function formatTime(iso: string, locale: string): string {
   const value = new Date(iso);

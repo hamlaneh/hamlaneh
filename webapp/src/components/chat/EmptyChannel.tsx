@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-import { isolateAuto, isolateLtr } from "../../chat/format";
+import { isolateAuto, isolateLtr } from "../../i18n/bidi";
 import type { Channel } from "../../chat/types";
 import { HashIcon, LockIcon, UserPlusIcon } from "../icons";
 import { Avatar } from "./Avatar";

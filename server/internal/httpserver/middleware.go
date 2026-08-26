@@ -95,6 +95,18 @@ var routePolicies = map[string]routePolicy{
 	"GET /api/v1/admin/users":          {class: classAdmin, action: authz.AdminUsersList},
 	"POST /api/v1/admin/users":         {class: classAdmin, action: authz.AdminUsersCreate},
 
+	// Phase 1.6 single sign-on (ADR 004 slice 2). The two flow halves are
+	// public — start is the door into authentication and the callback is a
+	// cross-site navigation that carries no session by design (the
+	// transaction cookie, not a session, is its state). The Settings pair is
+	// plain session work: neither joins the must-change trio, and neither is
+	// reachable under the totp-enrolment gate — changing how an account
+	// signs in is not enrolment.
+	"GET /api/v1/auth/oidc/start":    {class: classPublic},
+	"GET /api/v1/auth/oidc/callback": {class: classPublic},
+	"POST /api/v1/users/me/oidc":     {class: classSession},
+	"DELETE /api/v1/users/me/oidc":   {class: classSession},
+
 	// Phase 1.2 messaging surface. Every one of these carries sessionCookie
 	// in the contract, none is admin-only, and none joins the must-change
 	// trio — a user who still owes a password change gets 403 here.

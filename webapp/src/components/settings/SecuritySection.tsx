@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { SavedMark } from "./SavedMark";
 import { SettingsButton } from "./SettingsButton";
+import { SsoCard } from "./SsoCard";
 import { TwoFactorCard } from "./TwoFactorCard";
 import { describeDevice } from "../../settings/device";
 import type { useChangePassword } from "../../auth/useChangePassword";
@@ -167,6 +168,11 @@ export function SecuritySection({
           onDisabled={onTotpDisabled}
           onRegenerated={onRecoveryCodesRegenerated}
         />
+
+        {/* Renders itself away when the instance has no provider and this
+            account has nothing linked. Undesigned, so it is deliberately
+            unstyled — see SsoCard. */}
+        <SsoCard />
 
         <section className="hm-settings-card">
           <div className="hm-settings-card__row hm-settings-card__row--centred">

@@ -30,6 +30,19 @@ const (
 	// (ADR 004).
 	codeTOTPEnrollmentRequired errorCode = "totp_enrollment_required"
 
+	// Phase 1.6: single sign-on (ADR 004 slice 2). The first four are JSON
+	// error codes; the last three are the callback's fixed redirect codes —
+	// the callback is a browser navigation, so its failures are carried to
+	// the sign-in screen as a query value, never as a response body, and
+	// never as text the provider chose.
+	codeSSOUnavailable      errorCode = "sso_unavailable"
+	codeSSOAlreadyLinked    errorCode = "sso_already_linked"
+	codeSSONotLinked        errorCode = "sso_not_linked"
+	codeSSOUnlinkNoPassword errorCode = "sso_unlink_no_password"
+	codeSSOFailed           errorCode = "sso_failed"
+	codeSSOAccountExists    errorCode = "sso_account_exists"
+	codeSSOAccountUnknown   errorCode = "sso_account_unknown"
+
 	// Phase 1.1b: two-step verification, password reset, session management.
 	codeInvalidTOTPCode      errorCode = "invalid_totp_code"
 	codeTOTPAlreadyEnabled   errorCode = "totp_already_enabled"

@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -408,22 +409,13 @@ func (s *apiServer) challengeIfTwoStep(w http.ResponseWriter, r *http.Request, u
 		return true
 	}
 
-	record, err := store.TotpByUser(r.Context(), userID)
-	if errors.Is(err, storage.ErrNotFound) {
-		return false
-	}
+	raw, challenged, err := startTotpChallenge(r.Context(), store, userID)
 	if err != nil {
 		internalError(w, r, err)
 		return true
 	}
-	if !record.Enabled() {
+	if !challenged {
 		return false
-	}
-
-	raw, hash := session.NewToken()
-	if err := store.CreateTotpChallenge(r.Context(), userID, hash, totp.ChallengeTTL); err != nil {
-		internalError(w, r, err)
-		return true
 	}
 	s.consumeLoginBudget(ipKey, identifierKey)
 
@@ -432,6 +424,34 @@ func (s *apiServer) challengeIfTwoStep(w http.ResponseWriter, r *http.Request, u
 		Methods: []api.TwoFactorChallengeMethods{api.Totp},
 	})
 	return true
+}
+
+// startTotpChallenge is the shared half of both sign-in doors: it mints and
+// stores a two-step challenge when the account's second factor is on,
+// returning the raw cookie value. Password login (above) answers it with a
+// 202 and the SSO callback with a redirect, but the challenge itself — the
+// token, the storage row, the cookie built from raw — is one path, so the
+// two doors cannot drift apart (ADR 004: no second challenge path).
+//
+// (_, false, nil) means the account is password-only and the caller mints a
+// session as usual.
+func startTotpChallenge(ctx context.Context, store Store, userID uuid.UUID) (raw string, challenged bool, err error) {
+	record, err := store.TotpByUser(ctx, userID)
+	if errors.Is(err, storage.ErrNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if !record.Enabled() {
+		return "", false, nil
+	}
+
+	raw, hash := session.NewToken()
+	if err := store.CreateTotpChallenge(ctx, userID, hash, totp.ChallengeTTL); err != nil {
+		return "", false, err
+	}
+	return raw, true, nil
 }
 
 // totpPrincipal resolves the request principal and the store together, the

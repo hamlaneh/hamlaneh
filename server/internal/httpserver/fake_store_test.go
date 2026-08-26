@@ -29,6 +29,12 @@ var errFakeUnwired = errors.New("fakeStore: method not wired in this test")
 type fakeStore struct {
 	ready                   func(ctx context.Context) error
 	userByIdentifier        func(ctx context.Context, identifier string) (storage.User, error)
+	userByEmail             func(ctx context.Context, email string) (storage.User, error)
+	userByOidcIdentity      func(ctx context.Context, issuer, subject string) (storage.User, error)
+	linkOidcIdentity        func(ctx context.Context, userID uuid.UUID, issuer, subject string, emailAtLink *string) error
+	unlinkOidcIdentity      func(ctx context.Context, userID uuid.UUID) error
+	createOidcLinkRequest   func(ctx context.Context, stateHash, secretHash []byte, userID uuid.UUID, ttl time.Duration) error
+	consumeOidcLinkRequest  func(ctx context.Context, stateHash, secretHash []byte) (uuid.UUID, error)
 	createUser              func(ctx context.Context, nu storage.NewUser) (storage.User, error)
 	updatePassword          func(ctx context.Context, userID uuid.UUID, hash string, keepFamilyID uuid.UUID) error
 	updatePasswordHash      func(ctx context.Context, userID uuid.UUID, hash string) error
@@ -98,6 +104,48 @@ func (f *fakeStore) UserByIdentifier(ctx context.Context, identifier string) (st
 		return storage.User{}, errFakeUnwired
 	}
 	return f.userByIdentifier(ctx, identifier)
+}
+
+func (f *fakeStore) UserByEmail(ctx context.Context, email string) (storage.User, error) {
+	if f.userByEmail == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.userByEmail(ctx, email)
+}
+
+func (f *fakeStore) UserByOidcIdentity(ctx context.Context, issuer, subject string) (storage.User, error) {
+	if f.userByOidcIdentity == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.userByOidcIdentity(ctx, issuer, subject)
+}
+
+func (f *fakeStore) LinkOidcIdentity(ctx context.Context, userID uuid.UUID, issuer, subject string, emailAtLink *string) error {
+	if f.linkOidcIdentity == nil {
+		return errFakeUnwired
+	}
+	return f.linkOidcIdentity(ctx, userID, issuer, subject, emailAtLink)
+}
+
+func (f *fakeStore) UnlinkOidcIdentity(ctx context.Context, userID uuid.UUID) error {
+	if f.unlinkOidcIdentity == nil {
+		return errFakeUnwired
+	}
+	return f.unlinkOidcIdentity(ctx, userID)
+}
+
+func (f *fakeStore) CreateOidcLinkRequest(ctx context.Context, stateHash, secretHash []byte, userID uuid.UUID, ttl time.Duration) error {
+	if f.createOidcLinkRequest == nil {
+		return errFakeUnwired
+	}
+	return f.createOidcLinkRequest(ctx, stateHash, secretHash, userID, ttl)
+}
+
+func (f *fakeStore) ConsumeOidcLinkRequest(ctx context.Context, stateHash, secretHash []byte) (uuid.UUID, error) {
+	if f.consumeOidcLinkRequest == nil {
+		return uuid.Nil, errFakeUnwired
+	}
+	return f.consumeOidcLinkRequest(ctx, stateHash, secretHash)
 }
 
 func (f *fakeStore) CreateUser(ctx context.Context, nu storage.NewUser) (storage.User, error) {

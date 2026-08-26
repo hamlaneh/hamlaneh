@@ -12,6 +12,7 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
 	"github.com/hamlaneh/hamlaneh/server/internal/audit"
 	"github.com/hamlaneh/hamlaneh/server/internal/blobstore"
+	"github.com/hamlaneh/hamlaneh/server/internal/oidc"
 	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
 	"github.com/hamlaneh/hamlaneh/server/internal/ratelimit"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
@@ -31,6 +32,10 @@ type Store interface {
 	Ready(ctx context.Context) error
 
 	UserByIdentifier(ctx context.Context, identifier string) (storage.User, error)
+	// UserByEmail backs one thing here: phrasing the SSO refusal for an
+	// identity whose email collides with a local account. It never decides
+	// who signs in — (issuer, subject) is the whole login key (ADR 004).
+	UserByEmail(ctx context.Context, email string) (storage.User, error)
 	CreateUser(ctx context.Context, nu storage.NewUser) (storage.User, error)
 	UpdatePassword(ctx context.Context, userID uuid.UUID, passwordHash string, keepFamilyID uuid.UUID) error
 	UpdatePasswordHash(ctx context.Context, userID uuid.UUID, passwordHash string) error
@@ -72,6 +77,20 @@ type Store interface {
 	// the store has confirmed the account has a second factor to reissue
 	// codes for. The store calls it inside the transaction, after the check.
 	ReplaceRecoveryCodes(ctx context.Context, userID uuid.UUID, hashes func() []string) error
+	// Single sign-on identities (ADR 004 slice 2). The lookup also records
+	// the use (last_login_at); the two conflicts of a link map to
+	// storage.ErrOidcAccountLinked / ErrOidcIdentityTaken.
+	UserByOidcIdentity(ctx context.Context, issuer, subject string) (storage.User, error)
+	LinkOidcIdentity(ctx context.Context, userID uuid.UUID, issuer, subject string, emailAtLink *string) error
+	UnlinkOidcIdentity(ctx context.Context, userID uuid.UUID) error
+	// Pending links: the server-side state that decides link vs sign-in at
+	// the callback. Create is called only by the session-gated link
+	// endpoint; Consume atomically deletes and returns the target account
+	// (ErrNotFound when there is no live pending link), so the callback can
+	// never be steered by a forged cookie.
+	CreateOidcLinkRequest(ctx context.Context, stateHash, secretHash []byte, userID uuid.UUID, ttl time.Duration) error
+	ConsumeOidcLinkRequest(ctx context.Context, stateHash, secretHash []byte) (uuid.UUID, error)
+
 	CreateTotpChallenge(ctx context.Context, userID uuid.UUID, tokenHash []byte, ttl time.Duration) error
 	// TotpChallengeUserByTokenHash identifies the account behind a challenge
 	// token so CompleteTotpLogin can consult the per-account limiter BEFORE
@@ -204,6 +223,12 @@ type apiServer struct {
 	// answers the same empty 202 it always does, and any token presented to
 	// reset-complete is invalid.
 	reset *passwordreset.Service
+
+	// sso is the OIDC relying party. Nil means no provider is configured —
+	// the zero-config install: instance info reports sso disabled, the
+	// start/callback/link endpoints answer 503 sso_unavailable, and
+	// unlinking (a plain database delete) still works.
+	sso *oidc.Service
 
 	// The budgets that cannot be decided from a route, spent by the handlers
 	// that own them (ratelimits.go explains why each one stayed).

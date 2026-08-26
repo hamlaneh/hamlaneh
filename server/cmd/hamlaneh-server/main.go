@@ -25,6 +25,14 @@
 // supported install: reset is then switched off and says so. Setting them
 // half-way is not, and stops startup.
 //
+// Single sign-on follows the same rule: HAMLANEH_OIDC_ISSUER,
+// HAMLANEH_OIDC_CLIENT_ID and HAMLANEH_OIDC_CLIENT_SECRET (plus the
+// optional HAMLANEH_OIDC_PROVIDER_NAME) all set turns it on and needs
+// HAMLANEH_PUBLIC_URL for the redirect URI; none set is a supported
+// install with SSO off; a partial set stops startup. Provider discovery is
+// lazy and retried — an identity provider that is down never stops this
+// server booting, and password sign-in is unaffected while it is.
+//
 // The server speaks plain HTTP; TLS termination is the reverse proxy's job.
 // It shuts down gracefully on SIGINT/SIGTERM.
 package main
@@ -50,6 +58,7 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/healthcheck"
 	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
 	"github.com/hamlaneh/hamlaneh/server/internal/linkpreview"
+	"github.com/hamlaneh/hamlaneh/server/internal/oidc"
 	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/wsgateway"
@@ -136,6 +145,16 @@ func run(args []string) error {
 		if err != nil {
 			return fmt.Errorf("configure password reset: %w", err)
 		}
+
+		// Single sign-on follows the same rule: none of its variables set is
+		// a supported install (sso is nil and the endpoints say so), a
+		// half-configured set stops startup. Only configuration is checked
+		// here — provider discovery is lazy and retried, so an identity
+		// provider that is down cannot stop the chat server booting.
+		sso, err := oidc.FromEnv(os.Getenv(passwordreset.EnvPublicURL))
+		if err != nil {
+			return fmt.Errorf("configure single sign-on: %w", err)
+		}
 		// Drains the dispatch queue; the server has stopped accepting
 		// requests by the time serve returns.
 		defer reset.Close()
@@ -169,6 +188,7 @@ func run(args []string) error {
 
 		return serve(ctx, httpserver.New(listenAddr, store,
 			httpserver.WithPasswordReset(reset),
+			httpserver.WithSSO(sso),
 			// The same public origin the reset link and the socket's Origin
 			// check are built from; here it is what makes an invitation link
 			// something an admin can paste into a message.

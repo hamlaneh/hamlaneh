@@ -5,10 +5,10 @@ import {
   fileTypeLabel,
   formatCount,
   formatFileSize,
-  isolateLtr,
   linkPreviewHost,
 } from "../../chat/format";
 import type { Attachment, LinkPreview, Message } from "../../chat/types";
+import { isolateLtr } from "../../i18n/bidi";
 import { DownloadIcon, FileTextIcon, ImageIcon } from "../icons";
 
 /**

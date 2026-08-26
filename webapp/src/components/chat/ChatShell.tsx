@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router";
 
-import { isolateAuto, isolateLtr } from "../../chat/format";
+import { isolateAuto, isolateLtr } from "../../i18n/bidi";
 import { PRESENCE_LABEL_KEY } from "../../chat/presence";
 import type { SearchKind } from "../../chat/store";
 import type { Presence, User, UserSummary } from "../../chat/types";

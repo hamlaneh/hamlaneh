@@ -51,7 +51,18 @@
       "rateLimitedSeconds_other": "Too many attempts. Try again in {{count, number}} seconds.",
       "networkError": "We could not reach the server. Try again.",
       "unexpected": "Something went wrong. Try again."
+    },
+    "sso": {
+      "continueWith": "Continue with {{provider}}",
+      "error": {
+        "sso_account_exists": "An account with that email address already exists here and signs in with a password. Sign in with it, then connect single sign-on from Settings, under Security.",
+        "sso_account_unknown": "Your provider signed you in, but no account here is linked to that identity. An administrator has to set one up — there is nothing to correct at your end.",
+        "sso_failed": "Single sign-on did not complete. Try again, or sign in with your password."
+      }
     }
+  },
+  "sso": {
+    "provider": "single sign-on"
   },
   "totp": {
     "title": "Two-step verification",
@@ -416,6 +427,21 @@
       "sessionsCount_other": "{{count}} devices signed in.",
       "thisDevice": "This one is a {{device}}.",
       "manageSessions": "Manage"
+    },
+    "sso": {
+      "cardTitle": "Single sign-on",
+      "linked": "Connected to {{provider}}.",
+      "notLinked": "Connect {{provider}} so you can sign in with it instead of typing your password.",
+      "connect": "Connect {{provider}}",
+      "connecting": "Connecting…",
+      "disconnect": "Disconnect {{provider}}",
+      "disconnecting": "Disconnecting…",
+      "error": {
+        "noPassword": "This account has no password, so single sign-on is its only way in. An administrator has to issue you a password before it can be disconnected.",
+        "alreadyLinked": "Single sign-on is already connected to this account.",
+        "notLinked": "Single sign-on is not connected to this account.",
+        "unavailable": "Single sign-on is not configured on this instance."
+      }
     },
     "totp": {
       "cardTitle": "Two-step verification",

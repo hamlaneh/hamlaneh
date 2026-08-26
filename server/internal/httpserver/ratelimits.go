@@ -50,12 +50,14 @@ import (
 // because one colleague is chatty would be a bug wearing a security
 // control's clothes.
 //
-// One budget breaks that rule and says so in its own declaration:
-// budgetInviteRedeem. Redeeming an invitation is public by necessity — the
-// account it creates is the reason the request exists — so there is no
-// account to key on, and it is keyed on the client address instead
+// The budgets on public routes break that rule and say so in their own
+// declarations: budgetInviteRedeem and budgetSSOFlow. Redeeming an
+// invitation and walking the single sign-on flow are public by necessity —
+// the session each produces is the reason the request exists — so there is
+// no account to key on, and they are keyed on the client address instead
 // (budgetSpec.perIP). The argument above still holds for everything else:
-// per-IP is the key that route is forced into, not the one it would choose.
+// per-IP is the key those routes are forced into, not the one they would
+// choose.
 //
 // # What an endpoint with no declared budget does
 //
@@ -132,6 +134,8 @@ const (
 	budgetUpload            budgetName = "upload"
 	budgetAdminSecret       budgetName = "admin-secret"
 	budgetInviteRedeem      budgetName = "invite-redeem"
+	budgetSSOFlow           budgetName = "sso-flow"
+	budgetSSOSettings       budgetName = "sso-settings"
 )
 
 // budgetSpec is one budget: how many requests fit its sliding window, how
@@ -141,11 +145,11 @@ type budgetSpec struct {
 	limit  int
 	window time.Duration
 	// perIP keys this budget on the client address instead of the account.
-	// It exists for the invite-redemption route and nothing else: that
-	// route is public by necessity, so there is no account to key on, and a
-	// budget that demanded one would refuse the request with a 500. Leave
-	// it false for anything behind a session — see the file comment on why
-	// per account is the right key there.
+	// It exists for the public routes — invite redemption and the two SSO
+	// flow halves — which are public by necessity, so there is no account
+	// to key on, and a budget that demanded one would refuse the request
+	// with a 500. Leave it false for anything behind a session — see the
+	// file comment on why per account is the right key there.
 	perIP bool
 }
 
@@ -240,8 +244,37 @@ var budgetSpecs = map[budgetName]budgetSpec{
 	// needs to hurt.
 	budgetAdminSecret: {limit: 30, window: time.Minute},
 
-	// Redeeming an invitation is the only public route in this table, and
-	// the only one keyed on the client address. It hashes the chosen
+	// The two public halves of the single sign-on flow share one per-IP
+	// window: each start is meant to come back as one callback, so splitting
+	// the budget would only multiply the total, and there is no account to
+	// key on before the flow completes — the same forced choice as invite
+	// redemption.
+	//
+	// What is bounded is outbound work. The start mints randomness and — on
+	// a cold or previously-failed cache — retries provider discovery, so
+	// this window is also the backoff on a down provider. The callback
+	// triggers a token exchange: an HTTPS round trip to the provider per
+	// request, which an unauthenticated caller must not be able to ask for
+	// in a loop, both for this server's sake and because unbounded
+	// server-to-provider traffic chosen by strangers is a lever.
+	//
+	// 30 a minute per address absorbs an office's worth of people behind
+	// one NAT signing in together at nine in the morning (each sign-in is
+	// two requests) — unlike login's budget, EVERY request here spends a
+	// unit, so the window must clear a shared-address burst, not just one
+	// person's retries. A loop wants far more.
+	budgetSSOFlow: {limit: 30, window: time.Minute, perIP: true},
+
+	// The Settings pair — linking and unlinking single sign-on — is one
+	// window per account, the same shape as the two-step settings budget
+	// beside it: an attacker holding a session picks whichever endpoint is
+	// cheaper, and what is bounded is repetition of account-shape changes
+	// (each link also mints a provider redirect). 10 in 5 minutes is far
+	// above anyone's real reconfiguration and far below a useful loop.
+	budgetSSOSettings: {limit: 10, window: 5 * time.Minute},
+
+	// Redeeming an invitation is a public route keyed on the client
+	// address (like the SSO flow above). It hashes the chosen
 	// password with argon2id before the token is known to be good — the same
 	// trade password reset makes, and what keeps the account creation and
 	// the invite consumption in one transaction — so an unauthenticated
@@ -281,6 +314,16 @@ var endpointBudgets = map[string]budgetName{
 	"POST /api/v1/auth/reset-request":  budgetElsewhere, // internal/passwordreset: per address and per IP
 	"POST /api/v1/auth/reset-complete": budgetElsewhere, // internal/passwordreset: per IP
 	"GET /api/v1/ws":                   budgetElsewhere, // internal/wsgateway: per family and per IP — still to build
+
+	// Single sign-on. The two flow halves are the public per-IP window
+	// declared above; the Settings pair shares one per-account window.
+	// Unlinking is a single indexed delete, but the contract reserves a 429
+	// on it and account-shape changes deserve the same posture as the
+	// two-step settings.
+	"GET /api/v1/auth/oidc/start":    budgetSSOFlow,
+	"GET /api/v1/auth/oidc/callback": budgetSSOFlow,
+	"POST /api/v1/users/me/oidc":     budgetSSOSettings,
+	"DELETE /api/v1/users/me/oidc":   budgetSSOSettings,
 
 	// Session lifecycle. The contract reserves no 429 on any of these and
 	// none of them is a lever: refresh and logout are bounded by holding a

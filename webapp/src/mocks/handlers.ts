@@ -23,6 +23,7 @@ type TotpStatus = components["schemas"]["TotpStatus"];
 type TotpSetup = components["schemas"]["TotpSetup"];
 type RecoveryCodes = components["schemas"]["RecoveryCodes"];
 type SessionFamily = components["schemas"]["SessionFamily"];
+type OidcRedirect = components["schemas"]["OidcRedirect"];
 type SessionFamilyList = components["schemas"]["SessionFamilyList"];
 
 /** Cookie names from the spec's `sessionCookie` scheme and CSRF description. */
@@ -96,6 +97,17 @@ export const FIXTURE_TOTP_CODE = "123456";
 /** The token the mock's reset links carry; anything else answers 401. */
 export const FIXTURE_RESET_TOKEN = "fixture-reset-token-not-a-real-one";
 
+/**
+ * What the mock instance calls its identity provider. Latin, on purpose: it is
+ * interpolated into Persian copy, which is what the bidi isolation around it is
+ * for.
+ */
+export const FIXTURE_SSO_PROVIDER_NAME = "Fixture Identity";
+
+/** Where POST /users/me/oidc sends the browser. Obviously not a real provider. */
+export const FIXTURE_OIDC_REDIRECT_URL =
+  "https://identity.example.invalid/authorize?fixture=1";
+
 export const FIXTURE_RECOVERY_CODES = [
   "4T7M-9QKX",
   "B2LP-8WRD",
@@ -124,6 +136,7 @@ export const FIXTURE_ADMIN: User = {
   locale: "en",
   is_admin: true,
   must_change_password: false,
+  sso_linked: false,
   totp_enrollment_required: false,
   created_at: "2020-01-01T00:00:00Z",
 };
@@ -136,6 +149,7 @@ export const FIXTURE_MEMBER: User = {
   locale: "fa",
   is_admin: false,
   must_change_password: false,
+  sso_linked: false,
   totp_enrollment_required: false,
   created_at: "2020-01-02T00:00:00Z",
 };
@@ -148,6 +162,7 @@ export const FIXTURE_NEWHIRE: User = {
   locale: "en",
   is_admin: false,
   must_change_password: true,
+  sso_linked: false,
   totp_enrollment_required: false,
   created_at: "2020-01-03T00:00:00Z",
 };
@@ -160,6 +175,7 @@ export const FIXTURE_TWOSTEP_USER: User = {
   locale: "en",
   is_admin: false,
   must_change_password: false,
+  sso_linked: false,
   totp_enrollment_required: false,
   created_at: "2020-01-05T00:00:00Z",
 };
@@ -172,6 +188,7 @@ export const FIXTURE_ENROL_USER: User = {
   locale: "en",
   is_admin: false,
   must_change_password: false,
+  sso_linked: false,
   totp_enrollment_required: true,
   created_at: "2020-01-06T00:00:00Z",
 };
@@ -184,6 +201,7 @@ export const FIXTURE_BOTH_USER: User = {
   locale: "en",
   is_admin: false,
   must_change_password: true,
+  sso_linked: false,
   totp_enrollment_required: true,
   created_at: "2020-01-07T00:00:00Z",
 };
@@ -281,6 +299,10 @@ function freshAuthState(): MockAuthState {
       password_min_length: 12,
       password_reset_available: true,
       max_file_size_bytes: 25 * 1024 * 1024,
+      // Configured by default, same reasoning as the reset flag: the screens
+      // that offer single sign-on exist, and a case that wants the instance
+      // without a provider says so with setMockInstance.
+      sso: { enabled: true, provider_name: FIXTURE_SSO_PROVIDER_NAME },
     },
     totp: { enabled: false },
     pendingTotp: "none",
@@ -319,6 +341,34 @@ export function expireMockAccess(): void {
  */
 export function setMockInstance(info: Partial<InstanceInfo>): void {
   auth.instance = { ...auth.instance, ...info };
+}
+
+/**
+ * Arms a two-step challenge with no password step in front of it — what the
+ * OIDC callback leaves behind when it lands on `?sso=totp`. The real thing is a
+ * challenge cookie the callback set; here it is the same module state a 202
+ * login sets, because the mock stands in for the cookie either way.
+ */
+export function startMockSsoChallenge(): void {
+  auth.challengeFor = FIXTURE_TWOSTEP_USER;
+}
+
+/** Attaches an identity to the signed-in fixture account (`User.sso_linked`). */
+export function linkMockSso(): void {
+  if (auth.user !== null) {
+    auth.user.sso_linked = true;
+  }
+}
+
+/**
+ * Drops the signed-in account's password, which is the state the unlink refusal
+ * exists for: single sign-on is then the account's only way in, so DELETE
+ * answers 409 sso_unlink_no_password.
+ */
+export function clearMockPassword(): void {
+  if (auth.user !== null) {
+    auth.passwords.delete(auth.user.username);
+  }
 }
 
 /** Turns two-step verification on for the signed-in fixture account. */
@@ -778,6 +828,48 @@ export const handlers = [
     },
   ),
 
+  /* ── single sign-on linking ──────────────────────────────────────── */
+
+  // GET /auth/oidc/start and /auth/oidc/callback are deliberately NOT mocked:
+  // both are browser navigations answered with a 302, and MSW intercepts fetch,
+  // not the address bar. The webapp reaches them by link and by redirect.
+
+  http.post<never, never, OidcRedirect | ApiError>("/api/v1/users/me/oidc", () => {
+    const user = activeUser();
+    if (user === null) {
+      return notAuthenticated();
+    }
+    if (auth.instance.sso?.enabled !== true) {
+      return errorResponse(503, "sso_unavailable", "Single sign-on is not configured.");
+    }
+    if (user.sso_linked) {
+      return errorResponse(409, "sso_already_linked", "An identity is already linked.");
+    }
+    return HttpResponse.json({ redirect_url: FIXTURE_OIDC_REDIRECT_URL });
+  }),
+
+  http.delete<never, never, ApiError | null>("/api/v1/users/me/oidc", () => {
+    const user = activeUser();
+    if (user === null) {
+      return notAuthenticated();
+    }
+    if (!user.sso_linked) {
+      return errorResponse(404, "sso_not_linked", "Nothing was linked.");
+    }
+    if (auth.passwords.get(user.username) === undefined) {
+      // Contract: unlinking an account with no password would leave it with no
+      // way in at all, so the server refuses and an administrator has to issue
+      // a temporary password first.
+      return errorResponse(
+        409,
+        "sso_unlink_no_password",
+        "This account has no password.",
+      );
+    }
+    user.sso_linked = false;
+    return new HttpResponse(null, { status: 204 });
+  }),
+
   /* ── sessions ────────────────────────────────────────────────────── */
 
   http.get<never, never, SessionFamilyList | ApiError>("/api/v1/users/me/sessions", () =>
@@ -843,6 +935,9 @@ export const handlers = [
           is_admin: body.is_admin ?? false,
           // Contract: admin-created users must replace the initial password.
           must_change_password: true,
+          // Nothing links an identity at creation time; the account holder
+          // does that from Settings once they are signed in.
+          sso_linked: false,
           // A property of a session, and this account has none yet: it is
           // decided when they first sign in, not when they are created.
           totp_enrollment_required: false,

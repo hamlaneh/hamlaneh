@@ -437,9 +437,10 @@ type HealthStatusStatus string
 // InstanceInfo What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere.
 type InstanceInfo struct {
 	// MaxFileSizeBytes The per-file upload cap, published so a client can refuse a file before spending the user's bandwidth on a doomed request. The server enforces it regardless; this is a courtesy, not the check.
-	MaxFileSizeBytes       int64 `json:"max_file_size_bytes"`
-	PasswordMinLength      int   `json:"password_min_length"`
-	PasswordResetAvailable bool  `json:"password_reset_available"`
+	MaxFileSizeBytes       int64      `json:"max_file_size_bytes"`
+	PasswordMinLength      int        `json:"password_min_length"`
+	PasswordResetAvailable bool       `json:"password_reset_available"`
+	Sso                    *SsoStatus `json:"sso,omitempty"`
 }
 
 // Invite An open invite, as the table lists it. Never the link itself.
@@ -524,6 +525,12 @@ type MessagePage struct {
 	// BeforeCursor Pass as `before` to fetch the previous (older) page.
 	BeforeCursor *string   `json:"before_cursor,omitempty"`
 	Messages     []Message `json:"messages"`
+}
+
+// OidcRedirect defines model for OidcRedirect.
+type OidcRedirect struct {
+	// RedirectUrl The provider authorization URL to send the browser to.
+	RedirectUrl string `json:"redirect_url"`
 }
 
 // OpenDirectMessageRequest defines model for OpenDirectMessageRequest.
@@ -683,6 +690,15 @@ type SetReadPositionRequest struct {
 	MessageId openapi_types.UUID `json:"message_id"`
 }
 
+// SsoStatus defines model for SsoStatus.
+type SsoStatus struct {
+	// Enabled False when no provider is configured. The sign-in screen renders the button only when the door exists, rather than offering one that goes nowhere.
+	Enabled bool `json:"enabled"`
+
+	// ProviderName What to call the provider on the button. Present whenever enabled is true, and absent otherwise - a configured provider always has a name, defaulting to a generic one, so a client never has to render a button it cannot label.
+	ProviderName *string `json:"provider_name,omitempty"`
+}
+
 // TemporaryCredentials Shown once and never again — the password is stored only as an argon2id hash, so there is nothing to redisplay.
 type TemporaryCredentials struct {
 	TemporaryPassword string `json:"temporary_password"`
@@ -774,6 +790,9 @@ type User struct {
 	// MustChangePassword True until the user replaces their admin-assigned temporary password. While true, every endpoint except change-password, logout, reading and patching users/me returns 403 with code password_change_required.
 	MustChangePassword bool `json:"must_change_password"`
 
+	// SsoLinked Whether this account has a single sign-on identity attached. It is what the settings screen offers Connect or Disconnect from.
+	SsoLinked bool `json:"sso_linked"`
+
 	// TotpEnrollmentRequired True when this session was minted while the organisation requires two-step verification and this account has none activated. While true, every endpoint except logout, reading and patching users/me, and the TOTP enrolment endpoints returns 403 with code totp_enrollment_required, and the WebSocket refuses the upgrade. Patching is admitted for the same reason the password gate admits it: the only field it carries is locale, and somebody whose account language is wrong would otherwise be stuck reading a screen they cannot change in a language they cannot read.
 	// It is a property of the session rather than of the account, which is what makes "at the next sign-in, never mid-session" true: turning the policy on strands nobody who is already working, including the administrator who turned it on.
 	// The two gates are sequential, not simultaneous: while must_change_password is also true, only that gate applies. An account an administrator created on an instance that requires two-step carries both flags on its first sign-in, and the two allow-lists intersect at almost nothing -- enforcing both at once would leave that person able to do neither thing being demanded of them. The password comes first because a temporary password is a credential its holder does not yet exclusively hold, and changing it revokes every other session, so enrolment then happens on a session nobody else could be sharing.
@@ -862,6 +881,13 @@ type AdminListUsersParams struct {
 
 	// Cursor Opaque pagination cursor from a previous response.
 	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// CompleteOidcSignInParams defines parameters for CompleteOidcSignIn.
+type CompleteOidcSignInParams struct {
+	Code  *string `form:"code,omitempty" json:"code,omitempty"`
+	State *string `form:"state,omitempty" json:"state,omitempty"`
+	Error *string `form:"error,omitempty" json:"error,omitempty"`
 }
 
 // ListChannelsParams defines parameters for ListChannels.
@@ -1028,6 +1054,12 @@ type ServerInterface interface {
 	// Logout End the current session and clear cookies.
 	// (POST /api/v1/auth/logout)
 	Logout(w http.ResponseWriter, r *http.Request)
+	// CompleteOidcSignIn Return from the identity provider.
+	// (GET /api/v1/auth/oidc/callback)
+	CompleteOidcSignIn(w http.ResponseWriter, r *http.Request, params CompleteOidcSignInParams)
+	// StartOidcSignIn Begin single sign-on.
+	// (GET /api/v1/auth/oidc/start)
+	StartOidcSignIn(w http.ResponseWriter, r *http.Request)
 	// RefreshSession Rotate the refresh token and mint a new session.
 	// (POST /api/v1/auth/refresh)
 	RefreshSession(w http.ResponseWriter, r *http.Request)
@@ -1100,6 +1132,12 @@ type ServerInterface interface {
 	// UpdateCurrentUser Change your own account settings.
 	// (PATCH /api/v1/users/me)
 	UpdateCurrentUser(w http.ResponseWriter, r *http.Request)
+	// UnlinkOidcIdentity Disconnect single sign-on from this account.
+	// (DELETE /api/v1/users/me/oidc)
+	UnlinkOidcIdentity(w http.ResponseWriter, r *http.Request)
+	// LinkOidcIdentity Connect single sign-on to this account.
+	// (POST /api/v1/users/me/oidc)
+	LinkOidcIdentity(w http.ResponseWriter, r *http.Request)
 	// ListMySessions Every device signed in to the caller's account.
 	// (GET /api/v1/users/me/sessions)
 	ListMySessions(w http.ResponseWriter, r *http.Request)
@@ -1492,6 +1530,79 @@ func (siw *ServerInterfaceWrapper) Logout(w http.ResponseWriter, r *http.Request
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.Logout(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CompleteOidcSignIn operation middleware
+func (siw *ServerInterfaceWrapper) CompleteOidcSignIn(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CompleteOidcSignInParams
+
+	// ------------- Optional query parameter "code" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "code", r.URL.Query(), &params.Code, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "code"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "code", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", r.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "state"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "state", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "error" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "error", r.URL.Query(), &params.Error, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "error"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "error", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CompleteOidcSignIn(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartOidcSignIn operation middleware
+func (siw *ServerInterfaceWrapper) StartOidcSignIn(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartOidcSignIn(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2239,6 +2350,34 @@ func (siw *ServerInterfaceWrapper) UpdateCurrentUser(w http.ResponseWriter, r *h
 	handler.ServeHTTP(w, r)
 }
 
+// UnlinkOidcIdentity operation middleware
+func (siw *ServerInterfaceWrapper) UnlinkOidcIdentity(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UnlinkOidcIdentity(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// LinkOidcIdentity operation middleware
+func (siw *ServerInterfaceWrapper) LinkOidcIdentity(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.LinkOidcIdentity(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListMySessions operation middleware
 func (siw *ServerInterfaceWrapper) ListMySessions(w http.ResponseWriter, r *http.Request) {
 
@@ -2555,6 +2694,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/setup", wrapper.StartTotpSetup)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/verify", wrapper.VerifyTotpSetup)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/activate", wrapper.ActivateTotp)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/auth/oidc/start", wrapper.StartOidcSignIn)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/auth/oidc/callback", wrapper.CompleteOidcSignIn)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/users/me/oidc", wrapper.UnlinkOidcIdentity)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/oidc", wrapper.LinkOidcIdentity)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/disable", wrapper.DisableTotp)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/recovery-codes", wrapper.RegenerateRecoveryCodes)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me/sessions", wrapper.ListMySessions)

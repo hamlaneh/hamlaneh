@@ -418,7 +418,7 @@ public registration is off by default, it is **the** way users come into existen
       nothing: an admin turns on enforced two-step, the screen agrees, and the instance does not
       change. Enforcement lands per session at mint, so flipping the policy strands no live
       session. Sign-ins become audited at the same time — they are not today.
-- [ ] SSO: OIDC first (SAML post-v1 unless a Managed pre-sale demands it) — free, per PLAN.md §6.3
+- [x] SSO: OIDC first (SAML post-v1 unless a Managed pre-sale demands it) — free, per PLAN.md §6.3
 - [ ] SCIM provisioning — deprovisioning kills all sessions/devices instantly
 - [ ] SSO just-in-time provisioning, its own org setting, default off — last on purpose: it is
       the widest door, and it lands after every gate it must respect is tested

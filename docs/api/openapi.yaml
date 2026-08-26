@@ -523,6 +523,179 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/auth/oidc/start:
+    get:
+      tags: [auth]
+      operationId: startOidcSignIn
+      summary: Begin single sign-on.
+      description: >
+        Redirects to the configured identity provider's authorization endpoint
+        with a fresh state, nonce and PKCE challenge, and sets a short-lived
+        transaction cookie holding the values the callback must compare
+        against.
+
+        That cookie is SameSite=Lax, and it is the one place this server
+        departs from Strict: the callback arrives as a top-level cross-site
+        navigation from the provider, and a Strict cookie would not be sent
+        with it. It carries only server-minted randomness, so it discloses
+        nothing and is compared rather than trusted.
+
+        There is no return-to parameter. The flow always lands on the
+        application root, which removes the open-redirect class outright
+        rather than defending against it.
+      responses:
+        "302":
+          description: Go to the identity provider.
+          headers:
+            Location:
+              schema: { type: string }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: >
+            Single sign-on is not configured, or the provider's discovery
+            document could not be fetched (code sso_unavailable). Password
+            sign-in is unaffected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/auth/oidc/callback:
+    get:
+      tags: [auth]
+      operationId: completeOidcSignIn
+      summary: Return from the identity provider.
+      description: >
+        Verifies the transaction cookie's state against the query parameter,
+        exchanges the code with the PKCE verifier, validates the identity
+        token's issuer, audience, signature and expiry, and compares its nonce
+        to the cookie's. The cookie is single-use and is cleared either way.
+
+        Every outcome is a redirect, because this is a browser navigation
+        rather than a client call, and every one of them lands on the
+        application root. What differs is one query parameter, which the
+        client reads once and strips from the address bar:
+
+        * signed in - no parameter. The session cookies are set.
+        * `?sso=totp` - the account has a second factor. The two-step
+          challenge cookie is set and the client shows the challenge screen.
+          The value names the method so the parameter survives WebAuthn
+          arriving beside totp, the way TwoFactorChallenge.methods does.
+          Nothing else is needed: the challenge travels in the cookie, so the
+          screen sends only the code.
+        * `?sso_error=<code>` - it did not work, with exactly one of
+          sso_account_exists (the identity's email belongs to a local
+          password account), sso_account_unknown (it matches nobody and
+          just-in-time provisioning is off), or sso_failed (anything else).
+
+        Landing everything on the root rather than on distinct paths keeps the
+        server's enumerated route list unchanged, and means a stale or shared
+        callback URL can never resolve to a screen that implies a state the
+        visitor is not in.
+
+        Text supplied by the provider is never reflected into the URL or the
+        page; it goes to the server log. The three codes are a closed set, so
+        a client meeting an unrecognised value treats it as sso_failed.
+      parameters:
+        - name: code
+          in: query
+          schema: { type: string }
+        - name: state
+          in: query
+          schema: { type: string }
+        - name: error
+          in: query
+          schema: { type: string }
+      responses:
+        "302":
+          description: Signed in, challenged, or sent back with an error code.
+          headers:
+            Location:
+              schema: { type: string }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: Single sign-on is not configured (code sso_unavailable).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/users/me/oidc:
+    post:
+      tags: [users]
+      operationId: linkOidcIdentity
+      summary: Connect single sign-on to this account.
+      description: >
+        Answers with the provider redirect the browser should follow, and sets
+        the same transaction cookie the sign-in flow uses, carrying the intent
+        to link and the id of the signed-in account. The callback then records
+        the identity against that account instead of minting a session.
+
+        Binding the account id into a server-minted HttpOnly cookie, and the
+        state into both the cookie and the URL, is what makes link fixation
+        fail: the transaction exists only in the browser that started it.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Follow this to the provider.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OidcRedirect"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: >
+            This account already has an identity linked (code
+            sso_already_linked).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: Single sign-on is not configured (code sso_unavailable).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [users]
+      operationId: unlinkOidcIdentity
+      summary: Disconnect single sign-on from this account.
+      description: >
+        Refused when the account has no password, because unlinking would
+        leave it with no way in at all. The recovery path for such an account
+        is an administrator issuing a temporary password, which is also the
+        break-glass door when the provider is unreachable.
+      security:
+        - sessionCookie: []
+      responses:
+        "204":
+          description: The identity is no longer linked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Nothing was linked (code sso_not_linked).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >
+            The account has no password, so this is its only way in (code
+            sso_unlink_no_password).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /api/v1/users/me/totp/disable:
     post:
       tags: [users]
@@ -1902,7 +2075,7 @@ components:
       type: object
       required:
         [id, username, display_name, locale, is_admin, must_change_password,
-         totp_enrollment_required, created_at]
+         sso_linked, totp_enrollment_required, created_at]
       properties:
         id:
           type: string
@@ -1927,6 +2100,11 @@ components:
             While true, every endpoint except change-password, logout, reading
             and patching users/me returns 403 with code
             password_change_required.
+        sso_linked:
+          type: boolean
+          description: >
+            Whether this account has a single sign-on identity attached. It is
+            what the settings screen offers Connect or Disconnect from.
         totp_enrollment_required:
           type: boolean
           description: >
@@ -2038,6 +2216,34 @@ components:
           minimum: 8
         password_reset_available:
           type: boolean
+        sso:
+          $ref: "#/components/schemas/SsoStatus"
+
+    OidcRedirect:
+      type: object
+      required: [redirect_url]
+      properties:
+        redirect_url:
+          type: string
+          description: The provider authorization URL to send the browser to.
+
+    SsoStatus:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          description: >
+            False when no provider is configured. The sign-in screen renders
+            the button only when the door exists, rather than offering one
+            that goes nowhere.
+        provider_name:
+          type: string
+          description: >
+            What to call the provider on the button. Present whenever enabled
+            is true, and absent otherwise - a configured provider always has a
+            name, defaulting to a generic one, so a client never has to render
+            a button it cannot label.
 
     TwoFactorChallenge:
       type: object

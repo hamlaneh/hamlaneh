@@ -8,8 +8,6 @@ import {
   formatFileSize,
   formatResultStamp,
   formatTime,
-  isolateAuto,
-  isolateLtr,
   linkPreviewHost,
 } from "./format";
 
@@ -22,24 +20,10 @@ import {
 
 const NOW = new Date("2026-08-21T12:00:00.000Z");
 
-/** By code point, not literal: the isolates are invisible in source. */
-const LRI = String.fromCodePoint(0x2066);
-const FSI = String.fromCodePoint(0x2068);
-const PDI = String.fromCodePoint(0x2069);
-
 /** Everything the string has left once the ASCII digits are removed. */
 function digitsOnly(value: string): string {
   return value.replace(/\D/g, "");
 }
-
-describe("bidi isolation", () => {
-  it("wraps a value in an isolate rather than adding markup", () => {
-    // LRI ... PDI, so a slug stays an LTR run inside a Persian sentence.
-    expect(isolateLtr("#deploys")).toBe(`${LRI}#deploys${PDI}`);
-    // FSI ... PDI, so a name takes the direction of its own first letter.
-    expect(isolateAuto("Parisa")).toBe(`${FSI}Parisa${PDI}`);
-  });
-});
 
 describe("formatTime", () => {
   it("is 24-hour and zero-padded", () => {

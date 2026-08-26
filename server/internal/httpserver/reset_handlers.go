@@ -140,9 +140,20 @@ func writeInvalidResetToken(w http.ResponseWriter, r *http.Request) {
 // password_reset_available is false when no mail transport is configured,
 // so the screen omits a link that would go nowhere.
 func (s *apiServer) GetInstance(w http.ResponseWriter, r *http.Request) {
-	writeJSONValue(w, r, http.StatusOK, api.InstanceInfo{
+	info := api.InstanceInfo{
 		MaxFileSizeBytes:       maxUploadBytes,
 		PasswordMinLength:      uservalidate.MinPasswordLen,
 		PasswordResetAvailable: s.reset != nil && s.reset.Available(),
-	})
+		// sso.enabled follows CONFIGURATION, not the provider's health: the
+		// button exists whenever the door does, and a provider that is down
+		// answers 503 at the door rather than hiding it.
+		Sso: &api.SsoStatus{Enabled: s.sso != nil},
+	}
+	if s.sso != nil {
+		// Present whenever enabled (the contract): ProviderName defaults
+		// rather than returning empty, so the pair cannot desynchronize.
+		name := s.sso.ProviderName()
+		info.Sso.ProviderName = &name
+	}
+	writeJSONValue(w, r, http.StatusOK, info)
 }
