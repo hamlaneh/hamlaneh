@@ -137,7 +137,251 @@
   "account": {
     "title": "Account",
     "signedInAs": "Signed in as {{name}}",
-    "logout": "Log out"
+    "logout": "Log out",
+    "adminDashboard": "Administration"
+  },
+  "admin": {
+    "kicker": "ADMINISTRATION",
+    "backToChat": "Back to chat",
+    "nav": {
+      "label": "Administration",
+      "users": "Users",
+      "invites": "Invites",
+      "org": "Org settings",
+      "audit": "Audit log"
+    },
+    "role": {
+      "admin": "Admin",
+      "member": "Member"
+    },
+    "status": {
+      "active": "Active",
+      "inactive": "Deactivated",
+      "saving": "Saving…"
+    },
+    "error": {
+      "loadBody": "The server did not answer. Nothing has been changed.",
+      "retry": "Try again",
+      "actionFailed": "That did not go through. Try again."
+    },
+    "users": {
+      "title": "Users",
+      "subtitle": "Every account on this instance. New ones are born here, or from an invite link.",
+      "create": "Create user",
+      "searchLabel": "Search accounts",
+      "searchPlaceholder": "Username, name or email",
+      "roleFilter": "Filter by role",
+      "roleFilter.all": "Any role",
+      "statusFilter": "Filter by status",
+      "statusFilter.all": "Any status",
+      "tally": "{{shown}} of {{total}} shown",
+      "you": "You",
+      "actionsFor": "Actions for {{name}}",
+      "loadFailed": "We could not load the accounts.",
+      "column": {
+        "user": "User",
+        "displayName": "Display name",
+        "email": "Email",
+        "role": "Role",
+        "status": "Status",
+        "created": "Created",
+        "actions": "Actions"
+      },
+      "action": {
+        "changeRole": "Change role",
+        "forceReset": "Force a password reset",
+        "deactivate": "Deactivate",
+        "reactivate": "Reactivate"
+      },
+      "empty": {
+        "title": "Yours is the only account",
+        "body": "Create the accounts your team needs, or send an invite link and let people choose their own username and password.",
+        "createFirst": "Create the first account",
+        "createInvite": "Create an invite link"
+      },
+      "filteredEmpty": {
+        "title": "No account matches",
+        "body": "Nothing here matches the search and filters you have set. This instance has {{total}} accounts.",
+        "clear": "Clear search and filters"
+      },
+      "promote": {
+        "title": "Make {{name}} an administrator?",
+        "body": "Administrators create and deactivate accounts, change every setting on this instance, and read the audit log.",
+        "confirm": "Make administrator"
+      },
+      "demote": {
+        "title": "Remove {{name}}'s administrator role?",
+        "body": "They keep their account, their messages and their channels, and lose this dashboard.",
+        "confirm": "Make member"
+      },
+      "reset": {
+        "title": "Force a password reset?",
+        "body": "{{name}} gets a temporary password and is asked to replace it at the next sign-in. The sessions they already have open are not ended — they stay signed in on those devices. Use Deactivate if the intent is to shut the account.",
+        "confirm": "Issue a temporary password"
+      },
+      "deactivate": {
+        "title": "Deactivate {{name}}?",
+        "body": "{{name}} cannot sign in again until an administrator reactivates the account, and every session they have open ends now — on every device, including the desktop app. Nothing they have written is removed."
+      },
+      "reactivate": {
+        "title": "Reactivate {{name}}?",
+        "body": "They can sign in again with the password they had. The sessions that ended when the account was deactivated do not come back — they sign in fresh."
+      },
+      "blocked": {
+        "lastAdmin": {
+          "title": "The last administrator cannot be removed",
+          "body": "This instance would be left with nobody who can administer it, so the change is refused. Give another active account the administrator role first, then come back to this one."
+        },
+        "selfDeactivate": {
+          "title": "You cannot deactivate your own account",
+          "body": "Deactivating an account ends every session it holds, so this one would sign you out of the dashboard mid-action. Ask another administrator to do it."
+        }
+      }
+    },
+    "createUser": {
+      "title": "Create user",
+      "subtitle": "The account works straight away. The temporary password below is replaced the first time they sign in.",
+      "usernameLabel": "Username",
+      "usernameHint": "Lowercase letters, digits, dots, dashes and underscores. This is how people find them.",
+      "displayNameLabel": "Display name",
+      "emailLabel": "Email address",
+      "emailHint": "Optional. Without one, this account cannot reset its own password by email.",
+      "passwordLabel": "Temporary password",
+      "passwordHint": "At least {{min}} characters, generated in your browser. You see it once, on the next step.",
+      "generate": "Generate again",
+      "roleLabel": "Role",
+      "languageLabel": "Language",
+      "submit": "Create account",
+      "submitBusy": "Creating…",
+      "error": {
+        "username": "Use 3 to 32 characters: lowercase letters, digits, dots, dashes and underscores, starting with a letter or a digit.",
+        "taken": "That username is already taken on this instance.",
+        "invalid": "The server refused these details. Check what you entered and try again.",
+        "unexpected": "The account could not be created. Try again."
+      }
+    },
+    "credentials": {
+      "warning": "This is the only time it is shown. The server keeps a hash of it and nothing else, so it cannot show it to you again — copy or download it before you close this.",
+      "created": "Account created",
+      "createdLede": "{{name}} can sign in with these.",
+      "resetDone": "Temporary password issued",
+      "resetLede": "{{name}} signs in with this and is asked to replace it.",
+      "usernameLabel": "Username",
+      "passwordLabel": "Temporary password",
+      "copy": "Copy",
+      "copied": "Copied.",
+      "copyFailed": "Could not copy. Select the values above and copy them by hand.",
+      "download": "Download as text",
+      "note": "They must replace this password the first time they sign in.",
+      "acknowledge": "I have saved these",
+      "createAnother": "Create another account"
+    },
+    "invites": {
+      "title": "Invites",
+      "subtitle": "Links that can still be redeemed. Each one creates a single account and then stops working.",
+      "create": "Create invite link",
+      "createSubtitle": "One link, one account. It stops working when it is used, or when it expires — whichever comes first.",
+      "createSubmit": "Create link",
+      "expiryLabel": "Valid for",
+      "expiry": {
+        "24": "1 day",
+        "168": "7 days",
+        "720": "30 days"
+      },
+      "noteLabel": "Note",
+      "noteHint": "Optional. Only administrators see it — it is there so you remember who a link was for.",
+      "noNote": "No note",
+      "singleUse": "Once",
+      "revoke": "Revoke",
+      "tally": "{{open}} still open",
+      "note": "Used, expired and revoked links leave this table. Their history stays in the audit log.",
+      "loadFailed": "We could not load the invite links.",
+      "column": {
+        "note": "Note",
+        "createdBy": "Created by",
+        "created": "Created",
+        "expires": "Expires",
+        "uses": "Uses",
+        "actions": "Actions"
+      },
+      "empty": {
+        "title": "No open invite links",
+        "body": "Create one and send it to somebody. They choose their own username and password, and the link works once."
+      },
+      "link": {
+        "title": "Invite link created",
+        "lede": "Anyone who opens it can create one account. Valid until {{when}}.",
+        "warning": "This is the only time the link is shown. The server keeps a hash of it and nothing else, so it cannot show it to you again — copy or download it before you close this.",
+        "label": "Invite link",
+        "note": "Send it over a channel you trust. Anybody holding the link can use it — once."
+      },
+      "revokeConfirm": {
+        "title": "Revoke this invite link?",
+        "body": "The link stops working immediately. Anybody still holding it will need a new one."
+      }
+    },
+    "org": {
+      "title": "Org settings",
+      "subtitle": "Every change here saves the moment you make it. There is no Save button to forget.",
+      "organization": "Organization",
+      "nameLabel": "Organization name",
+      "nameHint": "Shown on the sign-in page and above this nav. Saves when you leave the field.",
+      "localeLabel": "Default language",
+      "localeHint": "What a new account starts in. Everyone can change their own afterwards.",
+      "registration": "How accounts are created",
+      "registrationMode": {
+        "invite": "By invitation",
+        "open": "Open"
+      },
+      "registrationHint": {
+        "invite": "Only an administrator brings an account into existence — here, or with an invite link.",
+        "open": "Anybody who reaches this instance can create their own account."
+      },
+      "openWarning": "With open registration, anybody who reaches this instance's address can create an account without an invitation.",
+      "security": "Security",
+      "requireTotpLabel": "Require two-step verification",
+      "requireTotpHint": "Enforced at the next sign-in, never mid-session — turning it on cannot lock out the session you are in.",
+      "accountsWithoutTotp": "Accounts with no authenticator set up yet: {{accounts}}.",
+      "sessionLifetimeLabel": "Session lifetime",
+      "lifetime": {
+        "24": "1 day",
+        "168": "7 days",
+        "720": "30 days",
+        "2160": "90 days",
+        "custom": "Custom — {{hours}} hours"
+      },
+      "passwordMinLabel": "Minimum password length",
+      "passwordMinNote": "Set on the server, not here. It applies to every password screen: the forced change after a temporary password, resets by email, and self-service changes.",
+      "loadFailed": "We could not load the organization settings.",
+      "saveFailed": "That setting was not saved. The instance still holds the previous value."
+    },
+    "audit": {
+      "title": "Audit log",
+      "subtitle": "Every administrative action, newest first. Read-only — nothing on this page can be edited or deleted.",
+      "export": "Export CSV",
+      "actorFilter": "Filter by actor",
+      "actorAny": "Anyone",
+      "actionFilter": "Filter by action",
+      "actionAll": "Every action",
+      "system": "System",
+      "pageLabel": "Newest first",
+      "newer": "Newer",
+      "older": "Older",
+      "loadFailed": "We could not load the audit log.",
+      "column": {
+        "time": "Time",
+        "actor": "Actor",
+        "action": "Action",
+        "target": "Target",
+        "ip": "Source IP"
+      },
+      "empty": {
+        "title": "Nothing recorded yet",
+        "body": "Administrative actions land here as they happen. If you have set a filter, it may be hiding them."
+      },
+      "chainBroken": "The signature chain over the entries on this page does not verify. The log is tamper-evident, not tamper-proof, and this is it showing: somebody has reached the database directly and changed or removed a row. Treat what is below as unreliable and look at the server.",
+      "footnote": "Entries are append-only, and each one is signed over the entry before it with a key kept outside the database. That does not make the log tamper-proof — anybody who can write to the database can rewrite rows. It makes a rewrite show."
+    }
   },
   "settings": {
     "title": "Settings",
@@ -430,6 +674,38 @@
       "invite": "Invite",
       "message": "Message",
       "failed": "That did not work. Try again."
+    }
+  },
+  "redeemInvite": {
+    "done": "Your account is ready. Sign in to continue."
+  },
+  "invite": {
+    "title": "Join {{org}}",
+    "helper": "You were invited. Pick a username and a password, and you are in.",
+    "usernameLabel": "Username",
+    "usernameHint": "Letters, digits, dots, dashes and underscores. This is how people find you.",
+    "displayNameLabel": "Display name",
+    "displayNameHint": "Optional — what people see beside your messages. Your username if you leave it empty.",
+    "passwordLabel": "Password",
+    "confirmLabel": "Confirm password",
+    "submit": "Create account",
+    "submitting": "Creating your account…",
+    "goToSignIn": "Go to sign-in",
+    "unusable": {
+      "title": "This invitation cannot be used",
+      "body": "The link may have expired, been used already, or been withdrawn. Ask whoever invited you for a new one."
+    },
+    "unreachable": {
+      "body": "We could not reach the server to check this invitation. Try again in a moment."
+    },
+    "error": {
+      "username": "Pick a username of 3 to 32 characters.",
+      "usernameTaken": "That username is taken. Try another.",
+      "password": "Your password must be at least {{minimum}} characters.",
+      "mismatch": "The two passwords do not match.",
+      "unusable": "This invitation cannot be used any more.",
+      "rateLimited": "Too many attempts. Try again in {{count, number}} seconds.",
+      "unexpected": "Something went wrong. Try again."
     }
   }
 }

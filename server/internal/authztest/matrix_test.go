@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hamlaneh/hamlaneh/server/internal/audit"
 	"github.com/hamlaneh/hamlaneh/server/internal/blobstore"
 	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
 	"github.com/hamlaneh/hamlaneh/server/internal/password"
@@ -302,7 +303,17 @@ func TestAuthzMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("matrix blob store: %v", err)
 	}
-	handler := httpserver.Handler(store, httpserver.WithUploads(blobs, nil))
+	// The audit row reads the log back, and reading it back means verifying
+	// it, which needs the key. A throwaway one per run is right here: the
+	// matrix asserts who may ask, and this is what makes the question
+	// answerable at all.
+	chain, err := audit.New([]byte("authz matrix audit chain key, 32+ bytes"))
+	if err != nil {
+		t.Fatalf("matrix audit chain: %v", err)
+	}
+	handler := httpserver.Handler(store,
+		httpserver.WithUploads(blobs, nil),
+		httpserver.WithAuditChain(chain))
 	ctx := context.Background()
 
 	entries := Registry()

@@ -24,6 +24,29 @@ const (
 	AdminUsersCreate Action = "admin:users:create"
 )
 
+// Phase 1.4 actions: the rest of the admin dashboard. Each names one
+// route-level decision the security middleware makes; none of them is
+// resource-scoped, because an instance admin's authority over an instance
+// resource does not vary by which resource it is.
+const (
+	// AdminUsersUpdate is deactivating, reactivating, or changing a role.
+	AdminUsersUpdate Action = "admin:users:update"
+	// AdminUsersResetPassword is issuing a temporary password.
+	AdminUsersResetPassword Action = "admin:users:reset-password"
+	// AdminInvitesList is reading the open invitations.
+	AdminInvitesList Action = "admin:invites:list"
+	// AdminInvitesCreate is generating an invitation link.
+	AdminInvitesCreate Action = "admin:invites:create"
+	// AdminInvitesRevoke is closing an open invitation.
+	AdminInvitesRevoke Action = "admin:invites:revoke"
+	// AdminOrgRead is reading the instance settings.
+	AdminOrgRead Action = "admin:org:read"
+	// AdminOrgUpdate is changing the instance settings.
+	AdminOrgUpdate Action = "admin:org:update"
+	// AdminAuditList is reading the audit log.
+	AdminAuditList Action = "admin:audit:list"
+)
+
 // Can reports whether user may perform action on resource. resource is nil
 // for org-level actions; later phases pass channels, messages, and files.
 //
@@ -41,7 +64,9 @@ func Can(_ context.Context, user *storage.User, action Action, resource any) boo
 		return canMessage(user, action, res)
 	}
 	switch action {
-	case AdminUsersList, AdminUsersCreate:
+	case AdminUsersList, AdminUsersCreate, AdminUsersUpdate, AdminUsersResetPassword,
+		AdminInvitesList, AdminInvitesCreate, AdminInvitesRevoke,
+		AdminOrgRead, AdminOrgUpdate, AdminAuditList:
 		return user.IsAdmin
 	case ChannelRead, ChannelUpdate, ChannelMemberAdd, ChannelMemberRemove,
 		MessageSend, MessageEdit, MessageDelete, ReadPositionSet, FileUpload:

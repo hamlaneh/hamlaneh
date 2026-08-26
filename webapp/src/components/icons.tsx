@@ -483,3 +483,51 @@ export function NestMark({ size, className }: { size: number; className?: string
     </svg>
   );
 }
+
+/* ── admin set ─────────────────────────────────────────────────────── */
+
+export function ScrollTextIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M15 12h-5" />
+      <path d="M15 8h-5" />
+      <path d="M19 17V5a2 2 0 0 0-2-2H6" />
+      <path d="M8 21h12a2 2 0 0 0 2-2 1 1 0 0 0-1-1H10a1 1 0 0 0-1 1 2 2 0 0 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3" />
+    </Glyph>
+  );
+}
+
+export function RefreshCwIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M21 12a9 9 0 1 1-6.2-8.6" />
+      <path d="M21 3v5h-5" />
+    </Glyph>
+  );
+}
+
+export function ChevronDownIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="m6 9 6 6 6-6" />
+    </Glyph>
+  );
+}
+
+export function ChevronLeftIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="m15 18-6-6 6-6" />
+    </Glyph>
+  );
+}
+
+export function UserMinusIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 11h-6" />
+    </Glyph>
+  );
+}

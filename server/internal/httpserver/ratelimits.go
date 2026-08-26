@@ -50,6 +50,13 @@ import (
 // because one colleague is chatty would be a bug wearing a security
 // control's clothes.
 //
+// One budget breaks that rule and says so in its own declaration:
+// budgetInviteRedeem. Redeeming an invitation is public by necessity — the
+// account it creates is the reason the request exists — so there is no
+// account to key on, and it is keyed on the client address instead
+// (budgetSpec.perIP). The argument above still holds for everything else:
+// per-IP is the key that route is forced into, not the one it would choose.
+//
 // # What an endpoint with no declared budget does
 //
 // It is refused, with 500, exactly as an unclassified route is refused by
@@ -123,14 +130,23 @@ const (
 	budgetConversationWrite budgetName = "conversation-write"
 	budgetDirectory         budgetName = "directory"
 	budgetUpload            budgetName = "upload"
+	budgetAdminSecret       budgetName = "admin-secret"
+	budgetInviteRedeem      budgetName = "invite-redeem"
 )
 
-// budgetSpec is one budget: how many requests fit its sliding window, and
-// how long that window is. There is no key field because there is nothing to
-// choose — see the file comment on why every budget here is per account.
+// budgetSpec is one budget: how many requests fit its sliding window, how
+// long that window is, and — for the one budget on a public route — what it
+// is keyed on.
 type budgetSpec struct {
 	limit  int
 	window time.Duration
+	// perIP keys this budget on the client address instead of the account.
+	// It exists for the invite-redemption route and nothing else: that
+	// route is public by necessity, so there is no account to key on, and a
+	// budget that demanded one would refuse the request with a 500. Leave
+	// it false for anything behind a session — see the file comment on why
+	// per account is the right key there.
+	perIP bool
 }
 
 // budgetSpecs gives every named budget its numbers and its reason. The
@@ -210,6 +226,32 @@ var budgetSpecs = map[budgetName]budgetSpec{
 	// the directory, and the rows carry no email, role or password state — so
 	// what is being bounded here is server work, not disclosure.
 	budgetDirectory: {limit: 120, window: time.Minute},
+
+	// The two admin actions that mint a one-shot secret: a forced password
+	// reset and an invitation link. One window per admin across both,
+	// because an attacker holding an admin session picks whichever is
+	// cheaper for them and per-endpoint budgets would only multiply the
+	// total.
+	//
+	// What is bounded is server work, not guessing: the forced reset runs a
+	// full argon2id hash (64 MiB) per call, and every invitation is a row
+	// that stays live until it expires. 30 a minute is far past an admin
+	// clicking through a row-action menu and far below what either loop
+	// needs to hurt.
+	budgetAdminSecret: {limit: 30, window: time.Minute},
+
+	// Redeeming an invitation is the only public route in this table, and
+	// the only one keyed on the client address. It hashes the chosen
+	// password with argon2id before the token is known to be good — the same
+	// trade password reset makes, and what keeps the account creation and
+	// the invite consumption in one transaction — so an unauthenticated
+	// caller can otherwise buy 64 MiB of hashing per request.
+	//
+	// It is not a guessing defence: the token is 256 bits, and no budget
+	// makes that more or less findable. 10 in 5 minutes is far above the
+	// handful of tries a person needs to land on a username nobody has
+	// taken, and far below a loop worth running.
+	budgetInviteRedeem: {limit: 10, window: 5 * time.Minute, perIP: true},
 }
 
 // endpointBudgets is the rate-limit table for every contract endpoint, keyed
@@ -267,6 +309,26 @@ var endpointBudgets = map[string]budgetName{
 	// instance; the contract reserves no 429.
 	"GET /api/v1/admin/users":  budgetNone,
 	"POST /api/v1/admin/users": budgetNone,
+
+	// Phase 1.4 administration. Exactly the three routes the contract
+	// reserves a 429 on are budgeted; the rest are reads and idempotent
+	// writes an admin already has the authority to make.
+	"POST /api/v1/admin/users/{userId}/reset-password": budgetAdminSecret,
+	"POST /api/v1/admin/invites":                       budgetAdminSecret,
+	"POST /api/v1/invites/{token}":                     budgetInviteRedeem,
+	"PATCH /api/v1/admin/users/{userId}":               budgetNone,
+	"GET /api/v1/admin/invites":                        budgetNone,
+	"DELETE /api/v1/admin/invites/{inviteId}":          budgetNone,
+	"GET /api/v1/admin/org":                            budgetNone,
+	"PATCH /api/v1/admin/org":                          budgetNone,
+	// The preview is public and carries no 429 in the contract. It runs one
+	// indexed lookup against a hash and answers the same 404 to everything
+	// that is not live, so there is nothing here a budget would protect that
+	// the 256-bit token does not already.
+	"GET /api/v1/invites/{token}": budgetNone,
+	// The audit log is one indexed page per call, read by an admin who
+	// already holds the instance; the contract reserves no 429 on it.
+	"GET /api/v1/admin/audit": budgetNone,
 
 	// Conversations and messages.
 	"GET /api/v1/users":                          budgetDirectory,
@@ -327,18 +389,10 @@ func (s *apiServer) rateLimitMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		prin, ok := principalFrom(r.Context())
+		key, ok := s.budgetKey(w, r, name)
 		if !ok {
-			// Every budget in the table is per account, so a budgeted route
-			// must be session-gated in routePolicies. A principal missing here
-			// means the two tables disagree, and serving the request would
-			// silently drop the budget.
-			internalError(w, r, fmt.Errorf(
-				"budget %q needs an account and route %q provides none", name, r.Pattern))
 			return
 		}
-
-		key := prin.user.ID.String()
 		if limiter.Limited(key) {
 			writeRateLimited(w, r, limiter.RetryAfter(key))
 			return
@@ -347,4 +401,25 @@ func (s *apiServer) rateLimitMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// budgetKey resolves what this budget is spent against: the client address
+// for a budget declared perIP, and the authenticated account otherwise.
+//
+// A per-account budget on a route that provides no principal is refused with
+// 500 rather than served. It means routePolicies and budgetSpecs disagree
+// about whether the route is authenticated, and serving the request would
+// silently drop the budget instead.
+func (s *apiServer) budgetKey(w http.ResponseWriter, r *http.Request, name budgetName) (string, bool) {
+	if budgetSpecs[name].perIP {
+		_, ipKey := clientIP(r)
+		return ipKey, true
+	}
+	prin, ok := principalFrom(r.Context())
+	if !ok {
+		internalError(w, r, fmt.Errorf(
+			"budget %q needs an account and route %q provides none", name, r.Pattern))
+		return "", false
+	}
+	return prin.user.ID.String(), true
 }

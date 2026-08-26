@@ -90,6 +90,24 @@ func (e HealthStatusStatus) Valid() bool {
 	}
 }
 
+// Defines values for OrgSettingsDefaultLocale.
+const (
+	OrgSettingsDefaultLocaleEn OrgSettingsDefaultLocale = "en"
+	OrgSettingsDefaultLocaleFa OrgSettingsDefaultLocale = "fa"
+)
+
+// Valid indicates whether the value is a known member of the OrgSettingsDefaultLocale enum.
+func (e OrgSettingsDefaultLocale) Valid() bool {
+	switch e {
+	case OrgSettingsDefaultLocaleEn:
+		return true
+	case OrgSettingsDefaultLocaleFa:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Presence.
 const (
 	Away    Presence = "away"
@@ -105,6 +123,24 @@ func (e Presence) Valid() bool {
 	case Offline:
 		return true
 	case Online:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RegistrationMode.
+const (
+	RegistrationModeInvite RegistrationMode = "invite"
+	RegistrationModeOpen   RegistrationMode = "open"
+)
+
+// Valid indicates whether the value is a known member of the RegistrationMode enum.
+func (e RegistrationMode) Valid() bool {
+	switch e {
+	case RegistrationModeInvite:
+		return true
+	case RegistrationModeOpen:
 		return true
 	default:
 		return false
@@ -138,6 +174,24 @@ const (
 func (e TwoFactorChallengeMethods) Valid() bool {
 	switch e {
 	case Totp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateOrgSettingsRequestDefaultLocale.
+const (
+	UpdateOrgSettingsRequestDefaultLocaleEn UpdateOrgSettingsRequestDefaultLocale = "en"
+	UpdateOrgSettingsRequestDefaultLocaleFa UpdateOrgSettingsRequestDefaultLocale = "fa"
+)
+
+// Valid indicates whether the value is a known member of the UpdateOrgSettingsRequestDefaultLocale enum.
+func (e UpdateOrgSettingsRequestDefaultLocale) Valid() bool {
+	switch e {
+	case UpdateOrgSettingsRequestDefaultLocaleEn:
+		return true
+	case UpdateOrgSettingsRequestDefaultLocaleFa:
 		return true
 	default:
 		return false
@@ -182,6 +236,30 @@ type AdminCreateUserRequest struct {
 // AdminCreateUserRequestLocale defines model for AdminCreateUserRequest.Locale.
 type AdminCreateUserRequestLocale string
 
+// AdminUser A row of the users table. Carries what the dashboard shows and nothing more — never a password hash, never a session token.
+type AdminUser struct {
+	CreatedAt   time.Time `json:"created_at"`
+	DisplayName string    `json:"display_name"`
+	Email       *string   `json:"email,omitempty"`
+
+	// HasTotp Whether the account has a second factor. The org-settings screen uses it to say who enforcement will affect.
+	HasTotp *bool              `json:"has_totp,omitempty"`
+	Id      openapi_types.UUID `json:"id"`
+
+	// IsActive False for a deactivated account — it cannot sign in and holds no sessions.
+	IsActive           bool   `json:"is_active"`
+	IsAdmin            bool   `json:"is_admin"`
+	MustChangePassword bool   `json:"must_change_password"`
+	Username           string `json:"username"`
+}
+
+// AdminUserPage defines model for AdminUserPage.
+type AdminUserPage struct {
+	// NextCursor Present when another page exists.
+	NextCursor *string     `json:"next_cursor,omitempty"`
+	Users      []AdminUser `json:"users"`
+}
+
 // Attachment A file card in the message list. Read-only on Message: attachments are created by the Phase 1.3 upload pipeline, so until that slice lands the array is always empty. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both.
 type Attachment struct {
 	// ContentType The card's short type label ("PDF", "PNG") is derived from this.
@@ -199,6 +277,29 @@ type Attachment struct {
 
 	// Width Images only — the card's "1600 × 900" line.
 	Width *int `json:"width,omitempty"`
+}
+
+// AuditEntry One recorded action. `actor` is null for something the system did rather than a person.
+type AuditEntry struct {
+	// Action Namespaced verb, e.g. user.deactivated, invite.created.
+	Action     string                  `json:"action"`
+	Actor      *UserSummary            `json:"actor,omitempty"`
+	Detail     *map[string]interface{} `json:"detail,omitempty"`
+	Id         openapi_types.UUID      `json:"id"`
+	Ip         *string                 `json:"ip,omitempty"`
+	OccurredAt time.Time               `json:"occurred_at"`
+	TargetId   *openapi_types.UUID     `json:"target_id,omitempty"`
+
+	// TargetLabel What the target was called when this happened, kept so the log still reads correctly after a rename or a deletion.
+	TargetLabel *string `json:"target_label,omitempty"`
+}
+
+// AuditPage defines model for AuditPage.
+type AuditPage struct {
+	// ChainValid False means the hash chain over the returned entries does not verify — somebody edited or removed a row in the database. It is not a display concern.
+	ChainValid bool         `json:"chain_valid"`
+	Entries    []AuditEntry `json:"entries"`
+	NextCursor *string      `json:"next_cursor,omitempty"`
 }
 
 // ChangePasswordRequest defines model for ChangePasswordRequest.
@@ -276,6 +377,21 @@ type CreateChannelRequest struct {
 // CreateChannelRequestKind Direct messages are opened through /api/v1/dms, not here.
 type CreateChannelRequestKind string
 
+// CreateInviteRequest defines model for CreateInviteRequest.
+type CreateInviteRequest struct {
+	ExpiresInHours *int `json:"expires_in_hours,omitempty"`
+
+	// Note What this link is for; shown in the table, never to the invitee.
+	Note *string `json:"note,omitempty"`
+}
+
+// CreatedInvite The link is in this response and nowhere else: only its hash is stored, exactly as password-reset tokens are.
+type CreatedInvite struct {
+	ExpiresAt time.Time          `json:"expires_at"`
+	Id        openapi_types.UUID `json:"id"`
+	Url       string             `json:"url"`
+}
+
 // EditMessageRequest defines model for EditMessageRequest.
 type EditMessageRequest struct {
 	Content string `json:"content"`
@@ -306,6 +422,28 @@ type InstanceInfo struct {
 	MaxFileSizeBytes       int64 `json:"max_file_size_bytes"`
 	PasswordMinLength      int   `json:"password_min_length"`
 	PasswordResetAvailable bool  `json:"password_reset_available"`
+}
+
+// Invite An open invite, as the table lists it. Never the link itself.
+type Invite struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// CreatedBy The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
+	CreatedBy UserSummary        `json:"created_by"`
+	ExpiresAt time.Time          `json:"expires_at"`
+	Id        openapi_types.UUID `json:"id"`
+	Note      *string            `json:"note,omitempty"`
+}
+
+// InvitePage defines model for InvitePage.
+type InvitePage struct {
+	Invites    []Invite `json:"invites"`
+	NextCursor *string  `json:"next_cursor,omitempty"`
+}
+
+// InvitePreview What the redemption screen draws before anybody has an account. Deliberately says nothing about who issued the invite or for whom.
+type InvitePreview struct {
+	OrgName string `json:"org_name"`
 }
 
 // LinkPreview The link-preview card: image, title, description, and the host line the client derives from url. Read-only, and always absent until the Phase 1.3 egress preview proxy exists.
@@ -376,6 +514,26 @@ type OpenDirectMessageRequest struct {
 	UserId openapi_types.UUID `json:"user_id"`
 }
 
+// OrgSettings defines model for OrgSettings.
+type OrgSettings struct {
+	// AccountsWithoutTotp How many accounts enforcement would affect. Read-only, and the reason the screen can say who it hits before it is turned on.
+	AccountsWithoutTotp *int `json:"accounts_without_totp,omitempty"`
+
+	// DefaultLocale The locale a new account starts in.
+	DefaultLocale OrgSettingsDefaultLocale `json:"default_locale"`
+	OrgName       string                   `json:"org_name"`
+
+	// RegistrationMode How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
+	RegistrationMode RegistrationMode `json:"registration_mode"`
+
+	// RequireTotp Enforced at the next sign-in, never mid-session — turning it on must not lock out the admin who turned it on.
+	RequireTotp          bool `json:"require_totp"`
+	SessionLifetimeHours int  `json:"session_lifetime_hours"`
+}
+
+// OrgSettingsDefaultLocale The locale a new account starts in.
+type OrgSettingsDefaultLocale string
+
 // PasswordConfirmRequest Re-authentication for an action that changes the second factor. The session alone is not enough: a hijacked session must not be able to disable two-step verification or mint fresh sign-in codes.
 type PasswordConfirmRequest struct {
 	Password string `json:"password"`
@@ -401,6 +559,18 @@ type Presence string
 type RecoveryCodes struct {
 	Codes []string `json:"codes"`
 }
+
+// RedeemInviteRequest defines model for RedeemInviteRequest.
+type RedeemInviteRequest struct {
+	DisplayName *string `json:"display_name,omitempty"`
+
+	// Password The same bound every other password field carries. A shorter one here would refuse a passphrase at redemption that the account could set five minutes later.
+	Password string `json:"password"`
+	Username string `json:"username"`
+}
+
+// RegistrationMode How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
+type RegistrationMode string
 
 // SearchKind The two tabs above the results. `files` searches filenames, scoped by channel membership exactly as messages are.
 type SearchKind string
@@ -492,6 +662,12 @@ type SetReadPositionRequest struct {
 	MessageId openapi_types.UUID `json:"message_id"`
 }
 
+// TemporaryCredentials Shown once and never again — the password is stored only as an argon2id hash, so there is nothing to redisplay.
+type TemporaryCredentials struct {
+	TemporaryPassword string `json:"temporary_password"`
+	Username          string `json:"username"`
+}
+
 // TotpLoginRequest defines model for TotpLoginRequest.
 type TotpLoginRequest struct {
 	// Code A six-digit authenticator code, or one recovery code (XXXX-XXXX; case-insensitive, hyphens and spaces ignored).
@@ -537,6 +713,26 @@ type UpdateChannelRequest struct {
 	Topic string `json:"topic"`
 }
 
+// UpdateOrgSettingsRequest Only the fields present are changed; each saves on its own.
+type UpdateOrgSettingsRequest struct {
+	DefaultLocale *UpdateOrgSettingsRequestDefaultLocale `json:"default_locale,omitempty"`
+	OrgName       *string                                `json:"org_name,omitempty"`
+
+	// RegistrationMode How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
+	RegistrationMode     *RegistrationMode `json:"registration_mode,omitempty"`
+	RequireTotp          *bool             `json:"require_totp,omitempty"`
+	SessionLifetimeHours *int              `json:"session_lifetime_hours,omitempty"`
+}
+
+// UpdateOrgSettingsRequestDefaultLocale defines model for UpdateOrgSettingsRequest.DefaultLocale.
+type UpdateOrgSettingsRequestDefaultLocale string
+
+// UpdateUserAdminRequest Only the fields present are changed.
+type UpdateUserAdminRequest struct {
+	IsActive *bool `json:"is_active,omitempty"`
+	IsAdmin  *bool `json:"is_admin,omitempty"`
+}
+
 // User defines model for User.
 type User struct {
 	CreatedAt   time.Time            `json:"created_at"`
@@ -553,13 +749,6 @@ type User struct {
 
 // UserLocale defines model for User.Locale.
 type UserLocale string
-
-// UserPage defines model for UserPage.
-type UserPage struct {
-	// NextCursor Present when another page exists.
-	NextCursor *string `json:"next_cursor,omitempty"`
-	Users      []User  `json:"users"`
-}
 
 // UserSummary The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
 type UserSummary struct {
@@ -587,8 +776,14 @@ type VerifyTotpSetupRequest struct {
 // ChannelId defines model for ChannelId.
 type ChannelId = openapi_types.UUID
 
+// InviteId defines model for InviteId.
+type InviteId = openapi_types.UUID
+
 // MessageId defines model for MessageId.
 type MessageId = openapi_types.UUID
+
+// UserId defines model for UserId.
+type UserId = openapi_types.UUID
 
 // BadRequest defines model for BadRequest.
 type BadRequest = Error
@@ -604,6 +799,28 @@ type RateLimited = Error
 
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
+
+// ListAuditEntriesParams defines parameters for ListAuditEntries.
+type ListAuditEntriesParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor Opaque pagination cursor from a previous response.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Action Filter to one action.
+	Action *string `form:"action,omitempty" json:"action,omitempty"`
+
+	// ActorId Filter to one actor.
+	ActorId *openapi_types.UUID `form:"actor_id,omitempty" json:"actor_id,omitempty"`
+}
+
+// ListInvitesParams defines parameters for ListInvites.
+type ListInvitesParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor Opaque pagination cursor from a previous response.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
 
 // AdminListUsersParams defines parameters for AdminListUsers.
 type AdminListUsersParams struct {
@@ -667,8 +884,17 @@ type ListUsersParams struct {
 	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
+// CreateInviteJSONRequestBody defines body for CreateInvite for application/json ContentType.
+type CreateInviteJSONRequestBody = CreateInviteRequest
+
+// UpdateOrgSettingsJSONRequestBody defines body for UpdateOrgSettings for application/json ContentType.
+type UpdateOrgSettingsJSONRequestBody = UpdateOrgSettingsRequest
+
 // AdminCreateUserJSONRequestBody defines body for AdminCreateUser for application/json ContentType.
 type AdminCreateUserJSONRequestBody = AdminCreateUserRequest
+
+// UpdateUserAdminJSONRequestBody defines body for UpdateUserAdmin for application/json ContentType.
+type UpdateUserAdminJSONRequestBody = UpdateUserAdminRequest
 
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = ChangePasswordRequest
@@ -709,6 +935,9 @@ type SetReadPositionJSONRequestBody = SetReadPositionRequest
 // OpenDirectMessageJSONRequestBody defines body for OpenDirectMessage for application/json ContentType.
 type OpenDirectMessageJSONRequestBody = OpenDirectMessageRequest
 
+// RedeemInviteJSONRequestBody defines body for RedeemInvite for application/json ContentType.
+type RedeemInviteJSONRequestBody = RedeemInviteRequest
+
 // DisableTotpJSONRequestBody defines body for DisableTotp for application/json ContentType.
 type DisableTotpJSONRequestBody = PasswordConfirmRequest
 
@@ -720,12 +949,36 @@ type VerifyTotpSetupJSONRequestBody = VerifyTotpSetupRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// ListAuditEntries The audit log.
+	// (GET /api/v1/admin/audit)
+	ListAuditEntries(w http.ResponseWriter, r *http.Request, params ListAuditEntriesParams)
+	// ListInvites Open invite links.
+	// (GET /api/v1/admin/invites)
+	ListInvites(w http.ResponseWriter, r *http.Request, params ListInvitesParams)
+	// CreateInvite Generate a single-use invite link.
+	// (POST /api/v1/admin/invites)
+	CreateInvite(w http.ResponseWriter, r *http.Request)
+	// RevokeInvite Revoke an open invite.
+	// (DELETE /api/v1/admin/invites/{inviteId})
+	RevokeInvite(w http.ResponseWriter, r *http.Request, inviteId InviteId)
+	// GetOrgSettings The instance's own settings.
+	// (GET /api/v1/admin/org)
+	GetOrgSettings(w http.ResponseWriter, r *http.Request)
+	// UpdateOrgSettings Change the instance's settings.
+	// (PATCH /api/v1/admin/org)
+	UpdateOrgSettings(w http.ResponseWriter, r *http.Request)
 	// AdminListUsers List users (dashboard). adminOnly.
 	// (GET /api/v1/admin/users)
 	AdminListUsers(w http.ResponseWriter, r *http.Request, params AdminListUsersParams)
 	// AdminCreateUser Create a user (dashboard). adminOnly.
 	// (POST /api/v1/admin/users)
 	AdminCreateUser(w http.ResponseWriter, r *http.Request)
+	// UpdateUserAdmin Deactivate, reactivate, or change a user's role.
+	// (PATCH /api/v1/admin/users/{userId})
+	UpdateUserAdmin(w http.ResponseWriter, r *http.Request, userId UserId)
+	// ForcePasswordReset Issue a new temporary password for a user.
+	// (POST /api/v1/admin/users/{userId}/reset-password)
+	ForcePasswordReset(w http.ResponseWriter, r *http.Request, userId UserId)
 	// ChangePassword Change the authenticated user's password.
 	// (POST /api/v1/auth/change-password)
 	ChangePassword(w http.ResponseWriter, r *http.Request)
@@ -792,6 +1045,12 @@ type ServerInterface interface {
 	// GetInstance Public instance capabilities and policy.
 	// (GET /api/v1/instance)
 	GetInstance(w http.ResponseWriter, r *http.Request)
+	// PreviewInvite What this invite offers, before signing up.
+	// (GET /api/v1/invites/{token})
+	PreviewInvite(w http.ResponseWriter, r *http.Request, token string)
+	// RedeemInvite Create an account from an invite.
+	// (POST /api/v1/invites/{token})
+	RedeemInvite(w http.ResponseWriter, r *http.Request, token string)
 	// Search Search messages (and, from Phase 1.3, files).
 	// (GET /api/v1/search)
 	Search(w http.ResponseWriter, r *http.Request, params SearchParams)
@@ -848,6 +1107,192 @@ type ServerInterfaceWrapper struct {
 
 type MiddlewareFunc func(http.Handler) http.Handler
 
+// ListAuditEntries operation middleware
+func (siw *ServerInterfaceWrapper) ListAuditEntries(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAuditEntriesParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "action" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "action", r.URL.Query(), &params.Action, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "action"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "action", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "actor_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "actor_id", r.URL.Query(), &params.ActorId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "actor_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "actor_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListAuditEntries(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListInvites operation middleware
+func (siw *ServerInterfaceWrapper) ListInvites(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListInvitesParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListInvites(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateInvite operation middleware
+func (siw *ServerInterfaceWrapper) CreateInvite(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateInvite(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeInvite operation middleware
+func (siw *ServerInterfaceWrapper) RevokeInvite(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "inviteId" -------------
+	var inviteId InviteId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "inviteId", r.PathValue("inviteId"), &inviteId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "inviteId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeInvite(w, r, inviteId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetOrgSettings operation middleware
+func (siw *ServerInterfaceWrapper) GetOrgSettings(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetOrgSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateOrgSettings operation middleware
+func (siw *ServerInterfaceWrapper) UpdateOrgSettings(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateOrgSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // AdminListUsers operation middleware
 func (siw *ServerInterfaceWrapper) AdminListUsers(w http.ResponseWriter, r *http.Request) {
 
@@ -899,6 +1344,58 @@ func (siw *ServerInterfaceWrapper) AdminCreateUser(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.AdminCreateUser(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateUserAdmin operation middleware
+func (siw *ServerInterfaceWrapper) UpdateUserAdmin(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "userId" -------------
+	var userId UserId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", r.PathValue("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "userId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateUserAdmin(w, r, userId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ForcePasswordReset operation middleware
+func (siw *ServerInterfaceWrapper) ForcePasswordReset(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "userId" -------------
+	var userId UserId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", r.PathValue("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "userId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ForcePasswordReset(w, r, userId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1491,6 +1988,58 @@ func (siw *ServerInterfaceWrapper) GetInstance(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// PreviewInvite operation middleware
+func (siw *ServerInterfaceWrapper) PreviewInvite(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token" -------------
+	var token string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token", r.PathValue("token"), &token, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PreviewInvite(w, r, token)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RedeemInvite operation middleware
+func (siw *ServerInterfaceWrapper) RedeemInvite(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token" -------------
+	var token string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token", r.PathValue("token"), &token, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RedeemInvite(w, r, token)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // Search operation middleware
 func (siw *ServerInterfaceWrapper) Search(w http.ResponseWriter, r *http.Request) {
 
@@ -1959,6 +2508,16 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users", wrapper.ListUsers)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/users", wrapper.AdminListUsers)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/users", wrapper.AdminCreateUser)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/admin/users/{userId}", wrapper.UpdateUserAdmin)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/users/{userId}/reset-password", wrapper.ForcePasswordReset)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/invites", wrapper.ListInvites)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/invites", wrapper.CreateInvite)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/admin/invites/{inviteId}", wrapper.RevokeInvite)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/invites/{token}", wrapper.PreviewInvite)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/invites/{token}", wrapper.RedeemInvite)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/org", wrapper.GetOrgSettings)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/admin/org", wrapper.UpdateOrgSettings)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/audit", wrapper.ListAuditEntries)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels", wrapper.ListChannels)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels", wrapper.CreateChannel)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/dms", wrapper.OpenDirectMessage)

@@ -198,9 +198,10 @@ write_env() {
   fi
 
   log "generating deploy/.env with random secrets"
-  local password file_url_key old_umask
+  local password file_url_key audit_key old_umask
   password="$(openssl rand -base64 32)"
   file_url_key="$(openssl rand -base64 32)"
+  audit_key="$(openssl rand -base64 32)"
   ADMIN_PASSWORD="$(openssl rand -base64 18)"
   ADMIN_PASSWORD_NEW=1
   old_umask="$(umask)"
@@ -210,6 +211,7 @@ write_env() {
     printf 'HAMLANEH_DOMAIN=%s\n' "$DOMAIN"
     printf 'POSTGRES_PASSWORD=%s\n' "$password"
     printf 'HAMLANEH_FILE_URL_KEY=%s\n' "$file_url_key"
+    printf 'HAMLANEH_AUDIT_KEY=%s\n' "$audit_key"
     printf 'HAMLANEH_ADMIN_USERNAME=admin\n'
     printf 'HAMLANEH_ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD"
     printf 'HAMLANEH_ADMIN_LOCALE=en\n'
@@ -300,6 +302,21 @@ ensure_file_url_key_env() {
 ' "$(openssl rand -base64 32)" >> "$ENV_FILE"
 }
 
+# Upgrade path for an .env that predates the audit log, and the same shape as
+# the one above for the same reason: the server refuses to start without this
+# key. Generating it once, here, keeps upgrading an existing install a no-op
+# — and once it exists it must never be regenerated, because every entry
+# already recorded is sealed with it and would stop verifying.
+ensure_audit_key_env() {
+  [ -f "$ENV_FILE" ] || return 0
+  if grep -q '^HAMLANEH_AUDIT_KEY=' "$ENV_FILE"; then
+    return 0
+  fi
+  log "generating HAMLANEH_AUDIT_KEY in deploy/.env (keys the hash chain over the audit log)"
+  printf 'HAMLANEH_AUDIT_KEY=%s
+' "$(openssl rand -base64 32)" >> "$ENV_FILE"
+}
+
 # Upgrade path: an .env from an older install may predate the admin bootstrap
 # variables. Appending them is safe — the server only reads them while the
 # users table is empty — but on an instance that already has users they are
@@ -355,6 +372,7 @@ main() {
   ensure_admin_env
   ensure_mail_env
   ensure_file_url_key_env
+  ensure_audit_key_env
   start_stack
   print_success
 }

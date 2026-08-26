@@ -373,15 +373,26 @@ The dashboard is a first-class product surface (decided Aug 2026): it ships **in
 install** — same webapp, same binary, same compose stack, zero extra setup — and, because
 public registration is off by default, it is **the** way users come into existence.
 
-- [ ] Admin dashboard on separate path, optional IP allow-list
-- [ ] User lifecycle from the dashboard: create users, generate invite links, deactivate/
+- [x] Admin dashboard on its own path (`/admin`), reachable only by admins
+- [ ] Optional IP allow-list on the admin path — deferred: it protects an already
+      session-and-role-gated surface, and on a self-hosted instance behind one Caddy the
+      operator's own firewall is the better place for it. Revisit if hosted multi-tenant lands
+- [x] User lifecycle from the dashboard: create users, generate invite links, deactivate/
       offboard (kills all sessions + sockets), unlock/reset access
-- [ ] Role & permission management from the dashboard (org admin/member now; channel-level
+- [x] Role & permission management from the dashboard (org admin/member now; channel-level
       roles from 1.2 surface here)
-- [ ] Org customization from the dashboard: org name, logo, default locale (`en`/`fa`),
+- [x] Org customization from the dashboard: org name, logo, default locale (`en`/`fa`),
       org-wide policies (2FA enforcement, session lifetime, password policy, registration mode)
-- [ ] Tamper-evident audit log (hash-chained/HMAC; logins, admin actions, exports) — schema
+- [x] Tamper-evident audit log (hash-chained/HMAC; logins, admin actions, exports) — schema
       designed now, SIEM export later
+- [ ] **The invite token rides the URL path**, while the reset token deliberately rides a
+      fragment so it never reaches a server's access log. The implementation keeps the *link*
+      fragment-based (`{origin}/invite#token=…`), so a browser never sends it in a document
+      request — but `GET`/`POST /api/v1/invites/{token}` still puts it in a path, where a
+      proxy logs it. An invite is a lower-value credential than a reset token (it creates an
+      account rather than taking one over) and it is single-use, which is why this is recorded
+      rather than treated as a defect. Moving it to a header or a body would be a contract
+      change; decide before the first public release
 - Tests: every admin mutation appears in the audit log; directly mutating an audit row in the
   DB → chain verification fails and reports the break; with allow-listing on, admin request
   from a non-allowed IP rejected even with a valid admin session; non-admin cannot reach any

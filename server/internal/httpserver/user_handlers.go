@@ -78,14 +78,17 @@ func (s *apiServer) AdminListUsers(w http.ResponseWriter, r *http.Request, param
 		return
 	}
 
-	page := api.UserPage{Users: make([]api.User, 0, min(len(users), limit))}
+	// The admin shape, not the reduced one: this list feeds the dashboard's
+	// users table, which draws an active/inactive column and needs to know
+	// who has a second factor.
+	page := api.AdminUserPage{Users: make([]api.AdminUser, 0, min(len(users), limit))}
 	if len(users) > limit {
 		users = users[:limit]
 		next := encodeUserCursor(users[len(users)-1])
 		page.NextCursor = &next
 	}
 	for _, u := range users {
-		page.Users = append(page.Users, apiUser(u))
+		page.Users = append(page.Users, apiAdminUser(u))
 	}
 	writeJSONValue(w, r, http.StatusOK, page)
 }

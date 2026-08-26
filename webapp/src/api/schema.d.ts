@@ -433,6 +433,159 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/users/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Deactivate, reactivate, or change a user's role.
+         * @description The row-action menu on the users table. Deactivation is the offboarding switch: it ends every session and closes every socket the user holds, and the confirm says so because that is the difference between it and a forced password reset, which deliberately leaves the session alive.
+         *     Reactivation is the inverse and only that — it restores the ability to sign in, never the sessions that were killed.
+         *     Removing the last admin is refused (409 last_admin), not warned about afterwards: an instance nobody can administer is unrecoverable without database access, and the dashboard must not be able to produce that state. Demoting yourself is likewise refused while you are the only admin. Deactivating yourself is refused outright (409 self_deactivation) — locking yourself out is never the intent the click expressed.
+         */
+        patch: operations["updateUserAdmin"];
+        trace?: never;
+    };
+    "/api/v1/admin/users/{userId}/reset-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a new temporary password for a user.
+         * @description Answers with the generated password **once**, in the only response that will ever carry it — it is stored as an argon2id hash like any other, so nothing can show it again. The account is marked must_change_password, and the user's existing session deliberately survives: this is the unlock path for somebody who forgot their password, not the offboarding path, and killing their session would make the two indistinguishable.
+         */
+        post: operations["forcePasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Open invite links.
+         * @description Only links that are still usable — an accepted or expired invite leaves the list, because the table's purpose is "what can still be redeemed", and the audit log is where the history lives. Ordered by expiry, soonest first, which is what the design flags.
+         */
+        get: operations["listInvites"];
+        put?: never;
+        /**
+         * Generate a single-use invite link.
+         * @description Answers with the link **once**. Only its hash is stored, exactly as password-reset tokens are, so a stolen database yields no usable invitation and nothing can redisplay a link somebody closed the dialog on. Single-use and expiring; redeeming it creates the account and consumes the invite in one transaction, so two people racing the same link produce one account and one honest refusal.
+         */
+        post: operations["createInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/invites/{inviteId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke an open invite.
+         * @description Idempotent: revoking one that is already gone answers 204, because the outcome the caller wanted is the outcome that holds.
+         */
+        delete: operations["revokeInvite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/invites/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What this invite offers, before signing up.
+         * @description Public: the redemption screen needs the org's name before anybody has an account. It answers only what the screen draws and never who issued it or for whom. An unknown, expired, revoked or already-used token answers the same 404, so a guessed token cannot be told from a spent one.
+         */
+        get: operations["previewInvite"];
+        put?: never;
+        /**
+         * Create an account from an invite.
+         * @description Public, and the only way a user comes into existence when registration is closed. The invite is consumed in the same transaction that creates the account, so a link cannot make two people. Answers 404 for every unusable token, exactly as the preview does, and 409 username_taken when the name is gone.
+         */
+        post: operations["redeemInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/org": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The instance's own settings. */
+        get: operations["getOrgSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the instance's settings.
+         * @description Saved immediately, field by field — the design has no Save button, because a button is a thing to forget. Only the fields present are changed.
+         *     Turning 2FA enforcement on does not lock anybody out mid-session: it takes effect at the next sign-in, and the accounts without a second factor are reported so the admin can see who it will affect rather than discovering it from support requests.
+         */
+        patch: operations["updateOrgSettings"];
+        trace?: never;
+    };
+    "/api/v1/admin/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The audit log.
+         * @description Append-only and hash-chained: every entry carries the hash of the one before it, so an edited or deleted row breaks the chain from that point on. `chain_valid` reports the verification of the returned page, and a false there is not a display concern — it means somebody reached the database directly.
+         *     Newest first, older/newer paging rather than numbered pages, because entries arrive while a page is being read.
+         */
+        get: operations["listAuditEntries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels": {
         parameters: {
             query?: never;
@@ -949,6 +1102,128 @@ export interface components {
             /** @description Present when another page exists. */
             next_cursor?: string;
         };
+        AdminUserPage: {
+            users: components["schemas"]["AdminUser"][];
+            /** @description Present when another page exists. */
+            next_cursor?: string;
+        };
+        /** @description A row of the users table. Carries what the dashboard shows and nothing more — never a password hash, never a session token. */
+        AdminUser: {
+            /** Format: uuid */
+            id: string;
+            username: string;
+            email?: string | null;
+            display_name: string;
+            is_admin: boolean;
+            /** @description False for a deactivated account — it cannot sign in and holds no sessions. */
+            is_active: boolean;
+            must_change_password: boolean;
+            /** @description Whether the account has a second factor. The org-settings screen uses it to say who enforcement will affect. */
+            has_totp?: boolean;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @description Only the fields present are changed. */
+        UpdateUserAdminRequest: {
+            is_admin?: boolean;
+            is_active?: boolean;
+        };
+        /** @description Shown once and never again — the password is stored only as an argon2id hash, so there is nothing to redisplay. */
+        TemporaryCredentials: {
+            username: string;
+            temporary_password: string;
+        };
+        CreateInviteRequest: {
+            /** @default 168 */
+            expires_in_hours?: number;
+            /** @description What this link is for; shown in the table, never to the invitee. */
+            note?: string;
+        };
+        /** @description The link is in this response and nowhere else: only its hash is stored, exactly as password-reset tokens are. */
+        CreatedInvite: {
+            /** Format: uuid */
+            id: string;
+            url: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        /** @description An open invite, as the table lists it. Never the link itself. */
+        Invite: {
+            /** Format: uuid */
+            id: string;
+            created_by: components["schemas"]["UserSummary"];
+            note?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        InvitePage: {
+            invites: components["schemas"]["Invite"][];
+            next_cursor?: string;
+        };
+        /** @description What the redemption screen draws before anybody has an account. Deliberately says nothing about who issued the invite or for whom. */
+        InvitePreview: {
+            org_name: string;
+        };
+        RedeemInviteRequest: {
+            username: string;
+            /** @description The same bound every other password field carries. A shorter one here would refuse a passphrase at redemption that the account could set five minutes later. */
+            password: string;
+            display_name?: string;
+        };
+        /**
+         * @description How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
+         * @enum {string}
+         */
+        RegistrationMode: "invite" | "open";
+        OrgSettings: {
+            org_name: string;
+            /**
+             * @description The locale a new account starts in.
+             * @enum {string}
+             */
+            default_locale: "en" | "fa";
+            registration_mode: components["schemas"]["RegistrationMode"];
+            /** @description Enforced at the next sign-in, never mid-session — turning it on must not lock out the admin who turned it on. */
+            require_totp: boolean;
+            /** @description How many accounts enforcement would affect. Read-only, and the reason the screen can say who it hits before it is turned on. */
+            accounts_without_totp?: number;
+            session_lifetime_hours: number;
+        };
+        /** @description Only the fields present are changed; each saves on its own. */
+        UpdateOrgSettingsRequest: {
+            org_name?: string;
+            /** @enum {string} */
+            default_locale?: "en" | "fa";
+            registration_mode?: components["schemas"]["RegistrationMode"];
+            require_totp?: boolean;
+            session_lifetime_hours?: number;
+        };
+        /** @description One recorded action. `actor` is null for something the system did rather than a person. */
+        AuditEntry: {
+            /** Format: uuid */
+            id: string;
+            /** @description Namespaced verb, e.g. user.deactivated, invite.created. */
+            action: string;
+            actor?: components["schemas"]["UserSummary"] | null;
+            /** Format: uuid */
+            target_id?: string | null;
+            /** @description What the target was called when this happened, kept so the log still reads correctly after a rename or a deletion. */
+            target_label?: string | null;
+            detail?: {
+                [key: string]: unknown;
+            } | null;
+            ip?: string | null;
+            /** Format: date-time */
+            occurred_at: string;
+        };
+        AuditPage: {
+            entries: components["schemas"]["AuditEntry"][];
+            /** @description False means the hash chain over the returned entries does not verify — somebody edited or removed a row in the database. It is not a display concern. */
+            chain_valid: boolean;
+            next_cursor?: string;
+        };
         /** @description A file card in the message list. Read-only on Message: attachments are created by the Phase 1.3 upload pipeline, so until that slice lands the array is always empty. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both. */
         Attachment: {
             /** Format: uuid */
@@ -1124,6 +1399,8 @@ export interface components {
         /** @description A channel or direct message the caller is a member of. */
         ChannelId: string;
         MessageId: string;
+        UserId: string;
+        InviteId: string;
     };
     requestBodies: never;
     headers: never;
@@ -1761,13 +2038,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One page of users. */
+            /** @description One page of users, in the admin shape — the table draws an active/inactive column and the org-settings screen counts accounts without a second factor, so the list has to carry both. A list whose rows lack a column the same screen renders would leave the dashboard learning a user's state only from the row it just changed. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UserPage"];
+                    "application/json": components["schemas"]["AdminUserPage"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -1808,6 +2085,291 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    updateUserAdmin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUserAdminRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUser"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Refused on a rule the dashboard must not be able to break (last_admin, self_deactivation). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    forcePasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The temporary password, shown once. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemporaryCredentials"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listInvites: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Opaque pagination cursor from a previous response. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of open invites. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitePage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description The invite link, shown once. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedInvite"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    revokeInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                inviteId: components["parameters"]["InviteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked, or already gone. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    previewInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The invite token from the link. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The invitation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitePreview"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    redeemInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The invite token from the link. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description Account created; sign in normally. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+            /** @description That username is taken (code username_taken). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getOrgSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettings"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateOrgSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateOrgSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description The settings as they now stand. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listAuditEntries: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Opaque pagination cursor from a previous response. */
+                cursor?: string;
+                /** @description Filter to one action. */
+                action?: string;
+                /** @description Filter to one actor. */
+                actor_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the log. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     listChannels: {

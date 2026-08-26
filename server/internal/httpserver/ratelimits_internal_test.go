@@ -99,10 +99,12 @@ func TestEveryBudgetHasALimiter(t *testing.T) {
 	}
 }
 
-// TestEveryBudgetedRouteIsSessionGated is the invariant that lets budgetSpec
-// carry no key field: every budget is per account, so every budgeted route
-// must be one securityMiddleware puts a principal on. A budgeted public route
-// would answer 500 on every call, having no account to key on.
+// TestEveryBudgetedRouteIsSessionGated pins the two tables against each
+// other: a per-account budget has no account to key on outside a
+// session-gated route, and would answer 500 on every call. The one budget
+// declared perIP is the exception the invariant is stated around — and this
+// test holds it to the other half of the deal, that a perIP budget is only
+// ever put on a route with no session to key on instead.
 func TestEveryBudgetedRouteIsSessionGated(t *testing.T) {
 	t.Parallel()
 
@@ -110,9 +112,18 @@ func TestEveryBudgetedRouteIsSessionGated(t *testing.T) {
 		if name == budgetElsewhere || name == budgetNone || name == budgetUndeclared {
 			continue
 		}
+		sessionGated := false
 		switch routePolicies[pattern].class {
 		case classSession, classSessionMustChangeAllowed, classAdmin:
+			sessionGated = true
 		case classUnclassified, classPublic, classRefreshCookie, classChallengeCookie:
+		}
+
+		switch {
+		case budgetSpecs[name].perIP && sessionGated:
+			t.Errorf("%s is session-gated but carries the per-IP budget %q; an authenticated "+
+				"route must be keyed on the account, not on a shared address", pattern, name)
+		case !budgetSpecs[name].perIP && !sessionGated:
 			t.Errorf("%s carries budget %q but is not session-gated; a per-account budget "+
 				"has no account to key on there", pattern, name)
 		}

@@ -109,7 +109,7 @@ func (s *Store) SessionUserByAccessHash(ctx context.Context, accessHash []byte) 
 	row := s.pool.QueryRow(ctx,
 		`SELECT s.id, s.user_id, s.family_id, s.access_expires_at, s.refresh_expires_at, s.created_at,
 		        u.id, u.username, u.email, u.display_name, u.password_hash,
-		        u.locale, u.is_admin, u.must_change_password, u.created_at, u.updated_at
+		        u.locale, u.is_admin, u.is_active, u.must_change_password, u.created_at, u.updated_at
 		 FROM sessions s
 		 JOIN users u ON u.id = s.user_id
 		 WHERE s.access_token_hash = $1
@@ -123,7 +123,7 @@ func (s *Store) SessionUserByAccessHash(ctx context.Context, accessHash []byte) 
 	err := row.Scan(
 		&sess.ID, &sess.UserID, &sess.FamilyID, &sess.AccessExpiresAt, &sess.RefreshExpiresAt, &sess.CreatedAt,
 		&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.PasswordHash,
-		&u.Locale, &u.IsAdmin, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt,
+		&u.Locale, &u.IsAdmin, &u.IsActive, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, User{}, ErrNotFound

@@ -246,7 +246,7 @@ const callerJoins = `LEFT JOIN channel_read_positions rp
 // memberUserColumns is userColumns qualified for the joins in this file; it
 // must stay in the order scanUser expects.
 const memberUserColumns = `u.id, u.username, u.email, u.display_name, u.password_hash,
-	        u.locale, u.is_admin, u.must_change_password, u.created_at, u.updated_at`
+	        u.locale, u.is_admin, u.is_active, u.must_change_password, u.created_at, u.updated_at`
 
 // CreateChannel inserts a public or private channel and makes its creator
 // the first member, in one transaction: a channel nobody belongs to is

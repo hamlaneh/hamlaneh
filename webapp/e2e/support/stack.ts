@@ -106,6 +106,9 @@ function writeEnvFile(adminPassword: string): void {
     // The files origin refuses to boot without a signing key, exactly as a
     // real install would; the throwaway stack generates one the same way.
     `HAMLANEH_FILE_URL_KEY=${secret()}`,
+    // The audit log's chain key. The server refuses to boot without one, and
+    // a fresh key per run is right: each stack starts with an empty log.
+    `HAMLANEH_AUDIT_KEY=${secret()}`,
     "HAMLANEH_ADMIN_USERNAME=e2eadmin",
     `HAMLANEH_ADMIN_PASSWORD=${adminPassword}`,
     "HAMLANEH_ADMIN_LOCALE=en",

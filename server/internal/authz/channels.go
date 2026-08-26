@@ -95,7 +95,9 @@ func canChannel(user *storage.User, action Action, res Channel) bool {
 		// Message actions need a Message resource. Asking with a Channel is
 		// a caller bug, and the safe answer to a malformed question is no.
 		return false
-	case AdminUsersList, AdminUsersCreate:
+	case AdminUsersList, AdminUsersCreate, AdminUsersUpdate, AdminUsersResetPassword,
+		AdminInvitesList, AdminInvitesCreate, AdminInvitesRevoke,
+		AdminOrgRead, AdminOrgUpdate, AdminAuditList:
 		// Instance-level actions are not decided by channel membership.
 		return false
 	default:
@@ -121,7 +123,9 @@ func canMessage(user *storage.User, action Action, res Message) bool {
 		MessageSend, ReadPositionSet, FileUpload:
 		// Channel actions need a Channel resource; see canChannel.
 		return false
-	case AdminUsersList, AdminUsersCreate:
+	case AdminUsersList, AdminUsersCreate, AdminUsersUpdate, AdminUsersResetPassword,
+		AdminInvitesList, AdminInvitesCreate, AdminInvitesRevoke,
+		AdminOrgRead, AdminOrgUpdate, AdminAuditList:
 		return false
 	default:
 		return false

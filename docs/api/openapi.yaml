@@ -47,7 +47,7 @@ info:
     WebSocket upgrade that carries realtime delivery. Phase 1.1b completes the
     identity surface: email password reset, TOTP two-step verification with
     recovery codes, and self-service session management.
-  version: 0.4.0
+  version: 0.5.0
   license:
     name: AGPL-3.0
     url: https://www.gnu.org/licenses/agpl-3.0.html
@@ -711,11 +711,17 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: One page of users.
+          description: >
+            One page of users, in the admin shape — the table draws an
+            active/inactive column and the org-settings screen counts
+            accounts without a second factor, so the list has to carry both.
+            A list whose rows lack a column the same screen renders would
+            leave the dashboard learning a user's state only from the row it
+            just changed.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/UserPage"
+                $ref: "#/components/schemas/AdminUserPage"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -754,6 +760,340 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
+  /api/v1/admin/users/{userId}:
+    patch:
+      operationId: updateUserAdmin
+      summary: Deactivate, reactivate, or change a user's role.
+      description: >
+        The row-action menu on the users table. Deactivation is the
+        offboarding switch: it ends every session and closes every socket the
+        user holds, and the confirm says so because that is the difference
+        between it and a forced password reset, which deliberately leaves the
+        session alive.
+
+        Reactivation is the inverse and only that — it restores the ability
+        to sign in, never the sessions that were killed.
+
+        Removing the last admin is refused (409 last_admin), not warned
+        about afterwards: an instance nobody can administer is unrecoverable
+        without database access, and the dashboard must not be able to
+        produce that state. Demoting yourself is likewise refused while you
+        are the only admin. Deactivating yourself is refused outright
+        (409 self_deactivation) — locking yourself out is never the intent
+        the click expressed.
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserAdminRequest"
+      responses:
+        "200":
+          description: The updated user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUser"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: >
+            Refused on a rule the dashboard must not be able to break
+            (last_admin, self_deactivation).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/admin/users/{userId}/reset-password:
+    post:
+      operationId: forcePasswordReset
+      summary: Issue a new temporary password for a user.
+      description: >
+        Answers with the generated password **once**, in the only response
+        that will ever carry it — it is stored as an argon2id hash like any
+        other, so nothing can show it again. The account is marked
+        must_change_password, and the user's existing session deliberately
+        survives: this is the unlock path for somebody who forgot their
+        password, not the offboarding path, and killing their session would
+        make the two indistinguishable.
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "200":
+          description: The temporary password, shown once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemporaryCredentials"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/admin/invites:
+    get:
+      operationId: listInvites
+      summary: Open invite links.
+      description: >
+        Only links that are still usable — an accepted or expired invite
+        leaves the list, because the table's purpose is "what can still be
+        redeemed", and the audit log is where the history lives. Ordered by
+        expiry, soonest first, which is what the design flags.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          description: Opaque pagination cursor from a previous response.
+          schema: { type: string }
+      responses:
+        "200":
+          description: One page of open invites.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvitePage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createInvite
+      summary: Generate a single-use invite link.
+      description: >
+        Answers with the link **once**. Only its hash is stored, exactly as
+        password-reset tokens are, so a stolen database yields no usable
+        invitation and nothing can redisplay a link somebody closed the
+        dialog on. Single-use and expiring; redeeming it creates the account
+        and consumes the invite in one transaction, so two people racing the
+        same link produce one account and one honest refusal.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInviteRequest"
+      responses:
+        "201":
+          description: The invite link, shown once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedInvite"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/admin/invites/{inviteId}:
+    delete:
+      operationId: revokeInvite
+      summary: Revoke an open invite.
+      description: >
+        Idempotent: revoking one that is already gone answers 204, because
+        the outcome the caller wanted is the outcome that holds.
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/InviteId"
+      responses:
+        "204":
+          description: Revoked, or already gone.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/invites/{token}:
+    get:
+      operationId: previewInvite
+      summary: What this invite offers, before signing up.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: The invite token from the link.
+          schema: { type: string, minLength: 20, maxLength: 128 }
+      description: >
+        Public: the redemption screen needs the org's name before anybody has
+        an account. It answers only what the screen draws and never who
+        issued it or for whom. An unknown, expired, revoked or already-used
+        token answers the same 404, so a guessed token cannot be told from a
+        spent one.
+      responses:
+        "200":
+          description: The invitation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvitePreview"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: redeemInvite
+      summary: Create an account from an invite.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: The invite token from the link.
+          schema: { type: string, minLength: 20, maxLength: 128 }
+      description: >
+        Public, and the only way a user comes into existence when
+        registration is closed. The invite is consumed in the same
+        transaction that creates the account, so a link cannot make two
+        people. Answers 404 for every unusable token, exactly as the preview
+        does, and 409 username_taken when the name is gone.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RedeemInviteRequest"
+      responses:
+        "201":
+          description: Account created; sign in normally.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: That username is taken (code username_taken).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/admin/org:
+    get:
+      operationId: getOrgSettings
+      summary: The instance's own settings.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Current settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgSettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      operationId: updateOrgSettings
+      summary: Change the instance's settings.
+      description: >
+        Saved immediately, field by field — the design has no Save button,
+        because a button is a thing to forget. Only the fields present are
+        changed.
+
+        Turning 2FA enforcement on does not lock anybody out mid-session: it
+        takes effect at the next sign-in, and the accounts without a second
+        factor are reported so the admin can see who it will affect rather
+        than discovering it from support requests.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrgSettingsRequest"
+      responses:
+        "200":
+          description: The settings as they now stand.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgSettings"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/audit:
+    get:
+      operationId: listAuditEntries
+      summary: The audit log.
+      description: >
+        Append-only and hash-chained: every entry carries the hash of the one
+        before it, so an edited or deleted row breaks the chain from that
+        point on. `chain_valid` reports the verification of the returned
+        page, and a false there is not a display concern — it means somebody
+        reached the database directly.
+
+        Newest first, older/newer paging rather than numbered pages, because
+        entries arrive while a page is being read.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          description: Opaque pagination cursor from a previous response.
+          schema: { type: string }
+        - name: action
+          in: query
+          description: Filter to one action.
+          schema: { type: string, maxLength: 64 }
+        - name: actor_id
+          in: query
+          description: Filter to one actor.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: One page of the log.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /api/v1/channels:
     get:
@@ -1413,6 +1753,16 @@ components:
       required: true
       schema: { type: string, format: uuid }
 
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    InviteId:
+      name: inviteId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   responses:
     BadRequest:
       description: Request validation failed.
@@ -2000,6 +2350,213 @@ components:
         next_cursor:
           type: string
           description: Present when another page exists.
+
+    AdminUserPage:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminUser"
+        next_cursor:
+          type: string
+          description: Present when another page exists.
+
+    AdminUser:
+      type: object
+      description: >
+        A row of the users table. Carries what the dashboard shows and
+        nothing more — never a password hash, never a session token.
+      required: [id, username, display_name, is_admin, is_active, must_change_password, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        email: { type: string, nullable: true }
+        display_name: { type: string }
+        is_admin: { type: boolean }
+        is_active:
+          type: boolean
+          description: False for a deactivated account — it cannot sign in and holds no sessions.
+        must_change_password: { type: boolean }
+        has_totp:
+          type: boolean
+          description: >
+            Whether the account has a second factor. The org-settings screen
+            uses it to say who enforcement will affect.
+        created_at: { type: string, format: date-time }
+
+    UpdateUserAdminRequest:
+      type: object
+      description: Only the fields present are changed.
+      properties:
+        is_admin: { type: boolean }
+        is_active: { type: boolean }
+
+    TemporaryCredentials:
+      type: object
+      description: >
+        Shown once and never again — the password is stored only as an
+        argon2id hash, so there is nothing to redisplay.
+      required: [username, temporary_password]
+      properties:
+        username: { type: string }
+        temporary_password: { type: string }
+
+    CreateInviteRequest:
+      type: object
+      properties:
+        expires_in_hours:
+          type: integer
+          minimum: 1
+          maximum: 720
+          default: 168
+        note:
+          type: string
+          maxLength: 200
+          description: What this link is for; shown in the table, never to the invitee.
+
+    CreatedInvite:
+      type: object
+      description: >
+        The link is in this response and nowhere else: only its hash is
+        stored, exactly as password-reset tokens are.
+      required: [id, url, expires_at]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string }
+        expires_at: { type: string, format: date-time }
+
+    Invite:
+      type: object
+      description: An open invite, as the table lists it. Never the link itself.
+      required: [id, created_by, created_at, expires_at]
+      properties:
+        id: { type: string, format: uuid }
+        created_by: { $ref: "#/components/schemas/UserSummary" }
+        note: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+
+    InvitePage:
+      type: object
+      required: [invites]
+      properties:
+        invites:
+          type: array
+          items: { $ref: "#/components/schemas/Invite" }
+        next_cursor: { type: string }
+
+    InvitePreview:
+      type: object
+      description: >
+        What the redemption screen draws before anybody has an account.
+        Deliberately says nothing about who issued the invite or for whom.
+      required: [org_name]
+      properties:
+        org_name: { type: string }
+
+    RedeemInviteRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 3, maxLength: 32 }
+        password:
+          type: string
+          minLength: 12
+          maxLength: 1024
+          description: >
+            The same bound every other password field carries. A shorter one
+            here would refuse a passphrase at redemption that the account
+            could set five minutes later.
+        display_name: { type: string, maxLength: 64 }
+
+    RegistrationMode:
+      type: string
+      description: >
+        How accounts come into existence. `invite` is the default and the
+        safe one; `open` lets anybody with the URL create an account, which
+        is why the screen warns about it.
+      enum: [invite, open]
+
+    OrgSettings:
+      type: object
+      required: [org_name, default_locale, registration_mode, require_totp, session_lifetime_hours]
+      properties:
+        org_name: { type: string, maxLength: 64 }
+        default_locale:
+          type: string
+          enum: [en, fa]
+          description: The locale a new account starts in.
+        registration_mode: { $ref: "#/components/schemas/RegistrationMode" }
+        require_totp:
+          type: boolean
+          description: >
+            Enforced at the next sign-in, never mid-session — turning it on
+            must not lock out the admin who turned it on.
+        accounts_without_totp:
+          type: integer
+          minimum: 0
+          description: >
+            How many accounts enforcement would affect. Read-only, and the
+            reason the screen can say who it hits before it is turned on.
+        session_lifetime_hours:
+          type: integer
+          minimum: 1
+          maximum: 8760
+
+    UpdateOrgSettingsRequest:
+      type: object
+      description: Only the fields present are changed; each saves on its own.
+      properties:
+        org_name: { type: string, maxLength: 64 }
+        default_locale: { type: string, enum: [en, fa] }
+        registration_mode: { $ref: "#/components/schemas/RegistrationMode" }
+        require_totp: { type: boolean }
+        session_lifetime_hours: { type: integer, minimum: 1, maximum: 8760 }
+
+    AuditEntry:
+      type: object
+      description: >
+        One recorded action. `actor` is null for something the system did
+        rather than a person.
+      required: [id, action, occurred_at]
+      properties:
+        id: { type: string, format: uuid }
+        action:
+          type: string
+          description: Namespaced verb, e.g. user.deactivated, invite.created.
+        actor:
+          allOf: [{ $ref: "#/components/schemas/UserSummary" }]
+          nullable: true
+        target_id: { type: string, format: uuid, nullable: true }
+        target_label:
+          type: string
+          nullable: true
+          description: >
+            What the target was called when this happened, kept so the log
+            still reads correctly after a rename or a deletion.
+        detail:
+          type: object
+          additionalProperties: true
+          nullable: true
+        ip: { type: string, nullable: true }
+        occurred_at: { type: string, format: date-time }
+
+    AuditPage:
+      type: object
+      required: [entries, chain_valid]
+      properties:
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/AuditEntry" }
+        chain_valid:
+          type: boolean
+          description: >
+            False means the hash chain over the returned entries does not
+            verify — somebody edited or removed a row in the database. It is
+            not a display concern.
+        next_cursor: { type: string }
 
     Attachment:
       type: object

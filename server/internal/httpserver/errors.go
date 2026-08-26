@@ -69,6 +69,14 @@ const (
 	codeFileTooLarge        errorCode = "file_too_large"
 	codeContentTypeMismatch errorCode = "content_type_mismatch"
 	codeAttachmentNotFound  errorCode = "attachment_not_found"
+	// Phase 1.4: administration. The two refusals the dashboard must not be
+	// able to talk its way past — an instance with no admin who can sign in
+	// is unrecoverable without database access — plus the one answer every
+	// unusable invite token gets, on both public invite routes, so a guessed
+	// token cannot be told from a spent one.
+	codeLastAdmin        errorCode = "last_admin"
+	codeSelfDeactivation errorCode = "self_deactivation"
+	codeInviteNotFound   errorCode = "invite_not_found"
 	// codeNotFound answers a path under /api that no contract route claims.
 	// It is the router's answer, not a resource's: the contract's
 	// resource-level 404s carry their own codes (session_not_found,

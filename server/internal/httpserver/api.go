@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
+	"github.com/hamlaneh/hamlaneh/server/internal/audit"
 	"github.com/hamlaneh/hamlaneh/server/internal/blobstore"
 	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
 	"github.com/hamlaneh/hamlaneh/server/internal/ratelimit"
@@ -96,11 +97,37 @@ type Store interface {
 	ListMessages(ctx context.Context, params storage.ListMessagesParams) (storage.MessagePage, error)
 	SetReadPosition(ctx context.Context, channelID, userID, messageID uuid.UUID) error
 
+	// The tamper-evident log (internal/audit). The append takes a seal
+	// callback rather than a finished hash because the entry cannot be
+	// sealed until its place in the chain is fixed, and that happens inside
+	// the transaction — storage decides the position, audit holds the key.
+	AppendAuditEntry(ctx context.Context, e storage.AuditEntry, seal func(storage.AuditEntry) []byte) (storage.AuditEntry, error)
+	ListAuditEntries(ctx context.Context, params storage.ListAuditParams) ([]storage.AuditEntry, error)
+
 	// CreateAttachment records an upload whose bytes are already on disk.
 	// Reading attachments back is not a call of its own: they arrive with
 	// the messages that carry them, in one query per page rather than one
 	// per message (storage.Message.Attachments).
 	CreateAttachment(ctx context.Context, na storage.NewAttachment) (storage.Attachment, error)
+
+	// Admin user lifecycle. UpdateUserAdmin owns the last-admin rule — the
+	// refusal is a fact about a set, so it cannot be decided by a handler
+	// reading rows one at a time.
+	UpdateUserAdmin(ctx context.Context, userID uuid.UUID, upd storage.AdminUserUpdate) (storage.User, error)
+	SetTemporaryPassword(ctx context.Context, userID uuid.UUID, passwordHash string) (storage.User, error)
+
+	// Invitations. Only the hash is ever stored, so nothing here takes or
+	// returns a raw token except by its digest.
+	CreateInvite(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string, ttl time.Duration) (storage.Invite, error)
+	ListOpenInvites(ctx context.Context, params storage.ListInvitesParams) ([]storage.Invite, error)
+	RevokeInvite(ctx context.Context, id uuid.UUID) error
+	OpenInviteByTokenHash(ctx context.Context, tokenHash []byte) (storage.Invite, error)
+	RedeemInvite(ctx context.Context, tokenHash []byte, nu storage.NewUser) (storage.User, error)
+
+	// Instance settings, including the derived accounts-without-two-step
+	// count the enforcement switch is read beside.
+	OrgSettings(ctx context.Context) (storage.OrgSettings, error)
+	UpdateOrgSettings(ctx context.Context, patch storage.OrgSettingsPatch) (storage.OrgSettings, error)
 }
 
 // The production store satisfies the whole surface at compile time.
@@ -205,6 +232,25 @@ type apiServer struct {
 	// nil check and no attachment can be written without the url the
 	// contract makes required.
 	fileSigner fileURLSigner
+
+	// audit records administrative actions. Never nil — it defaults to
+	// noAudit, so a handler records unconditionally and no action can be
+	// lost to a forgotten nil check (the same reason realtime works that
+	// way).
+	audit AuditRecorder
+
+	// auditChain verifies the pages the log reads back. Nil is a server
+	// wired without the audit key — a unit-test fixture, never production,
+	// because main refuses to start without one — and the audit endpoint
+	// then answers 500 rather than claiming a page verified when nothing
+	// checked it (audit_handlers.go).
+	auditChain *audit.Chain
+
+	// publicURL is the instance's absolute public origin, used to build the
+	// invitation link the dashboard shows once. Empty is an install that was
+	// never told its own origin; the link is then site-relative, which still
+	// resolves for the admin looking at it (admin_handlers.go).
+	publicURL string
 }
 
 var _ api.ServerInterface = (*apiServer)(nil)
@@ -223,6 +269,7 @@ func newAPIServer(store Store, opts ...Option) *apiServer {
 		totpAccountLimiter:     ratelimit.New(totpRateLimit, totpRateWindow),
 		budgets:                newBudgetLimiters(),
 		fileSigner:             unsignedFileURLs{},
+		audit:                  noAudit{},
 	}
 	for _, opt := range opts {
 		opt(s)

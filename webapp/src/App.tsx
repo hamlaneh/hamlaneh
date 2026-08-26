@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router";
 
 import { api } from "./api/client";
 import type { components } from "./api/schema";
+import { readInviteToken } from "./auth/inviteToken";
 import { consumeResetToken } from "./auth/resetToken";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AuthShell } from "./components/auth/AuthShell";
@@ -12,6 +13,7 @@ import { ChangePasswordScreen } from "./screens/ChangePasswordScreen";
 import { ChatApp } from "./screens/ChatApp";
 import { LoginScreen } from "./screens/LoginScreen";
 import type { LoginNotice } from "./screens/LoginScreen";
+import { RedeemInviteScreen } from "./screens/RedeemInviteScreen";
 import { ResetPasswordScreen } from "./screens/ResetPasswordScreen";
 import { ResetRequestScreen } from "./screens/ResetRequestScreen";
 import { TotpChallengeScreen } from "./screens/TotpChallengeScreen";
@@ -33,7 +35,8 @@ type AuthFlow =
   | { screen: "login"; notice?: LoginNotice }
   | { screen: "totp" }
   | { screen: "resetRequest" }
-  | { screen: "resetPassword"; token: string };
+  | { screen: "resetPassword"; token: string }
+  | { screen: "redeemInvite"; token: string };
 
 /** Asks the server who is signed in (GET /users/me) and maps it to a Session. */
 async function fetchSession(): Promise<Session> {
@@ -93,8 +96,17 @@ function App() {
    * somewhere.
    */
   const [flow, setFlow] = useState<AuthFlow>(() => {
-    const token = consumeResetToken();
-    return token === null ? { screen: "login" } : { screen: "resetPassword", token };
+    const resetToken = consumeResetToken();
+    if (resetToken !== null) {
+      return { screen: "resetPassword", token: resetToken };
+    }
+    // A join link is the only way into an instance whose registration is
+    // closed, so it outranks the sign-in screen the same way a reset link
+    // does — somebody following an invitation has no account to sign in with.
+    const inviteToken = readInviteToken();
+    return inviteToken === null
+      ? { screen: "login" }
+      : { screen: "redeemInvite", token: inviteToken };
   });
 
   const refreshSession = useCallback(() => {
@@ -130,6 +142,25 @@ function App() {
     // the server, not from a local guess.
     refreshSession();
   };
+
+  if (flow.screen === "redeemInvite") {
+    return (
+      <RedeemInviteScreen
+        token={flow.token}
+        onAccountCreated={() => {
+          // The invite creates the account and nothing else: no session is
+          // minted, deliberately, so the new user signs in like anybody
+          // else and the sign-in path stays the one way in.
+          window.history.replaceState(null, "", "/");
+          setSession({ status: "unauthenticated" });
+          setFlow({
+            screen: "login",
+            notice: { tone: "success", message: t("redeemInvite.done") },
+          });
+        }}
+      />
+    );
+  }
 
   if (flow.screen === "resetPassword") {
     return (

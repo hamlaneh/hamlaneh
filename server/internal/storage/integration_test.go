@@ -69,7 +69,7 @@ func TestStorageIntegration(t *testing.T) {
 		}
 
 		want := []string{
-			"created_at", "display_name", "email", "id", "is_admin",
+			"created_at", "display_name", "email", "id", "is_active", "is_admin",
 			"locale", "must_change_password", "password_hash", "updated_at", "username",
 		}
 		if !slices.Equal(got, want) {

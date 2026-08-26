@@ -68,6 +68,19 @@ type fakeStore struct {
 	listMessages        func(ctx context.Context, params storage.ListMessagesParams) (storage.MessagePage, error)
 	setReadPosition     func(ctx context.Context, channelID, userID, messageID uuid.UUID) error
 	createAttachment    func(ctx context.Context, na storage.NewAttachment) (storage.Attachment, error)
+
+	updateUserAdmin       func(ctx context.Context, userID uuid.UUID, upd storage.AdminUserUpdate) (storage.User, error)
+	setTemporaryPassword  func(ctx context.Context, userID uuid.UUID, hash string) (storage.User, error)
+	createInvite          func(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string, ttl time.Duration) (storage.Invite, error)
+	listOpenInvites       func(ctx context.Context, params storage.ListInvitesParams) ([]storage.Invite, error)
+	revokeInvite          func(ctx context.Context, id uuid.UUID) error
+	openInviteByTokenHash func(ctx context.Context, tokenHash []byte) (storage.Invite, error)
+	redeemInvite          func(ctx context.Context, tokenHash []byte, nu storage.NewUser) (storage.User, error)
+	orgSettings           func(ctx context.Context) (storage.OrgSettings, error)
+	updateOrgSettings     func(ctx context.Context, patch storage.OrgSettingsPatch) (storage.OrgSettings, error)
+
+	appendAuditEntry func(ctx context.Context, e storage.AuditEntry, seal func(storage.AuditEntry) []byte) (storage.AuditEntry, error)
+	listAuditEntries func(ctx context.Context, params storage.ListAuditParams) ([]storage.AuditEntry, error)
 }
 
 var _ httpserver.Store = (*fakeStore)(nil)
@@ -260,7 +273,10 @@ var fixtureHash = sync.OnceValue(func() string {
 	return password.Hash(fixturePassword)
 })
 
-// fixtureUser is a member account with the fixture password.
+// fixtureUser is an active member account with the fixture password.
+// IsActive is set because that is what an account is: login refuses a
+// deactivated one, so a fixture without it would fail every sign-in test for
+// a reason none of them is about.
 func fixtureUser() storage.User {
 	return storage.User{
 		ID:           uuid.MustParse("11111111-1111-1111-1111-111111111111"),
@@ -268,6 +284,7 @@ func fixtureUser() storage.User {
 		DisplayName:  "Member",
 		PasswordHash: fixtureHash(),
 		Locale:       "en",
+		IsActive:     true,
 	}
 }
 
@@ -508,9 +525,86 @@ func (f *fakeStore) CreateAttachment(ctx context.Context, na storage.NewAttachme
 	return f.createAttachment(ctx, na)
 }
 
+func (f *fakeStore) AppendAuditEntry(ctx context.Context, e storage.AuditEntry, seal func(storage.AuditEntry) []byte) (storage.AuditEntry, error) {
+	if f.appendAuditEntry == nil {
+		return storage.AuditEntry{}, errFakeUnwired
+	}
+	return f.appendAuditEntry(ctx, e, seal)
+}
+
+func (f *fakeStore) ListAuditEntries(ctx context.Context, params storage.ListAuditParams) ([]storage.AuditEntry, error) {
+	if f.listAuditEntries == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listAuditEntries(ctx, params)
+}
+
 func (f *fakeStore) UserByID(ctx context.Context, id uuid.UUID) (storage.User, error) {
 	if f.userByID == nil {
 		return storage.User{}, errFakeUnwired
 	}
 	return f.userByID(ctx, id)
+}
+
+func (f *fakeStore) UpdateUserAdmin(ctx context.Context, userID uuid.UUID, upd storage.AdminUserUpdate) (storage.User, error) {
+	if f.updateUserAdmin == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.updateUserAdmin(ctx, userID, upd)
+}
+
+func (f *fakeStore) SetTemporaryPassword(ctx context.Context, userID uuid.UUID, hash string) (storage.User, error) {
+	if f.setTemporaryPassword == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.setTemporaryPassword(ctx, userID, hash)
+}
+
+func (f *fakeStore) CreateInvite(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string, ttl time.Duration) (storage.Invite, error) {
+	if f.createInvite == nil {
+		return storage.Invite{}, errFakeUnwired
+	}
+	return f.createInvite(ctx, createdBy, tokenHash, note, ttl)
+}
+
+func (f *fakeStore) ListOpenInvites(ctx context.Context, params storage.ListInvitesParams) ([]storage.Invite, error) {
+	if f.listOpenInvites == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listOpenInvites(ctx, params)
+}
+
+func (f *fakeStore) RevokeInvite(ctx context.Context, id uuid.UUID) error {
+	if f.revokeInvite == nil {
+		return errFakeUnwired
+	}
+	return f.revokeInvite(ctx, id)
+}
+
+func (f *fakeStore) OpenInviteByTokenHash(ctx context.Context, tokenHash []byte) (storage.Invite, error) {
+	if f.openInviteByTokenHash == nil {
+		return storage.Invite{}, errFakeUnwired
+	}
+	return f.openInviteByTokenHash(ctx, tokenHash)
+}
+
+func (f *fakeStore) RedeemInvite(ctx context.Context, tokenHash []byte, nu storage.NewUser) (storage.User, error) {
+	if f.redeemInvite == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.redeemInvite(ctx, tokenHash, nu)
+}
+
+func (f *fakeStore) OrgSettings(ctx context.Context) (storage.OrgSettings, error) {
+	if f.orgSettings == nil {
+		return storage.OrgSettings{}, errFakeUnwired
+	}
+	return f.orgSettings(ctx)
+}
+
+func (f *fakeStore) UpdateOrgSettings(ctx context.Context, patch storage.OrgSettingsPatch) (storage.OrgSettings, error) {
+	if f.updateOrgSettings == nil {
+		return storage.OrgSettings{}, errFakeUnwired
+	}
+	return f.updateOrgSettings(ctx, patch)
 }

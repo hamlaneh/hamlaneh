@@ -345,6 +345,63 @@ func bothKinds(method, path string, body func(Fixture) string, want map[Principa
 	}
 }
 
+// adminEntry builds the matrix row of an implemented admin-only endpoint.
+// The three refusals are identical on every one of them and are filled in
+// here so no row can quietly disagree about them: anonymous 401, a member
+// 403 forbidden, and a caller who still owes a password change 403
+// password_change_required — the last of which is the column that proves the
+// must-change gate runs BEFORE the admin check, not instead of it.
+//
+// want is the handler's own answer for an admin, which is what makes the
+// Admin cell prove the gates ran AND the handler decided.
+func adminEntry(method, path, target string, body func(Fixture) string, want int, code string) Entry {
+	e := Entry{
+		Method:        method,
+		Path:          path,
+		Class:         ClassAdmin,
+		RequestTarget: target,
+		Body:          body,
+		Want: map[Principal]int{
+			Anonymous:        http.StatusUnauthorized,
+			Member:           http.StatusForbidden,
+			MemberMustChange: http.StatusForbidden,
+			Admin:            want,
+		},
+		WantCode: map[Principal]string{
+			Anonymous:        "not_authenticated",
+			Member:           "forbidden",
+			MemberMustChange: "password_change_required",
+		},
+	}
+	if code != "" {
+		e.WantCode[Admin] = code
+	}
+	return e
+}
+
+// publicEntry builds the row of an endpoint that answers every principal
+// identically. That uniformity is not a shortcut — on the invite routes it IS
+// the security property, because a signed-in caller learning something an
+// anonymous one cannot would be the leak these rows exist to forbid.
+func publicEntry(method, path, target string, body func(Fixture) string, want int, code string) Entry {
+	e := Entry{
+		Method:        method,
+		Path:          path,
+		Class:         ClassPublic,
+		RequestTarget: target,
+		Body:          body,
+		Want:          map[Principal]int{},
+		WantCode:      map[Principal]string{},
+	}
+	for _, p := range InstancePrincipals() {
+		e.Want[p] = want
+		if code != "" {
+			e.WantCode[p] = code
+		}
+	}
+	return e
+}
+
 // sessionEntry builds the matrix row of an implemented session-gated
 // endpoint. The route-level gates decide first — anonymous 401,
 // still-owes-a-password-change 403 — and a caller past both reaches the
@@ -525,6 +582,24 @@ func instanceRegistry() []Entry {
 			},
 		},
 		{
+			// Phase 1.4: the audit log. A member must not read who did what
+			// to whom — the log names people, addresses and the actions taken
+			// on accounts, which is a wider disclosure than the dashboard it
+			// belongs to.
+			Method: http.MethodGet,
+			Path:   "/api/v1/admin/audit",
+			Class:  ClassAdmin,
+			Want: map[Principal]int{
+				Anonymous: http.StatusUnauthorized, Member: http.StatusForbidden,
+				MemberMustChange: http.StatusForbidden, Admin: http.StatusOK,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:        "not_authenticated",
+				Member:           "forbidden",
+				MemberMustChange: "password_change_required",
+			},
+		},
+		{
 			Method: http.MethodPost,
 			Path:   "/api/v1/admin/users",
 			Class:  ClassAdmin,
@@ -541,6 +616,57 @@ func instanceRegistry() []Entry {
 				MemberMustChange: "password_change_required",
 			},
 		},
+
+		// Phase 1.4 administration. Every row here acts on something that
+		// does not exist — a well-formed id naming nothing, an invitation
+		// token of the right shape that was never issued — so the Admin cell
+		// pins the handler's own answer without any row mutating what
+		// another row reads.
+		//
+		// The two user rows answer 404 for exactly the reason the
+		// session-family row does: a well-formed id naming nobody must be
+		// indistinguishable from one naming somebody else's account.
+		adminEntry(http.MethodPatch, "/api/v1/admin/users/{userId}",
+			"/api/v1/admin/users/00000000-0000-4000-8000-0000000000ad",
+			func(Fixture) string { return `{"is_admin":false}` },
+			http.StatusNotFound, "user_not_found"),
+		adminEntry(http.MethodPost, "/api/v1/admin/users/{userId}/reset-password",
+			"/api/v1/admin/users/00000000-0000-4000-8000-0000000000ad/reset-password",
+			nil, http.StatusNotFound, "user_not_found"),
+
+		adminEntry(http.MethodGet, "/api/v1/admin/invites", "", nil, http.StatusOK, ""),
+		adminEntry(http.MethodPost, "/api/v1/admin/invites", "",
+			func(fx Fixture) string { return fmt.Sprintf(`{"note":"matrix %s"}`, fx.Unique) },
+			http.StatusCreated, ""),
+		// Revocation is idempotent, so an id naming nothing is the 204 the
+		// contract promises rather than a 404. The row pins that: "already
+		// gone" is the outcome the caller wanted.
+		adminEntry(http.MethodDelete, "/api/v1/admin/invites/{inviteId}",
+			"/api/v1/admin/invites/00000000-0000-4000-8000-0000000000be",
+			nil, http.StatusNoContent, ""),
+
+		adminEntry(http.MethodGet, "/api/v1/admin/org", "", nil, http.StatusOK, ""),
+		// A no-op patch: the settings screen saves one field at a time, and
+		// this row is about who may save at all, not about what changes.
+		adminEntry(http.MethodPatch, "/api/v1/admin/org", "",
+			func(Fixture) string { return `{"require_totp":false}` },
+			http.StatusOK, ""),
+
+		// The two public halves of an invitation, asked with a token of the
+		// right shape that was never issued. All four principals get one
+		// 404: an unknown, expired, revoked or spent token is one answer, and
+		// a session neither helps nor hinders. Both properties are the
+		// security story, so the matrix pins them rather than trusting the
+		// handlers to agree.
+		publicEntry(http.MethodGet, "/api/v1/invites/{token}",
+			"/api/v1/invites/"+strings.Repeat("z", 43), nil,
+			http.StatusNotFound, "invite_not_found"),
+		publicEntry(http.MethodPost, "/api/v1/invites/{token}",
+			"/api/v1/invites/"+strings.Repeat("z", 43),
+			func(fx Fixture) string {
+				return fmt.Sprintf(`{"username":"redeem%s","password":"a matrix passphrase"}`, fx.Unique)
+			},
+			http.StatusNotFound, "invite_not_found"),
 
 		// Phase 1.2, the endpoints decided without a channel. Nothing here
 		// turns on membership: the directory and the sidebar are the caller's

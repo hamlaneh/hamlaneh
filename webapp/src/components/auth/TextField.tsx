@@ -2,7 +2,7 @@ import type { Ref } from "react";
 
 import type { FieldProps } from "./Field";
 import { Field } from "./Field";
-import { fieldErrorId } from "./fieldErrorId";
+import { fieldDescribedBy } from "./fieldErrorId";
 
 interface TextFieldProps extends FieldProps {
   value: string;
@@ -36,7 +36,7 @@ export function TextField({
         autoComplete={autoComplete}
         disabled={field.disabled}
         aria-invalid={field.error === undefined ? undefined : true}
-        aria-describedby={field.error === undefined ? undefined : fieldErrorId(field.id)}
+        aria-describedby={fieldDescribedBy(field.id, field)}
         value={value}
         onChange={(event) => {
           onChange(event.target.value);

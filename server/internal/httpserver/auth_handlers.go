@@ -100,6 +100,18 @@ func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !user.IsActive {
+		// A deactivated account cannot sign in. The refusal is deliberately
+		// the same invalid_credentials every other failure answers with: an
+		// account's state is not something an unauthenticated caller gets to
+		// learn, and "wrong password" and "this person has left" must look
+		// identical from outside. Deactivation already revoked every session
+		// the account held, so this is the only door left to close.
+		s.consumeLoginBudget(ipKey, identifierKey)
+		writeInvalidCredentials(w, r)
+		return
+	}
+
 	if needsRehash {
 		s.rehashPassword(r.Context(), user.ID, req.Password)
 	}

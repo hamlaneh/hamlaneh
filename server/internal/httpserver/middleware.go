@@ -117,6 +117,27 @@ var routePolicies = map[string]routePolicy{
 	"DELETE /api/v1/users/me/sessions/{familyId}":  {class: classSession},
 	"POST /api/v1/users/me/sessions/revoke-others": {class: classSession},
 	"GET /api/v1/ws":                               {class: classSession},
+
+	// Phase 1.4 administration. Every dashboard route is classAdmin, so the
+	// admin check is made once, in one place, before any handler runs.
+	"PATCH /api/v1/admin/users/{userId}":               {class: classAdmin, action: authz.AdminUsersUpdate},
+	"POST /api/v1/admin/users/{userId}/reset-password": {class: classAdmin, action: authz.AdminUsersResetPassword},
+	"GET /api/v1/admin/invites":                        {class: classAdmin, action: authz.AdminInvitesList},
+	"POST /api/v1/admin/invites":                       {class: classAdmin, action: authz.AdminInvitesCreate},
+	"DELETE /api/v1/admin/invites/{inviteId}":          {class: classAdmin, action: authz.AdminInvitesRevoke},
+	"GET /api/v1/admin/org":                            {class: classAdmin, action: authz.AdminOrgRead},
+	"PATCH /api/v1/admin/org":                          {class: classAdmin, action: authz.AdminOrgUpdate},
+	// Read-only, and the only read in the table that is also the record of
+	// every other route above it.
+	"GET /api/v1/admin/audit": {class: classAdmin, action: authz.AdminAuditList},
+
+	// The two public halves of an invitation. They must be reachable before
+	// anybody has an account — that is what an invitation is for — and they
+	// are the only routes in this table that a signed-in session neither
+	// helps nor hinders. Every unusable token answers one 404 on both, so
+	// being public leaks nothing a guesser can use.
+	"GET /api/v1/invites/{token}":  {class: classPublic},
+	"POST /api/v1/invites/{token}": {class: classPublic},
 }
 
 // principal is the authenticated caller: the user plus the session that

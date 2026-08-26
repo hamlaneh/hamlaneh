@@ -161,6 +161,17 @@ installs it on its own server with one command and owns its communication comple
   falls back to REST backfill. The handshake is guarded by a strict Origin check — the
   cross-site-hijacking defense standing in for the CSRF header a browser cannot send on an
   upgrade — and a revoked session closes its sockets within a tested 10 seconds.
+- **The admin dashboard (Phase 1.4).** Users, invitations, org settings and the audit log, on
+  their own path inside the same install — same binary, same compose stack, no extra setup. It
+  is also how people come into existence, because public registration is off by default. Two
+  rules the dashboard is deliberately unable to break: the last administrator cannot be removed
+  (checked inside the transaction that would remove them, under a lock, so two admins demoting
+  each other simultaneously still leaves one), and an invite link cannot make two accounts (the
+  invite is claimed in the same transaction that creates the user). Deactivation ends every
+  session and closes every socket; a forced password reset deliberately leaves the session
+  alive, and each confirm says which it is. The audit log is hash-chained with a key kept
+  outside the database: that does not make it tamper-proof — anybody who can write to the
+  database can rewrite rows — it makes a rewrite show.
 - **Files (Phase 1.3 server half).** Upload is channel-scoped from birth, so a file is readable
   exactly by its channel's members — the same one rule, the same 404 for everyone else. Bytes
   are sniffed and labels are decoration: only proven images are ever served inline; everything

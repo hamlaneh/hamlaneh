@@ -321,6 +321,12 @@
   cursor: not-allowed;
 }
 
+/* The standing constraint line under a control (admin-create-user). */
+.hm-field__hint {
+  font: 400 var(--text-caption) / 1.55 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+}
+
 .hm-field__error {
   display: flex;
   align-items: center;

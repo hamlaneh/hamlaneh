@@ -65,6 +65,9 @@ type webapp struct {
 //	          fragment (internal/passwordreset), which no browser ever sends,
 //	          so the server only ever sees this bare path
 //	/c/...    webapp/src/screens/ChatApp.tsx — channel and message permalinks
+//	/invite   the redemption screen an invitation link lands on. Like /reset,
+//	          its token rides in the URL fragment (invite_handlers.go), so
+//	          the server only ever sees this bare path
 //
 // — and adding a route to the app means adding it here in the same change.
 func routeWebapp(mux *http.ServeMux, files fs.FS) {
@@ -72,6 +75,7 @@ func routeWebapp(mux *http.ServeMux, files fs.FS) {
 
 	mux.HandleFunc("GET /{$}", a.serveIndex)
 	mux.HandleFunc("GET /reset", a.serveIndex)
+	mux.HandleFunc("GET /invite", a.serveIndex)
 	mux.HandleFunc("GET /c/", a.serveIndex)
 
 	mux.HandleFunc("GET /assets/", a.serveHashedAsset)

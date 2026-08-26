@@ -114,9 +114,9 @@ func TestAdminListUsersPagination(t *testing.T) {
 	if first.Code != http.StatusOK {
 		t.Fatalf("first page: got status %d (body %s)", first.Code, first.Body.String())
 	}
-	var page1 api.UserPage
+	var page1 api.AdminUserPage
 	if err := json.Unmarshal(first.Body.Bytes(), &page1); err != nil {
-		t.Fatalf("first page is not a UserPage: %v", err)
+		t.Fatalf("first page is not an AdminUserPage: %v", err)
 	}
 	if len(page1.Users) != 2 {
 		t.Fatalf("first page has %d users, want 2", len(page1.Users))
@@ -133,9 +133,9 @@ func TestAdminListUsersPagination(t *testing.T) {
 	if second.Code != http.StatusOK {
 		t.Fatalf("second page: got status %d (body %s)", second.Code, second.Body.String())
 	}
-	var page2 api.UserPage
+	var page2 api.AdminUserPage
 	if err := json.Unmarshal(second.Body.Bytes(), &page2); err != nil {
-		t.Fatalf("second page is not a UserPage: %v", err)
+		t.Fatalf("second page is not an AdminUserPage: %v", err)
 	}
 	if len(page2.Users) != 1 {
 		t.Fatalf("second page has %d users, want 1", len(page2.Users))
@@ -271,4 +271,54 @@ func TestAdminCreateUser(t *testing.T) {
 			withSessionCookie("tok"), withCSRF()))
 		wantError(t, rec, http.StatusConflict, "email_taken")
 	})
+}
+
+// TestAdminUserListCarriesTheColumnsTheTableDraws is a contract regression.
+//
+// The list first answered with the reduced User shape, which carries neither
+// is_active nor has_totp — while the row action beside it answered AdminUser,
+// which carries both. So the dashboard's users table could not render its own
+// active/inactive column from its own list endpoint: it learned a user's
+// state only for the row it had just changed. The shapes disagreed, and the
+// screen was the thing caught in between.
+func TestAdminUserListCarriesTheColumnsTheTableDraws(t *testing.T) {
+	t.Parallel()
+
+	deactivated := fixtureUser()
+	deactivated.ID = uuid.MustParse("bbbbbbbb-0000-4000-8000-00000000000b")
+	deactivated.Username = "offboarded"
+	deactivated.IsActive = false
+
+	store := adminStore()
+	store.listUsers = func(context.Context, storage.ListUsersParams) ([]storage.User, error) {
+		return []storage.User{deactivated}, nil
+	}
+
+	rec := doHandler(t, httpserver.Handler(store),
+		request(http.MethodGet, "/api/v1/admin/users", "", withSessionCookie("tok")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// Asserted on the encoded key set, not a decoded struct: decoding into
+	// AdminUser would happily succeed against a payload that omitted the
+	// field entirely, which is exactly the bug.
+	var raw struct {
+		Users []map[string]any `json:"users"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("body is not a page of objects: %v", err)
+	}
+	if len(raw.Users) != 1 {
+		t.Fatalf("got %d rows, want 1", len(raw.Users))
+	}
+	row := raw.Users[0]
+	for _, key := range []string{"is_active", "is_admin", "must_change_password"} {
+		if _, ok := row[key]; !ok {
+			t.Errorf("the row carries no %q; the table draws a column from it", key)
+		}
+	}
+	if row["is_active"] != false {
+		t.Errorf("is_active = %v for a deactivated account, want false", row["is_active"])
+	}
 }

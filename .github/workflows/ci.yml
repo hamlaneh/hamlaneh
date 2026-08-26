@@ -298,8 +298,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Generate throwaway environment file
-        # Both secrets are random per run, exist only in the runner temp
-        # directory, and are never printed. Nothing is hard-coded.
+        # Every secret is random per run, exists only in the runner temp
+        # directory, and is never printed. Nothing is hard-coded.
         run: |
           umask 077
           env_file="$RUNNER_TEMP/compose-smoke.env"
@@ -307,6 +307,7 @@ jobs:
             echo "HAMLANEH_DOMAIN=localhost"
             echo "POSTGRES_PASSWORD=$(openssl rand -hex 32)"
             echo "HAMLANEH_FILE_URL_KEY=$(openssl rand -hex 32)"
+            echo "HAMLANEH_AUDIT_KEY=$(openssl rand -hex 32)"
           } > "$env_file"
           echo "COMPOSE=docker compose -f deploy/docker-compose.yml --env-file $env_file" >> "$GITHUB_ENV"
 
