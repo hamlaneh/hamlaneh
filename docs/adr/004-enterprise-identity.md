@@ -47,12 +47,37 @@ records `issuer`, so multi-provider later is additive rather than a migration.
 
 **`(issuer, subject)` is the only login key, and email never auto-links a local password account.**
 Looking users up by email on each login is the classic takeover bug — emails are mutable at the
-IdP, `sub` is contractually stable. Auto-linking is permitted in exactly one case: the account is
-already SCIM-managed (`scim_external_id` set) and the emails match, so both sides of the match
-come from the same authority an admin already granted. A local password account with a colliding
-email is refused (`sso_account_exists`) and links from Settings while signed in. Refusing costs
-one password sign-in per legacy user; accepting `email_verified` from the IdP would fuse the
-weakest email assertion on either side into a session.
+IdP, `sub` is contractually stable. A local password account with a colliding email is refused
+(`sso_account_exists`) and links from Settings while signed in, where a live session rather than
+an email is the authority for the link. Refusing costs one password sign-in per legacy user.
+
+Auto-linking is permitted in exactly one case, and that case is **two** conditions, not one:
+
+1. the account is already SCIM-managed (`scim_external_id` set), **and**
+2. the incoming ID token asserts `email_verified` for the matching address.
+
+The first sentence of this rule originally read "so both sides of the match come from the same
+authority an admin already granted", and that was wrong in a way worth recording. `scim_external_id`
+says the *account* is directory-managed — it is a fact about our side, established when an admin
+minted the SCIM token. It says nothing about the *assertion arriving now*: that a subject can put
+an address in its profile is a different statement from that subject owning it, and `email_verified`
+is the only claim that binds the two. Without condition 2, any provider configuration permitting a
+self-asserted email lets whoever can register a subject there set their profile email to a
+directory-managed victim's address and be signed in as them, administrators included. Mainstream
+IdPs in directory-backed configurations do not permit that — which is exactly why depending on it
+was invisible, and why the condition is checked here rather than assumed of somebody's deployment.
+
+Absent is not true: a token that never mentions verification has not asserted it, and neither has
+one sending the claim as a string. Both are treated as unverified.
+
+The refusal is deliberately **not** gated on verification — an unverified email that matches an
+account still refuses. Refusing is strictly the safer half, and gating it would push those
+identities into just-in-time provisioning, where they would create a second account for an address
+that already has one.
+
+None of this makes `email_verified` a login key. It gates one link at one rung; the session that
+follows still resolves through `(issuer, subject)`, and accepting an email claim as identity on
+its own would fuse the weakest assertion on either side into a session.
 
 **Just-in-time provisioning is its own org setting, default off.** It is not inferred from
 `registration_mode` — that setting governs a self-serve password door that does not exist, and

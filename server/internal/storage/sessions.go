@@ -178,13 +178,19 @@ func (s *Store) CreateSession(ctx context.Context, ns NewSession) (Session, erro
 // live session matching the hash and its user in one query. A session is
 // live when it is not revoked and its access token has not expired (checked
 // against the database clock). Returns ErrNotFound otherwise.
+//
+// This is the ONE query that returns a user alongside other columns, so it
+// is also the one that cannot call scanUser. It shares the projection and
+// the scan list all the same — memberUserColumns and userScanTargets, see
+// the block above userColumns in users.go. It carried its own copy of both
+// once: the copy missed migration 0014's COALESCE, which 500'd every
+// authenticated request by an account with no password, and it had quietly
+// lost the two SCIM columns as well. Do not re-inline it.
 func (s *Store) SessionUserByAccessHash(ctx context.Context, accessHash []byte) (Session, User, error) {
 	row := s.pool.QueryRow(ctx,
 		`SELECT s.id, s.user_id, s.family_id, s.access_expires_at, s.refresh_expires_at, s.created_at,
 		        s.totp_enrollment_required,
-		        u.id, u.username, u.email, u.display_name, u.password_hash,
-		        u.locale, u.is_admin, u.is_active, u.must_change_password, u.created_at, u.updated_at,
-		        EXISTS (SELECT 1 FROM oidc_identities oi WHERE oi.user_id = u.id)
+		        `+memberUserColumns+`
 		 FROM sessions s
 		 JOIN users u ON u.id = s.user_id
 		 WHERE s.access_token_hash = $1
@@ -195,13 +201,10 @@ func (s *Store) SessionUserByAccessHash(ctx context.Context, accessHash []byte) 
 
 	var sess Session
 	var u User
-	err := row.Scan(
+	err := row.Scan(append([]any{
 		&sess.ID, &sess.UserID, &sess.FamilyID, &sess.AccessExpiresAt, &sess.RefreshExpiresAt, &sess.CreatedAt,
 		&sess.TotpEnrollmentRequired,
-		&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.PasswordHash,
-		&u.Locale, &u.IsAdmin, &u.IsActive, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt,
-		&u.SsoLinked,
-	)
+	}, userScanTargets(&u)...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, User{}, ErrNotFound
 	}

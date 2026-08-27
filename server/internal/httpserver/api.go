@@ -32,9 +32,10 @@ type Store interface {
 	Ready(ctx context.Context) error
 
 	UserByIdentifier(ctx context.Context, identifier string) (storage.User, error)
-	// UserByEmail backs one thing here: phrasing the SSO refusal for an
-	// identity whose email collides with a local account. It never decides
-	// who signs in — (issuer, subject) is the whole login key (ADR 004).
+	// UserByEmail backs rungs 2 and 3 of the SSO resolution ladder: whether
+	// an unlinked identity's email names an account the directory manages
+	// (attach) or any other account (refuse). It never decides who signs in
+	// on its own — (issuer, subject) is the whole login key (ADR 004).
 	UserByEmail(ctx context.Context, email string) (storage.User, error)
 	CreateUser(ctx context.Context, nu storage.NewUser) (storage.User, error)
 	UpdatePassword(ctx context.Context, userID uuid.UUID, passwordHash string, keepFamilyID uuid.UUID) error
@@ -83,6 +84,10 @@ type Store interface {
 	UserByOidcIdentity(ctx context.Context, issuer, subject string) (storage.User, error)
 	LinkOidcIdentity(ctx context.Context, userID uuid.UUID, issuer, subject string, emailAtLink *string) error
 	UnlinkOidcIdentity(ctx context.Context, userID uuid.UUID) error
+	// CreateOidcUser is just-in-time provisioning: the account and its link
+	// in one transaction, so two tabs of one person leave one account behind
+	// rather than one account plus an orphan.
+	CreateOidcUser(ctx context.Context, nu storage.NewOidcUser) (storage.User, error)
 	// Pending links: the server-side state that decides link vs sign-in at
 	// the callback. Create is called only by the session-gated link
 	// endpoint; Consume atomically deletes and returns the target account

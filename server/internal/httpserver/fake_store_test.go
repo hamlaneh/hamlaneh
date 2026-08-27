@@ -33,6 +33,7 @@ type fakeStore struct {
 	userByOidcIdentity      func(ctx context.Context, issuer, subject string) (storage.User, error)
 	linkOidcIdentity        func(ctx context.Context, userID uuid.UUID, issuer, subject string, emailAtLink *string) error
 	unlinkOidcIdentity      func(ctx context.Context, userID uuid.UUID) error
+	createOidcUser          func(ctx context.Context, nu storage.NewOidcUser) (storage.User, error)
 	createOidcLinkRequest   func(ctx context.Context, stateHash, secretHash []byte, userID uuid.UUID, ttl time.Duration) error
 	consumeOidcLinkRequest  func(ctx context.Context, stateHash, secretHash []byte) (uuid.UUID, error)
 	createUser              func(ctx context.Context, nu storage.NewUser) (storage.User, error)
@@ -136,6 +137,13 @@ func (f *fakeStore) UnlinkOidcIdentity(ctx context.Context, userID uuid.UUID) er
 		return errFakeUnwired
 	}
 	return f.unlinkOidcIdentity(ctx, userID)
+}
+
+func (f *fakeStore) CreateOidcUser(ctx context.Context, nu storage.NewOidcUser) (storage.User, error) {
+	if f.createOidcUser == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.createOidcUser(ctx, nu)
 }
 
 func (f *fakeStore) CreateOidcLinkRequest(ctx context.Context, stateHash, secretHash []byte, userID uuid.UUID, ttl time.Duration) error {

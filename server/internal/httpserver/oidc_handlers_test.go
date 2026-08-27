@@ -67,6 +67,7 @@ type fakeIDP struct {
 	down       bool
 	tokenCalls int
 	// nextClaims overrides claims of the next minted ID token (one shot).
+	// A nil VALUE removes that claim instead of setting it to null.
 	nextClaims map[string]any
 	// signMode of the next token (one shot): "" (RS256, real key),
 	// "hs256" (HMAC over the client secret), "rogue" (RS256, unknown key).
@@ -281,9 +282,18 @@ func (i *fakeIDP) mintIDToken(code idpCode) string {
 		"nonce": code.nonce,
 	}
 	if code.email != "" {
-		claims["email"] = code.email
+		// A directory-backed provider asserts both: the address, and that
+		// this subject owns it. Tests that care about the second override
+		// it — email_verified: false, or nil to leave the claim out
+		// entirely, which is a different thing from false and must be
+		// treated the same way.
+		claims["email"], claims["email_verified"] = code.email, true
 	}
 	for k, v := range i.nextClaims {
+		if v == nil {
+			delete(claims, k)
+			continue
+		}
 		claims[k] = v
 	}
 	i.nextClaims = nil
@@ -560,10 +570,11 @@ func TestOidcStartShape(t *testing.T) {
 	}
 }
 
-// TestOidcUnknownIdentityRefused pins the slice's deliberate scope: an
-// identity matching nobody creates nothing (JIT does not exist), and an
-// email collision with a local password account is REFUSED rather than
-// linked — the takeover ADR 004 rules out.
+// TestOidcUnknownIdentityRefused pins what a default instance does: an
+// identity matching nobody creates nothing (just-in-time provisioning is off
+// unless an administrator turns it on — oidc_jit_test.go covers it on), and
+// an email collision with a local password account is REFUSED rather than
+// linked, whatever that setting says — the takeover ADR 004 rules out.
 func TestOidcUnknownIdentityRefused(t *testing.T) {
 	t.Parallel()
 

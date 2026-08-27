@@ -340,6 +340,29 @@ export interface paths {
          *
          *     Landing everything on the root rather than on distinct paths keeps the server's enumerated route list unchanged, and means a stale or shared callback URL can never resolve to a screen that implies a state the visitor is not in.
          *     Text supplied by the provider is never reflected into the URL or the page; it goes to the server log. The three codes are a closed set, so a client meeting an unrecognised value treats it as sso_failed.
+         *     Which account a verified identity resolves to is decided in this order, and the order is the security property:
+         *     1. The identity is already linked - sign that account in. Email is
+         *        never consulted once a link exists, because emails are mutable at
+         *        the provider and subjects are not.
+         *     2. No link, but the email names an account the directory manages (its
+         *        SCIM external id is set) - link it and sign in. Both sides of that
+         *        match come from an authority an administrator already granted: the
+         *        administrator minted the SCIM token that let the directory adopt
+         *        the account, and the same provider is now asserting the email.
+         *     3. No link, and the email names a local password account - refuse with
+         *        sso_account_exists, whatever sso_jit_provisioning says. Its owner
+         *        signs in with their password and connects single sign-on from
+         *        Settings. Auto-linking here would fuse the weakest email assertion
+         *        on either side into a session, and creating a second account for an
+         *        address that already has one is worse.
+         *     4. No match at all, and sso_jit_provisioning is on - create an active
+         *        account with no password, its username derived from the identity,
+         *        and sign in. Recorded in the audit log as a creation, not merely a
+         *        sign-in.
+         *     5. No match at all, and it is off - refuse with sso_account_unknown.
+         *        Nothing is created.
+         *
+         *     A created account is subject to every policy an invited one is: the organisation's two-step requirement applies at that first sign-in, because the session goes through the same mint.
          */
         get: operations["completeOidcSignIn"];
         put?: never;
@@ -1373,6 +1396,12 @@ export interface components {
             /** @description How many accounts enforcement would affect. Read-only, and the reason the screen can say who it hits before it is turned on. */
             accounts_without_totp?: number;
             /**
+             * @description Whether an identity the provider vouches for, matching no account here, creates one.
+             *     Off by default, and deliberately not inferred from registration_mode: that setting governs a self-serve password door, and "an administrator configured an identity provider" is not the same consent as "everyone in the directory may have an account here". While it is off, an unmatched identity creates nothing at all - the branch does not run, which is what makes single sign-on unable to walk around registration being closed.
+             *     An organisation provisioning through SCIM can leave this off entirely; it exists for organisations that want single sign-on without a sync engine.
+             */
+            sso_jit_provisioning: boolean;
+            /**
              * @description How long a session may live before its refresh token expires, read at every mint, including the rotation a refresh performs. Shortening it does not retroactively end an already-issued window, so an idle session keeps the window it has.
              *     Read what it governs carefully: it bounds how long a session may go UNUSED, not how long it may exist. A client that keeps refreshing renews its window each time and can stay signed in indefinitely — which is also why "enforced at the next sign-in" can, for a continuously active client, mean a long time. Ending a specific session now is what the device list and administrative deactivation are for. The server's own maximum is the ceiling, so a value above it is clamped rather than refused.
              */
@@ -1385,6 +1414,7 @@ export interface components {
             default_locale?: "en" | "fa";
             registration_mode?: components["schemas"]["RegistrationMode"];
             require_totp?: boolean;
+            sso_jit_provisioning?: boolean;
             session_lifetime_hours?: number;
         };
         /** @description One recorded action. `actor` is null for something the system did rather than a person. */

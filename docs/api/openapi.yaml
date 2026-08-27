@@ -597,6 +597,34 @@ paths:
         Text supplied by the provider is never reflected into the URL or the
         page; it goes to the server log. The three codes are a closed set, so
         a client meeting an unrecognised value treats it as sso_failed.
+
+        Which account a verified identity resolves to is decided in this
+        order, and the order is the security property:
+
+        1. The identity is already linked - sign that account in. Email is
+           never consulted once a link exists, because emails are mutable at
+           the provider and subjects are not.
+        2. No link, but the email names an account the directory manages (its
+           SCIM external id is set) - link it and sign in. Both sides of that
+           match come from an authority an administrator already granted: the
+           administrator minted the SCIM token that let the directory adopt
+           the account, and the same provider is now asserting the email.
+        3. No link, and the email names a local password account - refuse with
+           sso_account_exists, whatever sso_jit_provisioning says. Its owner
+           signs in with their password and connects single sign-on from
+           Settings. Auto-linking here would fuse the weakest email assertion
+           on either side into a session, and creating a second account for an
+           address that already has one is worse.
+        4. No match at all, and sso_jit_provisioning is on - create an active
+           account with no password, its username derived from the identity,
+           and sign in. Recorded in the audit log as a creation, not merely a
+           sign-in.
+        5. No match at all, and it is off - refuse with sso_account_unknown.
+           Nothing is created.
+
+        A created account is subject to every policy an invited one is: the
+        organisation's two-step requirement applies at that first sign-in,
+        because the session goes through the same mint.
       parameters:
         - name: code
           in: query
@@ -2922,7 +2950,9 @@ components:
 
     OrgSettings:
       type: object
-      required: [org_name, default_locale, registration_mode, require_totp, session_lifetime_hours]
+      required:
+        [org_name, default_locale, registration_mode, require_totp,
+         sso_jit_provisioning, session_lifetime_hours]
       properties:
         org_name: { type: string, maxLength: 64 }
         default_locale:
@@ -2943,6 +2973,23 @@ components:
           description: >
             How many accounts enforcement would affect. Read-only, and the
             reason the screen can say who it hits before it is turned on.
+        sso_jit_provisioning:
+          type: boolean
+          description: >
+            Whether an identity the provider vouches for, matching no account
+            here, creates one.
+
+            Off by default, and deliberately not inferred from
+            registration_mode: that setting governs a self-serve password
+            door, and "an administrator configured an identity provider" is
+            not the same consent as "everyone in the directory may have an
+            account here". While it is off, an unmatched identity creates
+            nothing at all - the branch does not run, which is what makes
+            single sign-on unable to walk around registration being closed.
+
+            An organisation provisioning through SCIM can leave this off
+            entirely; it exists for organisations that want single sign-on
+            without a sync engine.
         session_lifetime_hours:
           type: integer
           minimum: 1
@@ -2970,6 +3017,7 @@ components:
         default_locale: { type: string, enum: [en, fa] }
         registration_mode: { $ref: "#/components/schemas/RegistrationMode" }
         require_totp: { type: boolean }
+        sso_jit_provisioning: { type: boolean }
         session_lifetime_hours: { type: integer, minimum: 1, maximum: 8760 }
 
     AuditEntry:

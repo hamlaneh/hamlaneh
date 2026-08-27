@@ -27,6 +27,9 @@ func TestOrgSettingsIntegration(t *testing.T) {
 		if settings.RequireTotp {
 			t.Error("require_totp defaults on")
 		}
+		if settings.SsoJitProvisioning {
+			t.Error("sso_jit_provisioning defaults on — the widest door in the product must be shut on a fresh instance")
+		}
 		if settings.OrgName == "" || settings.DefaultLocale != "en" || settings.SessionLifetimeHours != 720 {
 			t.Errorf("unexpected defaults: %+v", settings)
 		}
@@ -50,6 +53,15 @@ func TestOrgSettingsIntegration(t *testing.T) {
 		if !after.RequireTotp {
 			t.Error("require_totp did not save")
 		}
+		jit, err := store.UpdateOrgSettings(ctx, storage.OrgSettingsPatch{
+			SsoJitProvisioning: ptr(true),
+		})
+		if err != nil {
+			t.Fatalf("save sso_jit_provisioning: %v", err)
+		}
+		if !jit.SsoJitProvisioning || jit.OrgName != "Nest" || !jit.RequireTotp {
+			t.Errorf("sso_jit_provisioning save disturbed its neighbours: %+v", jit)
+		}
 
 		// An empty patch changes nothing at all.
 		unchanged, err := store.UpdateOrgSettings(ctx, storage.OrgSettingsPatch{})
@@ -68,13 +80,16 @@ func TestOrgSettingsIntegration(t *testing.T) {
 			RegistrationMode:     ptr("open"),
 			RequireTotp:          ptr(false),
 			SessionLifetimeHours: ptr(24),
+			// The subtest above left this on, so writing false here is a
+			// real change: a column the UPDATE forgot would come back true.
+			SsoJitProvisioning: ptr(false),
 		})
 		if err != nil {
 			t.Fatalf("UpdateOrgSettings: %v", err)
 		}
 		want := storage.OrgSettings{
 			OrgName: "Hamlaneh QA", DefaultLocale: "fa", RegistrationMode: "open",
-			RequireTotp: false, SessionLifetimeHours: 24,
+			RequireTotp: false, SessionLifetimeHours: 24, SsoJitProvisioning: false,
 			AccountsWithoutTotp: got.AccountsWithoutTotp,
 		}
 		if got != want {

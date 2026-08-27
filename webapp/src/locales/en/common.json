@@ -355,6 +355,10 @@
         "open": "Anybody who reaches this instance can create their own account."
       },
       "openWarning": "With open registration, anybody who reaches this instance's address can create an account without an invitation.",
+      "ssoJitLabel": "Create accounts on first single sign-on",
+      "ssoJitHint": "On, anybody your identity provider will authenticate gets an account here on their first sign-in. Off, single sign-on signs in only accounts that already exist — made by an administrator, by an invitation, or by SCIM.",
+      "ssoJitNote": "Not the same switch as registration above: that one is the password door people open themselves, this one is the identity provider. Turning either on leaves the other where it is. An organization provisioning through SCIM does not need this.",
+      "ssoJitUnconfigured": "No identity provider is configured on this instance yet, so this setting governs nothing until one is.",
       "security": "Security",
       "requireTotpLabel": "Require two-step verification",
       "requireTotpHint": "Enforced at the next sign-in, never mid-session — turning it on cannot lock out the session you are in.",

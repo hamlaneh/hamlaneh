@@ -77,6 +77,43 @@ func TestSessionsIntegration(t *testing.T) {
 		}
 	})
 
+	// Regression: this query used to carry its own copy of the user
+	// projection and its own scan list, and the copy drifted twice. It
+	// missed migration 0014's COALESCE — a 500 on EVERY authenticated
+	// request by an account with no password credential, which is the whole
+	// API for every account a directory had provisioned — and it had lost
+	// the two SCIM columns, so the user on every authenticated principal
+	// came back looking un-managed. Both halves are asserted here because
+	// the second was invisible: nothing read those fields off a principal,
+	// and the drift would have waited for the first caller that did.
+	t.Run("the joined user is a whole user", func(t *testing.T) {
+		externalID := "ext-passwordless"
+		email := "passwordless@corp.example"
+		passwordless, err := store.CreateScimUser(ctx, storage.NewScimUser{
+			Username: "passwordless", ScimUserName: email, ExternalID: &externalID,
+			Email: &email, Locale: "en", IsActive: true,
+		})
+		if err != nil {
+			t.Fatalf("CreateScimUser: %v", err)
+		}
+		mustCreateSession(ctx, t, store, passwordless.ID, tokensFor("a2b", "r2b"))
+
+		_, u, err := store.SessionUserByAccessHash(ctx, hashOf("a2b"))
+		if err != nil {
+			t.Fatalf("SessionUserByAccessHash for a password-less account: %v", err)
+		}
+		if u.ID != passwordless.ID || u.PasswordHash != "" {
+			t.Errorf("joined user (%s, hash %q), want (%s, empty)", u.ID, u.PasswordHash, passwordless.ID)
+		}
+		if u.ScimExternalID == nil || *u.ScimExternalID != externalID {
+			t.Errorf("joined scim_external_id = %v, want %q — a directory-managed account must not read as un-managed",
+				u.ScimExternalID, externalID)
+		}
+		if u.ScimUserName == nil || *u.ScimUserName != email {
+			t.Errorf("joined scim_user_name = %v, want %q", u.ScimUserName, email)
+		}
+	})
+
 	t.Run("unknown access hash is ErrNotFound", func(t *testing.T) {
 		_, _, err := store.SessionUserByAccessHash(ctx, hashOf("never-issued"))
 		if !errors.Is(err, storage.ErrNotFound) {

@@ -181,7 +181,9 @@ The budget has to survive a provider's initial full sync, which arrives as a bur
 ## 8. Audit
 
 Every account mutation is recorded with the authority that made it: `scim.user.created`,
-`scim.user.updated`, `scim.user.deactivated`, `scim.user.reactivated`. The actor is the system
+`scim.user.updated`, `scim.user.deactivated`, `scim.user.reactivated`. Single sign-on records its
+own creations separately as `sso.user.created`, so a log reader can tell an account a directory
+pushed from one a provider assertion produced on somebody's first sign-in. The actor is the system
 rather than a person, with the token's id in the detail, so the log names *which* credential
 acted. Token lifecycle is recorded from the dashboard side as `scim.token.created` and
 `scim.token.revoked`.

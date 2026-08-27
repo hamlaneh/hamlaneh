@@ -76,10 +76,27 @@ type NewUser struct {
 	MustChangePassword bool
 }
 
-// userColumns is the canonical column list every user query selects, in the
-// order scanUser expects. The final expression derives SsoLinked; the
-// correlated users.id resolves against the row being selected or returned,
-// so the same list works in SELECT ... FROM users and in RETURNING on it.
+// The users table has exactly TWO projections and one scan, and this is
+// where all three live. Read this before adding a query that returns a user.
+//
+// A third copy is not a shortcut, it is the bug: SessionUserByAccessHash
+// carried one inline, it was missed when migration 0014 made password_hash
+// nullable, and the result was a 500 on EVERY authenticated request by an
+// account with no password — the whole API, for every account a directory
+// had provisioned. It had also silently lost the two SCIM columns. Neither
+// drift is visible at the call site, which is why the fix was to delete the
+// copy rather than to correct it.
+//
+// So: select userColumns (or memberUserColumns when the query joins), scan
+// with scanUser (or userScanTargets when the row carries other columns
+// too). A new column is added to all three of these and nowhere else; adding
+// it to one projection and not the other, or not to userScanTargets, is a
+// scan error on the first read rather than a wrong value that survives.
+
+// userColumns is the canonical column list, in the order userScanTargets
+// expects. The final expression derives SsoLinked; the correlated users.id
+// resolves against the row being selected or returned, so the same list
+// works in SELECT ... FROM users and in RETURNING on it.
 //
 // password_hash is COALESCEd because migration 0014 made it nullable for
 // accounts with no password credential. Every reader keeps its plain string
@@ -87,6 +104,30 @@ type NewUser struct {
 const userColumns = `id, username, email, display_name, COALESCE(password_hash, ''), locale, is_admin, is_active, must_change_password, created_at, updated_at,
 	scim_external_id, scim_user_name,
 	EXISTS (SELECT 1 FROM oidc_identities oi WHERE oi.user_id = users.id)`
+
+// memberUserColumns is userColumns qualified (alias u), for the queries that
+// join users against another table: channel member reads, the identity
+// lookup in oidc.go, and the session read in sessions.go. Same columns, same
+// order — a projection of the users table belongs beside the users table,
+// whichever file first happened to need it.
+const memberUserColumns = `u.id, u.username, u.email, u.display_name, COALESCE(u.password_hash, ''),
+	        u.locale, u.is_admin, u.is_active, u.must_change_password, u.created_at, u.updated_at,
+	        u.scim_external_id, u.scim_user_name,
+	        EXISTS (SELECT 1 FROM oidc_identities oi WHERE oi.user_id = u.id)`
+
+// userScanTargets is the scan destination for both projections above, in
+// their order. It is a function rather than an argument list written out at
+// each call site so that a query returning a user ALONGSIDE other columns —
+// SessionUserByAccessHash is the only one — appends this list instead of
+// retyping it, which is how the copy that drifted came to exist.
+func userScanTargets(u *User) []any {
+	return []any{
+		&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.PasswordHash,
+		&u.Locale, &u.IsAdmin, &u.IsActive, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt,
+		&u.ScimExternalID, &u.ScimUserName,
+		&u.SsoLinked,
+	}
+}
 
 // CreateUser inserts a user and returns the stored row. Uniqueness
 // conflicts map to ErrUsernameTaken / ErrEmailTaken.
@@ -415,15 +456,11 @@ func (s *Store) SetTemporaryPassword(ctx context.Context, userID uuid.UUID, pass
 	return u, nil
 }
 
-// scanUser scans one userColumns row. pgx.ErrNoRows becomes ErrNotFound.
+// scanUser scans one userColumns (or memberUserColumns) row. pgx.ErrNoRows
+// becomes ErrNotFound.
 func scanUser(row pgx.Row) (User, error) {
 	var u User
-	err := row.Scan(
-		&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.PasswordHash,
-		&u.Locale, &u.IsAdmin, &u.IsActive, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt,
-		&u.ScimExternalID, &u.ScimUserName,
-		&u.SsoLinked,
-	)
+	err := row.Scan(userScanTargets(&u)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}

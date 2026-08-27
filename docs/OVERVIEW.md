@@ -282,6 +282,23 @@ was not entitled to read the message it points at.
   those families. The requirement is sixty seconds and the machinery was already tested at ten.
   Deleting deactivates — messages hold their author, and erasing somebody's history to satisfy a
   directory would destroy other people's conversations.
+- **Just-in-time provisioning (Phase 1.6, off by default).** An identity the provider vouches
+  for, matching no account here, can create one — but only when an administrator has said so, in
+  a setting that is deliberately not inferred from the registration mode. That setting governs a
+  self-serve password door; configuring an identity provider is not the same consent as letting
+  everybody in that directory have an account. While it is off the creating branch does not run,
+  which is what makes "single sign-on cannot walk around registration being closed" true by
+  construction rather than by a check that could be wrong.
+
+  Which account a verified identity resolves to is a five-rung ladder, and its order is the
+  security property: a linked identity signs in without email ever being consulted; an email
+  naming a directory-managed account links, because both halves of that match come from an
+  authority an administrator already granted; an email naming an ordinary account is refused
+  whatever the provisioning setting says, since auto-linking would fuse the weakest email
+  assertion on either side into a session and a second account for one address is worse; only a
+  match against nothing at all reaches creation. A created account is indistinguishable from an
+  invited one afterwards — the same mint, so the organisation's two-step requirement binds at
+  that first sign-in.
 
 ## What's next
 

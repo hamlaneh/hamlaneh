@@ -317,6 +317,10 @@ func validateOrgSettings(w http.ResponseWriter, r *http.Request, req api.UpdateO
 		patch.RequireTotp = req.RequireTotp
 		changed["require_totp"] = *req.RequireTotp
 	}
+	if req.SsoJitProvisioning != nil {
+		patch.SsoJitProvisioning = req.SsoJitProvisioning
+		changed["sso_jit_provisioning"] = *req.SsoJitProvisioning
+	}
 	if req.SessionLifetimeHours != nil {
 		if *req.SessionLifetimeHours < 1 || *req.SessionLifetimeHours > maxSessionLifetimeHours {
 			return fail("session_lifetime_hours must be between 1 and 8760")
@@ -356,6 +360,7 @@ func apiOrgSettings(s storage.OrgSettings) api.OrgSettings {
 		DefaultLocale:        api.OrgSettingsDefaultLocale(s.DefaultLocale),
 		RegistrationMode:     api.RegistrationMode(s.RegistrationMode),
 		RequireTotp:          s.RequireTotp,
+		SsoJitProvisioning:   s.SsoJitProvisioning,
 		SessionLifetimeHours: s.SessionLifetimeHours,
 		AccountsWithoutTotp:  &count,
 	}

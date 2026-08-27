@@ -13,6 +13,12 @@ type OrgSettings struct {
 	RegistrationMode     string
 	RequireTotp          bool
 	SessionLifetimeHours int
+	// SsoJitProvisioning is whether an identity the provider vouches for,
+	// matching no account here, creates one. Off by default, and read at
+	// exactly one place — the callback's resolution ladder — because while
+	// it is off the account-creating branch must not run at all (migration
+	// 0015).
+	SsoJitProvisioning bool
 
 	// AccountsWithoutTotp is how many accounts two-step enforcement would
 	// affect. It is DERIVED on every read and stored nowhere: a cached copy
@@ -31,11 +37,12 @@ type OrgSettingsPatch struct {
 	RegistrationMode     *string
 	RequireTotp          *bool
 	SessionLifetimeHours *int
+	SsoJitProvisioning   *bool
 }
 
 // orgSettingsColumns is the stored projection, in the order scanning
 // expects. AccountsWithoutTotp is not among them by design.
-const orgSettingsColumns = `org_name, default_locale, registration_mode, require_totp, session_lifetime_hours`
+const orgSettingsColumns = `org_name, default_locale, registration_mode, require_totp, session_lifetime_hours, sso_jit_provisioning`
 
 // countAccountsWithoutTotp counts the accounts two-step enforcement would
 // affect: active users with no ACTIVATED second factor. A pending setup is
@@ -58,7 +65,8 @@ func (s *Store) OrgSettings(ctx context.Context) (OrgSettings, error) {
 		`SELECT `+orgSettingsColumns+`, (`+countAccountsWithoutTotp+`) FROM org_settings`,
 	).Scan(
 		&out.OrgName, &out.DefaultLocale, &out.RegistrationMode,
-		&out.RequireTotp, &out.SessionLifetimeHours, &out.AccountsWithoutTotp,
+		&out.RequireTotp, &out.SessionLifetimeHours, &out.SsoJitProvisioning,
+		&out.AccountsWithoutTotp,
 	); err != nil {
 		return OrgSettings{}, fmt.Errorf("org settings: %w", err)
 	}
@@ -77,13 +85,15 @@ func (s *Store) UpdateOrgSettings(ctx context.Context, patch OrgSettingsPatch) (
 		     registration_mode      = COALESCE($3::text, registration_mode),
 		     require_totp           = COALESCE($4::boolean, require_totp),
 		     session_lifetime_hours = COALESCE($5::integer, session_lifetime_hours),
+		     sso_jit_provisioning   = COALESCE($6::boolean, sso_jit_provisioning),
 		     updated_at             = now()
 		 RETURNING `+orgSettingsColumns+`, (`+countAccountsWithoutTotp+`)`,
 		patch.OrgName, patch.DefaultLocale, patch.RegistrationMode,
-		patch.RequireTotp, patch.SessionLifetimeHours,
+		patch.RequireTotp, patch.SessionLifetimeHours, patch.SsoJitProvisioning,
 	).Scan(
 		&out.OrgName, &out.DefaultLocale, &out.RegistrationMode,
-		&out.RequireTotp, &out.SessionLifetimeHours, &out.AccountsWithoutTotp,
+		&out.RequireTotp, &out.SessionLifetimeHours, &out.SsoJitProvisioning,
+		&out.AccountsWithoutTotp,
 	); err != nil {
 		return OrgSettings{}, fmt.Errorf("update org settings: %w", err)
 	}

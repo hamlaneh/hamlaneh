@@ -572,6 +572,11 @@ type OrgSettings struct {
 	// SessionLifetimeHours How long a session may live before its refresh token expires, read at every mint, including the rotation a refresh performs. Shortening it does not retroactively end an already-issued window, so an idle session keeps the window it has.
 	// Read what it governs carefully: it bounds how long a session may go UNUSED, not how long it may exist. A client that keeps refreshing renews its window each time and can stay signed in indefinitely — which is also why "enforced at the next sign-in" can, for a continuously active client, mean a long time. Ending a specific session now is what the device list and administrative deactivation are for. The server's own maximum is the ceiling, so a value above it is clamped rather than refused.
 	SessionLifetimeHours int `json:"session_lifetime_hours"`
+
+	// SsoJitProvisioning Whether an identity the provider vouches for, matching no account here, creates one.
+	// Off by default, and deliberately not inferred from registration_mode: that setting governs a self-serve password door, and "an administrator configured an identity provider" is not the same consent as "everyone in the directory may have an account here". While it is off, an unmatched identity creates nothing at all - the branch does not run, which is what makes single sign-on unable to walk around registration being closed.
+	// An organisation provisioning through SCIM can leave this off entirely; it exists for organisations that want single sign-on without a sync engine.
+	SsoJitProvisioning bool `json:"sso_jit_provisioning"`
 }
 
 // OrgSettingsDefaultLocale The locale a new account starts in.
@@ -800,6 +805,7 @@ type UpdateOrgSettingsRequest struct {
 	RegistrationMode     *RegistrationMode `json:"registration_mode,omitempty"`
 	RequireTotp          *bool             `json:"require_totp,omitempty"`
 	SessionLifetimeHours *int              `json:"session_lifetime_hours,omitempty"`
+	SsoJitProvisioning   *bool             `json:"sso_jit_provisioning,omitempty"`
 }
 
 // UpdateOrgSettingsRequestDefaultLocale defines model for UpdateOrgSettingsRequest.DefaultLocale.

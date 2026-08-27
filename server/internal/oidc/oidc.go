@@ -252,9 +252,18 @@ type Identity struct {
 	// Issuer it is the whole login key (migration 0012).
 	Subject string
 	// Email is the token's email claim, or empty. Recorded at link time as
-	// a forensic note and consulted only to phrase a refusal — never to
-	// decide who signs in.
+	// a forensic note; on its own it never decides who signs in.
 	Email string
+	// EmailVerified is the provider asserting that THIS subject owns that
+	// address. It is a separate statement from the address itself, and the
+	// only one that binds the two: a token carrying an email says what the
+	// person typed into a profile somewhere, and nothing more.
+	//
+	// It is false when the claim is absent, false, or not a JSON boolean.
+	// Absent is not true — the one caller that reads it lets an email
+	// attach an identity to an account that already exists, so a provider
+	// that did not say "verified" has not said it.
+	EmailVerified bool
 }
 
 // errNonceMismatch reports an ID token whose nonce is not this flow's.
@@ -312,14 +321,28 @@ func (s *Service) Exchange(ctx context.Context, code, verifier, nonce string) (I
 
 	var claims struct {
 		Email string `json:"email"`
+		// Deliberately any, not bool: providers exist that send this claim
+		// as the STRING "true", and a bool field would fail the whole
+		// claims decode for them — taking the email down with it, which
+		// turns a refusal into a just-in-time create for an address that
+		// already has an account. Any works for every shape, and the
+		// assertion below accepts only a real boolean.
+		EmailVerified any `json:"email_verified"`
 	}
 	// A token with unreadable extra claims still identifies its subject;
 	// the email is a courtesy claim, not the login key.
 	if err := idToken.Claims(&claims); err != nil {
-		claims.Email = ""
+		claims.Email, claims.EmailVerified = "", nil
 	}
+	// Absent is not true, and neither is "true": see Identity.EmailVerified.
+	verified, _ := claims.EmailVerified.(bool)
 
-	return Identity{Issuer: s.cfg.Issuer, Subject: idToken.Subject, Email: claims.Email}, nil
+	return Identity{
+		Issuer:        s.cfg.Issuer,
+		Subject:       idToken.Subject,
+		Email:         claims.Email,
+		EmailVerified: verified,
+	}, nil
 }
 
 // randomToken mints 256 bits from crypto/rand, base64url-encoded: the state

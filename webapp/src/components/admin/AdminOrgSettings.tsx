@@ -42,7 +42,7 @@ export function AdminOrgSettings({
   onOrganizationRenamed,
 }: AdminOrgSettingsProps) {
   const { t, i18n } = useTranslation();
-  const { info } = useInstance();
+  const { info, loaded } = useInstance();
   const settings = useAdminResource(useCallback(() => getOrgSettings(), []));
   const fieldId = useId();
 
@@ -218,6 +218,63 @@ export function AdminOrgSettings({
                 <span>{t("admin.org.openWarning")}</span>
               </div>
               {mark("registration")}
+
+              {/* Here rather than in Security beside session lifetime: this
+                  answers the question the radio group above answers — how an
+                  account comes into existence on this instance. It sits
+                  outside that fieldset so a registration save does not disable
+                  it, and it is a switch rather than a third radio because the
+                  two settings govern two independent doors.
+
+                  ALWAYS SHOWN, and never disabled, on an instance with no
+                  provider configured. The sign-in screen hides its single
+                  sign-on link when `sso.enabled` is false, and SsoCard hides
+                  itself, because a door with nowhere to go is dishonest to the
+                  person about to walk through it. This is the opposite kind of
+                  control: stored organisation policy, not a door. Its value
+                  outlives any provider configuration — an instance whose
+                  provider was removed still holds whatever was last set, and
+                  it governs the moment a provider comes back — so hiding it
+                  would make a live rule invisible and let an administrator
+                  configure a provider tomorrow under a setting they were never
+                  shown. Disabling it would invent a coupling the contract does
+                  not have: PATCH accepts the field with no provider
+                  configured, and pre-setting policy before wiring the provider
+                  is a reasonable order to work in. So it is shown, writable,
+                  and says plainly when there is nothing yet for it to govern. */}
+              <div className="hm-admin-switchrow">
+                <span className="hm-admin-choice__text" id={`${fieldId}-jit-label`}>
+                  <span className="hm-admin-choice__label">{t("admin.org.ssoJitLabel")}</span>
+                  {/* Every toggle carries a consequence line, never a bare switch. */}
+                  <span className="hm-admin-choice__hint">{t("admin.org.ssoJitHint")}</span>
+                  <span className="hm-admin-choice__hint">{t("admin.org.ssoJitNote")}</span>
+                  {/* `loaded` so the line does not appear and then vanish once
+                      the instance document arrives. */}
+                  {!loaded || info.sso?.enabled === true ? null : (
+                    <span className="hm-admin-choice__hint">
+                      {t("admin.org.ssoJitUnconfigured")}
+                    </span>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  className="hm-admin-toggle"
+                  role="switch"
+                  // Optional in the contract, and off is its documented
+                  // default, so an absent field reads as off.
+                  aria-checked={current.sso_jit_provisioning === true}
+                  aria-labelledby={`${fieldId}-jit-label`}
+                  disabled={saving === "jit"}
+                  onClick={() => {
+                    save("jit", {
+                      sso_jit_provisioning: current.sso_jit_provisioning !== true,
+                    });
+                  }}
+                >
+                  <span className="hm-admin-toggle__knob" aria-hidden="true" />
+                </button>
+              </div>
+              {mark("jit")}
             </section>
 
             <section className="hm-admin-panel">

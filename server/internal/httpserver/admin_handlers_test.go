@@ -205,6 +205,11 @@ func TestOrgSettingsSavePerField(t *testing.T) {
 			wantPatch: storage.OrgSettingsPatch{RequireTotp: boolPtr(true)},
 		},
 		{
+			name:      "just-in-time provisioning",
+			body:      `{"sso_jit_provisioning":true}`,
+			wantPatch: storage.OrgSettingsPatch{SsoJitProvisioning: boolPtr(true)},
+		},
+		{
 			name:      "name is trimmed",
 			body:      `{"org_name":"  Nest  "}`,
 			wantPatch: storage.OrgSettingsPatch{OrgName: stringPtr("Nest")},
@@ -272,6 +277,7 @@ func TestGetOrgSettingsReportsTheDerivedCount(t *testing.T) {
 		return storage.OrgSettings{
 			OrgName: "Nest", DefaultLocale: "fa", RegistrationMode: "open",
 			RequireTotp: true, SessionLifetimeHours: 24, AccountsWithoutTotp: 7,
+			SsoJitProvisioning: true,
 		}, nil
 	}
 
@@ -288,6 +294,9 @@ func TestGetOrgSettingsReportsTheDerivedCount(t *testing.T) {
 	}
 	if got.RegistrationMode != api.RegistrationModeOpen || got.DefaultLocale != api.OrgSettingsDefaultLocaleFa {
 		t.Errorf("settings did not round-trip: %+v", got)
+	}
+	if !got.SsoJitProvisioning {
+		t.Error("sso_jit_provisioning = false — the screen cannot show a switch the read omits")
 	}
 }
 
@@ -390,6 +399,7 @@ func samePatch(a, b storage.OrgSettingsPatch) bool {
 		sameStringPtr(a.DefaultLocale, b.DefaultLocale) &&
 		sameStringPtr(a.RegistrationMode, b.RegistrationMode) &&
 		sameBoolPtr(a.RequireTotp, b.RequireTotp) &&
+		sameBoolPtr(a.SsoJitProvisioning, b.SsoJitProvisioning) &&
 		sameIntPtr(a.SessionLifetimeHours, b.SessionLifetimeHours)
 }
 

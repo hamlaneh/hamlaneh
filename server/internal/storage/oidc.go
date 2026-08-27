@@ -39,6 +39,69 @@ func (s *Store) LinkOidcIdentity(ctx context.Context, userID uuid.UUID, issuer, 
 	return nil
 }
 
+// NewOidcUser is an account a verified provider assertion is creating
+// just-in-time. There is no password hash and no is_admin: the column stays
+// NULL because the account has no password credential, and a provider
+// assertion is not an administrator's grant. There is no display name
+// either — an ID token carries none, and inventing one from the email is
+// not this server's to invent.
+type NewOidcUser struct {
+	// Username is the derived local username (uservalidate.DeriveUsername);
+	// a conflict comes back as ErrUsernameTaken for the caller to retry
+	// with the next derivation.
+	Username string
+	// Email is the email claim, or nil when the token carried none. It is
+	// stored on the account AND as the identity's forensic email_at_link.
+	Email  *string
+	Locale string
+	// Issuer and Subject are the login key the new account is reachable by.
+	Issuer  string
+	Subject string
+}
+
+// CreateOidcUser provisions an account and links the identity to it in ONE
+// transaction, which is the whole reason it is a method rather than two
+// calls in the handler: two tabs of one person arriving at once must leave
+// one account behind, not one account plus one orphan whose link lost the
+// race. The loser gets ErrOidcIdentityTaken (or ErrEmailTaken when the
+// token carried an email) and resolves it by looking the identity up again.
+func (s *Store) CreateOidcUser(ctx context.Context, nu NewOidcUser) (User, error) {
+	var out User
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx,
+			`INSERT INTO users (username, email, locale)
+			 VALUES ($1, $2, $3)
+			 RETURNING `+userColumns,
+			nu.Username, nu.Email, nu.Locale,
+		)
+		u, err := scanUser(row)
+		if err != nil {
+			return mapUserConflict(err)
+		}
+
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO oidc_identities (user_id, issuer, subject, email_at_link)
+			 VALUES ($1, $2, $3, $4)`,
+			u.ID, nu.Issuer, nu.Subject, nu.Email,
+		); err != nil {
+			return mapOidcConflict(err)
+		}
+
+		// userColumns derives SsoLinked from oidc_identities, and the
+		// RETURNING above ran before the row existed. Setting it here
+		// rather than re-reading the account is not a shortcut: the insert
+		// that makes it true is the statement immediately above, in this
+		// transaction.
+		u.SsoLinked = true
+		out = u
+		return nil
+	})
+	if err != nil {
+		return User{}, fmt.Errorf("create oidc user: %w", err)
+	}
+	return out, nil
+}
+
 // UserByOidcIdentity resolves an SSO sign-in: the account (issuer, subject)
 // is linked to, recording the use in last_login_at in the same statement.
 // (issuer, subject) is the WHOLE lookup — email is deliberately not a
