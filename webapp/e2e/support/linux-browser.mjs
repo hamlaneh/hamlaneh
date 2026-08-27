@@ -71,5 +71,20 @@ forwardToCaddy();
 // 0.0.0.0 so the published port reaches it. The RPC is reachable by anything
 // that can reach this port, which is why the documented `docker run` binds it
 // to the host's loopback and the container is thrown away afterwards.
-const server = await chromium.launchServer({ host: "0.0.0.0", port: BROWSER_PORT, wsPath: "/" });
+/**
+ * The same media flags the call specs pass to a local browser. Headless
+ * Chromium has no capture device at all, so a call joined without these fails
+ * at getUserMedia rather than at anything the test is about; the fake device
+ * publishes a real tone, which is what makes `bytesReceived` grow.
+ *
+ * Harmless to the screenshot suite, which requests no media.
+ */
+const MEDIA_ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"];
+
+const server = await chromium.launchServer({
+  host: "0.0.0.0",
+  port: BROWSER_PORT,
+  wsPath: "/",
+  args: MEDIA_ARGS,
+});
 console.log(server.wsEndpoint());

@@ -201,6 +201,24 @@ jobs:
       - name: Build
         run: npm run build
 
+  # Also carries the two Phase 2 media gates, because they are ordinary specs
+  # in the same suite against the same stack and there is nothing to add:
+  #
+  #   calls-relay-only.e2e.ts  ROADMAP §2 gate 2 — two browsers forced to
+  #                            relay-only ICE complete a call, with a live
+  #                            control probe proving the relay port is not
+  #                            reachable from outside the media container.
+  #   livekit-key-leak.e2e.ts  the media API secret appears in no response
+  #                            body, header, WebSocket frame or served asset.
+  #
+  # PER PULL REQUEST, not nightly, and deliberately: both guard a claim that a
+  # single line of deploy config can silently break (a published port, an
+  # advertised address, a token field), and a gate that only turns red at 02:30
+  # is a gate that gets found the morning after the change has been merged and
+  # forgotten. Together they cost under two minutes on top of a job whose
+  # `docker compose up --build` already dominates. The nightly workflow runs
+  # them again in the both-locales tier; the specs themselves skip the second
+  # locale, since neither measures anything a translation can move.
   e2e:
     name: End-to-end (Playwright)
     needs: changes
@@ -232,10 +250,12 @@ jobs:
         # config's single device profile uses.
         run: npx playwright install --with-deps chromium
 
-      - name: Run the suite (full en + fa smoke subset)
+      - name: Run the suite (full en + fa smoke subset, media gates included)
         working-directory: webapp
         # The suite starts and stops the stack itself, under its own compose
-        # project name; see webapp/e2e/support/stack.ts.
+        # project name; see webapp/e2e/support/stack.ts. The media gates need
+        # the runner to be the Docker host — it is, and calls-relay-only skips
+        # itself with the reason stated anywhere it is not.
         run: npm run e2e
 
       - name: Upload the report, traces and screenshots

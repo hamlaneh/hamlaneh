@@ -50,6 +50,17 @@ const RATE_LIMIT_SPEC = "**/rate-limit.e2e.ts";
 const PERSIAN_SPECS = ["**/fa-smoke.e2e.ts", "**/fa-rtl-snapshots.e2e.ts"];
 
 /**
+ * Specs that measure something with no language in it — a candidate type, a
+ * credential in a response body — so running them twice measures the same
+ * thing twice and calls it coverage.
+ *
+ * They live here rather than as a `test.skip` inside each spec so the routing
+ * is in one readable place: a reader asking "what runs in Persian" gets an
+ * answer from this file instead of from every spec's first three lines.
+ */
+const LOCALE_AGNOSTIC_SPECS = ["**/calls-relay-only.e2e.ts", "**/livekit-key-leak.e2e.ts"];
+
+/**
  * `.e2e.ts`, not `.spec.ts`: Vitest's default include is
  * `**\/*.{test,spec}.*`, so specs named the conventional way would be
  * collected by `npm test` as well and fail there — Playwright's `test` cannot
@@ -90,7 +101,7 @@ export default defineConfig<TestOptions>({
     {
       name: "fa",
       use: { ...devices["Desktop Chrome"], uiLocale: "fa" },
-      testIgnore: [RATE_LIMIT_SPEC],
+      testIgnore: [RATE_LIMIT_SPEC, ...LOCALE_AGNOSTIC_SPECS],
       ...(allLocales ? {} : { grep: /@fa-smoke/u }),
     },
     {

@@ -51,7 +51,7 @@ async function seedLanguage(context: BrowserContext, locale: string): Promise<vo
 export type OpenApp = (
   account: TestAccount,
   path?: string,
-  prepare?: (context: BrowserContext) => Promise<void>,
+  prepare?: (context: BrowserContext) => Promise<void> | void,
 ) => Promise<App>;
 
 interface Fixtures {
@@ -99,7 +99,7 @@ export const test = base.extend<Fixtures & TestOptions, WorkerFixtures>({
 
   openApp: async ({ browser, uiLocale, t }, provide) => {
     const opened: BrowserContext[] = [];
-    await provide(async (account, path = "/") => {
+    await provide(async (account, path = "/", prepare) => {
       const context = await browser.newContext({
         baseURL: readStackState().baseURL,
         // The same reason the project sets it: Caddy issues from an internal
@@ -109,6 +109,7 @@ export const test = base.extend<Fixtures & TestOptions, WorkerFixtures>({
       });
       opened.push(context);
       await seedLanguage(context, uiLocale);
+      await prepare?.(context);
       const app = new App(await context.newPage(), t);
       await app.gotoSignIn(path);
       await app.signIn(account.username, account.password);

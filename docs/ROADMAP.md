@@ -458,9 +458,18 @@ Goal: 1:1 and group calls that survive real-world NATs.
 - [x] TURN (LiveKit embedded — see ADR 005 for why, and it is credentials rather than features) in the compose stack, auto-configured by install.sh
 - Tests: token service authz via the matrix harness (no token for rooms you're not in); token
   negatives — expired rejected, tampered signature rejected, token for room X rejected at room Y;
-  **key-leak scan in CI**: LiveKit API key/secret never appears in any HTTP response, WS
-  message, or built webapp bundle; room lifecycle integration tests; **automated TURN test**:
-  a client forced to `relay`-only ICE policy completes a call against the compose stack in CI
+  **key-leak scan in CI** ✅; room lifecycle integration tests; **automated TURN test** ✅.
+
+  Two notes on what those two gates actually assert, because both could be written to pass
+  without meaning anything. The key-leak scan asserts the **secret** absent in eight encodings,
+  and deliberately does *not* assert the key absent from the wire — the key is every token's
+  issuer, so failing on it would fail on the protocol working correctly. It carries two controls:
+  the run must observe at least one issued token, or a clean scan is vacuous, and the scanner
+  must flag a synthetic secret in all eight encodings. The relay test asserts the nominated
+  pair's local candidate is genuinely `relay` — forced in the peer-connection constructor, so it
+  is measured rather than restated — and that media bytes grow. Its control probe asserts the
+  relay port is **refused** rather than merely silent, because the published media port is
+  reachable and silent, so "did not answer" is a bar an open port clears.
 
 ### Test gate ✅
 
