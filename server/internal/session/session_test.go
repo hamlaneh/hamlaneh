@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -183,6 +184,43 @@ func TestClearCookies(t *testing.T) {
 	for _, c := range got {
 		if c.Value != "" {
 			t.Errorf("cleared cookie %s still has value %q", c.Name, c.Value)
+		}
+	}
+}
+
+// TestPlausibleToken pins the shape check the SCIM door uses to throw
+// obvious nonsense away before it costs a database query. It is a filter,
+// never an authentication decision — everything it admits still has to
+// resolve against a stored digest.
+func TestPlausibleToken(t *testing.T) {
+	t.Parallel()
+
+	// Whatever the generator produces must pass, by construction rather than
+	// by a length somebody wrote down.
+	for range 50 {
+		raw, _ := NewToken()
+		if !PlausibleToken(raw) {
+			t.Fatalf("PlausibleToken rejected a real token: %q (len %d)", raw, len(raw))
+		}
+	}
+
+	tests := map[string]bool{
+		"":                            false,
+		"short":                       false,
+		strings.Repeat("a", 42):       false,
+		strings.Repeat("a", 43):       true,
+		strings.Repeat("a", 44):       false,
+		strings.Repeat("a", 42) + "=": false, // padded base64 is not what we emit
+		strings.Repeat("a", 42) + "+": false, // standard base64, not base64url
+		strings.Repeat("a", 42) + "/": false,
+		strings.Repeat("a", 42) + " ": false,
+		strings.Repeat("a", 42) + "-": true,
+		strings.Repeat("a", 42) + "_": true,
+		strings.Repeat("A", 21) + strings.Repeat("9", 22): true,
+	}
+	for raw, want := range tests {
+		if got := PlausibleToken(raw); got != want {
+			t.Errorf("PlausibleToken(%q) = %v, want %v", raw, got, want)
 		}
 	}
 }

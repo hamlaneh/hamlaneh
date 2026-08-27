@@ -268,6 +268,20 @@ was not entitled to read the message it points at.
   bypass registration being off" true by construction rather than by a check. A single sign-on
   lands in exactly the same session mint as a password one, so the two-step challenge, the
   enforced-2FA gate and the organisation's session lifetime all apply unchanged.
+- **SCIM provisioning (Phase 1.6).** The door an identity provider's sync engine uses, at
+  `/scim/v2`, documented by `docs/api/scim.md` — a second machine-checked contract, following the
+  WebSocket gateway's precedent rather than being bent into the OpenAPI spec it does not fit. It
+  authenticates by bearer token and nothing else: a session cookie is worthless there and a
+  provisioning token is worthless under `/api`, two doors with two credentials and no ambient
+  authority crossing between them. Users only, and what it refuses is written down — Groups are
+  refused by the resource-type document rather than by a fake success, and `is_admin` is not
+  writable from any path, so a stolen sync token cannot mint an administrator.
+
+  Deactivation is the point of the whole thing: `active: false` routes through the same
+  transaction the admin dashboard uses, and the socket sweep then closes every connection of
+  those families. The requirement is sixty seconds and the machinery was already tested at ten.
+  Deleting deactivates — messages hold their author, and erasing somebody's history to satisfy a
+  directory would destroy other people's conversations.
 
 ## What's next
 

@@ -748,6 +748,19 @@ func instanceRegistry() []Entry {
 			"/api/v1/admin/invites/00000000-0000-4000-8000-0000000000be",
 			nil, http.StatusNoContent, ""),
 
+		// Phase 1.6 SCIM provisioning tokens. Minting one is minting a second
+		// credential into the instance — one that is not a session and is not
+		// gated by any of the columns to its left — so who may ask matters
+		// more here than on any other row in this block. The revocation names
+		// a token that was never issued and answers the contract's 404.
+		adminEntry(http.MethodGet, "/api/v1/admin/scim/tokens", "", nil, http.StatusOK, ""),
+		adminEntry(http.MethodPost, "/api/v1/admin/scim/tokens", "",
+			func(fx Fixture) string { return fmt.Sprintf(`{"note":"matrix %s"}`, fx.Unique) },
+			http.StatusCreated, ""),
+		adminEntry(http.MethodDelete, "/api/v1/admin/scim/tokens/{tokenId}",
+			"/api/v1/admin/scim/tokens/00000000-0000-4000-8000-0000000000fc",
+			nil, http.StatusNotFound, "scim_token_not_found"),
+
 		adminEntry(http.MethodGet, "/api/v1/admin/org", "", nil, http.StatusOK, ""),
 		// A no-op patch: the settings screen saves one field at a time, and
 		// this row is about who may save at all, not about what changes.

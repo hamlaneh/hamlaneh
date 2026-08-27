@@ -76,7 +76,7 @@ export function daySeparatorLabel(
   }
   return {
     kind: "date",
-    text: new Intl.DateTimeFormat(locale, {
+    text: new Intl.DateTimeFormat(latinDigitLocale(locale), {
       day: "numeric",
       month: "long",
       year: value.getFullYear() === now.getFullYear() ? undefined : "numeric",
@@ -99,9 +99,9 @@ export function formatResultStamp(iso: string, locale: string, now: Date = new D
     return formatTime(iso, locale);
   }
   if (distance < 7) {
-    return new Intl.DateTimeFormat(locale, { weekday: "short" }).format(value);
+    return new Intl.DateTimeFormat(latinDigitLocale(locale), { weekday: "short" }).format(value);
   }
-  return new Intl.DateTimeFormat(locale, { day: "numeric", month: "short" }).format(value);
+  return new Intl.DateTimeFormat(latinDigitLocale(locale), { day: "numeric", month: "short" }).format(value);
 }
 
 /**

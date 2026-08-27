@@ -545,3 +545,44 @@ func withRefreshCookie(value string) func(*http.Request) {
 		r.AddCookie(&http.Cookie{Name: session.RefreshCookie, Value: value})
 	}
 }
+
+// TestLoginRefusesAnAccountWithNoPassword pins the guard ADR 004 calls for.
+// Migration 0014 made password_hash nullable for accounts a directory
+// provisioned or single sign-on created, and the canonical projection reads
+// NULL back as "". Without an explicit refusal, every password attempt
+// against one of those reaches the argon2 verifier as a malformed hash and
+// is logged as an internal defect, which it is not.
+//
+// The refusal is byte-identical to the one a wrong password gets, because
+// "this account has no password" is not something an unauthenticated caller
+// gets to learn.
+func TestLoginRefusesAnAccountWithNoPassword(t *testing.T) {
+	t.Parallel()
+
+	provisioned := fixtureUser()
+	provisioned.PasswordHash = ""
+	store := &fakeStore{
+		userByIdentifier: func(_ context.Context, identifier string) (storage.User, error) {
+			if strings.EqualFold(identifier, provisioned.Username) {
+				return provisioned, nil
+			}
+			return storage.User{}, storage.ErrNotFound
+		},
+		createSession: func(context.Context, storage.NewSession) (storage.Session, error) {
+			t.Error("a session was minted for an account with no password credential")
+			return fixtureSession(), nil
+		},
+	}
+
+	noPassword := do(t, store, request(http.MethodPost, "/api/v1/auth/login",
+		loginBody("member", "any password at all")))
+	wantError(t, noPassword, http.StatusUnauthorized, "invalid_credentials")
+	if len(responseCookies(noPassword)) != 0 {
+		t.Error("the refusal set cookies")
+	}
+
+	withPassword, _ := loginStore(t)
+	wrongPassword := do(t, withPassword, request(http.MethodPost, "/api/v1/auth/login",
+		loginBody("member", "definitely wrong password")))
+	assertIdentical(t, "no password versus wrong password", noPassword, wrongPassword)
+}

@@ -8,6 +8,8 @@
  */
 
 const MINUTE_MS = 60 * 1000;
+import { latinDigitLocale } from "../i18n/digits";
+
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
@@ -24,7 +26,7 @@ export function expiryLabel(iso: string, locale: string, now: Date = new Date())
   }
   const remaining = value.getTime() - now.getTime();
   // "auto" turns +1 day into "tomorrow" rather than "in 1 day".
-  const relative = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  const relative = new Intl.RelativeTimeFormat(latinDigitLocale(locale), { numeric: "auto" });
 
   if (remaining <= 0) {
     return { text: relative.format(0, "minute"), near: true };

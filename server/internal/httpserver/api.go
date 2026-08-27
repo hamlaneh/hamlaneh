@@ -147,6 +147,15 @@ type Store interface {
 	OpenInviteByTokenHash(ctx context.Context, tokenHash []byte) (storage.Invite, error)
 	RedeemInvite(ctx context.Context, tokenHash []byte, nu storage.NewUser) (storage.User, error)
 
+	// SCIM provisioning credentials. Only the digest is ever stored, so
+	// nothing here takes or returns a raw token — the same shape as
+	// invitations. The provisioning surface itself reaches storage through
+	// its own narrow interface (internal/scim), not through this one: it is
+	// a second door with its own credential and none of these methods.
+	CreateScimToken(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string) (storage.ScimToken, error)
+	ListScimTokens(ctx context.Context) ([]storage.ScimToken, error)
+	RevokeScimToken(ctx context.Context, id uuid.UUID) error
+
 	// Instance settings, including the derived accounts-without-two-step
 	// count the enforcement switch is read beside.
 	OrgSettings(ctx context.Context) (storage.OrgSettings, error)
@@ -250,6 +259,14 @@ type apiServer struct {
 	// value is an install with no upload pipeline configured, and the two
 	// file routes then answer 404 — which is what that install is.
 	files Files
+
+	// scim is the SCIM 2.0 provisioning surface (internal/scim), served from
+	// the same listener on /scim/v2 and from nothing else. Nil is a server
+	// built without provisioning, and those paths then answer the
+	// application's own 404. It is an http.Handler and not a store because
+	// this package deliberately knows nothing about SCIM beyond where it is
+	// mounted (server.go).
+	scim http.Handler
 
 	// blobs holds uploaded file bytes. A nil one is a server wired without
 	// the upload pipeline — a unit-test fixture, never production — and

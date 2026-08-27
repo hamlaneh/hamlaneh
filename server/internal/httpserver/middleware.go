@@ -160,6 +160,16 @@ var routePolicies = map[string]routePolicy{
 	// every other route above it.
 	"GET /api/v1/admin/audit": {class: classAdmin, action: authz.AdminAuditList},
 
+	// Phase 1.6 SCIM provisioning tokens (ADR 004 slice 3). These three are
+	// ordinary admin contract routes and go through every gate above. The
+	// provisioning surface they mint credentials FOR is not in this table at
+	// all: /scim/v2 is mounted outside this middleware and authenticates by
+	// bearer token alone, which is what makes a session cookie worthless
+	// there and one of these tokens worthless here (scim.md §3).
+	"GET /api/v1/admin/scim/tokens":              {class: classAdmin, action: authz.AdminScimTokensList},
+	"POST /api/v1/admin/scim/tokens":             {class: classAdmin, action: authz.AdminScimTokensCreate},
+	"DELETE /api/v1/admin/scim/tokens/{tokenId}": {class: classAdmin, action: authz.AdminScimTokensRevoke},
+
 	// The two public halves of an invitation. They must be reachable before
 	// anybody has an account — that is what an invitation is for — and they
 	// are the only routes in this table that a signed-in session neither

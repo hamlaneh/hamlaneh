@@ -28,6 +28,12 @@ const (
 	idleTimeout       = 120 * time.Second
 )
 
+// scimPrefix is where the provisioning surface is mounted. It is spelled
+// here rather than imported from internal/scim so this package's routing
+// table reads on its own; the two are pinned together by
+// TestSCIMPrefixMatchesPackage.
+const scimPrefix = "/scim/v2/"
+
 // Option configures a server beyond its storage. Every option is optional by
 // construction: the zero-config install passes none.
 type Option func(*apiServer)
@@ -45,6 +51,20 @@ func WithPasswordReset(svc *passwordreset.Service) Option {
 // same headers it would carry on a hit (files_origin.go says why).
 func WithFiles(f Files) Option {
 	return func(s *apiServer) { s.files = f }
+}
+
+// WithSCIM mounts the SCIM 2.0 provisioning surface at /scim/v2. Omitting it
+// leaves those paths answering the application's plain 404, which is the
+// honest state of a server built without one.
+//
+// It takes a finished handler rather than a store because that is the whole
+// relationship: internal/scim owns its own wire format, its own
+// authentication and its own budget, and this package's only job is to serve
+// it from the same listener on a prefix that is not /api. Nothing of the
+// contract router — no cookie, no CSRF check, no session — reaches it, and
+// nothing of it reaches the contract router.
+func WithSCIM(h http.Handler) Option {
+	return func(s *apiServer) { s.scim = h }
 }
 
 // New returns an *http.Server bound to addr with the Hamlaneh router and
@@ -70,6 +90,9 @@ func New(addr string, store Store, opts ...Option) *http.Server {
 //	GET /files/{id}      the cookie-less files origin: signed, expiring
 //	                     URLs for uploaded bytes, outside the contract on
 //	                     purpose (files_origin.go)
+//	/scim/v2/*           the SCIM 2.0 provisioning surface, authenticated by
+//	                     bearer token alone and likewise outside the
+//	                     contract (internal/scim, docs/api/scim.md)
 //	GET /healthz         liveness probe, 200 {"status":"ok"}
 //	GET /readyz          readiness probe (database ping + schema version)
 //	/api/v1/*            contract endpoints (Phase 1.1 identity core; the
@@ -102,6 +125,12 @@ func handler(store Store, web fs.FS, opts ...Option) http.Handler {
 	// and its session middleware: the files origin carries no cookie to
 	// check (files_origin.go).
 	routeFilesOrigin(mux, s)
+	// Likewise outside it, for the opposite reason: the provisioning surface
+	// has a credential, and it is a bearer token rather than a session. A
+	// cookie must buy nothing there and a token must buy nothing under /api
+	// (docs/api/scim.md §3), which is a property of it being routed here
+	// instead of through securityMiddleware.
+	routeSCIM(mux, s)
 
 	routed := api.HandlerWithOptions(s, api.StdHTTPServerOptions{
 		BaseRouter: mux,
@@ -120,6 +149,25 @@ func handler(store Store, web fs.FS, opts ...Option) http.Handler {
 		ErrorHandlerFunc: requestErrorHandler,
 	})
 	return securityHeaders(routed)
+}
+
+// routeSCIM mounts the provisioning surface, when one is configured, on
+// everything under /scim/v2. A server built without it leaves those paths to
+// the application's own 404.
+//
+// The prefix is registered whole rather than route by route: the SCIM mux
+// answers its own 404 for a path it does not serve, and that answer must be
+// a SCIM error envelope — a sync engine parses that one and not this
+// server's. /scim/v2/Groups is the case that matters, and it is how Groups
+// are refused (scim.md §2).
+func routeSCIM(mux *http.ServeMux, s *apiServer) {
+	mux.HandleFunc(scimPrefix, func(w http.ResponseWriter, r *http.Request) {
+		if s.scim == nil {
+			http.NotFound(w, r)
+			return
+		}
+		s.scim.ServeHTTP(w, r)
+	})
 }
 
 // writeBody writes body and logs a failed write; by the time a response

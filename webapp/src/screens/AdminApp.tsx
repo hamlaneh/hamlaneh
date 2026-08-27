@@ -4,6 +4,7 @@ import { Navigate, Route, Routes } from "react-router";
 import { AdminAuditLog } from "../components/admin/AdminAuditLog";
 import { AdminInvites } from "../components/admin/AdminInvites";
 import { AdminOrgSettings } from "../components/admin/AdminOrgSettings";
+import { AdminScimTokens } from "../components/admin/AdminScimTokens";
 import { AdminUsers } from "../components/admin/AdminUsers";
 import type { User } from "../chat/types";
 
@@ -18,6 +19,7 @@ interface AdminAppProps {
  *   /admin/invites   open invite links
  *   /admin/org       instance settings
  *   /admin/audit     the log
+ *   /admin/scim      provisioning tokens
  *
  * Guarded here as well as on the server. The server refuses regardless — that
  * is the authority — but a dashboard that paints and then errors is a lie, so
@@ -43,6 +45,7 @@ export function AdminApp({ currentUser, organizationName }: AdminAppProps) {
         element={<AdminOrgSettings {...shared} onOrganizationRenamed={setName} />}
       />
       <Route path="audit" element={<AdminAuditLog {...shared} />} />
+      <Route path="scim" element={<AdminScimTokens {...shared} />} />
       <Route path="*" element={<Navigate to="/admin" replace />} />
     </Routes>
   );

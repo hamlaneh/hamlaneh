@@ -97,7 +97,8 @@ func canChannel(user *storage.User, action Action, res Channel) bool {
 		return false
 	case AdminUsersList, AdminUsersCreate, AdminUsersUpdate, AdminUsersResetPassword,
 		AdminInvitesList, AdminInvitesCreate, AdminInvitesRevoke,
-		AdminOrgRead, AdminOrgUpdate, AdminAuditList:
+		AdminOrgRead, AdminOrgUpdate, AdminAuditList,
+		AdminScimTokensList, AdminScimTokensCreate, AdminScimTokensRevoke:
 		// Instance-level actions are not decided by channel membership.
 		return false
 	default:
@@ -125,7 +126,8 @@ func canMessage(user *storage.User, action Action, res Message) bool {
 		return false
 	case AdminUsersList, AdminUsersCreate, AdminUsersUpdate, AdminUsersResetPassword,
 		AdminInvitesList, AdminInvitesCreate, AdminInvitesRevoke,
-		AdminOrgRead, AdminOrgUpdate, AdminAuditList:
+		AdminOrgRead, AdminOrgUpdate, AdminAuditList,
+		AdminScimTokensList, AdminScimTokensCreate, AdminScimTokensRevoke:
 		return false
 	default:
 		return false

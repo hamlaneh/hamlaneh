@@ -97,6 +97,11 @@ const (
 	codeLastAdmin        errorCode = "last_admin"
 	codeSelfDeactivation errorCode = "self_deactivation"
 	codeInviteNotFound   errorCode = "invite_not_found"
+	// Phase 1.6: a provisioning token id naming no live credential. Unlike
+	// invitation revocation, which is idempotent, the contract reserves a
+	// 404 here — an administrator cutting a credential off needs to know
+	// when they named the wrong one.
+	codeScimTokenNotFound errorCode = "scim_token_not_found"
 	// codeNotFound answers a path under /api that no contract route claims.
 	// It is the router's answer, not a resource's: the contract's
 	// resource-level 404s carry their own codes (session_not_found,

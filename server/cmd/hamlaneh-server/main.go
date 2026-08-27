@@ -60,6 +60,7 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/linkpreview"
 	"github.com/hamlaneh/hamlaneh/server/internal/oidc"
 	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
+	"github.com/hamlaneh/hamlaneh/server/internal/scim"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/wsgateway"
 )
@@ -203,6 +204,17 @@ func run(args []string) error {
 			httpserver.WithLinkPreviews(previews),
 			httpserver.WithAudit(auditRecorder{audit.NewRecorder(auditChain, store)}),
 			httpserver.WithAuditChain(auditChain),
+			// SCIM provisioning. It needs no configuration and no
+			// environment variable: it is off until an administrator mints a
+			// token, and unauthenticated until one is presented, so mounting
+			// it unconditionally costs a zero-config install nothing.
+			//
+			// It takes the recorder directly rather than through
+			// auditRecorder: the actor of a provisioning action is a
+			// credential and never a person, so there is no "nobody" to
+			// translate.
+			httpserver.WithSCIM(scim.New(store,
+				scim.WithAudit(audit.NewRecorder(auditChain, store)))),
 		))
 	case args[0] == "healthcheck":
 		if len(args) > 1 {

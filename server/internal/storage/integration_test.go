@@ -70,7 +70,11 @@ func TestStorageIntegration(t *testing.T) {
 
 		want := []string{
 			"created_at", "display_name", "email", "id", "is_active", "is_admin",
-			"locale", "must_change_password", "password_hash", "updated_at", "username",
+			"locale", "must_change_password", "password_hash",
+			// Migration 0014: the two columns that make an account
+			// directory-managed.
+			"scim_external_id", "scim_user_name",
+			"updated_at", "username",
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("users columns:\n got %v\nwant %v", got, want)

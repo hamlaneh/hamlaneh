@@ -221,6 +221,12 @@ type harness struct {
 	server *httptest.Server
 	origin string
 
+	// userByID resolves the principal the test endpoint hands to the
+	// gateway. It is a hook rather than a fakeStore read because one test
+	// runs this harness against the REAL store, to prove that a
+	// storage-level deactivation reaches an open socket (scim_deprovision_test.go).
+	userByID func(uuid.UUID) storage.User
+
 	stopOnce sync.Once
 }
 
@@ -246,7 +252,29 @@ func newHarness(t *testing.T, opts ...Option) *harness {
 
 	store := newFakeStore()
 	h := &harness{t: t, store: store}
+	h.userByID = func(id uuid.UUID) storage.User {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.users[id]
+	}
+	return h.serve(store, opts...)
+}
 
+// newHarnessOn is newHarness against a store this package did not write —
+// the real one. Everything else is identical, deliberately: a test that
+// proves revocation closes a socket must go through the same endpoint, the
+// same gates and the same sweep as every other test here, or it proves
+// something about its own scaffolding instead.
+func newHarnessOn(t *testing.T, store Store, userByID func(uuid.UUID) storage.User, opts ...Option) *harness {
+	t.Helper()
+
+	h := &harness{t: t, userByID: userByID}
+	return h.serve(store, opts...)
+}
+
+// serve stands the gateway up behind the test endpoint.
+func (h *harness) serve(store Store, opts ...Option) *harness {
+	t := h.t
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/ws", func(w http.ResponseWriter, r *http.Request) {
 		if !h.gw.OriginAllowed(r.Header.Get("Origin")) {
@@ -259,11 +287,7 @@ func newHarness(t *testing.T, opts ...Option) *harness {
 			http.Error(w, "connect budget exhausted", http.StatusTooManyRequests)
 			return
 		}
-		store.mu.Lock()
-		user := store.users[userID]
-		store.mu.Unlock()
-
-		h.gw.ServeWebSocket(w, r, user, familyID)
+		h.gw.ServeWebSocket(w, r, h.userByID(userID), familyID)
 	})
 
 	h.server = httptest.NewServer(mux)

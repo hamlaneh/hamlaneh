@@ -11,15 +11,22 @@ import {
   NestMark,
   ScrollTextIcon,
   SettingsIcon,
+  ShieldIcon,
   UsersIcon,
 } from "../icons";
 
-/** The four sections, in the order the artboards draw them. */
+/**
+ * The four sections the artboards draw, in their order, followed by the one
+ * they do not: provisioning tokens arrived after the design and is appended
+ * rather than inserted, so the drawn four keep their drawn positions. Its
+ * glyph is borrowed (docs/design/STATUS.md, "SCIM provisioning tokens").
+ */
 const SECTIONS = [
   { to: "/admin", end: true, key: "users", Icon: UsersIcon },
   { to: "/admin/invites", end: false, key: "invites", Icon: LinkIcon },
   { to: "/admin/org", end: false, key: "org", Icon: SettingsIcon },
   { to: "/admin/audit", end: false, key: "audit", Icon: ScrollTextIcon },
+  { to: "/admin/scim", end: false, key: "scim", Icon: ShieldIcon },
 ] as const;
 
 type SectionKey = (typeof SECTIONS)[number]["key"];

@@ -562,6 +562,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/scim/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Provisioning tokens.
+         * @description The tokens an identity provider's sync engine authenticates with. Never the tokens themselves — only their metadata, exactly as the invite list never carries a link.
+         *     More than one live token is deliberate rather than an oversight: rotating a credential an external system holds needs an overlap, so an administrator mints the new one, updates the provider, and revokes the old one afterwards.
+         */
+        get: operations["listScimTokens"];
+        put?: never;
+        /**
+         * Mint a provisioning token.
+         * @description Answers with the token **once**. Only its hash is stored, as invite links and reset tokens are, so a stolen database yields no usable credential and nothing can redisplay a value somebody closed the dialog on.
+         *     This is a second door into the instance with its own credential, and it is not a session: it carries no cookie, no CSRF header, and it is refused everywhere under /api. A session cookie is equally worthless at the provisioning endpoints. Two doors, two credentials, neither usable at the other.
+         */
+        post: operations["createScimToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/scim/tokens/{tokenId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke a provisioning token.
+         * @description Takes effect immediately. The provider's next sync fails authentication, which is the intended way to cut off a system that should no longer be provisioning.
+         */
+        delete: operations["revokeScimToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/invites": {
         parameters: {
             query?: never;
@@ -1257,6 +1303,32 @@ export interface components {
             url: string;
             /** Format: date-time */
             expires_at: string;
+        };
+        /** @description A provisioning token as the table lists it. Never the token. */
+        ScimToken: {
+            /** Format: uuid */
+            id: string;
+            note?: string | null;
+            created_by: components["schemas"]["UserSummary"];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Null until the provider first authenticates with it. It is how an administrator tells a token that was configured from one that was minted and forgotten.
+             */
+            last_used_at?: string | null;
+        };
+        ScimTokenPage: {
+            tokens: components["schemas"]["ScimToken"][];
+        };
+        CreateScimTokenRequest: {
+            /** @description Optional, and only administrators see it. It exists so a list of opaque tokens can say which system holds which. */
+            note?: string;
+        };
+        CreatedScimToken: {
+            /** @description Shown once and never again. Only its hash is kept. */
+            token: string;
+            scim: components["schemas"]["ScimToken"];
         };
         /** @description An open invite, as the table lists it. Never the link itself. */
         Invite: {
@@ -2432,6 +2504,79 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
+        };
+    };
+    listScimTokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every token that has not been revoked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScimTokenPage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createScimToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateScimTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description The token, shown once. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedScimToken"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    revokeScimToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tokenId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The token is dead. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listInvites: {

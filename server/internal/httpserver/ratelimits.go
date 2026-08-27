@@ -377,6 +377,20 @@ var endpointBudgets = map[string]budgetName{
 	// already holds the instance; the contract reserves no 429 on it.
 	"GET /api/v1/admin/audit": budgetNone,
 
+	// Phase 1.6 SCIM provisioning tokens. Minting one is the third admin
+	// action that answers with a one-shot secret, so it joins the window the
+	// other two share — an attacker holding an admin session would otherwise
+	// have a fresh budget to walk to. The list and the revocation are a read
+	// and an indexed update, and the contract reserves no 429 on either.
+	//
+	// The provisioning surface these credentials open has its own single
+	// limiter at the top of its own mux; it cannot live in this table
+	// because this table is keyed on contract route patterns and those are
+	// not contract routes (scim.md §7).
+	"POST /api/v1/admin/scim/tokens":             budgetAdminSecret,
+	"GET /api/v1/admin/scim/tokens":              budgetNone,
+	"DELETE /api/v1/admin/scim/tokens/{tokenId}": budgetNone,
+
 	// Conversations and messages.
 	"GET /api/v1/users":                          budgetDirectory,
 	"GET /api/v1/search":                         budgetSearch,

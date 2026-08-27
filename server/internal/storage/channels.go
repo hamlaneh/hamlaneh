@@ -246,8 +246,9 @@ const callerJoins = `LEFT JOIN channel_read_positions rp
 // memberUserColumns is userColumns qualified (alias u) for queries that join
 // users against another table — this file's member reads and oidc.go's
 // identity lookup. It must stay in the order scanUser expects.
-const memberUserColumns = `u.id, u.username, u.email, u.display_name, u.password_hash,
+const memberUserColumns = `u.id, u.username, u.email, u.display_name, COALESCE(u.password_hash, ''),
 	        u.locale, u.is_admin, u.is_active, u.must_change_password, u.created_at, u.updated_at,
+	        u.scim_external_id, u.scim_user_name,
 	        EXISTS (SELECT 1 FROM oidc_identities oi WHERE oi.user_id = u.id)`
 
 // CreateChannel inserts a public or private channel and makes its creator

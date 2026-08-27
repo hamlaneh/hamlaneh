@@ -403,11 +403,26 @@ type CreateInviteRequest struct {
 	Note *string `json:"note,omitempty"`
 }
 
+// CreateScimTokenRequest defines model for CreateScimTokenRequest.
+type CreateScimTokenRequest struct {
+	// Note Optional, and only administrators see it. It exists so a list of opaque tokens can say which system holds which.
+	Note *string `json:"note,omitempty"`
+}
+
 // CreatedInvite The link is in this response and nowhere else: only its hash is stored, exactly as password-reset tokens are.
 type CreatedInvite struct {
 	ExpiresAt time.Time          `json:"expires_at"`
 	Id        openapi_types.UUID `json:"id"`
 	Url       string             `json:"url"`
+}
+
+// CreatedScimToken defines model for CreatedScimToken.
+type CreatedScimToken struct {
+	// Scim A provisioning token as the table lists it. Never the token.
+	Scim ScimToken `json:"scim"`
+
+	// Token Shown once and never again. Only its hash is kept.
+	Token string `json:"token"`
 }
 
 // EditMessageRequest defines model for EditMessageRequest.
@@ -599,6 +614,24 @@ type RedeemInviteRequest struct {
 
 // RegistrationMode How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
 type RegistrationMode string
+
+// ScimToken A provisioning token as the table lists it. Never the token.
+type ScimToken struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// CreatedBy The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
+	CreatedBy UserSummary        `json:"created_by"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// LastUsedAt Null until the provider first authenticates with it. It is how an administrator tells a token that was configured from one that was minted and forgotten.
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Note       *string    `json:"note,omitempty"`
+}
+
+// ScimTokenPage defines model for ScimTokenPage.
+type ScimTokenPage struct {
+	Tokens []ScimToken `json:"tokens"`
+}
 
 // SearchKind The two tabs above the results. `files` searches filenames, scoped by channel membership exactly as messages are.
 type SearchKind string
@@ -950,6 +983,9 @@ type CreateInviteJSONRequestBody = CreateInviteRequest
 // UpdateOrgSettingsJSONRequestBody defines body for UpdateOrgSettings for application/json ContentType.
 type UpdateOrgSettingsJSONRequestBody = UpdateOrgSettingsRequest
 
+// CreateScimTokenJSONRequestBody defines body for CreateScimToken for application/json ContentType.
+type CreateScimTokenJSONRequestBody = CreateScimTokenRequest
+
 // AdminCreateUserJSONRequestBody defines body for AdminCreateUser for application/json ContentType.
 type AdminCreateUserJSONRequestBody = AdminCreateUserRequest
 
@@ -1030,6 +1066,15 @@ type ServerInterface interface {
 	// UpdateOrgSettings Change the instance's settings.
 	// (PATCH /api/v1/admin/org)
 	UpdateOrgSettings(w http.ResponseWriter, r *http.Request)
+	// ListScimTokens Provisioning tokens.
+	// (GET /api/v1/admin/scim/tokens)
+	ListScimTokens(w http.ResponseWriter, r *http.Request)
+	// CreateScimToken Mint a provisioning token.
+	// (POST /api/v1/admin/scim/tokens)
+	CreateScimToken(w http.ResponseWriter, r *http.Request)
+	// RevokeScimToken Revoke a provisioning token.
+	// (DELETE /api/v1/admin/scim/tokens/{tokenId})
+	RevokeScimToken(w http.ResponseWriter, r *http.Request, tokenId openapi_types.UUID)
 	// AdminListUsers List users (dashboard). adminOnly.
 	// (GET /api/v1/admin/users)
 	AdminListUsers(w http.ResponseWriter, r *http.Request, params AdminListUsersParams)
@@ -1362,6 +1407,60 @@ func (siw *ServerInterfaceWrapper) UpdateOrgSettings(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateOrgSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListScimTokens operation middleware
+func (siw *ServerInterfaceWrapper) ListScimTokens(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListScimTokens(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateScimToken operation middleware
+func (siw *ServerInterfaceWrapper) CreateScimToken(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateScimToken(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeScimToken operation middleware
+func (siw *ServerInterfaceWrapper) RevokeScimToken(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "tokenId" -------------
+	var tokenId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "tokenId", r.PathValue("tokenId"), &tokenId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tokenId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeScimToken(w, r, tokenId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2708,6 +2807,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/users", wrapper.AdminCreateUser)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/admin/users/{userId}", wrapper.UpdateUserAdmin)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/users/{userId}/reset-password", wrapper.ForcePasswordReset)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/scim/tokens", wrapper.ListScimTokens)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/scim/tokens", wrapper.CreateScimToken)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/admin/scim/tokens/{tokenId}", wrapper.RevokeScimToken)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/invites", wrapper.ListInvites)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/invites", wrapper.CreateInvite)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/admin/invites/{inviteId}", wrapper.RevokeInvite)

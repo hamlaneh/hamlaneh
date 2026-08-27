@@ -164,7 +164,8 @@
       "users": "Users",
       "invites": "Invites",
       "org": "Org settings",
-      "audit": "Audit log"
+      "audit": "Audit log",
+      "scim": "Provisioning"
     },
     "role": {
       "admin": "Admin",
@@ -397,6 +398,38 @@
       },
       "chainBroken": "The signature chain over the entries on this page does not verify. The log is tamper-evident, not tamper-proof, and this is it showing: somebody has reached the database directly and changed or removed a row. Treat what is below as unreliable and look at the server.",
       "footnote": "Entries are append-only, and each one is signed over the entry before it with a key kept outside the database. That does not make the log tamper-proof — anybody who can write to the database can rewrite rows. It makes a rewrite show."
+    },
+    "scim": {
+      "title": "Provisioning tokens",
+      "subtitle": "What your identity provider's sync engine signs in with to create, update and deactivate accounts. A token belongs to a system, not to a person: it works only at the provisioning endpoints, and nowhere else in this instance.",
+      "overlap": "More than one token can be live at once, and that is how you replace one: create the new token, put it into the provider, check that it syncs, then revoke the old one.",
+      "noteLabel": "Note",
+      "noteHint": "Optional. Only administrators see it — it is there so a list of otherwise identical tokens can say which system holds which.",
+      "create": "Create token",
+      "noNote": "No note",
+      "neverUsed": "Never used",
+      "revoke": "Revoke",
+      "lastUsedNote": "Last used stays empty until the provider authenticates with the token for the first time. That is how you tell a token somebody configured from one that was created and forgotten.",
+      "empty": "No provisioning tokens yet. Create one and paste it into your identity provider's SCIM configuration, and it can then create and deactivate accounts here.",
+      "loadFailed": "We could not load the provisioning tokens.",
+      "column": {
+        "note": "Note",
+        "createdBy": "Created by",
+        "created": "Created",
+        "lastUsed": "Last used",
+        "actions": "Actions"
+      },
+      "created": {
+        "title": "Provisioning token created",
+        "lede": "Paste it into your identity provider as the bearer token for SCIM provisioning.",
+        "warning": "This is the only time the token is shown. The server keeps a hash of it and nothing else, so it cannot show it to you again — copy or download it before you close this.",
+        "label": "Provisioning token",
+        "note": "Whatever holds this token can create and deactivate accounts on this instance. Put it in the provider and nowhere else."
+      },
+      "revokeConfirm": {
+        "title": "Revoke this token?",
+        "body": "It stops working immediately, and the provider's next sync fails to authenticate — no accounts are created, updated or deactivated until it has a token that works. If that provider should still be provisioning, create its new token first."
+      }
     }
   },
   "settings": {

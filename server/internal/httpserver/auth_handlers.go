@@ -84,6 +84,25 @@ func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if user.PasswordHash == "" {
+		// No password credential: an account a directory provisioned, or one
+		// that only ever signed in through the identity provider. Migration
+		// 0014 made the column nullable and the projection reads NULL back
+		// as "", so this is the explicit guard ADR 004 calls for — without
+		// it every attempt against such an account reaches the verifier as a
+		// malformed hash and is logged as an internal defect, which it is
+		// not.
+		//
+		// The refusal is the same invalid_credentials everything else here
+		// answers, and it burns the same argon2 work first, so "this account
+		// has no password" is not something an unauthenticated caller can
+		// learn by timing or by reading the body.
+		password.CompareDummy(req.Password)
+		s.consumeLoginBudget(ipKey, identifierKey)
+		writeInvalidCredentials(w, r)
+		return
+	}
+
 	ok, needsRehash, err := password.Verify(req.Password, user.PasswordHash)
 	if err != nil {
 		// A malformed stored hash is an internal defect. Fail closed with

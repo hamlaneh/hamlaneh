@@ -86,6 +86,10 @@ type fakeStore struct {
 	orgSettings           func(ctx context.Context) (storage.OrgSettings, error)
 	updateOrgSettings     func(ctx context.Context, patch storage.OrgSettingsPatch) (storage.OrgSettings, error)
 
+	createScimToken func(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string) (storage.ScimToken, error)
+	listScimTokens  func(ctx context.Context) ([]storage.ScimToken, error)
+	revokeScimToken func(ctx context.Context, id uuid.UUID) error
+
 	appendAuditEntry func(ctx context.Context, e storage.AuditEntry, seal func(storage.AuditEntry) []byte) (storage.AuditEntry, error)
 	listAuditEntries func(ctx context.Context, params storage.ListAuditParams) ([]storage.AuditEntry, error)
 }
@@ -663,4 +667,25 @@ func (f *fakeStore) UpdateOrgSettings(ctx context.Context, patch storage.OrgSett
 		return storage.OrgSettings{}, errFakeUnwired
 	}
 	return f.updateOrgSettings(ctx, patch)
+}
+
+func (f *fakeStore) CreateScimToken(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string) (storage.ScimToken, error) {
+	if f.createScimToken == nil {
+		return storage.ScimToken{}, errFakeUnwired
+	}
+	return f.createScimToken(ctx, createdBy, tokenHash, note)
+}
+
+func (f *fakeStore) ListScimTokens(ctx context.Context) ([]storage.ScimToken, error) {
+	if f.listScimTokens == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listScimTokens(ctx)
+}
+
+func (f *fakeStore) RevokeScimToken(ctx context.Context, id uuid.UUID) error {
+	if f.revokeScimToken == nil {
+		return errFakeUnwired
+	}
+	return f.revokeScimToken(ctx, id)
 }

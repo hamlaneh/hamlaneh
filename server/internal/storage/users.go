@@ -25,10 +25,16 @@ var (
 	// unrecoverable without database access, so the change is refused
 	// rather than warned about afterwards.
 	ErrLastAdmin = errors.New("storage: would remove the last admin")
+	// ErrScimIdentifierTaken reports that another account already carries
+	// the presented SCIM userName or externalId. One sentinel covers both
+	// because SCIM answers both with one 409 uniqueness.
+	ErrScimIdentifierTaken = errors.New("storage: scim identifier already taken")
 )
 
 // User is a row of the users table. PasswordHash is the argon2id PHC string;
-// it never leaves the server.
+// it never leaves the server. It is empty for an account with no password
+// credential — a directory-provisioned or SSO-only one — because migration
+// 0014 made the column nullable and the projection reads NULL back as "".
 type User struct {
 	ID           uuid.UUID
 	Username     string
@@ -43,6 +49,15 @@ type User struct {
 	MustChangePassword bool
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	// ScimExternalID is the identity provider's own identifier for this
+	// person. Non-nil is what "directory-managed" means, and it is the one
+	// condition under which single sign-on may attach an identity by email
+	// (ADR 004).
+	ScimExternalID *string
+	// ScimUserName is the provider's userName, stored verbatim so a SCIM
+	// round trip returns what was sent. Nil for an account no directory has
+	// claimed; Username is what SCIM emits then.
+	ScimUserName *string
 	// SsoLinked is true when a row in oidc_identities points at this
 	// account (the contract's sso_linked). Derived, not stored: every user
 	// read computes it, so no writer can forget to maintain it.
@@ -65,7 +80,12 @@ type NewUser struct {
 // order scanUser expects. The final expression derives SsoLinked; the
 // correlated users.id resolves against the row being selected or returned,
 // so the same list works in SELECT ... FROM users and in RETURNING on it.
-const userColumns = `id, username, email, display_name, password_hash, locale, is_admin, is_active, must_change_password, created_at, updated_at,
+//
+// password_hash is COALESCEd because migration 0014 made it nullable for
+// accounts with no password credential. Every reader keeps its plain string
+// and gets "" for those, which Login refuses explicitly.
+const userColumns = `id, username, email, display_name, COALESCE(password_hash, ''), locale, is_admin, is_active, must_change_password, created_at, updated_at,
+	scim_external_id, scim_user_name,
 	EXISTS (SELECT 1 FROM oidc_identities oi WHERE oi.user_id = users.id)`
 
 // CreateUser inserts a user and returns the stored row. Uniqueness
@@ -401,6 +421,7 @@ func scanUser(row pgx.Row) (User, error) {
 	err := row.Scan(
 		&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.PasswordHash,
 		&u.Locale, &u.IsAdmin, &u.IsActive, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt,
+		&u.ScimExternalID, &u.ScimUserName,
 		&u.SsoLinked,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -424,6 +445,12 @@ func mapUserConflict(err error) error {
 		return ErrUsernameTaken
 	case "users_email_key":
 		return ErrEmailTaken
+	case "users_scim_user_name_key", "users_scim_external_id_key":
+		// One sentinel for both because SCIM answers both with one
+		// 409 uniqueness; the local username conflict stays separate
+		// precisely because it is the one a caller resolves by retrying
+		// with a different derivation.
+		return ErrScimIdentifierTaken
 	default:
 		return err
 	}

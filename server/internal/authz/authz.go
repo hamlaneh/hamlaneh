@@ -47,6 +47,18 @@ const (
 	AdminAuditList Action = "admin:audit:list"
 )
 
+// Phase 1.6 actions: the dashboard half of SCIM provisioning (ADR 004).
+// Minting one of these is minting a second credential into the instance, so
+// it is an admin decision like every other one on this list.
+const (
+	// AdminScimTokensList is reading the live provisioning tokens.
+	AdminScimTokensList Action = "admin:scim-tokens:list"
+	// AdminScimTokensCreate is minting a provisioning token.
+	AdminScimTokensCreate Action = "admin:scim-tokens:create"
+	// AdminScimTokensRevoke is killing a provisioning token.
+	AdminScimTokensRevoke Action = "admin:scim-tokens:revoke"
+)
+
 // Can reports whether user may perform action on resource. resource is nil
 // for org-level actions; later phases pass channels, messages, and files.
 //
@@ -66,7 +78,8 @@ func Can(_ context.Context, user *storage.User, action Action, resource any) boo
 	switch action {
 	case AdminUsersList, AdminUsersCreate, AdminUsersUpdate, AdminUsersResetPassword,
 		AdminInvitesList, AdminInvitesCreate, AdminInvitesRevoke,
-		AdminOrgRead, AdminOrgUpdate, AdminAuditList:
+		AdminOrgRead, AdminOrgUpdate, AdminAuditList,
+		AdminScimTokensList, AdminScimTokensCreate, AdminScimTokensRevoke:
 		return user.IsAdmin
 	case ChannelRead, ChannelUpdate, ChannelMemberAdd, ChannelMemberRemove,
 		MessageSend, MessageEdit, MessageDelete, ReadPositionSet, FileUpload:

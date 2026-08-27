@@ -6,7 +6,17 @@
  * generation's creation time, so its precision is the access-token lifetime —
  * which is exactly why the design phrases it in words rather than a clock
  * reading.
+ *
+ * Every Intl construction here goes through `latinDigitLocale`. The Persian
+ * UI sets every app-generated number in ASCII digits (docs/design/
+ * CHAT_HANDOFF.md, "Numerals"), and a date is a number: without the pin these
+ * render `۲۹ مرداد ۱۴۰۵` beside counts and timestamps that are Latin, which
+ * is the mixed-digit result the correction exists to prevent. The rule lives
+ * in one module precisely so a formatter written later cannot quietly opt out
+ * of it — this one did, for four screens, until 1.6.
  */
+
+import { latinDigitLocale } from "../i18n/digits";
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -31,7 +41,7 @@ export function lastActiveLabel(
   // A clock-skewed future stamp is still "now" rather than a negative age.
   const elapsed = Math.max(0, now.getTime() - value.getTime());
   // "auto" is what turns -1 day into "yesterday" instead of "1 day ago".
-  const relative = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  const relative = new Intl.RelativeTimeFormat(latinDigitLocale(locale), { numeric: "auto" });
 
   if (elapsed < 2 * MINUTE_MS) {
     return { kind: "now" };
@@ -48,7 +58,7 @@ export function lastActiveLabel(
   }
   return {
     kind: "last",
-    when: new Intl.DateTimeFormat(locale, {
+    when: new Intl.DateTimeFormat(latinDigitLocale(locale), {
       day: "numeric",
       month: "short",
       year: value.getFullYear() === now.getFullYear() ? undefined : "numeric",
@@ -62,7 +72,7 @@ export function formatActivationDate(iso: string, locale: string): string {
   if (Number.isNaN(value.getTime())) {
     return "";
   }
-  return new Intl.DateTimeFormat(locale, {
+  return new Intl.DateTimeFormat(latinDigitLocale(locale), {
     day: "numeric",
     month: "short",
     year: "numeric",

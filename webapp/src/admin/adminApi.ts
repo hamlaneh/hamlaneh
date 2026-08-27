@@ -19,6 +19,9 @@ export type AuditPage = components["schemas"]["AuditPage"];
 export type TemporaryCredentials = components["schemas"]["TemporaryCredentials"];
 export type AdminCreateUserRequest = components["schemas"]["AdminCreateUserRequest"];
 export type CreateInviteRequest = components["schemas"]["CreateInviteRequest"];
+export type ScimToken = components["schemas"]["ScimToken"];
+export type CreatedScimToken = components["schemas"]["CreatedScimToken"];
+export type CreateScimTokenRequest = components["schemas"]["CreateScimTokenRequest"];
 
 /**
  * A row of the users table.
@@ -154,6 +157,29 @@ export async function createInvite(body: CreateInviteRequest): Promise<CreatedIn
 export async function revokeInvite(inviteId: string): Promise<void> {
   const { error, response } = await api.DELETE("/api/v1/admin/invites/{inviteId}", {
     params: { path: { inviteId } },
+  });
+  if (response.status !== 204) {
+    throw new AdminError(response.status, error?.error.code ?? "unexpected");
+  }
+}
+
+/**
+ * Every live provisioning token. Unpaged by contract — `ScimTokenPage` carries
+ * no cursor, because the list is the handful of credentials an instance's
+ * identity provider holds, not a record of everything ever minted.
+ */
+export async function listScimTokens(): Promise<ScimToken[]> {
+  return unwrap(await api.GET("/api/v1/admin/scim/tokens")).tokens;
+}
+
+/** The one response that carries the token itself; it is never shown again. */
+export async function createScimToken(body: CreateScimTokenRequest): Promise<CreatedScimToken> {
+  return unwrap(await api.POST("/api/v1/admin/scim/tokens", { body }));
+}
+
+export async function revokeScimToken(tokenId: string): Promise<void> {
+  const { error, response } = await api.DELETE("/api/v1/admin/scim/tokens/{tokenId}", {
+    params: { path: { tokenId } },
   });
   if (response.status !== 204) {
     throw new AdminError(response.status, error?.error.code ?? "unexpected");

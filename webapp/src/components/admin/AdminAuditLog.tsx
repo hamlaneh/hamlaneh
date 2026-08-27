@@ -1,3 +1,4 @@
+import { latinDigitLocale } from "../../i18n/digits";
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -39,7 +40,7 @@ function auditStamp(iso: string, locale: string): string {
   if (Number.isNaN(value.getTime())) {
     return "";
   }
-  return new Intl.DateTimeFormat(locale.startsWith("fa") ? "fa-u-nu-latn" : locale, {
+  return new Intl.DateTimeFormat(latinDigitLocale(locale), {
     day: "numeric",
     month: "short",
     hour: "2-digit",

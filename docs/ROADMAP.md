@@ -419,7 +419,7 @@ public registration is off by default, it is **the** way users come into existen
       change. Enforcement lands per session at mint, so flipping the policy strands no live
       session. Sign-ins become audited at the same time — they are not today.
 - [x] SSO: OIDC first (SAML post-v1 unless a Managed pre-sale demands it) — free, per PLAN.md §6.3
-- [ ] SCIM provisioning — deprovisioning kills all sessions/devices instantly
+- [x] SCIM provisioning — deprovisioning kills all sessions/devices instantly
 - [ ] SSO just-in-time provisioning, its own org setting, default off — last on purpose: it is
       the widest door, and it lands after every gate it must respect is tested
 - Tests: SCIM deprovision → every session and WS socket of that user dead within 60s;
