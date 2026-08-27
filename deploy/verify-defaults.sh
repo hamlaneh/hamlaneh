@@ -16,7 +16,11 @@
 #   4. The files origin refuses to let an uploaded file behave like a
 #      document: attachment + nosniff + a sandboxing CSP (ADR 003)
 #   5. Postgres is NOT reachable from the host (localhost:5432 closed)
-#   6. caddy, server and db containers all run as a non-root UID
+#   6. caddy, server, livekit and db containers all run as a non-root UID
+#   7. The media plane exposes its signal path and nothing else (ADR 005):
+#      /rtc reaches LiveKit, its RoomService admin API and debug dumps do
+#      not, its HTTP port is unpublished, it publishes exactly the three
+#      ports the ADR names, and its API secret is in no public response
 #
 # Prints every check; exits non-zero listing every failed one.
 
@@ -268,9 +272,99 @@ check_db_not_exposed() {
   fi
 }
 
+# The media plane (ADR 005).
+#
+# LiveKit serves three very different things on ONE port, 7880: the signal
+# endpoint (/rtc), the RoomService admin API (/twirp/*) and goroutine and
+# room dumps (/debug/*). Anything that authenticates against LiveKit's own
+# API secret is an admin of every room on the instance, so the split between
+# "published" and "internal" is the entire security model here, and it is
+# enforced in exactly two places — the Caddyfile matcher and the absence of a
+# ports: entry for 7880. Both are checked.
+check_livekit() {
+  local cid bindings code body
+
+  cid="$(docker ps -q \
+    --filter "label=${PROJECT_LABEL}" \
+    --filter "label=com.docker.compose.service=livekit" | head -n 1)"
+  if [ -z "$cid" ]; then
+    failure "livekit container is not running"
+    return
+  fi
+
+  # Published ports: exactly the three ADR 005 names, and 7880 among them
+  # would put the admin API on the internet. Compared as a sorted set so a
+  # port silently ADDED here fails too, not only a missing one.
+  bindings="$(docker inspect -f '{{range $p, $c := .HostConfig.PortBindings}}{{$p}} {{end}}' "$cid" |
+    tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ' | sed 's/ $//')"
+  if grep -q '7880' <<<"$bindings"; then
+    failure "livekit publishes its HTTP/admin port to the host: ${bindings}"
+  else
+    pass "livekit does not publish its HTTP port (7880) to the host"
+  fi
+  if [ "$bindings" = "3478/udp 7881/tcp 7882/udp" ]; then
+    pass "livekit publishes exactly the three ports ADR 005 names (${bindings})"
+  else
+    failure "livekit publishes '${bindings}'; ADR 005 names exactly '3478/udp 7881/tcp 7882/udp'"
+  fi
+
+  # The signal path must reach LiveKit through Caddy. An anonymous /rtc
+  # request answers 401 with LiveKit's own wording, which is the assertion:
+  # a 404 would mean the Go server answered and the proxy is not wired, and
+  # a 200 would mean LiveKit accepts unauthenticated signalling.
+  body="$(curl -sk --max-time 10 "${CONNECT[@]}" "https://${DOMAIN}/rtc/validate" || true)"
+  code="$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' "${CONNECT[@]}" "https://${DOMAIN}/rtc/validate" || true)"
+  if [ "$code" = "401" ] && grep -qi 'permissions to access the room' <<<"$body"; then
+    pass "/rtc reaches LiveKit through the proxy and refuses an unauthenticated join (401)"
+  else
+    failure "/rtc/validate returned '${code:-000}' body '${body:-<empty>}'; expected LiveKit's 401"
+  fi
+
+  # ...and nothing else of LiveKit may be. Each of these answers 401 when
+  # asked of LiveKit directly, so 401 here is a FAILURE: it would mean the
+  # admin API is on the public origin, one stolen API secret from total
+  # control of every room.
+  local path
+  for path in \
+    /twirp/livekit.RoomService/ListRooms \
+    /twirp/livekit.RoomService/CreateRoom \
+    /twirp/livekit.EgressService/ListEgress \
+    /debug/rooms \
+    /debug/goroutine; do
+    body="$(curl -sk --max-time 10 "${CONNECT[@]}" -X POST \
+      -H 'Content-Type: application/json' -d '{}' "https://${DOMAIN}${path}" || true)"
+    if grep -q '"code":"unauthenticated"\|"msg":"permissions denied"' <<<"$body"; then
+      failure "LiveKit answered on the public origin at ${path} — its admin API is exposed"
+    else
+      pass "LiveKit's ${path} is not reachable through the proxy"
+    fi
+  done
+
+  # The API secret is what mints join tokens for every room on the instance.
+  # Nothing anonymous may echo it — least of all the two documents every
+  # visitor fetches before signing in.
+  local secret
+  secret="$(sed -n 's/^HAMLANEH_LIVEKIT_API_SECRET=//p' "$ENV_FILE" 2>/dev/null | tail -n 1)"
+  if [ -z "$secret" ]; then
+    failure "HAMLANEH_LIVEKIT_API_SECRET is not set in deploy/.env — cannot check for leaks"
+    return
+  fi
+  local url leaked=0
+  for url in "https://${DOMAIN}/api/v1/instance" "https://${DOMAIN}/"; do
+    body="$(curl -sk --max-time 10 "${CONNECT[@]}" "$url" || true)"
+    if grep -qF -- "$secret" <<<"$body"; then
+      failure "the LiveKit API secret appears in the response body of ${url}"
+      leaked=1
+    fi
+  done
+  if [ "$leaked" -eq 0 ]; then
+    pass "the LiveKit API secret appears in neither the instance document nor the login page"
+  fi
+}
+
 check_nonroot_containers() {
   local svc cid user uid
-  for svc in caddy server db; do
+  for svc in caddy server livekit db; do
     cid="$(docker ps -q \
       --filter "label=${PROJECT_LABEL}" \
       --filter "label=com.docker.compose.service=${svc}" | head -n 1)"
@@ -347,6 +441,7 @@ main() {
   check_healthz
   check_files_origin
   check_auth_defaults
+  check_livekit
   check_db_not_exposed
   check_nonroot_containers
 

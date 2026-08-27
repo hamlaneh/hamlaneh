@@ -41,6 +41,28 @@
 		-Server
 	}
 
+	# The LiveKit signal path (ADR 005). Calls ride the app origin instead of
+	# a subdomain of their own: no second certificate, nothing for the client
+	# to configure, bare-IP installs work identically, and the existing
+	# connect-src 'self' already admits a same-origin wss: — so the app's CSP
+	# needs no exception for calls.
+	#
+	# SECURITY INVARIANT — this matcher is an allow-list of exactly the two
+	# signal routes, never a prefix of the whole service. LiveKit serves its
+	# RoomService admin API on /twirp/*, and goroutine and room dumps on
+	# /debug/*, from the SAME port. Widening this to `path /rtc*` or, worse,
+	# proxying the site root to livekit would publish an unauthenticated-by-
+	# our-standards admin surface on the public origin. RoomService is
+	# reachable only from inside the compose network, by the server that
+	# holds the API secret.
+	@rtc path /rtc /rtc/*
+	handle @rtc {
+		# WebSocket upgrades need no extra directive: reverse_proxy passes
+		# them through. The join token is a query parameter on this URL and
+		# never a cookie, which is why nothing here forwards credentials.
+		reverse_proxy livekit:7880
+	}
+
 	# SECURITY INVARIANT — do not add trusted_proxies here without changing
 	# the Go server. With no trusted_proxies (this default), Caddy strips any
 	# client-supplied X-Forwarded-For and forwards only the true peer IP; the
@@ -48,7 +70,9 @@
 	# trusts the leftmost XFF value on that basis. Fronting Caddy with a CDN
 	# or another proxy requires switching the server to rightmost-untrusted
 	# parsing first, or login rate limiting becomes spoofable.
-	reverse_proxy server:8080
+	handle {
+		reverse_proxy server:8080
+	}
 }
 
 # The files origin (ADR 003). Uploaded bytes are served from a SEPARATE

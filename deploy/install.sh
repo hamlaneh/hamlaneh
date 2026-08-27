@@ -8,10 +8,13 @@
 #   2. installs Docker via get.docker.com only if it is missing
 #   3. resolves the domain/IP (prompt, --domain flag, or existing .env),
 #      generates the random secrets into deploy/.env (chmod 600) — the
-#      Postgres password and the key that signs file URLs —
+#      Postgres password, the key that signs file URLs, the audit-chain key
+#      and the LiveKit credential pair calls are authorized by —
 #      and writes the optional settings .env.example documents with empty
 #      values, so turning email on later is an edit rather than a search
 #   4. builds and starts the stack: docker compose up -d --build
+#   5. prints the ports a cloud security group must be opened on, which is
+#      the one step no script running on the host can perform
 #
 # Idempotent: a second run keeps the existing deploy/.env untouched and
 # converges the already-running stack without destructive changes.
@@ -212,6 +215,8 @@ write_env() {
     printf 'POSTGRES_PASSWORD=%s\n' "$password"
     printf 'HAMLANEH_FILE_URL_KEY=%s\n' "$file_url_key"
     printf 'HAMLANEH_AUDIT_KEY=%s\n' "$audit_key"
+    printf 'HAMLANEH_LIVEKIT_API_KEY=%s\n' "$(new_livekit_api_key)"
+    printf 'HAMLANEH_LIVEKIT_API_SECRET=%s\n' "$(new_livekit_api_secret)"
     printf 'HAMLANEH_ADMIN_USERNAME=admin\n'
     printf 'HAMLANEH_ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD"
     printf 'HAMLANEH_ADMIN_LOCALE=en\n'
@@ -317,6 +322,37 @@ ensure_audit_key_env() {
 ' "$(openssl rand -base64 32)" >> "$ENV_FILE"
 }
 
+# The LiveKit credential pair (ADR 005). Hex, not the base64 the other
+# secrets use, and deliberately: this pair is the only generated secret that
+# ends up inside a YAML document — compose builds LIVEKIT_KEYS as
+# "<key>: <secret>" — and hex cannot contain a character that YAML or that
+# split would read as syntax. 128 and 256 bits respectively.
+new_livekit_api_key() { openssl rand -hex 16; }
+new_livekit_api_secret() { openssl rand -hex 32; }
+
+# Upgrade path for an .env that predates calls, shaped like the file-URL and
+# audit keys above for the same reason: the stack refuses to start without
+# this pair, so a real secret is generated here rather than an empty
+# placeholder. Both halves are written together — a half-configured pair is
+# what compose is set up to reject, and it must never be this script that
+# creates one. Once written they must not be regenerated: every token already
+# minted is signed with the secret, and LiveKit would stop honouring them.
+ensure_livekit_env() {
+  [ -f "$ENV_FILE" ] || return 0
+  if grep -q '^HAMLANEH_LIVEKIT_API_KEY=' "$ENV_FILE" &&
+    grep -q '^HAMLANEH_LIVEKIT_API_SECRET=' "$ENV_FILE"; then
+    return 0
+  fi
+  if grep -q '^HAMLANEH_LIVEKIT_API_KEY=\|^HAMLANEH_LIVEKIT_API_SECRET=' "$ENV_FILE"; then
+    fail "deploy/.env has only one half of the LiveKit credential pair. Remove both HAMLANEH_LIVEKIT_API_KEY and HAMLANEH_LIVEKIT_API_SECRET and re-run, or set both by hand."
+  fi
+  log "generating the LiveKit credential pair in deploy/.env (mints the join tokens for calls)"
+  {
+    printf 'HAMLANEH_LIVEKIT_API_KEY=%s\n' "$(new_livekit_api_key)"
+    printf 'HAMLANEH_LIVEKIT_API_SECRET=%s\n' "$(new_livekit_api_secret)"
+  } >> "$ENV_FILE"
+}
+
 # Upgrade path: an .env from an older install may predate the admin bootstrap
 # variables. Appending them is safe — the server only reads them while the
 # users table is empty — but on an instance that already has users they are
@@ -359,6 +395,45 @@ print_success() {
   fi
   log "Status:          docker compose -f ${COMPOSE_FILE} ps"
   log "Verify defaults: ${SCRIPT_DIR}/verify-defaults.sh"
+  print_port_notice
+}
+
+# The one manual step this installer cannot do for you.
+#
+# Compose punches its own holes in the host firewall (that is what publishing
+# a port means), so on a plain VPS everything below is already reachable. A
+# cloud provider's security group is a DIFFERENT firewall, upstream of the
+# host and beyond the reach of any script running on it — an AWS security
+# group, a Hetzner or DigitalOcean cloud firewall, an Azure NSG, a GCP VPC
+# rule. On those, ports stay shut until a human opens them in a console this
+# script cannot see, and the failure is silent and confusing: sign-in works,
+# chat works, and calls connect to nothing.
+#
+# Printed last and printed always, including on a repeat run — the operator
+# who needs it most is the one upgrading an existing install onto a locked
+# down VPS, and they would never see a notice that only appeared once.
+print_port_notice() {
+  cat <<'EOF'
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  OPEN THESE PORTS IN YOUR CLOUD PROVIDER'S FIREWALL                  │
+  │                                                                      │
+  │  This installer already opened them on the host. It CANNOT open a    │
+  │  cloud security group (AWS, Azure NSG, GCP, Hetzner, DigitalOcean),  │
+  │  and calls fail silently for as long as those stay shut.             │
+  │                                                                      │
+  │      80/tcp    HTTP — redirects to HTTPS, and ACME certificates      │
+  │     443/tcp    HTTPS — the application                               │
+  │     443/udp    HTTP/3                                                │
+  │    3478/udp    calls: TURN, the relay for restrictive networks       │
+  │    7881/tcp    calls: media over TCP, where UDP is blocked           │
+  │    7882/udp    calls: media                                          │
+  │                                                                      │
+  │  Nothing else. Do NOT open 7880: LiveKit's admin API is on it, and   │
+  │  it is meant to stay on the internal network.                        │
+  └──────────────────────────────────────────────────────────────────────┘
+
+EOF
 }
 
 main() {
@@ -373,6 +448,7 @@ main() {
   ensure_mail_env
   ensure_file_url_key_env
   ensure_audit_key_env
+  ensure_livekit_env
   start_stack
   print_success
 }

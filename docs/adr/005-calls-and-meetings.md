@@ -71,6 +71,29 @@ does not traverse is a network permitting *only* TLS on 443 — that needs a ded
 single-box zero-config install cannot have. This goes in the hardening guide rather than being
 papered over.
 
+**The embedded TURN relay allocates from a port range, and that range is deliberately not
+published.** Verified rather than assumed, because the first draft of this ADR said the relay was
+purely in-process and that was wrong: real sockets appear on 30000-40000, and anyone reading
+`ss -lnup` will find them and reasonably wonder why they are unreachable.
+
+They are unreachable and calls work anyway, which is worth stating precisely because it looks
+like a bug. The browser's relay allocation sends its connectivity checks to the SFU's *published*
+media port; the SFU replies to the source address it observed rather than to the advertised
+candidate; that pair validates, is nominated, and carries media both ways on the same 5-tuple.
+Nothing outside ever needs to address the relay port. The SFU's own outbound checks toward the
+client's relay candidate do fail — they simply do not matter, which is exactly what ICE is built
+to tolerate.
+
+This was measured, under forced relay-only policy, with a control probe run against the live
+stack while media flowed: a packet to the node IP on an unpublished relay port was lost, while
+the published mux port was delivered by hairpin. So the result cannot be explained by a port that
+happened to be open. Full evidence in `docs/drills/001-livekit-turn-relay-ports.md`.
+
+One boundary: this holds wherever the node IP is an address the host itself owns, which is the
+ordinary VPS shape. Where it is not — an elastic IP behind a NAT gateway that will not hairpin —
+the relay's outbound fails, but so does ordinary non-relay media, so it is not a relay problem
+and `node_ip` is the existing escape hatch.
+
 **Three published ports** — TURN/UDP, ICE/TCP, media/UDP. Compose opens Docker's own firewall
 path, but a cloud provider's security group is beyond any script's reach. Those ports are the
 single manual step a locked-down VPS operator must take, `install.sh` prints them, and the NAT
@@ -126,10 +149,10 @@ a limitation.
 
 ## Slices
 
-1. **Media plane in the stack** — deploy only, and it exists partly to *verify three
-   assumptions*: that embedded TURN runs cert-less over UDP, that it relays in-process without a
-   further port range, and that LiveKit takes its whole config from the environment. Falsifying
-   any of them triggers the documented fallback rather than a redesign.
+1. **Media plane in the stack** — deploy only, and it existed partly to *falsify three
+   assumptions*. Two held: embedded TURN runs cert-less over UDP, and LiveKit takes its whole
+   configuration from the environment, so the container keeps a read-only filesystem with no
+   writable directory at all. The third was wrong as written and is corrected above.
 2. **Call core, server** — the two channel endpoints, token minting, the webhook receiver, the
    three gateway events, and the removal hooks on membership loss and deactivation.
 3. **Call UI, webapp** — in parallel with 2, against mocks.
@@ -139,9 +162,9 @@ a limitation.
 
 ## Open questions
 
-- Three LiveKit assumptions are verified in slice 1, not assumed here. If the signal channel
-  turns out not to refresh a connected participant's token, the TTL rises and this ADR's exposure
-  statement must be rewritten rather than quietly left standing.
+- Whether the signal channel refreshes a connected participant's token. It is load-bearing for
+  the two-minute TTL: if it turns out not to, the TTL rises and this ADR's exposure statement
+  must be rewritten rather than quietly left standing. Verified in slice 2.
 - Whether a conference should distinguish a verified member from a guest. Deferred with the
   impersonation weakness named.
 - Home-mode calls: LiveKit is a second process a single binary cannot trivially absorb. Phase 4
