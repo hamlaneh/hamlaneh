@@ -20,6 +20,8 @@ type OpenDirectMessageRequest = components["schemas"]["OpenDirectMessageRequest"
 type UpdateChannelRequest = components["schemas"]["UpdateChannelRequest"];
 type AddChannelMemberRequest = components["schemas"]["AddChannelMemberRequest"];
 type SetReadPositionRequest = components["schemas"]["SetReadPositionRequest"];
+type ChannelCall = components["schemas"]["ChannelCall"];
+type CallToken = components["schemas"]["CallToken"];
 type ApiError = components["schemas"]["Error"];
 
 /**
@@ -284,9 +286,25 @@ let chat = seedState();
 let uploaded = new Map<string, Attachment>();
 let uploadSequence = 0;
 
+/**
+ * Live call state, per channel. There is no calls table on the server either
+ * (ADR 005) — the media server's own room state is the truth, and this stands
+ * in for it. Empty means nobody is in any call.
+ */
+let calls = new Map<string, ChannelCall>();
+
+/**
+ * Puts a call in a channel, the way one is already running before this client
+ * ever opened the conversation. That is the case the REST read exists for.
+ */
+export function setMockCall(channelId: string, call: ChannelCall): void {
+  calls.set(channelId, call);
+}
+
 /** Tests call this between cases to drop mock conversation state. */
 export function resetMockChat(): void {
   chat = seedState();
+  calls = new Map();
   uploaded = new Map();
   uploadSequence = 0;
 }
@@ -475,6 +493,37 @@ export const chatHandlers = [
       }
       channel.topic = (await request.json()).topic;
       return HttpResponse.json(channel);
+    },
+  ),
+
+  http.get<{ channelId: string }, never, ChannelCall | ApiError>(
+    "/api/v1/channels/:channelId/call",
+    ({ params }) => {
+      if (mockChannel(params.channelId) === undefined) {
+        return notFound();
+      }
+      // "No call here" is a 200 with active false, not a 404: the channel is
+      // real and the answer about it is "nobody is in one".
+      return HttpResponse.json(calls.get(params.channelId) ?? { active: false });
+    },
+  ),
+
+  http.post<{ channelId: string }, never, CallToken | ApiError>(
+    "/api/v1/channels/:channelId/call/token",
+    ({ params }) => {
+      if (mockChannel(params.channelId) === undefined) {
+        return notFound();
+      }
+      return HttpResponse.json(
+        {
+          token: "fixture-call-ticket-not-a-real-one",
+          room: `chan-${params.channelId}`,
+          // Two minutes: a ticket has no business outliving the click that
+          // asked for it (openapi.yaml, createCallToken).
+          expires_at: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+        },
+        { status: 201 },
+      );
     },
   ),
 

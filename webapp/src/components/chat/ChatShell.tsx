@@ -3,12 +3,18 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router";
 
 import { isolateAuto, isolateLtr } from "../../i18n/bidi";
+import type { MediaConnect } from "../../calls/media";
+import { useCallSession } from "../../calls/useCallSession";
 import { PRESENCE_LABEL_KEY } from "../../chat/presence";
 import type { SearchKind } from "../../chat/store";
-import type { Presence, User, UserSummary } from "../../chat/types";
+import type { Channel, Presence, User, UserSummary } from "../../chat/types";
 import { useChat } from "../../chat/useChat";
 import type { RealtimeOverrides } from "../../chat/useChat";
 import { isUuid } from "../../chat/uuid";
+import { useInstance } from "../../instance/instanceInfo";
+import { CallRing } from "../calls/CallRing";
+import { CallStrip } from "../calls/CallStrip";
+import { CallView } from "../calls/CallView";
 import { ChatHeader } from "./ChatHeader";
 import { Composer } from "./Composer";
 import { ConnectionBanner } from "./ConnectionBanner";
@@ -28,12 +34,31 @@ export interface ChatShellProps {
   onLogout: () => void;
   /** Test seam only — production leaves the realtime client on its defaults. */
   realtime?: RealtimeOverrides;
+  /** Test seam only — production connects with `livekit-client`. */
+  media?: MediaConnect;
 }
 
 type Overlay = "none" | "createChannel" | "invite" | "newDm" | "account" | "channelMenu";
 
 function summarize(user: User): UserSummary {
   return { id: user.id, username: user.username, display_name: user.display_name };
+}
+
+/** What a conversation is called: the other person's name, or "#slug". */
+function conversationTitle(channel: Channel | undefined): string {
+  if (channel === undefined) {
+    return "";
+  }
+  return channel.kind === "dm" ? (channel.dm_peer?.display_name ?? "") : `#${channel.slug ?? ""}`;
+}
+
+/**
+ * The same title, isolated for interpolation into a sentence: a slug is an LTR
+ * run, a person's name follows its own script.
+ */
+function isolatedTitle(channel: Channel | undefined): string {
+  const title = conversationTitle(channel);
+  return channel?.kind === "dm" ? isolateAuto(title) : isolateLtr(title);
 }
 
 /**
@@ -46,10 +71,18 @@ export function ChatShell({
   organizationName,
   onLogout,
   realtime,
+  media,
 }: ChatShellProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const params = useParams<{ channelId?: string; messageId?: string }>();
+  const { info, loaded } = useInstance();
+  /**
+   * No media server, no call controls — the discipline `password_reset_available`
+   * and `sso.enabled` already follow, rather than offering a door that goes
+   * nowhere (openapi.yaml, InstanceInfo.calls).
+   */
+  const callsEnabled = loaded && info.calls === true;
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
@@ -71,8 +104,11 @@ export function ChatShell({
     currentUser: me,
     channelId: params.channelId,
     focusMessageId,
+    callsEnabled,
     ...(realtime === undefined ? {} : { realtime }),
   });
+
+  const call = useCallSession(media);
 
   const { state, activeChannel, view, markRead } = chat;
 
@@ -119,16 +155,18 @@ export function ChatShell({
   // whether its socket is up. Away is a server signal that does not exist yet.
   const myPresence: Presence = connection.status === "online" ? "online" : "offline";
 
-  const isDm = activeChannel?.kind === "dm";
-  const channelTitle =
-    activeChannel === undefined
-      ? ""
-      : isDm
-        ? (activeChannel.dm_peer?.display_name ?? "")
-        : `#${activeChannel.slug ?? ""}`;
-  // Interpolated into "Message {{target}}": a slug is an LTR run, a person's
-  // name follows its own script.
-  const composerTarget = isDm ? isolateAuto(channelTitle) : isolateLtr(channelTitle);
+  const channelTitle = conversationTitle(activeChannel);
+  /** Interpolated into "Message {{target}}". */
+  const composerTarget = isolatedTitle(activeChannel);
+
+  /* The call being drawn is not necessarily the conversation being read: the
+     surface stays put while the reader moves around, because a call you cannot
+     see is a call you cannot leave. */
+  const callChannel = state.channels.find((channel) => channel.id === call.channelId);
+  const ring = state.ring;
+  const ringChannel = state.channels.find((channel) => channel.id === ring?.channelId);
+  const ringCaller =
+    ring?.from?.display_name ?? ringChannel?.dm_peer?.display_name ?? t("calls.ring.unknown");
 
   const closeOverlay = () => {
     setOverlay("none");
@@ -224,6 +262,18 @@ export function ChatShell({
           onSettled={chat.settleConnection}
         />
 
+        {/* The strip is for people not in the call, so it is absent once this
+            channel's call is the one being drawn below. */}
+        {callsEnabled && activeChannel !== undefined && call.channelId !== activeChannel.id ? (
+          <CallStrip
+            call={state.calls[activeChannel.id]}
+            busy={call.status === "connecting"}
+            onJoin={() => {
+              call.join(activeChannel.id);
+            }}
+          />
+        ) : null}
+
         {activeChannel === undefined ? (
           <div className="hm-messages">
             {/* Four states, four sentences. Each of the last three used to
@@ -305,6 +355,24 @@ export function ChatShell({
         )}
       </main>
 
+      {/* Outside the channel column on purpose: the call belongs to a
+          conversation, but leaving it must stay reachable from any of them. */}
+      {callsEnabled && (call.status !== "idle" || call.errorKey !== null) ? (
+        <CallView
+          channelTitle={isolatedTitle(callChannel)}
+          status={call.status}
+          participants={call.participants}
+          micEnabled={call.micEnabled}
+          cameraEnabled={call.cameraEnabled}
+          screenSharing={call.screenSharing}
+          errorKey={call.errorKey}
+          onToggleMicrophone={call.toggleMicrophone}
+          onToggleCamera={call.toggleCamera}
+          onToggleScreenShare={call.toggleScreenShare}
+          onLeave={call.leave}
+        />
+      ) : null}
+
       <SearchResultsPanel
         search={state.search}
         onClose={() => {
@@ -353,6 +421,20 @@ export function ChatShell({
         />
       ) : null}
       </div>
+
+      {/* Outside the chat container, so a ring is still answerable while the
+          settings panel has the chat behind it inert. */}
+      {callsEnabled && ring !== null ? (
+        <CallRing
+          callerName={ringCaller}
+          onAccept={() => {
+            chat.dismissRing();
+            void navigate(`/c/${ring.channelId}`);
+            call.join(ring.channelId);
+          }}
+          onDismiss={chat.dismissRing}
+        />
+      ) : null}
 
       {settingsOpen ? (
         <SettingsPanel

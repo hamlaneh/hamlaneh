@@ -7,7 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/hamlaneh/hamlaneh/server/internal/calls"
+	"github.com/hamlaneh/hamlaneh/server/internal/calls/callstest"
 	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
+	"github.com/hamlaneh/hamlaneh/server/internal/storage"
+	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
 )
 
 // TestRunHealthcheckSubcommand exercises the healthcheck subcommand end to
@@ -85,4 +91,57 @@ func TestServeInvalidAddress(t *testing.T) {
 	if err := serve(ctx, httpserver.New("127.0.0.1:99999", nil)); err == nil {
 		t.Error("serve() with an invalid port returned nil, want error")
 	}
+}
+
+// TestDeactivationEjectsFromEveryCall is ADR 005's second removal hook, and
+// the reason it is a decorator here rather than a call inside each handler:
+// deactivation happens on two paths — the admin dashboard's patch and a
+// directory's SCIM `active: false` — and both go through this one store
+// method. A hook only one of them remembered would be an offboarding that
+// half works.
+//
+// It runs against a real store because that is what the wrapper wraps, and
+// against a fake media server because ejection is an RPC. The two facts it
+// pins are the whole hook: a committed deactivation ejects, and a
+// reactivation does not.
+func TestDeactivationEjectsFromEveryCall(t *testing.T) {
+	store, _ := testdb.New(t)
+	ctx := context.Background()
+
+	// A second admin so the last-admin rule never refuses the change under
+	// test — the rule is about a set, and this test is not about it.
+	if _, err := store.CreateUser(ctx, storage.NewUser{
+		Username: "keeper", PasswordHash: "argon2id$fixture", Locale: "en", IsAdmin: true,
+	}); err != nil {
+		t.Fatalf("create the keeper admin: %v", err)
+	}
+	leaver, err := store.CreateUser(ctx, storage.NewUser{
+		Username: "leaver", PasswordHash: "argon2id$fixture", Locale: "en",
+	})
+	if err != nil {
+		t.Fatalf("create the account to offboard: %v", err)
+	}
+
+	lk := callstest.New(t)
+	room := calls.RoomFor(uuid.New())
+	lk.Rooms = []string{room}
+	hooked := offboarding{store, calls.New("k", "a secret long enough to be one", lk.URL, nil)}
+
+	inactive := false
+	if _, err := hooked.UpdateUserAdmin(ctx, leaver.ID, storage.AdminUserUpdate{IsActive: &inactive}); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+
+	removed := lk.AwaitRemoval(t)
+	if removed.GetIdentity() != leaver.ID.String() || removed.GetRoom() != room {
+		t.Errorf("ejected %s from %s, want %s from %s",
+			removed.GetIdentity(), removed.GetRoom(), leaver.ID, room)
+	}
+
+	// Reactivation is not an offboarding and must eject nobody.
+	active := true
+	if _, err := hooked.UpdateUserAdmin(ctx, leaver.ID, storage.AdminUserUpdate{IsActive: &active}); err != nil {
+		t.Fatalf("reactivate: %v", err)
+	}
+	lk.NoRemoval(t)
 }

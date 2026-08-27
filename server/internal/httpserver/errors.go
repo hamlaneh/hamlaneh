@@ -102,6 +102,11 @@ const (
 	// 404 here — an administrator cutting a credential off needs to know
 	// when they named the wrong one.
 	codeScimTokenNotFound errorCode = "scim_token_not_found"
+	// Phase 2: calls. The instance has no media server configured, so there
+	// is no ticket to mint. Chat is unaffected, which is why this is a 503 on
+	// one endpoint rather than a degraded instance — the same shape
+	// sso_unavailable has.
+	codeCallsUnavailable errorCode = "calls_unavailable"
 	// codeNotFound answers a path under /api that no contract route claims.
 	// It is the router's answer, not a resource's: the contract's
 	// resource-level 404s carry their own codes (session_not_found,

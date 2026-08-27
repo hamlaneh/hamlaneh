@@ -39,6 +39,10 @@ const (
 	typeMemberAdded    = "member_added"
 	typeMemberRemoved  = "member_removed"
 	typeReadPosition   = "read_position"
+
+	typeCallStarted = "call_started"
+	typeCallUpdated = "call_updated"
+	typeCallEnded   = "call_ended"
 )
 
 // Close codes (§8). The 1000-range pair are the standard ones; the
@@ -248,6 +252,21 @@ type typingData struct {
 type presenceEventData struct {
 	UserID uuid.UUID `json:"user_id"`
 	State  string    `json:"state"`
+}
+
+// The three call events (§4). None carries a seq: they are hints that
+// something changed, never the state itself, and a replayed one would paint a
+// banner for a call that ended five minutes ago. call_ended needs no payload
+// beyond the channel, so it reuses chanData.
+type callStartedData struct {
+	Chan         uuid.UUID             `json:"chan"`
+	StartedBy    uuid.UUID             `json:"started_by"`
+	Participants []api.CallParticipant `json:"participants"`
+}
+
+type callUpdatedData struct {
+	Chan         uuid.UUID             `json:"chan"`
+	Participants []api.CallParticipant `json:"participants"`
 }
 
 // The contract shapes an event carries. These mirror httpserver's apiMessage,

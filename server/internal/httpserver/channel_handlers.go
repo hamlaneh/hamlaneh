@@ -619,6 +619,16 @@ func (s *apiServer) RemoveChannelMember(w http.ResponseWriter, r *http.Request, 
 		s.realtime.MemberRemoved(channelID, user)
 	}
 	s.realtime.ChannelRemoved(userID, channelID)
+
+	// The first of ADR 005's two removal hooks. A join ticket outlives the
+	// membership that justified it — a JWT is valid until it expires and
+	// membership can end a second later — and this is what bounds the
+	// already-joined half of that: the participant is ejected from the
+	// channel's call as after-commit work, in the background, and the
+	// response does not wait for it. A failed ejection is logged and retried
+	// once inside internal/calls; it never fails the removal, which has
+	// already committed, and the participant is gone at call end regardless.
+	s.calls.Eject(r.Context(), channelID, userID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

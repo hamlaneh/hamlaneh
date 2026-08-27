@@ -127,6 +127,15 @@ var routePolicies = map[string]routePolicy{
 	"POST /api/v1/dms":                                         {class: classSession},
 	"GET /api/v1/search":                                       {class: classSession},
 
+	// Phase 2 calls (ADR 005). Both are ordinary channel-scoped session
+	// routes: the class carries no resource-level meaning, and membership is
+	// an explicit authz.Can call inside each handler. The media server's own
+	// webhook is deliberately absent — it is not a contract route, it carries
+	// no session, and it is mounted outside this middleware entirely
+	// (call_handlers.go).
+	"GET /api/v1/channels/{channelId}/call":        {class: classSession},
+	"POST /api/v1/channels/{channelId}/call/token": {class: classSession},
+
 	// Phase 1.1b self-service security. All session-gated; none joins the
 	// must-change trio, because a user who owes a password change fixes that
 	// before touching their second factor or their device list.

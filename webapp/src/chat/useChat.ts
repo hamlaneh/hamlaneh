@@ -36,12 +36,16 @@ export interface ChatController {
   openDirectMessage: (userId: string) => Promise<Channel | null>;
   inviteMember: (userId: string) => Promise<boolean>;
   setTopic: (topic: string) => Promise<boolean>;
+  /** Closes the DM ring toast, and that is all it does (ADR 005). */
+  dismissRing: () => void;
 }
 
 interface UseChatInput {
   currentUser: UserSummary;
   channelId: string | undefined;
   focusMessageId: string | undefined;
+  /** `instance.calls` — with no media server there is nothing to reconcile. */
+  callsEnabled: boolean;
   realtime?: RealtimeOverrides;
 }
 
@@ -68,6 +72,7 @@ export function useChat({
   currentUser,
   channelId,
   focusMessageId,
+  callsEnabled,
   realtime,
 }: UseChatInput): ChatController {
   const [state, dispatch] = useReducer(chatReducer, initialChatState);
@@ -162,6 +167,53 @@ export function useChat({
     [loadHistory, stateRef],
   );
 
+  /* ── calls ──────────────────────────────────────────────────────── */
+
+  /**
+   * Reads what is actually happening in a channel's call.
+   *
+   * ws-protocol.md §5: `call_started`, `call_updated` and `call_ended` carry
+   * no sequence number and are never replayed, so a client that trusted them
+   * would paint a banner for a call that ended while it was disconnected. The
+   * events say something changed; this says what is true.
+   */
+  const reconcileCall = useCallback(async (target: string) => {
+    try {
+      const { data } = await api.GET("/api/v1/channels/{channelId}/call", {
+        params: { path: { channelId: target } },
+      });
+      if (data !== undefined) {
+        dispatch({ type: "call/state", channelId: target, call: data });
+      }
+    } catch (error) {
+      // Unreadable: the previous answer stands rather than being replaced by
+      // a guess in either direction.
+      console.warn("Could not read the channel's call state:", error);
+    }
+  }, []);
+
+  /**
+   * The reconciliation points, and there are exactly two: opening a channel,
+   * and coming back from a disconnect. Both are this one effect — it re-runs
+   * when the open channel changes, and again when the socket returns to
+   * `online`, which is precisely "after a reconnect".
+   *
+   * Gated on `online` rather than firing regardless, because a client that
+   * cannot hear `call_ended` cannot keep a banner honest either: the answer
+   * would be stale from the moment it arrived.
+   */
+  const connectionStatus = state.connection.status;
+  useEffect(() => {
+    if (!callsEnabled || channelId === undefined || connectionStatus !== "online") {
+      return;
+    }
+    void reconcileCall(channelId);
+  }, [callsEnabled, channelId, connectionStatus, reconcileCall]);
+
+  const dismissRing = useCallback(() => {
+    dispatch({ type: "call/dismissRing" });
+  }, []);
+
   /* ── realtime ───────────────────────────────────────────────────── */
 
   const clientRef = useRef<RealtimeClient | null>(null);
@@ -191,6 +243,27 @@ export function useChat({
           break;
         case "presence":
           dispatch({ type: "presence/set", userId: frame.userId, state: frame.state });
+          break;
+        case "call_started":
+          dispatch({
+            type: "call/started",
+            channelId: frame.chan,
+            call: { active: true, participants: frame.participants },
+            from: frame.startedBy,
+            currentUserId,
+          });
+          break;
+        case "call_updated":
+          dispatch({
+            type: "call/state",
+            channelId: frame.chan,
+            call: { active: true, participants: frame.participants },
+          });
+          break;
+        case "call_ended":
+          // `active: false` and nothing else — the contract says the other
+          // fields are absent rather than stale.
+          dispatch({ type: "call/state", channelId: frame.chan, call: { active: false } });
           break;
         default:
           // subscribed / unsubscribed / typing / member_added / error carry
@@ -672,5 +745,6 @@ export function useChat({
     openDirectMessage,
     inviteMember,
     setTopic,
+    dismissRing,
   };
 }

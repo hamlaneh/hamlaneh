@@ -82,11 +82,11 @@ func Can(_ context.Context, user *storage.User, action Action, resource any) boo
 		AdminScimTokensList, AdminScimTokensCreate, AdminScimTokensRevoke:
 		return user.IsAdmin
 	case ChannelRead, ChannelUpdate, ChannelMemberAdd, ChannelMemberRemove,
-		MessageSend, MessageEdit, MessageDelete, ReadPositionSet, FileUpload:
+		MessageSend, MessageEdit, MessageDelete, ReadPositionSet, FileUpload, CallJoin:
 		// Reached only when the caller passed no resource, or one of the
-		// wrong type. Every Phase 1.2 action is decided against a channel or
-		// a message; without one there is nothing to decide, and deny is the
-		// only safe answer to a question that was not fully asked.
+		// wrong type. Every channel-scoped action is decided against a channel
+		// or a message; without one there is nothing to decide, and deny is
+		// the only safe answer to a question that was not fully asked.
 		return false
 	default:
 		return false

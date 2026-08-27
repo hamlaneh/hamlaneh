@@ -1,4 +1,11 @@
-import type { Channel, ConnectionState, Message, Presence, UserSummary } from "./types";
+import type {
+  CallParticipant,
+  Channel,
+  ConnectionState,
+  Message,
+  Presence,
+  UserSummary,
+} from "./types";
 
 /**
  * Client half of docs/api/ws-protocol.md.
@@ -53,6 +60,19 @@ export type ServerFrame =
   | { type: "read_position"; chan: string; messageId: string }
   | { type: "typing"; chan: string; userId: string }
   | { type: "presence"; chan: string; userId: string; state: Presence }
+  /**
+   * The three call events (ws-protocol.md §4). They carry no `seq`, are never
+   * replayed, and are hints rather than truth: what is actually happening in a
+   * channel's call comes from `GET /channels/{id}/call` (§5).
+   */
+  | {
+      type: "call_started";
+      chan: string;
+      startedBy: UserSummary | null;
+      participants: CallParticipant[];
+    }
+  | { type: "call_updated"; chan: string; participants: CallParticipant[] }
+  | { type: "call_ended"; chan: string }
   | { type: "resync"; chan: string }
   | { type: "error"; code: string; message: string };
 
@@ -76,6 +96,20 @@ function readResumeCursors(value: unknown): ResumeCursor[] {
     }
   }
   return cursors;
+}
+
+function readUserSummary(value: unknown): UserSummary | null {
+  return isRecord(value) && typeof value.id === "string" ? (value as unknown as UserSummary) : null;
+}
+
+/** Entries that do not name a user are dropped rather than rendered as blanks. */
+function readCallParticipants(value: unknown): CallParticipant[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(
+    (entry): entry is CallParticipant => isRecord(entry) && readUserSummary(entry.user) !== null,
+  );
 }
 
 /**
@@ -173,6 +207,27 @@ export function parseServerFrame(raw: string): ServerFrame | null {
         return null;
       }
       return { type, chan, userId, state };
+    }
+    case "call_started": {
+      const target = chan ?? readString(data, "chan");
+      return target === null
+        ? null
+        : {
+            type,
+            chan: target,
+            startedBy: readUserSummary(data.started_by),
+            participants: readCallParticipants(data.participants),
+          };
+    }
+    case "call_updated": {
+      const target = chan ?? readString(data, "chan");
+      return target === null
+        ? null
+        : { type, chan: target, participants: readCallParticipants(data.participants) };
+    }
+    case "call_ended": {
+      const target = chan ?? readString(data, "chan");
+      return target === null ? null : { type, chan: target };
     }
     case "resync": {
       const target = chan ?? readString(data, "chan");

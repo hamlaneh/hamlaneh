@@ -864,6 +864,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/{channelId}/call": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What is happening in this channel's call.
+         * @description Live state, read from the media server rather than from a table. There is no calls table: the media server's own room state is the truth, and a copy in the database would be a cache to invalidate for nothing (ADR 005).
+         *     Clients call this on opening a channel and after a reconnect. The three call events on the WebSocket are hints that something changed, never the state itself -- a five-minute-old call event is worthless or wrong, so it carries no sequence number and is never replayed.
+         */
+        get: operations["getChannelCall"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/call/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A ticket to join this channel's call.
+         * @description Mints a short-lived join ticket for the media server. It is scoped to one room and one identity and lives about two minutes, because a ticket has no business outliving the click that asked for it.
+         *     It is not a session and grants nothing else: it cannot enumerate rooms, cannot eject anyone, and cannot open a data channel -- chat stays on the one write path with the one authorization choke point.
+         *     A ticket can outlive the membership that justified it, briefly, and that is bounded rather than denied. Minted-but-unused is bounded by the expiry. Already-joined is bounded by the server ejecting the participant when membership or the account ends. Both windows and their residue are written out in ADR 005.
+         *     The media server's address is not in the answer: its signal endpoint is same-origin, so a client derives it the way it derives everything else. Nothing about the media plane is ever told to a client beyond one boolean on the instance document.
+         */
+        post: operations["createCallToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels/{channelId}/messages": {
         parameters: {
             query?: never;
@@ -1089,6 +1133,8 @@ export interface components {
             password_min_length: number;
             password_reset_available: boolean;
             sso?: components["schemas"]["SsoStatus"];
+            /** @description False when no media server is configured -- a development server without the stack, or an install that has not enabled calls. The UI omits call controls rather than offering a door that goes nowhere, the same discipline password_reset_available follows. */
+            calls?: boolean;
         };
         OidcRedirect: {
             /** @description The provider authorization URL to send the browser to. */
@@ -1198,6 +1244,28 @@ export interface components {
          * @enum {string}
          */
         ChannelKind: "public" | "private" | "dm";
+        CallParticipant: {
+            user: components["schemas"]["UserSummary"];
+            /** Format: date-time */
+            joined_at: string;
+            /** @description Whether this participant is publishing a screen share. */
+            screen_sharing?: boolean;
+        };
+        /** @description A channel's live call. `active` false means nobody is in it, and the other fields are absent rather than stale. */
+        ChannelCall: {
+            active: boolean;
+            /** Format: date-time */
+            started_at?: string;
+            participants?: components["schemas"]["CallParticipant"][];
+        };
+        CallToken: {
+            /** @description The join ticket, for the media client. Short-lived, single room, single identity. Never store it; ask again on the next join. */
+            token: string;
+            /** @description The room to join. Derived from the channel, and safe to hand back because no ticket this server mints can enumerate rooms -- the only people who ever see this name are already members of the channel it names. */
+            room: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
         /** @description One conversation. Only members ever receive a Channel — every channel-scoped path answers 404 to everyone else. */
         Channel: {
             /** Format: uuid */
@@ -3091,6 +3159,64 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
+        };
+    };
+    getChannelCall: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The call, or that there is not one. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelCall"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createCallToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The ticket. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallToken"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            /** @description Calls are not configured on this instance (code calls_unavailable). Chat is unaffected. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     listMessages: {

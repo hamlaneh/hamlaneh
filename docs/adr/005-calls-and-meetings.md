@@ -37,9 +37,17 @@ consequence, stated rather than hidden: a LiveKit restart ends every call.
 only minter. A token is scoped to one room and one identity, carries the least-privilege grant
 set, and lives two minutes. It is a join ticket, not a session. `roomList` is absent so no
 participant can enumerate rooms — which is also why deriving a room name from a channel id is
-safe. `roomAdmin` is absent so no participant can eject another. `canPublishData` is absent so
-chat stays on the one write path with the one authz choke point, which also keeps message E2EE
-on the MLS path in Phase 3.
+safe. `roomAdmin` is absent so no participant can eject another. `canPublishData` is present and
+**false** so chat stays on the one write path with the one authz choke point, which also keeps
+message E2EE on the MLS path in Phase 3.
+
+That last one was wrong in the first draft, which said the grant was *absent*. In LiveKit an
+absent `canPublishData` inherits `canPublish` — so absence grants the data channel rather than
+withholding it, and a token minted on the original reading would have opened a second write path
+around the authorization choke point. Written here rather than only fixed in code, because
+"absent means denied" is the assumption that produced it and the next claim added to this set
+will be read the same way unless the trap is named. The test asserts the field is present and
+false, over the decoded claim map rather than over the struct we built.
 
 **A token can outlive its membership, briefly, and the exposure is bounded in two places rather
 than denied.** A JWT is valid until it expires and membership can be revoked a second later.
@@ -122,8 +130,22 @@ optional expiry may be set at creation for a link genuinely meant to be short-li
 ## Consequences
 
 - One migration, for conferences. Channel calls need no schema.
-- New dependencies at merge, each pinned and vetted: the LiveKit Go server SDK and protocol
-  module, `livekit-client` in the webapp, and a digest-pinned server image.
+- New dependencies, pinned and vetted. The webapp takes `livekit-client`, lazily imported so a
+  megabyte of WebRTC is not paid for on every chat load. The deploy stack takes a digest-pinned
+  server image. The server takes LiveKit's `protocol` module — **not** the full server SDK, whose
+  extra weight is a WebRTC participant implementation we never use.
+
+  The measured cost of that one module is worth stating, because the first draft named it in
+  passing: the server's build closure goes from roughly 19 third-party modules to 73. `auth`
+  alone transitively pulls in a WebRTC stack, NATS, Redis, gRPC, Prometheus and CEL, none of
+  which this server uses, and there is no lighter subset within the module. Five advisories in
+  those transitives had to be cleared on the way in.
+
+  The alternative is roughly two hundred lines against a documented token format, using a JOSE
+  library already in the tree, and it adds no modules. It stays documented here as the fallback
+  if that surface becomes a maintenance cost rather than a line item — and it is worth noticing
+  that using the library did not prevent the `canPublishData` trap above. Reading their source
+  did.
 - `GET /api/v1/instance` gains a `calls` flag, so the UI omits call controls rather than offering
   a door that goes nowhere. A half-configured LiveKit environment stops startup, as a
   half-configured mail transport does.

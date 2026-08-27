@@ -136,6 +136,7 @@ const (
 	budgetInviteRedeem      budgetName = "invite-redeem"
 	budgetSSOFlow           budgetName = "sso-flow"
 	budgetSSOSettings       budgetName = "sso-settings"
+	budgetCallToken         budgetName = "call-token"
 )
 
 // budgetSpec is one budget: how many requests fit its sliding window, how
@@ -273,6 +274,19 @@ var budgetSpecs = map[budgetName]budgetSpec{
 	// above anyone's real reconfiguration and far below a useful loop.
 	budgetSSOSettings: {limit: 10, window: 5 * time.Minute},
 
+	// Minting a join ticket is the fourth endpoint in this server that hands
+	// back a credential, and the only one a plain member may ask for. What is
+	// bounded is repetition: a ticket is a two-minute bearer capability for
+	// one room, and a caller who can mint them without limit can keep an
+	// arbitrarily long queue of live tickets for a channel they may be
+	// removed from at any moment. Signing itself is cheap, so this is about
+	// the standing set of live tickets rather than about CPU.
+	//
+	// 30 a minute is far above the real flow — a ticket is one click, and a
+	// media client re-mints only on a rejoin — and low enough that the live
+	// set stays roughly one minute's worth.
+	budgetCallToken: {limit: 30, window: time.Minute},
+
 	// Redeeming an invitation is a public route keyed on the client
 	// address (like the SSO flow above). It hashes the chosen
 	// password with argon2id before the token is known to be good — the same
@@ -399,6 +413,16 @@ var endpointBudgets = map[string]budgetName{
 	"POST /api/v1/channels":                      budgetConversationWrite,
 	"POST /api/v1/dms":                           budgetConversationWrite,
 	"POST /api/v1/channels/{channelId}/members":  budgetConversationWrite,
+
+	// Phase 2 calls. The contract reserves a 429 on the ticket and none on
+	// the state read, and this table follows it rather than inventing one:
+	// the read is what a client does on channel open and after a reconnect,
+	// and budgeting it would refuse a reconnect storm the reconnect backoff
+	// already paces. It does cost one RoomService round trip per call, which
+	// is worth knowing about — if that ever needs bounding, the 429 goes in
+	// openapi.yaml first and the budget follows it here.
+	"POST /api/v1/channels/{channelId}/call/token": budgetCallToken,
+	"GET /api/v1/channels/{channelId}/call":        budgetNone,
 
 	// Reads and edits the contract reserves no 429 on. Listing messages is
 	// the read a client repeats most — a budget nobody declared must not

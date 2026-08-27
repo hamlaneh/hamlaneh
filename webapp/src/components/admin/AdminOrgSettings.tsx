@@ -262,12 +262,12 @@ export function AdminOrgSettings({
                   role="switch"
                   // Optional in the contract, and off is its documented
                   // default, so an absent field reads as off.
-                  aria-checked={current.sso_jit_provisioning === true}
+                  aria-checked={current.sso_jit_provisioning}
                   aria-labelledby={`${fieldId}-jit-label`}
                   disabled={saving === "jit"}
                   onClick={() => {
                     save("jit", {
-                      sso_jit_provisioning: current.sso_jit_provisioning !== true,
+                      sso_jit_provisioning: !current.sso_jit_provisioning,
                     });
                   }}
                 >

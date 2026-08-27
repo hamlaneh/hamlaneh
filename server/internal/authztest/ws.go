@@ -132,6 +132,17 @@ func WSRegistry() []WSEntry {
 		wsEnforced("typing", S2C, WSMember),
 		wsEnforced("presence", S2C, WSMemberDM),
 		wsEnforced("resync", S2C, WSMember),
+		// The three call events (ADR 005). Membership scope, like every other
+		// channel event: a stranger to a channel must not learn that a call
+		// is happening in it, which is as much a disclosure as its messages.
+		// TestCallEventsNeverReachANonMember and TestCallEventsStopAtRemoval
+		// (internal/wsgateway/call_delivery_test.go) are what licenses
+		// WSEnforced here — the first proves a non-member's socket receives
+		// none of the three while a member's receives all three, the second
+		// that the audience is read at send time.
+		wsEnforced("call_started", S2C, WSMember),
+		wsEnforced("call_updated", S2C, WSMember),
+		wsEnforced("call_ended", S2C, WSMember),
 		wsEnforced("ping", S2C, WSSession),
 		wsEnforced("pong", S2C, WSSession),
 		wsEnforced("error", S2C, WSSession),

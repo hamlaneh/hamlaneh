@@ -299,6 +299,19 @@ was not entitled to read the message it points at.
   match against nothing at all reaches creation. A created account is indistinguishable from an
   invited one afterwards — the same mint, so the organisation's two-step requirement binds at
   that first sign-in.
+- **Calls (Phase 2, in progress).** LiveKit is in the stack, the server mints join tickets, and
+  the webapp joins, publishes and subscribes. A ticket is scoped to one room and one identity and
+  lives about two minutes, because a ticket has no business outliving the click that asked for
+  it; it grants nothing else — it cannot list rooms, cannot eject anyone, and cannot open a data
+  channel, so chat stays on the one write path with the one authorization choke point. Losing a
+  channel membership or an account ejects you from the call, which extends the offboarding path
+  1.6 built from sockets to media.
+
+  There is no calls table: the media server's own room state is the truth, and a copy in the
+  database would be a cache to invalidate for nothing. Three WebSocket events say something
+  changed; a REST read says what is true. That distinction is load-bearing rather than stylistic
+  — the events carry no sequence number and are never replayed, so a client that trusted them
+  would paint a banner for a call that ended while it was disconnected.
 
 ## What's next
 

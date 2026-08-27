@@ -134,6 +134,16 @@ type recordingRealtime struct {
 	memberRemoved  []recordedMemberEvent
 	channelRemoved []recordedChannelRemoved
 	readPositions  []recordedReadPosition
+	calls          []recordedCallEvent
+}
+
+// recordedCallEvent is one of the three call events: which one it was, the
+// channel it named, and what it carried.
+type recordedCallEvent struct {
+	event        string
+	channelID    uuid.UUID
+	startedBy    uuid.UUID
+	participants []api.CallParticipant
 }
 
 // recordedMemberEvent is one member_added or member_removed: the channel it
@@ -196,6 +206,40 @@ func (rt *recordingRealtime) ReadPosition(userID, channelID, messageID uuid.UUID
 	defer rt.mu.Unlock()
 	rt.readPositions = append(rt.readPositions,
 		recordedReadPosition{userID: userID, channelID: channelID, messageID: messageID, readAt: readAt})
+}
+
+// The three call events. They are recorded as one ordered list of names plus
+// their payloads, because what the webhook tests assert is WHICH event a
+// fresh read produced — call_started and call_updated are the same fact
+// announced under two labels, and getting the label wrong is the bug.
+func (rt *recordingRealtime) CallStarted(channelID, startedBy uuid.UUID, participants []api.CallParticipant) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.calls = append(rt.calls, recordedCallEvent{
+		event: "call_started", channelID: channelID,
+		startedBy: startedBy, participants: participants,
+	})
+}
+
+func (rt *recordingRealtime) CallUpdated(channelID uuid.UUID, participants []api.CallParticipant) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.calls = append(rt.calls, recordedCallEvent{
+		event: "call_updated", channelID: channelID, participants: participants,
+	})
+}
+
+func (rt *recordingRealtime) CallEnded(channelID uuid.UUID) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.calls = append(rt.calls, recordedCallEvent{event: "call_ended", channelID: channelID})
+}
+
+// callEvents returns the call events announced so far.
+func (rt *recordingRealtime) callEvents() []recordedCallEvent {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return append([]recordedCallEvent{}, rt.calls...)
 }
 
 // doRealtime serves req against store with rt attached.

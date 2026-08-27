@@ -93,6 +93,10 @@ func New(addr string, store Store, opts ...Option) *http.Server {
 //	/scim/v2/*           the SCIM 2.0 provisioning surface, authenticated by
 //	                     bearer token alone and likewise outside the
 //	                     contract (internal/scim, docs/api/scim.md)
+//	POST /livekit/webhook the media server's webhook receiver, authenticated
+//	                     by verifying its signature over the request body and
+//	                     outside the contract for the same reason
+//	                     (call_handlers.go)
 //	GET /healthz         liveness probe, 200 {"status":"ok"}
 //	GET /readyz          readiness probe (database ping + schema version)
 //	/api/v1/*            contract endpoints (Phase 1.1 identity core; the
@@ -131,6 +135,11 @@ func handler(store Store, web fs.FS, opts ...Option) http.Handler {
 	// (docs/api/scim.md §3), which is a property of it being routed here
 	// instead of through securityMiddleware.
 	routeSCIM(mux, s)
+	// And the third surface outside the contract router, for a third reason:
+	// the media server delivers webhooks with no cookie and no CSRF token,
+	// signing the body instead. The signature IS the credential
+	// (call_handlers.go).
+	routeCallWebhook(mux, s)
 
 	routed := api.HandlerWithOptions(s, api.StdHTTPServerOptions{
 		BaseRouter: mux,

@@ -42,8 +42,17 @@ async function seedLanguage(context: BrowserContext, locale: string): Promise<vo
  * is that one person's send reaches somebody ELSE's screen, and two pages
  * sharing a cookie jar would be one person with two tabs. `path` is where they
  * land, so a spec can put them straight into the conversation under test.
+ *
+ * `prepare` runs on the fresh context BEFORE its first page exists, which is
+ * the only moment an init script can still reach the app's first render — the
+ * shell is a single-page app and never navigates again. The relay test uses it
+ * to replace `RTCPeerConnection`; everything else omits it.
  */
-export type OpenApp = (account: TestAccount, path?: string) => Promise<App>;
+export type OpenApp = (
+  account: TestAccount,
+  path?: string,
+  prepare?: (context: BrowserContext) => Promise<void>,
+) => Promise<App>;
 
 interface Fixtures {
   t: Translate;

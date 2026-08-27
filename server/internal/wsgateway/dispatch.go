@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hamlaneh/hamlaneh/server/internal/api"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
 
@@ -174,6 +175,51 @@ func (g *Gateway) ReadPosition(userID, channelID, messageID uuid.UUID, readAt ti
 			ReadAt:    readAt.UTC(),
 		},
 	})
+}
+
+// CallStarted announces that a call is now happening in this channel.
+//
+// Membership scope, no subscription and no seq (§4): a DM peer's sockets
+// receive it without having subscribed to anything, which is what makes their
+// client ring, and it is never replayed because a call event from five
+// minutes ago is worse than worthless.
+func (g *Gateway) CallStarted(channelID, startedBy uuid.UUID, participants []api.CallParticipant) {
+	g.enqueue(event{
+		typ:       typeCallStarted,
+		channelID: channelID,
+		payload: callStartedData{
+			Chan: channelID, StartedBy: startedBy, Participants: callParticipants(participants),
+		},
+	})
+}
+
+// CallUpdated announces somebody joining, leaving, or starting a screen share.
+func (g *Gateway) CallUpdated(channelID uuid.UUID, participants []api.CallParticipant) {
+	g.enqueue(event{
+		typ:       typeCallUpdated,
+		channelID: channelID,
+		payload:   callUpdatedData{Chan: channelID, Participants: callParticipants(participants)},
+	})
+}
+
+// CallEnded announces that the last participant left.
+func (g *Gateway) CallEnded(channelID uuid.UUID) {
+	g.enqueue(event{
+		typ:       typeCallEnded,
+		channelID: channelID,
+		payload:   chanData{Chan: channelID},
+	})
+}
+
+// callParticipants normalizes the announced list. The contract makes
+// participants an array, so a call that momentarily has nobody in it must
+// serialize as [] rather than null — a client that reads null as "unknown"
+// and [] as "empty" would draw two different things.
+func callParticipants(participants []api.CallParticipant) []api.CallParticipant {
+	if participants == nil {
+		return []api.CallParticipant{}
+	}
+	return participants
 }
 
 // enqueue hands an event to the dispatcher without blocking. A full queue

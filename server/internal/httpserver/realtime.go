@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hamlaneh/hamlaneh/server/internal/api"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
 
@@ -54,7 +55,26 @@ type Realtime interface {
 	// ReadPosition syncs a read position to the same user's other sockets.
 	// There are no cross-user read receipts anywhere in this protocol.
 	ReadPosition(userID, channelID, messageID uuid.UUID, readAt time.Time)
+	// CallStarted announces that a call is now happening in this channel.
+	// Membership scope rather than subscription is what makes a DM peer's
+	// client ring without having subscribed to anything (ws-protocol.md §4),
+	// and it is the entire 1:1 ringing design for this phase.
+	CallStarted(channelID, startedBy uuid.UUID, participants []api.CallParticipant)
+	// CallUpdated announces that somebody joined, left, or started sharing a
+	// screen in a call that is already running.
+	CallUpdated(channelID uuid.UUID, participants []api.CallParticipant)
+	// CallEnded announces that the last participant left. It is sent on that
+	// departure rather than when the room is eventually reaped, so a banner
+	// never claims a call that ended five minutes ago.
+	CallEnded(channelID uuid.UUID)
 }
+
+// The three call events carry no seq and are never replayed (ws-protocol.md
+// §5): a five-minute-old call event is worse than worthless, because it would
+// paint a banner for a call nobody is in. Clients reconcile against
+// GET /api/v1/channels/{id}/call on channel open and on reconnect. That is
+// also what lets the webhook receiver treat every LiveKit delivery as a hint
+// — an event says something changed, REST says what is true.
 
 // noRealtime is the Realtime used when no gateway is attached. It exists so
 // handlers can announce unconditionally: a nil check before every event is
@@ -70,6 +90,9 @@ func (noRealtime) MemberAdded(uuid.UUID, storage.User)                     {}
 func (noRealtime) MemberRemoved(uuid.UUID, storage.User)                   {}
 func (noRealtime) ChannelRemoved(uuid.UUID, uuid.UUID)                     {}
 func (noRealtime) ReadPosition(uuid.UUID, uuid.UUID, uuid.UUID, time.Time) {}
+func (noRealtime) CallStarted(uuid.UUID, uuid.UUID, []api.CallParticipant) {}
+func (noRealtime) CallUpdated(uuid.UUID, []api.CallParticipant)            {}
+func (noRealtime) CallEnded(uuid.UUID)                                     {}
 
 // WithRealtime attaches the gateway that delivers the events above.
 func WithRealtime(rt Realtime) Option {

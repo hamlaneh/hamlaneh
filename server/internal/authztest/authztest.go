@@ -495,12 +495,14 @@ func totpEnrollmentReachable(e Entry) Entry {
 // openapi.yaml spells them: the {template} segments are the completeness
 // gate's key, and Entry.Target fills them from the cell's fixture.
 const (
-	channelPath  = "/api/v1/channels/{channelId}"
-	membersPath  = channelPath + "/members"
-	memberPath   = membersPath + "/{userId}"
-	messagesPath = channelPath + "/messages"
-	messagePath  = messagesPath + "/{messageId}"
-	readPath     = channelPath + "/read"
+	channelPath   = "/api/v1/channels/{channelId}"
+	membersPath   = channelPath + "/members"
+	memberPath    = membersPath + "/{userId}"
+	messagesPath  = channelPath + "/messages"
+	messagePath   = messagesPath + "/{messageId}"
+	readPath      = channelPath + "/read"
+	callPath      = channelPath + "/call"
+	callTokenPath = callPath + "/token"
 )
 
 // matrixClientMsgID is the send row's idempotency key. Every cell posts into
@@ -1175,6 +1177,26 @@ func channelRegistry() []Entry {
 		uploads[i].ContentType = uploadContentType
 	}
 	entries = append(entries, uploads...)
+
+	// Phase 2 calls (ADR 005). The matrix server configures no media plane,
+	// which is what makes these two rows say different things.
+	//
+	// The state read is a 200 for every member either way: an instance with
+	// no media server has no call, and `active: false` is the truth about it.
+	// The contract reserves no 503 there for exactly that reason.
+	//
+	// The ticket is where the boundary is pinned. A member reaches the
+	// handler and gets the unconfigured instance's honest 503; a stranger —
+	// an org admin among them — gets the channel's 404 and never learns
+	// whether the channel exists, let alone whether calls are configured.
+	// That ordering is the property: 404 before 503, so the refusal is about
+	// the channel and never about the instance. A DM is registered beside the
+	// named channel because a DM's call is where 1:1 ringing lives, and a
+	// stranger to somebody's DM must be refused exactly as hard.
+	entries = append(entries, bothKinds(http.MethodGet, callPath, nil, readable)...)
+	callsOff := refusal(http.StatusServiceUnavailable, "calls_unavailable")
+	entries = append(entries, bothKinds(http.MethodPost, callTokenPath, nil,
+		members(callsOff, callsOff, callsOff))...)
 
 	return entries
 }

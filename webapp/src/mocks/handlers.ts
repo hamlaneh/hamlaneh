@@ -303,6 +303,10 @@ function freshAuthState(): MockAuthState {
       // that offer single sign-on exist, and a case that wants the instance
       // without a provider says so with setMockInstance.
       sso: { enabled: true, provider_name: FIXTURE_SSO_PROVIDER_NAME },
+      // Likewise for calls: the fixture instance has a media server, so the
+      // call surfaces exist, and a case that wants the instance without one
+      // says so with setMockInstance({ calls: false }).
+      calls: true,
     },
     totp: { enabled: false },
     pendingTotp: "none",

@@ -1,12 +1,14 @@
 import { mentionsUser } from "./mentions";
 import type {
   Channel,
+  ChannelCall,
   ConnectionState,
   Message,
   MessagePage,
   PendingMessage,
   Presence,
   SearchPage,
+  UserSummary,
 } from "./types";
 
 /**
@@ -55,6 +57,25 @@ export interface ChatState {
    */
   justReconnected: boolean;
   search: SearchState;
+  /**
+   * What is happening in each channel's call, keyed by channel id.
+   *
+   * Written by the REST read, which is the truth (ws-protocol.md §5), and by
+   * the three call events, which are hints that something moved. A channel
+   * with no entry has not been asked about — not "has no call".
+   */
+  calls: Record<string, ChannelCall>;
+  /**
+   * The DM ring, and deliberately nothing more (ADR 005): no decline versus
+   * busy, no missed-call message, no timeout. One toast, dismissible.
+   */
+  ring: CallRing | null;
+}
+
+export interface CallRing {
+  channelId: string;
+  /** Whoever started it; null when the event did not name them. */
+  from: UserSummary | null;
 }
 
 export const initialChatState: ChatState = {
@@ -64,6 +85,8 @@ export const initialChatState: ChatState = {
   connection: { status: "connecting" },
   justReconnected: false,
   search: { status: "closed" },
+  calls: {},
+  ring: null,
 };
 
 export function emptyView(): ChannelView {
@@ -119,7 +142,18 @@ export type ChatAction =
   | { type: "search/start"; query: string; kind: SearchKind }
   | { type: "search/loaded"; query: string; kind: SearchKind; page: SearchPage }
   | { type: "search/failed"; query: string; kind: SearchKind }
-  | { type: "search/close" };
+  | { type: "search/close" }
+  /** The REST read, and the two events that carry a participant list. */
+  | { type: "call/state"; channelId: string; call: ChannelCall }
+  /** `call_started`, which is also the only thing that can raise a ring. */
+  | {
+      type: "call/started";
+      channelId: string;
+      call: ChannelCall;
+      from: UserSummary | null;
+      currentUserId: string;
+    }
+  | { type: "call/dismissRing" };
 
 /** Ascending by (created_at, id) — the order every contract page is served in. */
 function isBefore(left: Message, right: Message): boolean {
@@ -389,5 +423,38 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
     case "search/close":
       return { ...state, search: { status: "closed" } };
+
+    case "call/state":
+      return {
+        ...state,
+        calls: { ...state.calls, [action.channelId]: action.call },
+        // A call that is over cannot still be ringing, whether the news came
+        // from `call_ended` or from a REST read that corrected a stale hint.
+        ring:
+          !action.call.active && state.ring?.channelId === action.channelId ? null : state.ring,
+      };
+
+    case "call/started": {
+      const channel = state.channels.find((entry) => entry.id === action.channelId);
+      const joined = (action.call.participants ?? []).some(
+        (participant) => participant.user.id === action.currentUserId,
+      );
+      return {
+        ...state,
+        calls: { ...state.calls, [action.channelId]: action.call },
+        // Ringing is a DM affordance (ADR 005: "the client rings from it —
+        // that is the entire 1:1 ringing design for this phase"), and never
+        // rings at somebody already in the call, which includes whoever
+        // started it — the event reaches them too.
+        ring:
+          channel?.kind === "dm" && !joined
+            ? { channelId: action.channelId, from: action.from }
+            : state.ring,
+      };
+    }
+
+    case "call/dismissRing":
+      // Dismissing dismisses the toast. Nothing is told to anyone (ADR 005).
+      return { ...state, ring: null };
   }
 }

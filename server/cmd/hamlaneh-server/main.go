@@ -25,6 +25,11 @@
 // supported install: reset is then switched off and says so. Setting them
 // half-way is not, and stops startup.
 //
+// Calls follow the same rule: HAMLANEH_LIVEKIT_API_KEY,
+// HAMLANEH_LIVEKIT_API_SECRET and HAMLANEH_LIVEKIT_URL all set turns the
+// media plane on; none set is a supported install with calls off and the
+// instance document says so; a partial set stops startup.
+//
 // Single sign-on follows the same rule: HAMLANEH_OIDC_ISSUER,
 // HAMLANEH_OIDC_CLIENT_ID and HAMLANEH_OIDC_CLIENT_SECRET (plus the
 // optional HAMLANEH_OIDC_PROVIDER_NAME) all set turns it on and needs
@@ -53,6 +58,7 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/audit"
 	"github.com/hamlaneh/hamlaneh/server/internal/blobstore"
 	"github.com/hamlaneh/hamlaneh/server/internal/bootstrap"
+	"github.com/hamlaneh/hamlaneh/server/internal/calls"
 	"github.com/hamlaneh/hamlaneh/server/internal/egress"
 	"github.com/hamlaneh/hamlaneh/server/internal/filesign"
 	"github.com/hamlaneh/hamlaneh/server/internal/healthcheck"
@@ -156,6 +162,15 @@ func run(args []string) error {
 		if err != nil {
 			return fmt.Errorf("configure single sign-on: %w", err)
 		}
+
+		// Calls follow the same rule again: all three LiveKit variables set
+		// turns the media plane on, none set is a supported install with
+		// calls off and the instance document says so, and a partial set
+		// stops startup rather than failing at somebody's first call.
+		media, err := calls.FromEnv()
+		if err != nil {
+			return fmt.Errorf("configure calls: %w", err)
+		}
 		// Drains the dispatch queue; the server has stopped accepting
 		// requests by the time serve returns.
 		defer reset.Close()
@@ -187,9 +202,10 @@ func run(args []string) error {
 		previews := linkpreview.New(egress.New(), store, previewBlobs{blobs}, gateway)
 		defer previews.Close()
 
-		return serve(ctx, httpserver.New(listenAddr, store,
+		return serve(ctx, httpserver.New(listenAddr, offboarding{store, media},
 			httpserver.WithPasswordReset(reset),
 			httpserver.WithSSO(sso),
+			httpserver.WithCalls(media),
 			// The same public origin the reset link and the socket's Origin
 			// check are built from; here it is what makes an invitation link
 			// something an admin can paste into a message.
@@ -213,7 +229,7 @@ func run(args []string) error {
 			// auditRecorder: the actor of a provisioning action is a
 			// credential and never a person, so there is no "nobody" to
 			// translate.
-			httpserver.WithSCIM(scim.New(store,
+			httpserver.WithSCIM(scim.New(offboarding{store, media},
 				scim.WithAudit(audit.NewRecorder(auditChain, store)))),
 		))
 	case args[0] == "healthcheck":
@@ -226,6 +242,36 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q\n%s", args[0], usage)
 	}
+}
+
+// offboarding is ADR 005's second removal hook: an account that is
+// deactivated is ejected from every call it is in.
+//
+// It hangs off the ONE call both deactivation paths already make. Deactivation
+// is UpdateUserAdmin — the admin dashboard's patch and a directory's SCIM
+// `active: false` land on the same store method, which takes the advisory
+// lock, refuses the change that would leave nobody able to administer the
+// instance, and revokes every session family in one transaction; the
+// WebSocket gateway's revocation sweep then closes the sockets (ADR 004,
+// scim.md §5). This wrapper extends that path from sockets to calls rather
+// than opening a second one, which is why it is a decorator here and not a
+// call added to each of the two handlers: a hook only one of them remembered
+// would be an offboarding that half works.
+//
+// Only a COMMITTED deactivation ejects. A refused change (last admin) and a
+// reactivation both leave calls alone, and the ejection itself is background
+// work that cannot fail the request — see calls.Service.EjectEverywhere.
+type offboarding struct {
+	*storage.Store
+	calls *calls.Service
+}
+
+func (o offboarding) UpdateUserAdmin(ctx context.Context, userID uuid.UUID, upd storage.AdminUserUpdate) (storage.User, error) {
+	user, err := o.Store.UpdateUserAdmin(ctx, userID, upd)
+	if err == nil && !user.IsActive {
+		o.calls.EjectEverywhere(ctx, user.ID)
+	}
+	return user, err
 }
 
 // previewBlobs adapts the blob store to the enricher's one-shot write. A

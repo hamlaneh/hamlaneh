@@ -1713,6 +1713,93 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/v1/channels/{channelId}/call:
+    get:
+      tags: [channels]
+      operationId: getChannelCall
+      summary: What is happening in this channel's call.
+      description: >
+        Live state, read from the media server rather than from a table.
+        There is no calls table: the media server's own room state is the
+        truth, and a copy in the database would be a cache to invalidate for
+        nothing (ADR 005).
+
+        Clients call this on opening a channel and after a reconnect. The
+        three call events on the WebSocket are hints that something changed,
+        never the state itself -- a five-minute-old call event is worthless
+        or wrong, so it carries no sequence number and is never replayed.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The call, or that there is not one.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelCall"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/channels/{channelId}/call/token:
+    post:
+      tags: [channels]
+      operationId: createCallToken
+      summary: A ticket to join this channel's call.
+      description: >
+        Mints a short-lived join ticket for the media server. It is scoped to
+        one room and one identity and lives about two minutes, because a
+        ticket has no business outliving the click that asked for it.
+
+        It is not a session and grants nothing else: it cannot enumerate
+        rooms, cannot eject anyone, and cannot open a data channel -- chat
+        stays on the one write path with the one authorization choke point.
+
+        A ticket can outlive the membership that justified it, briefly, and
+        that is bounded rather than denied. Minted-but-unused is bounded by
+        the expiry. Already-joined is bounded by the server ejecting the
+        participant when membership or the account ends. Both windows and
+        their residue are written out in ADR 005.
+
+        The media server's address is not in the answer: its signal endpoint
+        is same-origin, so a client derives it the way it derives everything
+        else. Nothing about the media plane is ever told to a client beyond
+        one boolean on the instance document.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "201":
+          description: The ticket.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallToken"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: >
+            Calls are not configured on this instance (code calls_unavailable).
+            Chat is unaffected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/channels/{channelId}/messages:
     parameters:
       - $ref: "#/components/parameters/ChannelId"
@@ -2338,6 +2425,13 @@ components:
           type: boolean
         sso:
           $ref: "#/components/schemas/SsoStatus"
+        calls:
+          type: boolean
+          description: >
+            False when no media server is configured -- a development server
+            without the stack, or an install that has not enabled calls. The
+            UI omits call controls rather than offering a door that goes
+            nowhere, the same discipline password_reset_available follows.
 
     OidcRedirect:
       type: object
@@ -2598,6 +2692,48 @@ components:
         visibility is membership for all three; `kind` is stored so a channel
         directory and join flow can arrive without a schema change.
       enum: [public, private, dm]
+
+    CallParticipant:
+      type: object
+      required: [user, joined_at]
+      properties:
+        user: { $ref: "#/components/schemas/UserSummary" }
+        joined_at: { type: string, format: date-time }
+        screen_sharing:
+          type: boolean
+          description: Whether this participant is publishing a screen share.
+
+    ChannelCall:
+      type: object
+      description: >
+        A channel's live call. `active` false means nobody is in it, and the
+        other fields are absent rather than stale.
+      required: [active]
+      properties:
+        active: { type: boolean }
+        started_at: { type: string, format: date-time }
+        participants:
+          type: array
+          items:
+            $ref: "#/components/schemas/CallParticipant"
+
+    CallToken:
+      type: object
+      required: [token, room, expires_at]
+      properties:
+        token:
+          type: string
+          description: >
+            The join ticket, for the media client. Short-lived, single room,
+            single identity. Never store it; ask again on the next join.
+        room:
+          type: string
+          description: >
+            The room to join. Derived from the channel, and safe to hand back
+            because no ticket this server mints can enumerate rooms -- the
+            only people who ever see this name are already members of the
+            channel it names.
+        expires_at: { type: string, format: date-time }
 
     Channel:
       type: object

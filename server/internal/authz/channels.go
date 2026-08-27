@@ -34,6 +34,12 @@ const (
 	// typed — and because a file is readable by the channel's members from
 	// that moment, whether or not a message ever claims it (ADR 003).
 	FileUpload Action = "channel:file:upload"
+	// CallJoin is minting a ticket to join this channel's call. It is its own
+	// action rather than a reuse of ChannelRead because what it produces is a
+	// credential for a second server, not a page of JSON — and because the
+	// day a channel role model exists, "may join the call" is one of the
+	// first things it will want to say (ADR 005).
+	CallJoin Action = "channel:call:join"
 )
 
 // Channel is the resource for channel-scoped actions: the channel plus the
@@ -81,7 +87,8 @@ func canChannel(user *storage.User, action Action, res Channel) bool {
 		return false
 	}
 	switch action {
-	case ChannelRead, ChannelUpdate, ChannelMemberAdd, MessageSend, ReadPositionSet, FileUpload:
+	case ChannelRead, ChannelUpdate, ChannelMemberAdd, MessageSend, ReadPositionSet,
+		FileUpload, CallJoin:
 		// Any member. A direct message's fixed pair and its lack of a topic
 		// are refused by the handler as 400s: they are statements about the
 		// channel's shape, not about who is asking, and answering 403 would
@@ -121,7 +128,7 @@ func canMessage(user *storage.User, action Action, res Message) bool {
 		// removes words; it does not put new ones in somebody's mouth.
 		return res.Author || user.IsAdmin
 	case ChannelRead, ChannelUpdate, ChannelMemberAdd, ChannelMemberRemove,
-		MessageSend, ReadPositionSet, FileUpload:
+		MessageSend, ReadPositionSet, FileUpload, CallJoin:
 		// Channel actions need a Channel resource; see canChannel.
 		return false
 	case AdminUsersList, AdminUsersCreate, AdminUsersUpdate, AdminUsersResetPassword,

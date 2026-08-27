@@ -320,6 +320,28 @@ type AuditPage struct {
 	NextCursor *string      `json:"next_cursor,omitempty"`
 }
 
+// CallParticipant defines model for CallParticipant.
+type CallParticipant struct {
+	JoinedAt time.Time `json:"joined_at"`
+
+	// ScreenSharing Whether this participant is publishing a screen share.
+	ScreenSharing *bool `json:"screen_sharing,omitempty"`
+
+	// User The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
+	User UserSummary `json:"user"`
+}
+
+// CallToken defines model for CallToken.
+type CallToken struct {
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// Room The room to join. Derived from the channel, and safe to hand back because no ticket this server mints can enumerate rooms -- the only people who ever see this name are already members of the channel it names.
+	Room string `json:"room"`
+
+	// Token The join ticket, for the media client. Short-lived, single room, single identity. Never store it; ask again on the next join.
+	Token string `json:"token"`
+}
+
 // ChangePasswordRequest defines model for ChangePasswordRequest.
 type ChangePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
@@ -360,6 +382,13 @@ type Channel struct {
 
 	// UnreadCount Messages after the caller's read position, excluding the caller's own messages and deleted ones.
 	UnreadCount int `json:"unread_count"`
+}
+
+// ChannelCall A channel's live call. `active` false means nobody is in it, and the other fields are absent rather than stale.
+type ChannelCall struct {
+	Active       bool               `json:"active"`
+	Participants *[]CallParticipant `json:"participants,omitempty"`
+	StartedAt    *time.Time         `json:"started_at,omitempty"`
 }
 
 // ChannelKind Flat channel kinds (ADR 001 — no org or team layer). In Phase 1.2 visibility is membership for all three; `kind` is stored so a channel directory and join flow can arrive without a schema change.
@@ -451,6 +480,9 @@ type HealthStatusStatus string
 
 // InstanceInfo What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere.
 type InstanceInfo struct {
+	// Calls False when no media server is configured -- a development server without the stack, or an install that has not enabled calls. The UI omits call controls rather than offering a door that goes nowhere, the same discipline password_reset_available follows.
+	Calls *bool `json:"calls,omitempty"`
+
 	// MaxFileSizeBytes The per-file upload cap, published so a client can refuse a file before spending the user's bandwidth on a doomed request. The server enforces it regardless; this is a courtesy, not the check.
 	MaxFileSizeBytes       int64      `json:"max_file_size_bytes"`
 	PasswordMinLength      int        `json:"password_min_length"`
@@ -1132,6 +1164,12 @@ type ServerInterface interface {
 	// UpdateChannel Set the channel topic.
 	// (PATCH /api/v1/channels/{channelId})
 	UpdateChannel(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// GetChannelCall What is happening in this channel's call.
+	// (GET /api/v1/channels/{channelId}/call)
+	GetChannelCall(w http.ResponseWriter, r *http.Request, channelId openapi_types.UUID)
+	// CreateCallToken A ticket to join this channel's call.
+	// (POST /api/v1/channels/{channelId}/call/token)
+	CreateCallToken(w http.ResponseWriter, r *http.Request, channelId openapi_types.UUID)
 	// UploadFile Upload one file into a channel.
 	// (POST /api/v1/channels/{channelId}/files)
 	UploadFile(w http.ResponseWriter, r *http.Request, channelId ChannelId)
@@ -1862,6 +1900,58 @@ func (siw *ServerInterfaceWrapper) UpdateChannel(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateChannel(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetChannelCall operation middleware
+func (siw *ServerInterfaceWrapper) GetChannelCall(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetChannelCall(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateCallToken operation middleware
+func (siw *ServerInterfaceWrapper) CreateCallToken(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateCallToken(w, r, channelId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2832,6 +2922,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/members", wrapper.ListChannelMembers)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/members", wrapper.AddChannelMember)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/channels/{channelId}/members/{userId}", wrapper.RemoveChannelMember)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/call", wrapper.GetChannelCall)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/call/token", wrapper.CreateCallToken)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages", wrapper.ListMessages)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages", wrapper.SendMessage)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages/{messageId}", wrapper.DeleteMessage)

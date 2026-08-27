@@ -12,6 +12,7 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
 	"github.com/hamlaneh/hamlaneh/server/internal/audit"
 	"github.com/hamlaneh/hamlaneh/server/internal/blobstore"
+	"github.com/hamlaneh/hamlaneh/server/internal/calls"
 	"github.com/hamlaneh/hamlaneh/server/internal/oidc"
 	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
 	"github.com/hamlaneh/hamlaneh/server/internal/ratelimit"
@@ -237,6 +238,14 @@ type apiServer struct {
 	// answers the same empty 202 it always does, and any token presented to
 	// reset-complete is invalid.
 	reset *passwordreset.Service
+
+	// calls is the media plane (internal/calls). Nil means no media server is
+	// configured — the zero-config install and any development server without
+	// the stack: the instance document reports calls false, the token
+	// endpoint answers 503 calls_unavailable, and every read of live state
+	// honestly answers that there is no call. Every method on it is nil-safe,
+	// so no handler needs a nil check to say so.
+	calls *calls.Service
 
 	// sso is the OIDC relying party. Nil means no provider is configured —
 	// the zero-config install: instance info reports sso disabled, the

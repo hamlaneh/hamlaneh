@@ -148,6 +148,10 @@ unusable connection. The exception is `hello`: it is the frame that establishes 
 
 Notes that matter:
 
+- **The channel is the envelope's `chan`, never a field inside `data`.** Every channel-scoped
+  event carries it at the top level, and no payload repeats it. Some older readers in this repo
+  accept both, which is tolerance rather than permission — a payload that carries its own `chan`
+  is two sources for one fact, and the envelope is the one.
 - **Membership is checked on every channel-scoped operation, every time**, against the database
   or an invalidated cache — never against a membership set captured at connect. A user removed
   from a channel mid-socket stops being able to act on it immediately.
@@ -192,6 +196,9 @@ this socket has subscribed to).
 | `read_position` | own user | no | `{chan, message_id, read_at}` — sent only to the *same user's* other sockets. |
 | `typing` | subscription | no | `{user_id}` — expires client-side after ~5 s; there is no `typing_stopped`. |
 | `presence` | membership, DM channels only | no | `{user_id, state}` — `online`/`away`/`offline`. |
+| `call_started` | membership | no | `{started_by, participants}` — a call is now happening here. Membership scope rather than subscription is what makes a DM peer's client ring without having subscribed to anything. `started_by` exists only on this event: a ring is strictly live, and `GET .../call` cannot rebuild one after a reconnect because it does not carry who started the call. |
+| `call_updated` | membership | no | `{participants}` — somebody joined or left, or started sharing a screen. |
+| `call_ended` | membership | no | `{}` — the last participant left. Sent immediately on that departure, not when the room is eventually reaped, so a banner never claims a call that ended five minutes ago. |
 | `resync` | socket | no | `{chan}` — this channel's replay buffer could not satisfy your resume; backfill over REST (§5). |
 | `ping` | socket | no | `{}` — §6. |
 | `pong` | socket | no | `{}` — answer to a client `ping`. |
@@ -231,7 +238,10 @@ Notes that matter:
 Each channel carries a monotonically increasing **`seq`**, assigned by the server, incremented
 once per ordered event on that channel (the `seq: yes` rows in §4). Ephemeral events carry no
 `seq` and are never replayed: a typing indicator or a presence blip from thirty seconds ago is
-worthless.
+worthless, and a call event from five minutes ago is worse than worthless — it would paint a
+banner for a call nobody is in. Clients reconcile call state against
+`GET /api/v1/channels/{id}/call` on opening a channel and after a reconnect. The events say
+something changed; REST says what is true.
 
 The server keeps a bounded per-channel **replay buffer**: the more recent of the last **256
 events** or the last **5 minutes**. It is memory only. It is not durable, not a queue, and not a
@@ -433,6 +443,9 @@ entry and on an entry without a row. Columns are fixed: `op`, `direction`, `scop
 | typing | s2c | channel | member |
 | presence | s2c | channel | member-dm |
 | resync | s2c | channel | member |
+| call_started | s2c | channel | member |
+| call_updated | s2c | channel | member |
+| call_ended | s2c | channel | member |
 | ping | s2c | socket | session |
 | pong | s2c | socket | session |
 | error | s2c | socket | session |

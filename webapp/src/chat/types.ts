@@ -15,6 +15,8 @@ export type LinkPreview = components["schemas"]["LinkPreview"];
 export type SearchPage = components["schemas"]["SearchPage"];
 export type SearchResult = components["schemas"]["SearchResult"];
 export type User = components["schemas"]["User"];
+export type ChannelCall = components["schemas"]["ChannelCall"];
+export type CallParticipant = components["schemas"]["CallParticipant"];
 
 /**
  * A message the user composed that the server has not confirmed yet.

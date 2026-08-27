@@ -149,6 +149,12 @@ func (s *apiServer) GetInstance(w http.ResponseWriter, r *http.Request) {
 		// answers 503 at the door rather than hiding it.
 		Sso: &api.SsoStatus{Enabled: s.sso != nil},
 	}
+	// calls follows the same rule and for the same reason: the flag says a
+	// media server is configured, so the UI omits call controls rather than
+	// offering a door that goes nowhere (ADR 005). A configured media server
+	// that is down answers 503 at the token endpoint.
+	callsEnabled := s.calls.Enabled()
+	info.Calls = &callsEnabled
 	if s.sso != nil {
 		// Present whenever enabled (the contract): ProviderName defaults
 		// rather than returning empty, so the pair cannot desynchronize.

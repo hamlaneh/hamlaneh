@@ -751,6 +751,46 @@
       "failed": "That did not work. Try again."
     }
   },
+  "calls": {
+    "start": "Start a call",
+    "join": "Join call",
+    "joining": "Joining…",
+    "connecting": "Connecting…",
+    "dismiss": "Dismiss",
+    "strip": {
+      "label": "Call in this conversation",
+      "inProgress": "{{count}} in the call"
+    },
+    "tile": {
+      "speaking": "Speaking",
+      "muted": "Muted",
+      "cameraOff": "Camera off",
+      "sharing": "Sharing screen"
+    },
+    "view": {
+      "heading": "Call in {{channel}}",
+      "participants": "In this call"
+    },
+    "control": {
+      "microphone": "Microphone",
+      "camera": "Camera",
+      "screenShare": "Share screen",
+      "leave": "Leave call"
+    },
+    "ring": {
+      "label": "Incoming call",
+      "from": "{{name}} is calling",
+      "accept": "Answer",
+      "dismiss": "Dismiss",
+      "unknown": "Someone"
+    },
+    "error": {
+      "unavailable": "Calls are not available on this instance.",
+      "failed": "The call could not be joined.",
+      "device": "The microphone or camera could not be used. Check this site’s permissions in the browser.",
+      "ended": "The call ended."
+    }
+  },
   "redeemInvite": {
     "done": "Your account is ready. Sign in to continue."
   },
