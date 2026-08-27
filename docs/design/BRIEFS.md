@@ -169,13 +169,110 @@ guidance to create the first users), `admin-create-user` (modal open), `admin-in
 
 ---
 
-## 5. Call / meeting view — Phase 2 (do NOT design yet — listed for completeness)
+## 5. Call / meeting view — Phase 2 (**design now**; Phase 2 started 2026-08-27)
 
-Participant grid with active-speaker emphasis; screen-share layout (share large, faces rail);
-control bar: mic, camera, screen share, leave (distinct/destructive), participants, chat
-side-panel toggle; pre-join screen (camera preview, device pickers, mic/cam toggles, "Join");
-states: connecting, reconnecting, participant muted/camera-off tiles. Full brief will be
-written when Phase 2 starts.
+Architecture these screens sit on: `docs/adr/005-calls-and-meetings.md`. Read it for what is and
+is not built — several things a call UI usually has are deliberately absent, and drawing them
+would describe a product that does not exist.
+
+### Screens
+
+| Artboard | What it is |
+|---|---|
+| `call-prejoin` | The step between clicking Join and being in the room |
+| `call-grid` | Everyone in the call, nobody sharing |
+| `call-screenshare` | Somebody is sharing; faces demoted to a rail |
+| `call-banner` | The strip in a channel saying a call is happening, for people not in it |
+| `call-ring` | The 1:1 incoming-call toast |
+| `meet-guest` | The page a conference link opens for somebody with no account |
+| `call-rtl-fa` | Full Persian mirror of `call-grid` — the direction check, not a translation |
+
+### `call-prejoin`
+
+Camera preview, microphone and camera toggles, device pickers for both, and Join. This screen
+exists because joining a call with the wrong camera on is the mistake everyone makes once.
+
+It must also carry the case where permission was refused or no device exists — a person on a
+desktop with no webcam still joins, audio-only, and the screen has to say so without reading as
+an error.
+
+### `call-grid`
+
+Participant tiles with active-speaker emphasis. What a tile shows when the camera is **off** is
+the important half, because in a real call most tiles are: name, and an avatar or initials — the
+identity treatment from the chat sidebar is the obvious source, and whether it is borrowed or
+restated is the designer's call.
+
+Per-tile states: speaking, muted, camera off, connection poor, and reconnecting. Muted and
+speaking are the two a person scans for constantly, so they need to survive at the smallest tile
+size the grid produces.
+
+**Control bar:** microphone, camera, screen share, participants, and leave. Leave is
+destructive-adjacent and must not sit where a mis-click reaches it — it ends the call for the
+person clicking, not for everyone, and the difference should be unmistakable.
+
+**Not drawn, because not built** (ADR 005): no raise-hand, no reactions, no moderator controls —
+there is no channel role model to hang them on — no recording indicator, no chat panel inside the
+call (chat stays in the channel behind it), no participant count badge on a call in progress
+beyond what the banner carries.
+
+The grid must answer what happens at 2, 3, 5, and roughly 12 participants, and what it does
+beyond that. A phone-width layout is a separate question the artboard has to answer explicitly
+rather than by shrinking.
+
+### `call-screenshare`
+
+Share large, faces in a rail. Two things to decide: where the rail goes at 1280 versus at phone
+width, and what the sharer themself sees — the "you are sharing" state is the one people forget
+and then leak a window they meant to close.
+
+### `call-banner`
+
+A call is happening in this channel and the reader is not in it. It carries who is in the call
+and a way to join. It appears and disappears on live events, so it needs an entry that does not
+shove the message list.
+
+This is the only call surface a person sees without having chosen to be in a call, so it is the
+one most able to annoy.
+
+### `call-ring`
+
+Somebody is calling in a DM. Caller identity, accept, dismiss.
+
+**Deliberately thin, per ADR 005:** there is no decline-versus-busy distinction, no missed-call
+message afterwards, and no ring timeout — dismissing is dismissing the toast, and the caller
+learns nothing about why. Draw what that honestly is rather than implying a state machine behind
+it.
+
+### `meet-guest`
+
+The page a conference link opens for somebody with **no account on this instance** — the only
+unauthenticated screen in the product besides sign-in.
+
+It asks for a display name and joins. It must not look like a sign-up, and must not imply the
+visitor is getting an account, because they are not: they get one room and nothing else.
+
+Also needed: the state where the link is dead. Unknown, expired and revoked all answer
+identically and the screen cannot tell them apart — one honest sentence and a way out, in the
+shape `RedeemInviteScreen`'s unusable state already uses.
+
+### `call-rtl-fa`
+
+Full Persian mirror of `call-grid`. The control bar order, the screen-share rail side, and the
+active-speaker emphasis all have a direction; the artboard is where that is settled rather than
+guessed in CSS.
+
+**Numerals:** ASCII digits, per the locked correction of 2026-08-21 (`CHAT_HANDOFF.md`).
+Participant counts and call durations are app-generated numbers and follow it.
+
+### States every screen needs
+
+Connecting, reconnecting after a drop, and the call ending because the server restarted — ADR 005
+says a LiveKit restart ends every call, so "the call ended and it was not you" is a real state, not
+an edge case.
+
+Empty conference: a link-holder arrives before anybody else. Waiting alone in a room is a state,
+and it should not read as broken.
 
 ---
 

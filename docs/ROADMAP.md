@@ -435,8 +435,16 @@ public registration is off by default, it is **the** way users come into existen
    SSRF suite green.
 3. E2e green per tiering (full suite, both locales, on the nightly/pre-merge lane).
 4. `deploy/verify-defaults.sh` exits 0 against a fresh `docker compose up` — now also asserting:
-   signup 403 by default, admin routes 401/404 for non-admins, CSP present without
-   inline/eval.
+   no self-serve signup route accepts a caller, admin routes refuse anonymous callers, CSP
+   present without inline/eval.
+
+   Two corrections to what this item used to say, both from finding out what was actually
+   built. It asked for "signup 403": there is no self-serve signup endpoint in the contract at
+   all — `registration_mode` has never had a door behind it — so the script asserts the stronger
+   thing, that the endpoint does not exist, and fails loudly if somebody adds one without
+   deciding what a closed instance answers. It also asked for "401/404 for non-admins", which
+   needs a signed-in non-admin; that case is the authz matrix's job and it is covered there for
+   every admin route, so duplicating it here would be a worse copy of a better test.
 
 ---
 

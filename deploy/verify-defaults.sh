@@ -309,6 +309,22 @@ check_auth_defaults() {
     failure "anonymous GET /api/v1/admin/users returned '${code:-000}' (expected 401)"
   fi
 
+  # The roadmap's gate asks for "signup 403 by default". There is no
+  # self-serve signup route in the contract at all -- registration_mode has
+  # never had a door behind it -- so the true assertion is stronger than the
+  # one asked for: the endpoint does not exist. If somebody later builds one,
+  # this check fails and they have to come here and decide deliberately what
+  # a closed instance answers, which is the point.
+  local path
+  for path in /api/v1/auth/register /api/v1/auth/signup /api/v1/users; do
+    code="$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' "${CONNECT[@]}"       -X POST "https://${DOMAIN}${path}" -H 'Content-Type: application/json' -d '{}' || true)"
+    case "$code" in
+      404) pass "no self-serve signup at ${path}" ;;
+      401|403) pass "self-serve signup at ${path} refuses anonymous callers (${code})" ;;
+      *) failure "POST ${path} returned '${code:-000}'; a closed instance must not accept self-serve signup" ;;
+    esac
+  done
+
   body="$(curl -sk --max-time 10 "${CONNECT[@]}" -X POST "https://${DOMAIN}/api/v1/auth/login" \
     -H 'Content-Type: application/json' \
     -d '{"identifier":"no-such-user-verify-defaults","password":"definitely-wrong-password"}' || true)"
