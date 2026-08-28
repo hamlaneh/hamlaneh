@@ -26,7 +26,7 @@ COPY webapp/ ./
 RUN npm run build
 
 
-FROM golang:1.26@sha256:45a5f7a810238aabcbad211d70b9ae082022d96f7c7259e94041ad1b933575ac AS build
+FROM golang:1.27@sha256:0ecdc2a9f6156af6451080bfe3d8382a662fcc4e209608c6f919e643453514c1 AS build
 
 WORKDIR /src/server
 
