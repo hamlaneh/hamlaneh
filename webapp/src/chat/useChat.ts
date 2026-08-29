@@ -458,10 +458,12 @@ export function useChat({
    * `incomplete` — this client is in the group and could not add everyone.
    * It re-reconciles, which claims key packages for whoever is still outside.
    *
-   * `waiting` — the group exists and this device is not in it yet. A Welcome
-   * normally arrives as an `mls_welcome` nudge, but that event reaches
-   * sockets, so one sent while this client was reconnecting is simply gone.
-   * Re-opening the channel is how it finds out anyway.
+   * `waiting` — the group exists and this device is not in it yet. Only a
+   * Welcome can change that, so the Welcome list is what gets re-asked: the
+   * `mls_welcome` nudge reaches sockets, and one sent while this client was
+   * reconnecting is simply gone. Re-opening the channel would re-read the
+   * group and learn nothing, which is a poll that cannot answer its own
+   * question.
    *
    * Neither is polled for its own sake: both stop as soon as the state moves.
    */
@@ -476,7 +478,7 @@ export function useChat({
     }
     const timer = setInterval(() => {
       if (channelMlsStatus === "waiting") {
-        mlsRef.current.openChannel(channelId);
+        mlsRef.current.syncWelcomes();
       } else {
         // Not openChannel: that would go back through `opening`, and this
         // client can already send — briefly disabling its composer every few

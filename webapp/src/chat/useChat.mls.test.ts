@@ -265,7 +265,7 @@ describe("a group that could not be finished in one go", () => {
     }
   });
 
-  it("re-asks whether it has been added yet while it waits", async () => {
+  it("re-asks for its welcome while it waits, since nothing else can arrive", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const mls = spyController({ [CHANNEL_ID]: { status: "waiting" } });
@@ -275,14 +275,15 @@ describe("a group that could not be finished in one go", () => {
       await waitFor(() => {
         expect(mls.openChannel).toHaveBeenCalledWith(CHANNEL_ID);
       });
-      const before = calls(mls.openChannel);
+      const before = calls(mls.syncWelcomes);
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5_000);
       });
-      // A Welcome nudge reaches sockets, so one sent while this client was
-      // reconnecting is simply gone; asking again is how it finds out.
-      expect(calls(mls.openChannel)).toBeGreaterThan(before);
+      // The Welcome list, not the group: only a Welcome can move this state,
+      // and the nudge that announces one reaches sockets — so one sent while
+      // this client was reconnecting is simply gone.
+      expect(calls(mls.syncWelcomes)).toBeGreaterThan(before);
       unmount();
     } finally {
       vi.useRealTimers();
