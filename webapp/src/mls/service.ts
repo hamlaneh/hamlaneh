@@ -41,6 +41,9 @@ const COMMIT_ATTEMPTS = 4;
 /** Bound on commit-log paging, for the same reason. */
 const CATCH_UP_PAGES = 50;
 
+/** The single chain every MLS operation runs on — see {@link MlsService.runOn}. */
+const DEVICE_CHAIN = "device";
+
 function errorCode(error: unknown): string | null {
   if (typeof error !== "object" || error === null) {
     return null;
@@ -73,6 +76,15 @@ export class MlsService {
 
   /** channel id → MLS group id. Rebuilt from the server, never persisted. */
   private readonly groups = new Map<string, Uint8Array>();
+
+  /**
+   * message id → the ciphertext that was successfully opened for it.
+   *
+   * Holds successes only. A failure is deliberately absent, so it is retried
+   * rather than cached, and the value is the ciphertext rather than a flag so
+   * an edited message — same id, new bytes — is opened again.
+   */
+  private readonly opened = new Map<string, string>();
 
   private readonly chains = new Map<string, Promise<unknown>>();
   private starting: Promise<boolean> | null = null;
@@ -111,16 +123,26 @@ export class MlsService {
   }
 
   /**
-   * Serializes work per key. Rejections are absorbed by the chain so one
-   * failed operation cannot strand every later one behind it, while the
-   * caller still sees its own rejection.
+   * Serializes work. Rejections are absorbed by the chain so one failed
+   * operation cannot strand every later one behind it, while the caller still
+   * sees its own rejection.
+   *
+   * One chain, not one per channel, and the key is kept only to name the
+   * caller in a stack trace. Per-channel chains would be enough if a channel
+   * owned its own state, but `this.device` is a single handle holding every
+   * group, and both `persist()` and `rollback()` read and replace the whole
+   * of it. With per-channel chains, a rollback in one channel could discard a
+   * ratchet advance another channel had already sent ciphertext for, or
+   * resurrect a group whose creation had just lost its race, and a caller
+   * that captured `this.device` could persist a handle it no longer held.
+   * Serializing everything makes the chain match what it protects.
    */
-  private runOn<T>(key: string, work: () => Promise<T>): Promise<T> {
-    const next = (this.chains.get(key) ?? Promise.resolve())
+  private runOn<T>(_key: string, work: () => Promise<T>): Promise<T> {
+    const next = (this.chains.get(DEVICE_CHAIN) ?? Promise.resolve())
       .catch(() => undefined)
       .then(work);
     this.chains.set(
-      key,
+      DEVICE_CHAIN,
       next.catch(() => undefined),
     );
     return next;
@@ -136,7 +158,30 @@ export class MlsService {
    * caller joins the first attempt rather than racing it.
    */
   start(): Promise<boolean> {
-    this.starting ??= this.runOn("device", () => this.startOnce());
+    // Only a SUCCESSFUL attempt is memoized. `startOnce` reports failure by
+    // resolving false rather than rejecting, and a settled promise is never
+    // nullish, so memoizing unconditionally would pin the device at
+    // unavailable for the life of the session over one offline blip — and
+    // every retry the app has runs through here, so nothing could heal it
+    // short of a reload.
+    //
+    // Not on the chain, deliberately: every internal caller reaches this from
+    // inside chained work, so queueing here would put start() behind the
+    // operation waiting for it and neither would ever run. The `starting`
+    // promise is the single-flight guard this needs, and the chain the
+    // callers already hold is what serializes it against everything else.
+    this.starting ??= this.startOnce().then(
+      (ok) => {
+        if (!ok) {
+          this.starting = null;
+        }
+        return ok;
+      },
+      (error: unknown) => {
+        this.starting = null;
+        throw error;
+      },
+    );
     return this.starting;
   }
 
@@ -266,11 +311,17 @@ export class MlsService {
         return;
       }
     } else {
-      this.groups.set(channelId, existing);
       if (!device.has_group(existing)) {
+        // Deliberately NOT recorded in `groups` yet. The map means "this
+        // device holds this group", and every guard that consults it —
+        // syncChannel, encrypt, decrypt — would otherwise reach into a group
+        // the device has no state for. An unrelated commit nudge would then
+        // throw inside catchUp and mark the channel failed, which also stops
+        // the Welcome poll that was the only thing that could rescue it.
         this.setChannel(channelId, { status: "waiting" });
         return;
       }
+      this.groups.set(channelId, existing);
       await this.catchUp(channelId);
     }
 
@@ -356,6 +407,8 @@ export class MlsService {
         device.apply_commit(groupId, fromBase64(commit.message));
       }
       await this.persist();
+      // New epochs are exactly what an earlier failure was missing.
+      this.retryFailedDecryptions();
       if (commits.length < COMMIT_PAGE_SIZE) {
         return;
       }
@@ -363,19 +416,43 @@ export class MlsService {
   }
 
   /**
-   * Adds every channel member whose devices are not in the group yet.
+   * Makes the group's membership match the channel's, in BOTH directions.
    *
    * The channel's membership is the transport authority and the group is the
    * confidentiality authority; the server cannot check that they agree
    * (ADR 006), so this is the client doing it.
+   *
+   * Removing is not optional and not merely tidy. `member_removed` is a live
+   * frame over a replay buffer bounded at 256 events and five minutes, so a
+   * removal that happened while nobody was connected reaches nobody, and no
+   * other path recovers it: a resync backfills messages only. A leaf left in
+   * the tree is a leaf that was never cryptographically evicted — and on a
+   * later re-add this reconcile would see that identity already present, add
+   * nothing, and let a device that kept its old state read the whole commit
+   * log for the period it was supposed to be outside the conversation. That
+   * is exactly the promise Phase 3 is gated on.
    */
   private async reconcileMembers(channelId: string): Promise<void> {
     const device = this.requireDevice();
     const groupId = this.requireGroup(channelId);
-    const inGroup = new Set(unpackStrings(device.member_identities(groupId)));
+    const inGroup = unpackStrings(device.member_identities(groupId));
 
     const members = await this.listMembers(channelId);
-    const missing = members.filter((userId) => !inGroup.has(userId));
+    const memberIds = new Set(members);
+
+    // Removals first: adding somebody while a stale leaf is still in the tree
+    // would hand the new epoch's secrets to the leaf that should be gone.
+    // Never this device — a group cannot evict itself, and a client that
+    // cannot see its own membership has a transport problem, not a group one.
+    const stale = inGroup.filter(
+      (userId) => !memberIds.has(userId) && userId !== this.options.currentUserId,
+    );
+    for (const userId of stale) {
+      await this.removeUser(channelId, userId);
+    }
+
+    const groupIds = new Set(inGroup);
+    const missing = members.filter((userId) => !groupIds.has(userId));
     if (missing.length === 0) {
       this.setChannel(channelId, { status: "ready" });
       return;
@@ -453,6 +530,13 @@ export class MlsService {
         this.settle(channelId, unreachable);
         return;
       }
+
+      // Before the POST, not after: the server's log advances the moment it
+      // answers 201, and if this device dies between that answer and
+      // `commit_accepted` it has to be able to recognise its own commit in
+      // the log. That recovery reads the pending commit, so the pending
+      // commit has to have been written down first.
+      await this.persist();
 
       const { response, error } = await api.POST("/api/v1/channels/{channelId}/mls/commits", {
         params: { path: { channelId } },
@@ -576,39 +660,54 @@ export class MlsService {
       if (this.device === null || !this.groups.has(channelId)) {
         return;
       }
-      const device = this.device;
-      const groupId = this.requireGroup(channelId);
       try {
-        for (let attempt = 0; attempt < COMMIT_ATTEMPTS; attempt += 1) {
-          await this.catchUp(channelId);
-          const bundle = device.remove_user(groupId, userId);
-          const commit = bundle.commit;
-          if (commit === undefined) {
-            return; // already gone: somebody else's commit removed them
-          }
-          const { response, error } = await api.POST(
-            "/api/v1/channels/{channelId}/mls/commits",
-            {
-              params: { path: { channelId } },
-              body: { epoch: Number(device.epoch(groupId)), message: toBase64(commit) },
-            },
-          );
-          if (response.status === 201) {
-            device.commit_accepted(groupId);
-            await this.persist();
-            return;
-          }
-          device.commit_rejected(groupId);
-          await this.persist();
-          if (errorCode(error) !== "mls_epoch_conflict") {
-            throw new Error(`the removal was refused (${errorCode(error) ?? "unknown"})`);
-          }
-        }
+        await this.removeUser(channelId, userId);
       } catch (error) {
         console.warn(`Could not remove ${userId} from the group:`, error);
         this.setChannel(channelId, { status: "failed" });
       }
     });
+  }
+
+  /**
+   * Commits the removal of one person's devices. Caller holds the chain.
+   *
+   * Shared by the live `member_removed` frame and by `reconcileMembers`,
+   * which is what makes a removal nobody witnessed recoverable. The device
+   * handle is read fresh from `this` at each step rather than captured, so a
+   * rollback elsewhere cannot leave this loop accepting a commit on one
+   * handle while `persist` writes another.
+   */
+  private async removeUser(channelId: string, userId: string): Promise<void> {
+    for (let attempt = 0; attempt < COMMIT_ATTEMPTS; attempt += 1) {
+      await this.catchUp(channelId);
+      const groupId = this.requireGroup(channelId);
+      const bundle = this.requireDevice().remove_user(groupId, userId);
+      const commit = bundle.commit;
+      if (commit === undefined) {
+        return; // already gone: somebody else's commit removed them
+      }
+      // Written before the POST, for the reason addUsers states.
+      await this.persist();
+      const { response, error } = await api.POST("/api/v1/channels/{channelId}/mls/commits", {
+        params: { path: { channelId } },
+        body: {
+          epoch: Number(this.requireDevice().epoch(groupId)),
+          message: toBase64(commit),
+        },
+      });
+      if (response.status === 201) {
+        this.requireDevice().commit_accepted(groupId);
+        await this.persist();
+        return;
+      }
+      this.requireDevice().commit_rejected(groupId);
+      await this.persist();
+      if (errorCode(error) !== "mls_epoch_conflict") {
+        throw new Error(`the removal was refused (${errorCode(error) ?? "unknown"})`);
+      }
+    }
+    throw new Error("the group's epoch kept moving; giving up on this removal");
   }
 
   /* ── messages ──────────────────────────────────────────────────────── */
@@ -659,26 +758,85 @@ export class MlsService {
    * state honestly.
    */
   decrypt(channelId: string, messageId: string, ciphertext: string): Promise<void> {
-    if (messageId in this.state.decrypted) {
+    if (this.alreadyOpen(messageId, ciphertext)) {
       return Promise.resolve();
     }
     return this.runOn(channelId, async () => {
+      // Re-checked INSIDE the chain, not only at enqueue. `decryptAll` runs
+      // again on every change to the message list, so the same message is
+      // routinely enqueued twice before the first attempt has run. The real
+      // module consumes a message's ratchet secrets on use, so the second
+      // attempt fails on a message the first one opened — and the catch below
+      // would then replace good plaintext with "cannot decrypt".
+      if (this.alreadyOpen(messageId, ciphertext)) {
+        return;
+      }
       if (this.device === null || !this.groups.has(channelId)) {
+        // Not remembered in `opened`: this device may hold the group a moment
+        // from now, and a verdict recorded before it does would outlive the
+        // condition that produced it.
         this.setDecrypted(messageId, null);
         return;
       }
       const groupId = this.requireGroup(channelId);
       try {
         const text = this.device.decrypt(groupId, fromBase64(ciphertext));
+        // Keyed on the ciphertext, not the message id: an edit reuses the id
+        // with new bytes, and an id-keyed cache would show every recipient
+        // the text from before the edit for the rest of the session.
+        this.opened.set(messageId, ciphertext);
         this.setDecrypted(messageId, text);
         // Decrypting advances the receiving ratchet, which is state.
         await this.persist();
       } catch (error) {
         console.warn(`Message ${messageId} could not be decrypted:`, error);
-        this.setDecrypted(messageId, null);
+        // A failure is rendered but not remembered. The ordinary causes are
+        // temporary — a message sealed at an epoch this device has not caught
+        // up to yet, or a group it is still waiting to join — and catchUp
+        // clears the failed verdicts so they are attempted again.
+        //
+        // It never overwrites a plaintext that is already known, which is the
+        // author's own message: `rememberSent` holds text no decryption
+        // produced, and MLS gives a sender no way to open what it sent.
+        if (typeof this.state.decrypted[messageId] !== "string") {
+          this.setDecrypted(messageId, null);
+        }
         await this.persist();
       }
     });
+  }
+
+  /**
+   * Whether this exact ciphertext has already been opened for this message.
+   *
+   * Two ways to be done with a message: it was decrypted from these very
+   * bytes, or its plaintext is known without ever having been decrypted —
+   * this device sent it, and `rememberSent` recorded it. The second needs its
+   * own arm because the sender genuinely cannot decrypt its own message, so
+   * without it every author's bubble would be retried on every render and
+   * fail every time.
+   */
+  private alreadyOpen(messageId: string, ciphertext: string): boolean {
+    if (this.opened.get(messageId) === ciphertext) {
+      return true;
+    }
+    return !this.opened.has(messageId) && typeof this.state.decrypted[messageId] === "string";
+  }
+
+  /**
+   * Forgets every failed decryption, so the next pass retries them.
+   *
+   * Called after applying commits: the commonest reason a message would not
+   * open is that its epoch had not arrived yet, and without this the first
+   * attempt's verdict would stand for the rest of the session.
+   */
+  private retryFailedDecryptions(): void {
+    const entries = Object.entries(this.state.decrypted);
+    const kept = entries.filter(([, text]) => text !== null);
+    if (kept.length === entries.length) {
+      return;
+    }
+    this.publish({ decrypted: Object.fromEntries(kept) });
   }
 
   /* ── helpers ───────────────────────────────────────────────────────── */

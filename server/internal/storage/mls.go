@@ -59,6 +59,9 @@ var (
 	// caller may act on — another user's, or none at all. The two are one
 	// answer on purpose.
 	ErrMlsDeviceNotFound = errors.New("storage: mls device not found")
+	// ErrMlsWelcomeOutsider reports a Welcome addressed to a device whose
+	// owner is not a member of the channel the commit belongs to.
+	ErrMlsWelcomeOutsider = errors.New("storage: mls welcome recipient is not a channel member")
 )
 
 // MlsDevice is one client instance's leaf identity. A leaf is a device, not a
@@ -203,6 +206,28 @@ const advanceEpochQuery = `UPDATE mls_groups SET epoch = epoch + 1
 // inside the commit's transaction is what keeps that impossible.
 const insertWelcomesQuery = `INSERT INTO mls_welcomes (channel_id, recipient_device_id, welcome)
 	SELECT $1, d, $3 FROM unnest($2::uuid[]) AS d`
+
+// welcomeOutsidersQuery counts the named devices whose owner is not a member
+// of the channel, and it is what keeps a Welcome from being planted on a
+// stranger.
+//
+// The foreign key alone constrains only that a device exists, and a device id
+// is not a secret between members: whoever claims key packages in any shared
+// channel learns them. Without this count, a member of channel X could attach
+// a Welcome addressed to somebody who is not in X — and because
+// ListMlsWelcomes returns the row's channel id and group id to the device's
+// owner, the row itself would hand a non-member the identifiers the
+// channel-scoped 404s exist to withhold. The recipient could never join it
+// either, so it would be re-fetched and re-attempted forever.
+//
+// It joins mls_devices rather than left-joining it, so a device id naming
+// nothing is not counted here and still reaches the foreign key: a Welcome
+// for a device that does not exist stays the loud failure it was.
+const welcomeOutsidersQuery = `SELECT count(*) FROM unnest($2::uuid[]) AS d(id)
+	JOIN mls_devices dev ON dev.id = d.id
+	WHERE NOT EXISTS (
+		SELECT 1 FROM channel_members m WHERE m.channel_id = $1 AND m.user_id = dev.user_id
+	)`
 
 // welcomeColumns is the canonical column list of a pending Welcome, in the
 // order scanMlsWelcome expects.
@@ -433,17 +458,31 @@ func (s *Store) SubmitMlsCommit(ctx context.Context, nc NewMlsCommit) (MlsCommit
 			return nil
 		}
 
+		var recipients []uuid.UUID
+		for _, w := range nc.Welcomes {
+			recipients = append(recipients, w.DeviceIDs...)
+		}
+
+		// Membership is checked before anything is written, inside the
+		// commit's own transaction, so a refused Welcome leaves neither a row
+		// nor an advanced epoch behind.
+		var outsiders int
+		if err := tx.QueryRow(ctx, welcomeOutsidersQuery, nc.ChannelID, recipients).Scan(&outsiders); err != nil {
+			return fmt.Errorf("check welcome recipients: %w", err)
+		}
+		if outsiders > 0 {
+			return ErrMlsWelcomeOutsider
+		}
+
 		// One statement per Welcome rather than one for all of them: each
 		// carries its own blob, and binding it once per statement is what
 		// keeps a Welcome covering two hundred devices from being copied two
 		// hundred times. The contract caps a commit at eight Welcomes, so
 		// this loop is eight statements at worst.
-		var recipients []uuid.UUID
 		for _, w := range nc.Welcomes {
 			if _, insErr := tx.Exec(ctx, insertWelcomesQuery, nc.ChannelID, w.DeviceIDs, w.Welcome); insErr != nil {
 				return mapMlsWelcomeConflict(insErr)
 			}
-			recipients = append(recipients, w.DeviceIDs...)
 		}
 
 		out.WelcomeUserIDs, err = mlsDeviceOwners(ctx, tx, recipients)

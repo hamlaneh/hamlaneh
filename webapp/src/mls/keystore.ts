@@ -177,6 +177,29 @@ function readStoredState(value: unknown): StoredState | null {
   return iv === null || ciphertext === null ? null : { iv, ciphertext };
 }
 
+/** Names the Web Lock that serializes keystore writes across tabs. */
+const KEYSTORE_LOCK = "hamlaneh.mls.keystore";
+
+/**
+ * Runs `work` while holding the keystore lock, or plainly when the browser has
+ * no Web Locks API.
+ *
+ * The fallback is deliberate rather than a refusal: without the lock the only
+ * loss is the cross-tab coordination this adds, and a browser that cannot
+ * coordinate is not a reason to leave a single-tab user with no encryption at
+ * all.
+ */
+async function withKeystoreLock<T>(work: () => Promise<T>): Promise<T> {
+  // Typed through a shape where `locks` is optional rather than through
+  // Navigator, which declares it as always present — it is not, on Safari
+  // before 15.4 and in any non-secure context.
+  const locks = (navigator as { locks?: LockManager }).locks;
+  if (locks === undefined) {
+    return work();
+  }
+  return locks.request(KEYSTORE_LOCK, work);
+}
+
 /**
  * The device state, encrypted at rest.
  *
@@ -205,23 +228,30 @@ export class Keystore {
       console.warn("The MLS keystore needs WebCrypto, which this context does not provide.");
       return null;
     }
-    try {
-      const existing = await store.get(WRAPPING_KEY_ID);
-      if (isCryptoKey(existing)) {
-        return new Keystore(store, existing);
+    // Under the lock, because get-then-generate-then-put is read-modify-write
+    // and two tabs opening at once would both find no key, both make one, and
+    // the second would overwrite the first — leaving whatever the first had
+    // already written undecryptable, which reads to the service as "no stored
+    // device" and silently starts a fresh one, losing every group.
+    return withKeystoreLock(async () => {
+      try {
+        const existing = await store.get(WRAPPING_KEY_ID);
+        if (isCryptoKey(existing)) {
+          return new Keystore(store, existing);
+        }
+        const created = await subtle.generateKey({ name: "AES-GCM", length: 256 }, false, [
+          "encrypt",
+          "decrypt",
+        ]);
+        // `false` above is the load-bearing argument: non-extractable, so the
+        // key can be used through this handle and never read out of it.
+        await store.put(WRAPPING_KEY_ID, created);
+        return new Keystore(store, created);
+      } catch (error) {
+        console.warn("Could not establish the MLS wrapping key:", error);
+        return null;
       }
-      const created = await subtle.generateKey({ name: "AES-GCM", length: 256 }, false, [
-        "encrypt",
-        "decrypt",
-      ]);
-      // `false` above is the load-bearing argument: non-extractable, so the
-      // key can be used through this handle and never read out of it.
-      await store.put(WRAPPING_KEY_ID, created);
-      return new Keystore(store, created);
-    } catch (error) {
-      console.warn("Could not establish the MLS wrapping key:", error);
-      return null;
-    }
+    });
   }
 
   /** Encrypts and stores one device-state export. False when it could not. */
@@ -234,7 +264,14 @@ export class Keystore {
         copyOf(state),
       );
       const record: StoredState = { iv, ciphertext: new Uint8Array(ciphertext) };
-      await this.store.put(STATE_ID, record);
+      // Serialized against every other writer in this profile, so a write is
+      // never interleaved with another tab's. It does NOT make two tabs share
+      // one device: each still holds its own in wasm memory and the last one
+      // to save still wins the stored copy. What the lock buys is that the
+      // stored copy is always exactly one tab's state and never a torn mix of
+      // two. One device per profile needs a SharedWorker and is filed as its
+      // own roadmap item.
+      await withKeystoreLock(() => this.store.put(STATE_ID, record));
       return true;
     } catch (error) {
       // A failed write costs this device its groups on the next reload, which

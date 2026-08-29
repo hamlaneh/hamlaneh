@@ -370,6 +370,13 @@ func (s *apiServer) SubmitMlsCommit(w http.ResponseWriter, r *http.Request, chan
 		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
 			"every welcome must name a registered device")
 		return
+	case errors.Is(err, storage.ErrMlsWelcomeOutsider):
+		// A Welcome addressed to somebody who is not in this channel. Refused
+		// rather than dropped, because a client that built one has a bug the
+		// silence would hide. Nothing was stored, as above.
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+			"every welcome must name a device of a channel member")
+		return
 	case err != nil:
 		internalError(w, r, err)
 		return
@@ -388,9 +395,10 @@ func (s *apiServer) SubmitMlsCommit(w http.ResponseWriter, r *http.Request, chan
 // every member a commit adds and each recipient extracts its own secrets from
 // it. Only the shape rules live here: how many Welcomes, how many devices
 // each, distinctness, and decodable blobs within their cap. Whether a device
-// id names anything is not a question a handler can answer without racing the
-// answer, so it is left to the foreign key inside the commit's own
-// transaction.
+// id names anything, and whether its owner belongs to this channel, are not
+// questions a handler can answer without racing the answer, so both are left
+// to the commit's own transaction — the foreign key for existence, and
+// welcomeOutsidersQuery for membership.
 //
 // Distinctness is checked ACROSS the whole request rather than within each
 // Welcome, and that is the rule worth stating: two Welcomes naming one device

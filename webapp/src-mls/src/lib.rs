@@ -441,18 +441,41 @@ impl MlsDevice {
             .map_err(|error| fail("could not clear the rejected commit", error))
     }
 
-    /// Applies somebody else's commit from the log.
+    /// Applies a commit from the log — somebody else's, or our own.
     ///
-    /// A pending commit of our own is cleared first: if another commit is in
-    /// the log at this epoch, ours has already lost, and holding it would
-    /// only block the group from advancing.
+    /// Our own needs handling because the server's log advances when it
+    /// answers 201 while this device advances when `commit_accepted` runs,
+    /// and a crash between the two leaves a device that must read its own
+    /// commit back. MLS cannot process a self-authored commit, so processing
+    /// is attempted first and a pending commit is the answer to its failure:
+    /// the log holding a commit at our epoch while we hold one pending means
+    /// ours is the one that landed, and merging it is exactly what the lost
+    /// `commit_accepted` would have done. Clearing the pending commit before
+    /// processing — which is what this did before — threw away the only copy
+    /// of the state needed to recover, and the channel could never advance
+    /// again.
+    ///
+    /// When processing succeeds the incoming commit is somebody else's and
+    /// ours has lost, so the pending commit is cleared then rather than now.
     pub fn apply_commit(&mut self, group_id: &[u8], message: &[u8]) -> Result<(), JsError> {
         let mut group = self.require_group(group_id)?;
+
+        let processed = match self.process(&mut group, message) {
+            Ok(processed) => processed,
+            Err(error) => {
+                if group.pending_commit().is_some() {
+                    return group
+                        .merge_pending_commit(&self.provider)
+                        .map_err(|error| fail("could not merge our own accepted commit", error));
+                }
+                return Err(error);
+            }
+        };
+
         group
             .clear_pending_commit(self.provider.storage())
             .map_err(|error| fail("could not clear a superseded commit", error))?;
 
-        let processed = self.process(&mut group, message)?;
         match processed.into_content() {
             ProcessedMessageContent::StagedCommitMessage(staged) => group
                 .merge_staged_commit(&self.provider, *staged)

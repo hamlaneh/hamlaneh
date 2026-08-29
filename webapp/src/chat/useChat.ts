@@ -655,13 +655,22 @@ export function useChat({
     [enqueueSend, channelId],
   );
 
-  /** Queued messages send themselves when the connection returns. */
-  const wasOnline = useRef(false);
+  /**
+   * Queued messages send themselves again when something that could have
+   * blocked them changes.
+   *
+   * Losing the connection is not the only way to end up queued. A refused
+   * request, a transport throw, and an encrypted channel whose group was not
+   * usable yet all queue while the socket is perfectly online — and a drain
+   * that only fires on an offline→online edge would never look at them again,
+   * so the message would sit under "Waiting to send" until a reload dropped
+   * it without a word. Retrying when the encryption state moves is what makes
+   * the e2ee case recover; retrying while merely online is what makes the
+   * other two recover, and a resend is free because `client_msg_id` makes the
+   * server's answer a lookup rather than a second message.
+   */
   useEffect(() => {
-    const online = state.connection.status === "online";
-    const regained = online && !wasOnline.current;
-    wasOnline.current = online;
-    if (!regained) {
+    if (state.connection.status !== "online") {
       return;
     }
     for (const [target, channelView] of Object.entries(stateRef.current.views)) {
@@ -674,7 +683,7 @@ export function useChat({
         }
       }
     }
-  }, [state.connection, enqueueSend, stateRef]);
+  }, [state.connection, channelMlsStatus, enqueueSend, stateRef]);
 
   /* ── message actions ────────────────────────────────────────────── */
 
