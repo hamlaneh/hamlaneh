@@ -301,6 +301,7 @@ impl MlsDevice {
             .use_ratchet_tree_extension(true)
             .ciphersuite(CIPHERSUITE)
             .build();
+
         MlsGroup::new_with_group_id(
             &self.provider,
             &self.signer,
@@ -476,7 +477,12 @@ impl MlsDevice {
         };
         let staged = StagedWelcome::new_from_welcome(
             &self.provider,
-            &MlsGroupJoinConfig::default(),
+            // Not `default()`: the join config is what a joined group carries
+            // forward, so a device that joined with the ratchet-tree
+            // extension off would produce tree-less Welcomes of its own and
+            // nobody it added could join. Caught exactly that way, by the
+            // three-party case in wasm.roundtrip.test.ts.
+            &join_config(),
             welcome,
             // None: the ratchet tree rides in the group's extension.
             None,
@@ -612,6 +618,15 @@ impl MlsDevice {
             .put_handle(HANDLE_KEY_PACKAGE_BATCHES, &encoded)
             .map_err(|error| fail("could not record the key-package batches", error))
     }
+}
+
+/// The join config every group in this app runs with. Its one setting is the
+/// ratchet-tree extension, and it has to be the same on creation and on join:
+/// see the comment in `join_from_welcome`.
+fn join_config() -> MlsGroupJoinConfig {
+    MlsGroupJoinConfig::builder()
+        .use_ratchet_tree_extension(true)
+        .build()
 }
 
 fn credential_for(identity: &str, signer: &SignatureKeyPair) -> CredentialWithKey {
