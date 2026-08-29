@@ -454,7 +454,8 @@ Goal: 1:1 and group calls that survive real-world NATs.
 
 - [x] LiveKit integration: server-side room/token service — LiveKit API keys never leave the server
 - [x] 1:1 calls from DMs; group calls in channels; conference rooms with links
-- [ ] Screen share; mute/camera controls; active-speaker UI
+- [x] Screen share; mute/camera controls; active-speaker UI — with the leak warning the
+      artboards draw, because the state people forget is that they are still sharing
 - [x] TURN (LiveKit embedded — see ADR 005 for why, and it is credentials rather than features) in the compose stack, auto-configured by install.sh
 - Tests: token service authz via the matrix harness (no token for rooms you're not in); token
   negatives — expired rejected, tampered signature rejected, token for room X rejected at room Y;
