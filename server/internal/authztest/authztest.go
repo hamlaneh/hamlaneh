@@ -532,6 +532,7 @@ const (
 	mlsGroupPath   = channelPath + "/mls/group"
 	mlsClaimsPath  = channelPath + "/mls/key-package-claims"
 	mlsCommitsPath = channelPath + "/mls/commits"
+	mlsDevicesPath = channelPath + "/mls/member-devices"
 )
 
 // The E2EE transport's own-account half. Every one of these is decided by the
@@ -1420,6 +1421,21 @@ func mlsEntries() []Entry {
 	commitBody := func(Fixture) string { return fmt.Sprintf(`{"epoch":0,"message":%q}`, mlsBlob) }
 	entries = append(entries, bothKinds(http.MethodPost, mlsCommitsPath, commitBody,
 		members(noGroup, noGroup, noGroup))...)
+
+	// The member-device directory (ADR 007 decision 2), and the row exists
+	// for the two non-member columns rather than the member ones. This read
+	// is the allow-list an eviction sweep trusts: every leaf whose key it
+	// does not name is evicted. A stranger who could read it would learn the
+	// whole roster of a channel they cannot see — every member's id, and how
+	// many devices each has — so the 404 these cells pin is the boundary that
+	// keeps the directory a thing only members can assemble.
+	//
+	// The member cells land on the mode refusal because every fixture channel
+	// is plaintext, and that they do is the ordering this row pins: a channel
+	// with no group has no tree to sweep, but a stranger must reach the
+	// channel's own 404 first and learn nothing about the mode either way.
+	entries = append(entries, bothKinds(http.MethodGet, mlsDevicesPath, nil,
+		members(notEncrypted, notEncrypted, notEncrypted))...)
 
 	return entries
 }

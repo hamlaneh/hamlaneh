@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 
@@ -645,5 +646,142 @@ func TestMlsWelcomesIntegration(t *testing.T) {
 	}
 	if len(left) != 1 || left[0].ID != welcomes[1].ID {
 		t.Errorf("welcomes left = %+v, want only the second one", left)
+	}
+}
+
+// The eviction allow-list (ADR 007 decision 2). What these pin is not that
+// the query returns rows, but the two shapes the sweep's correctness rests
+// on: a member with no devices is PRESENT with an empty list, and a
+// non-member's device is ABSENT from every page. Both are properties of a
+// LEFT JOIN driven from channel_members, and both are silently broken by the
+// inner join somebody will eventually be tempted to write instead.
+
+// memberKeys collects a page into user id → sorted device keys, so the
+// assertions below compare sets. The allow-list IS a set: which order two of
+// one person's devices come back in is not something a sweep can depend on.
+func memberKeys(members []storage.MlsMemberDevice) map[uuid.UUID][]string {
+	out := map[uuid.UUID][]string{}
+	for _, m := range members {
+		keys := make([]string, 0, len(m.SignaturePublicKeys))
+		for _, k := range m.SignaturePublicKeys {
+			keys = append(keys, string(k))
+		}
+		slices.Sort(keys)
+		out[m.UserID] = keys
+	}
+	return out
+}
+
+func TestListMlsMemberDevicesIntegration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fx := newMlsFixture(ctx, t, "memberdev")
+
+	mustRegisterDevice(ctx, t, fx.store, fx.bob.ID, "bob-laptop")
+	mustRegisterDevice(ctx, t, fx.store, fx.bob.ID, "bob-phone")
+	// Alice deliberately registers nothing.
+	//
+	// The stranger's device must never reach a page: an allow-list carrying
+	// an outsider's key authorizes the very leaf the sweep exists to evict.
+	mustRegisterDevice(ctx, t, fx.store, fx.stranger.ID, "stranger-laptop")
+
+	members, err := fx.store.ListMlsMemberDevices(ctx, fx.channelID, nil, 200)
+	if err != nil {
+		t.Fatalf("ListMlsMemberDevices: %v", err)
+	}
+
+	got := memberKeys(members)
+	if len(got) != 2 {
+		t.Fatalf("page holds %d members (%v), want exactly alice and bob", len(got), got)
+	}
+
+	// The one a future "optimization" breaks. Alice has registered no device,
+	// and she must still appear — with an empty list, not by being dropped.
+	// Dropped, she is indistinguishable from a non-member, and a client's
+	// allow-list would evict a real member's leaves.
+	alice, present := got[fx.alice.ID]
+	if !present {
+		t.Errorf("alice (%s) is missing from the page; a member with no devices must appear with an "+
+			"empty list, or a sweep built from this page evicts her real leaves", fx.alice.ID)
+	}
+	if len(alice) != 0 {
+		t.Errorf("alice's keys = %v, want empty", alice)
+	}
+
+	if want := []string{"bob-laptop", "bob-phone"}; !slices.Equal(got[fx.bob.ID], want) {
+		t.Errorf("bob's keys = %v, want %v", got[fx.bob.ID], want)
+	}
+
+	// The stranger's key is nowhere in the answer, under any user.
+	for userID, keys := range got {
+		if slices.Contains(keys, "stranger-laptop") {
+			t.Errorf("a non-member's device key appears under %s; it would be allow-listed", userID)
+		}
+	}
+	if _, leaked := got[fx.stranger.ID]; leaked {
+		t.Errorf("the stranger (%s) appears in the page at all", fx.stranger.ID)
+	}
+}
+
+// TestListMlsMemberDevicesPagingIntegration walks a roster a page at a time
+// and pins that the walk sees every member exactly once.
+//
+// It is the server's half of the contract's "a client must read every page
+// before sweeping": a member skipped by paging is a member whose keys are
+// absent from the assembled allow-list, and the sweep built from it evicts
+// them. Duplicates are harmless to a set union and are still checked, because
+// a member appearing twice means the keyset is not a total order — and the
+// next symptom of that is a skip.
+func TestListMlsMemberDevicesPagingIntegration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fx := newMlsFixture(ctx, t, "memberpage")
+
+	// Alice and Bob are already members; add five more, one of whom registers
+	// a device, so the walk covers a mix rather than a uniform roster.
+	want := map[uuid.UUID][]string{fx.alice.ID: {}, fx.bob.ID: {}}
+	for i := range 5 {
+		u := mustCreateUser(ctx, t, fx.store, newUser(fmt.Sprintf("memberpage%d", i)))
+		if err := fx.store.AddChannelMember(ctx, fx.channelID, u.ID, fx.alice.ID); err != nil {
+			t.Fatalf("add member %d: %v", i, err)
+		}
+		want[u.ID] = []string{}
+		if i == 4 {
+			mustRegisterDevice(ctx, t, fx.store, u.ID, "device-of-member-4")
+			want[u.ID] = []string{"device-of-member-4"}
+		}
+	}
+
+	const pageSize = 2
+	seen := map[uuid.UUID][]string{}
+	var after *uuid.UUID
+	for pages := 0; ; pages++ {
+		if pages > len(want) {
+			t.Fatalf("paging did not terminate after %d pages", pages)
+		}
+		page, err := fx.store.ListMlsMemberDevices(ctx, fx.channelID, after, pageSize)
+		if err != nil {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		for id, keys := range memberKeys(page) {
+			if _, twice := seen[id]; twice {
+				t.Errorf("member %s came back on two pages", id)
+			}
+			seen[id] = keys
+		}
+		last := page[len(page)-1].UserID
+		after = &last
+	}
+
+	if len(seen) != len(want) {
+		t.Fatalf("the walk saw %d members, want %d", len(seen), len(want))
+	}
+	for id, keys := range want {
+		if !slices.Equal(seen[id], keys) {
+			t.Errorf("member %s: keys %v across the walk, want %v", id, seen[id], keys)
+		}
 	}
 }

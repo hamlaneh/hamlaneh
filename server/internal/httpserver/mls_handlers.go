@@ -49,6 +49,12 @@ const (
 	maxDevicesPerWelcome = 200
 	maxCiphertextB64     = 45000
 	maxCommitPageLimit   = 50
+
+	// The roster page. The contract's default IS its maximum (openapi.yaml):
+	// a client assembling an allow-list has to read every page regardless, so
+	// a smaller default would only buy it more round trips to reach the same
+	// set.
+	maxMemberDevicePageLimit = 200
 )
 
 // maxKeyPackagesBody bounds the replace-all request. The contract's own
@@ -275,6 +281,94 @@ func (s *apiServer) ClaimMlsKeyPackages(w http.ResponseWriter, r *http.Request, 
 	}
 	out.MissingDeviceIds = append(out.MissingDeviceIds, missing...)
 	writeJSONValue(w, r, http.StatusOK, out)
+}
+
+// ListMlsMemberDevices returns the channel roster's device signature keys —
+// the allow-list a client sweeps its MLS tree against (ADR 007).
+//
+// Deliberately the whole roster rather than a per-user lookup, and that is
+// the endpoint's reason to exist rather than a paging convenience: the sweep
+// evicts every leaf the directory does not map to a current member, and a
+// per-user question can only ever confirm keys the directory already
+// attributes correctly. The planted leaf — credentialed under a staying
+// member's id — is precisely the one no per-user answer names.
+//
+// Refused on a plaintext channel exactly as claiming is: a channel that can
+// never have a group has no tree to sweep. Membership is decided first, by
+// channelMlsScope, so the mode refusal cannot be used to probe which channels
+// exist.
+//
+// The keys are the server's claim and not a proof — the directory is written
+// under an authenticated session and never signature-verified — so nothing
+// here may be described as making removal hold against a hostile server.
+// Closing that residue is the verification slice's job.
+func (s *apiServer) ListMlsMemberDevices(w http.ResponseWriter, r *http.Request, channelID api.ChannelId, params api.ListMlsMemberDevicesParams) {
+	sc, ok := s.channelMlsScope(w, r, channelID, authz.MlsRead)
+	if !ok {
+		return
+	}
+	if !sc.channel.E2EE {
+		writeE2EENotEnabled(w, r, "this channel is not end-to-end encrypted")
+		return
+	}
+	limit, ok := pageLimit(w, r, params.Limit, maxMemberDevicePageLimit, maxMemberDevicePageLimit)
+	if !ok {
+		return
+	}
+	after, ok := memberDeviceCursor(w, r, params.Cursor)
+	if !ok {
+		return
+	}
+
+	// One row beyond the page tells us whether a next page exists.
+	members, err := sc.store.ListMlsMemberDevices(r.Context(), channelID, after, limit+1)
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
+
+	page := api.MlsMemberDevicePage{
+		Members: make([]api.MlsMemberDevice, 0, min(len(members), limit)),
+	}
+	if len(members) > limit {
+		members = members[:limit]
+		next := encodeCursor("", members[len(members)-1].UserID)
+		page.NextCursor = &next
+	}
+	for _, m := range members {
+		// Always an array, never a JSON null: an empty list is what tells a
+		// client "this member has registered no device", which is a different
+		// fact from "not a member" and must not arrive as a crash.
+		keys := make([]string, 0, len(m.SignaturePublicKeys))
+		for _, k := range m.SignaturePublicKeys {
+			keys = append(keys, base64.StdEncoding.EncodeToString(k))
+		}
+		page.Members = append(page.Members, api.MlsMemberDevice{
+			UserId: m.UserID, SignaturePublicKeys: keys,
+		})
+	}
+	writeJSONValue(w, r, http.StatusOK, page)
+}
+
+// memberDeviceCursor decodes the roster page's optional position. On a
+// malformed cursor it answers 400 and reports false, as every other paged
+// read does.
+//
+// The page's sort key IS the user id, so the shared cursor encoding's key
+// half is empty here and the uuid half carries the whole position. It is
+// still the shared encoding rather than a bare uuid, so a cursor stays one
+// opaque thing across the API instead of one endpoint inviting clients to
+// construct their own.
+func memberDeviceCursor(w http.ResponseWriter, r *http.Request, encoded *string) (*uuid.UUID, bool) {
+	if encoded == nil {
+		return nil, true
+	}
+	_, id, err := decodeCursor(*encoded)
+	if err != nil {
+		writeInvalidCursor(w, r)
+		return nil, false
+	}
+	return &id, true
 }
 
 // ListMlsCommits returns the commit log after an epoch, ascending.

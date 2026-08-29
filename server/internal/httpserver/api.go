@@ -190,6 +190,7 @@ type Store interface {
 	MlsGroupByChannel(ctx context.Context, channelID uuid.UUID) (storage.MlsGroup, error)
 	CreateMlsGroup(ctx context.Context, channelID uuid.UUID, groupID []byte) (storage.MlsGroup, error)
 	ClaimMlsKeyPackages(ctx context.Context, channelID, targetUserID uuid.UUID) ([]storage.MlsKeyPackageClaim, []uuid.UUID, error)
+	ListMlsMemberDevices(ctx context.Context, channelID uuid.UUID, after *uuid.UUID, limit int) ([]storage.MlsMemberDevice, error)
 	SubmitMlsCommit(ctx context.Context, nc storage.NewMlsCommit) (storage.MlsCommitOutcome, error)
 	ListMlsCommits(ctx context.Context, channelID uuid.UUID, afterEpoch int64, limit int) ([]storage.MlsCommit, error)
 	ListMlsWelcomes(ctx context.Context, userID uuid.UUID) ([]storage.MlsWelcome, error)

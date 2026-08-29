@@ -105,6 +105,7 @@ type fakeStore struct {
 	mlsGroupByChannel     func(ctx context.Context, channelID uuid.UUID) (storage.MlsGroup, error)
 	createMlsGroup        func(ctx context.Context, channelID uuid.UUID, groupID []byte) (storage.MlsGroup, error)
 	claimMlsKeyPackages   func(ctx context.Context, channelID, targetUserID uuid.UUID) ([]storage.MlsKeyPackageClaim, []uuid.UUID, error)
+	listMlsMemberDevices  func(ctx context.Context, channelID uuid.UUID, after *uuid.UUID, limit int) ([]storage.MlsMemberDevice, error)
 	submitMlsCommit       func(ctx context.Context, nc storage.NewMlsCommit) (storage.MlsCommitOutcome, error)
 	listMlsCommits        func(ctx context.Context, channelID uuid.UUID, afterEpoch int64, limit int) ([]storage.MlsCommit, error)
 	listMlsWelcomes       func(ctx context.Context, userID uuid.UUID) ([]storage.MlsWelcome, error)
@@ -788,6 +789,13 @@ func (f *fakeStore) ClaimMlsKeyPackages(ctx context.Context, channelID, targetUs
 		return nil, nil, errFakeUnwired
 	}
 	return f.claimMlsKeyPackages(ctx, channelID, targetUserID)
+}
+
+func (f *fakeStore) ListMlsMemberDevices(ctx context.Context, channelID uuid.UUID, after *uuid.UUID, limit int) ([]storage.MlsMemberDevice, error) {
+	if f.listMlsMemberDevices == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listMlsMemberDevices(ctx, channelID, after, limit)
 }
 
 func (f *fakeStore) SubmitMlsCommit(ctx context.Context, nc storage.NewMlsCommit) (storage.MlsCommitOutcome, error) {
