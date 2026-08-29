@@ -16,17 +16,29 @@ interface PeoplePickerProps {
   actionLabel: string;
   onPick: (user: UserSummary) => Promise<boolean>;
   onClose: () => void;
+  /**
+   * The encryption choice, when this picker is the moment a conversation is
+   * created. Absent for the invite picker, which joins one that exists.
+   */
+  encryption?: { checked: boolean; onChange: (checked: boolean) => void } | undefined;
 }
 
 /** One directory request per pause in typing, not per keystroke. */
 const QUERY_DEBOUNCE_MS = 200;
 
-export function PeoplePicker({ title, actionLabel, onPick, onClose }: PeoplePickerProps) {
+export function PeoplePicker({
+  title,
+  actionLabel,
+  onPick,
+  onClose,
+  encryption,
+}: PeoplePickerProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [people, setPeople] = useState<UserSummary[]>([]);
   const [failed, setFailed] = useState(false);
   const queryId = useId();
+  const e2eeId = useId();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -82,6 +94,28 @@ export function PeoplePicker({ title, actionLabel, onPick, onClose }: PeoplePick
           }}
         />
       </p>
+      {encryption === undefined ? null : (
+        <>
+          <p>
+            {/* Picking the person *is* the creation moment for a DM, so the
+                choice has to live here — it is fixed once the conversation
+                exists and there is no later screen to make it on. */}
+            <label htmlFor={e2eeId}>
+              <input
+                id={e2eeId}
+                type="checkbox"
+                name="e2ee"
+                checked={encryption.checked}
+                onChange={(event) => {
+                  encryption.onChange(event.target.checked);
+                }}
+              />
+              {t("chat.people.e2eeLabel")}
+            </label>
+          </p>
+          <p>{t("chat.people.e2eeNote")}</p>
+        </>
+      )}
       {failed ? <p role="alert">{t("chat.people.failed")}</p> : null}
       <ul>
         {people.map((person) => (

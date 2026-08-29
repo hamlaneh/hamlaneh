@@ -204,8 +204,14 @@ export function ChatShell({
   const ringCaller =
     ring?.from?.display_name ?? ringChannel?.dm_peer?.display_name ?? t("calls.ring.unknown");
 
+  /* The DM picker's encryption choice. It lives here rather than inside the
+   * picker so closing and reopening starts from the default rather than from
+   * whatever the last attempt left behind. */
+  const [newDmEncrypted, setNewDmEncrypted] = useState(false);
+
   const closeOverlay = () => {
     setOverlay("none");
+    setNewDmEncrypted(false);
   };
 
   const runSearch = (kind: SearchKind) => {
@@ -479,8 +485,9 @@ export function ChatShell({
         <PeoplePicker
           title={t("chat.sidebar.newDirectMessage")}
           actionLabel={t("chat.people.message")}
+          encryption={{ checked: newDmEncrypted, onChange: setNewDmEncrypted }}
           onPick={async (user) => {
-            const channel = await chat.openDirectMessage(user.id);
+            const channel = await chat.openDirectMessage(user.id, newDmEncrypted);
             if (channel === null) {
               return false;
             }

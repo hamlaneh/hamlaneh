@@ -467,10 +467,10 @@ export const chatHandlers = [
       const created: Channel = {
         id: `00000000-0000-4000-8000-${String(chat.channels.length).padStart(12, "8")}`,
         kind: "dm",
-        // OpenDirectMessageRequest carries no e2ee field, so a DM opened
-        // through this contract is plaintext — mirrored here rather than
-        // guessed at.
-        e2ee: false,
+        // Only this branch reads it: the flag applies when the call *creates*
+        // the DM, and the get-or-create above returns an existing one as it
+        // is, whatever the request says (openapi.yaml).
+        e2ee: body.e2ee ?? false,
         slug: null,
         topic: "",
         member_count: 2,

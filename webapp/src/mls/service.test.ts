@@ -6,7 +6,7 @@ import { CHAT_USERS } from "../mocks/chat";
 import { resetMockAuth } from "../mocks/handlers";
 import { mockMlsDevices, mockMlsGroup, mockMlsWelcomes, seedMockMlsDevice } from "../mocks/mls";
 import { server } from "../mocks/node";
-import { toBase64 } from "./bytes";
+import { fromBase64, toBase64 } from "./bytes";
 import { fakeMlsModule, fakeWorld } from "./fakeModule";
 import { memoryStore, Keystore } from "./keystore";
 import { MlsService } from "./service";
@@ -74,9 +74,21 @@ async function createE2eeChannel(slug: string): Promise<string> {
   return data.id;
 }
 
+let world = fakeWorld();
+
 beforeEach(() => {
-  setMlsModule(fakeMlsModule(fakeWorld()));
+  world = fakeWorld();
+  setMlsModule(fakeMlsModule(world));
 });
+
+/** A fresh encrypted direct message, opened through the contract. */
+async function openE2eeDm(userId: string): Promise<string> {
+  const { data } = await api.POST("/api/v1/dms", { body: { user_id: userId, e2ee: true } });
+  if (data === undefined) {
+    throw new Error("the fixture direct message could not be opened");
+  }
+  return data.id;
+}
 
 describe("start", () => {
   it("registers the device and publishes a key-package pool", async () => {
@@ -349,6 +361,62 @@ describe("messages", () => {
 
     service.rememberSent("m-2", "what I said");
     expect(latest().decrypted["m-2"]).toBe("what I said");
+  });
+});
+
+describe("a direct message", () => {
+  /**
+   * A DM is a channel of two, and the service treats it as one — there is no
+   * DM-shaped branch anywhere in it. This proves that in the only way that
+   * counts: the group is created, the peer is added, and a message written on
+   * one side opens on the other.
+   */
+  it("bootstraps its group and carries a message to the other side", async () => {
+    // Not Parisa: the fixture already holds a plaintext DM with her, and
+    // get-or-create would hand that one back — which is the rule the last
+    // case in this group pins down.
+    const peerId = CHAT_USERS.nasrin.id;
+    // The peer's own device, in the same world, with a key package in the
+    // directory for us to claim.
+    const peer = fakeMlsModule(world).create(peerId);
+    seedMockMlsDevice(peerId, [fakeKeyPackage(peerId)]);
+
+    const channelId = await openE2eeDm(peerId);
+    const service = newService();
+    await service.openChannel(channelId);
+
+    const group = mockMlsGroup(channelId);
+    expect(group?.epoch).toBe(1);
+
+    // The Welcome the commit carried, joined by the peer exactly as its own
+    // client would after the mls_welcome nudge.
+    const welcome = mockMlsWelcomes().find((entry) => entry.channel_id === channelId);
+    expect(welcome).toBeDefined();
+    peer.join_from_welcome(fromBase64(welcome?.welcome ?? ""));
+
+    const sealed = await service.encrypt(channelId, "just between us");
+    expect(sealed).not.toBeNull();
+    const groupId = fromBase64(group?.groupId ?? "");
+    expect(peer.decrypt(groupId, fromBase64(sealed?.ciphertext ?? ""))).toBe("just between us");
+  });
+
+  it("opens as plaintext when the flag says so", async () => {
+    const { data } = await api.POST("/api/v1/dms", {
+      body: { user_id: CHAT_USERS.omid.id, e2ee: false },
+    });
+    expect(data?.e2ee).toBe(false);
+  });
+
+  it("keeps an existing conversation as it was opened", async () => {
+    const peerId = CHAT_USERS.omid.id;
+    const first = await openE2eeDm(peerId);
+    // Get-or-create is idempotent, and a flag cannot re-decide a conversation
+    // that already exists (openapi.yaml -> OpenDirectMessageRequest.e2ee).
+    const { data } = await api.POST("/api/v1/dms", {
+      body: { user_id: peerId, e2ee: false },
+    });
+    expect(data?.id).toBe(first);
+    expect(data?.e2ee).toBe(true);
   });
 });
 

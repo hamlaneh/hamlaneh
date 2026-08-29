@@ -790,7 +790,9 @@
       "searchLabel": "Find someone",
       "invite": "Invite",
       "message": "Message",
-      "failed": "That did not work. Try again."
+      "failed": "That did not work. Try again.",
+      "e2eeLabel": "End-to-end encrypt this conversation",
+      "e2eeNote": "Cannot be changed later, and only applies if this conversation does not exist yet — reopening one you already have keeps whatever it was opened as."
     },
     "e2ee": {
       "regionLabel": "Encryption",

@@ -39,7 +39,11 @@ export interface ChatController {
     kind: "public" | "private",
     e2ee: boolean,
   ) => Promise<Channel | null>;
-  openDirectMessage: (userId: string) => Promise<Channel | null>;
+  /**
+   * `e2ee` applies only when this opens a DM that did not exist; an existing
+   * one comes back as it is, whatever is passed (openapi.yaml).
+   */
+  openDirectMessage: (userId: string, e2ee: boolean) => Promise<Channel | null>;
   inviteMember: (userId: string) => Promise<boolean>;
   setTopic: (topic: string) => Promise<boolean>;
   /** Closes the DM ring toast, and that is all it does (ADR 005). */
@@ -764,9 +768,9 @@ export function useChat({
     [],
   );
 
-  const openDirectMessage = useCallback(async (userId: string) => {
+  const openDirectMessage = useCallback(async (userId: string, e2ee: boolean) => {
     try {
-      const { data } = await api.POST("/api/v1/dms", { body: { user_id: userId } });
+      const { data } = await api.POST("/api/v1/dms", { body: { user_id: userId, e2ee } });
       if (data === undefined) {
         return null;
       }
