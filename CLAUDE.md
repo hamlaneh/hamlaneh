@@ -4,14 +4,17 @@ Hamlaneh (هم‌لانه, "shared nest") is a self-hosted team communication pl
 sharing, voice/video calls, screen share, and conferencing. One-line install, secure by default,
 100% open source (AGPL-3.0), revenue from official hosting.
 
+**Address the user by name: Amir.**
+
 **Read before any non-trivial work:**
 - `docs/PLAN.md` — master plan: vision, architecture, security plan, business model. Strategy lives there.
 - `docs/ROADMAP.md` — executable phases with test gates. Execution lives there.
 
-**Current status:** Phase 1.2 is complete — chat works end to end, proven by Playwright against
-the real stack. Phase 0 (hardened compose stack, contract-first codegen, CI) and Phase 1.1
-(identity core, password reset, two-step verification, session management) shipped before it.
-Next: 1.3 (file upload, link previews, file search).
+**Current status:** Phase 0 through Phase 2 are code-complete — install stack, identity, chat,
+files, admin dashboard, bilingual UI, enterprise identity, and calls/conferences on LiveKit.
+Next: Phase 3 (end-to-end encryption with MLS), which opens with an ADR rather than code.
+Two gates are outstanding and are the user's to run, not code tasks: Phase 2's manual NAT drill
+and Phase 1's two weeks of daily-driving.
 `docs/OVERVIEW.md` always carries the current picture — read it, not this line, for detail.
 
 ## Tech stack (decided — see "Changing a decision" below for the only way to relitigate)

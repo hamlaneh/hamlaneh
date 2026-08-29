@@ -5,7 +5,7 @@
 > commit (enforced via the Definition of Done in CLAUDE.md). Strategy lives in
 > [PLAN.md](PLAN.md); task-level execution lives in [ROADMAP.md](ROADMAP.md).
 >
-> **Last updated:** 2026-08-21
+> **Last updated:** 2026-08-29
 
 ## What is Hamlaneh?
 
@@ -232,8 +232,8 @@ keeps its place with its content erased, which is what the design's "Message rem
 placeholder renders, and a permalink resolves through a cursor that centres the page on the
 message it names.
 
-**Not yet built:** files; the admin dashboard (designed, not built); calls; E2EE — see the phase
-list below.
+**Not yet built:** E2EE — the whole of Phase 3, and the only phase before Phase 4 with no code
+behind it. Everything else this file describes exists and is under test.
 
 A DM now carries its peer, resolved by a join in the same query that draws the sidebar rather
 than a lookup per row; mentions are parsed from the contract's `<@{id}>` token when a message is
@@ -299,7 +299,7 @@ was not entitled to read the message it points at.
   match against nothing at all reaches creation. A created account is indistinguishable from an
   invited one afterwards — the same mint, so the organisation's two-step requirement binds at
   that first sign-in.
-- **Calls (Phase 2, in progress).** LiveKit is in the stack, the server mints join tickets, and
+- **Calls (Phase 2).** LiveKit is in the stack, the server mints join tickets, and
   the webapp joins, publishes and subscribes. A ticket is scoped to one room and one identity and
   lives about two minutes, because a ticket has no business outliving the click that asked for
   it; it grants nothing else — it cannot list rooms, cannot eject anyone, and cannot open a data
@@ -327,22 +327,27 @@ was not entitled to read the message it points at.
 
 ## What's next
 
-**Phase 1.6 — enterprise identity.** OIDC single sign-on first, free rather than paywalled
-(PLAN.md §6.3), with SAML held back unless a paying pre-sale asks for it; then SCIM
-provisioning, whose deprovision path has to kill every session and socket of the removed
-account, not merely mark it inactive. Two rules the slice exists to prove: an SSO-created
-account is still subject to the org's two-step policy, and single sign-on cannot walk around
-registration being off.
+**Phase 3 — end-to-end encryption with MLS.** It starts with a decision rather than code: the
+library pick, written up in an ADR. The spike behind that decision is
+[`spikes/mls-library.md`](spikes/mls-library.md), and its first finding is that the roadmap's
+framing — "OpenMLS vs libsignal" — names one MLS library and one non-MLS library, so the real
+comparison is OpenMLS against mls-rs and ts-mls, where the audit requirement is what decides.
+Then group state, multi-device keys, key verification, encrypted backups and the recovery path,
+media E2EE through LiveKit insertable streams, and the per-org Strict/Compliance mode choice.
 
-Then the Phase 1 gate, which is not a code task: two consecutive weeks of the project actually
-being used to run the project.
+**Everything through Phase 2 is code-complete**, each proven by a Playwright suite against the
+real stack rather than against mocks — two browsers, two accounts, a message crossing live; and
+in Persian, committed screenshots that fail on an unapproved pixel.
 
-**Everything through Phase 1.5 is done**, each proven by a Playwright suite against the real
-stack rather than against mocks — two browsers, two accounts, a message crossing live; and in
-Persian, five committed screenshots that fail on an unapproved pixel. Accepted limitations,
-recorded rather than left as unfinished work: search matches characters and not word stems in
-either language, and a search snippet is the whole message because the contract's parts array
-has to reconstruct it.
+**What is not code, and is not done:** Phase 2's gate needs a manual NAT drill across two
+genuinely hostile networks (`docs/drills/nat-drill.md` is written and waiting), and the Phase 1
+gate is two consecutive weeks of the project being used to run the project. Both are the user's
+to run; neither is blocked on anything in the tree.
+
+Accepted limitations, recorded rather than left as unfinished work: search matches characters
+and not word stems in either language, a search snippet is the whole message because the
+contract's parts array has to reconstruct it, and TOTP secrets are stored raw pending the
+key-management decision deferred to Phase 5.
 
 **Desktop designs are delivered for every Phase 1 screen** — auth, chat, admin dashboard, user
 settings. Phone-width artboards are not: `docs/design/STATUS.md` is the authority on which
