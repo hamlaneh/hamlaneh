@@ -321,11 +321,27 @@ describe("welcomes", () => {
       },
     });
 
+    // Seeded because a joined device now reconciles before it reports ready:
+    // the Welcome puts it into a tree somebody else assembled, and `ready`
+    // enables the composer, so the sweep that ADR 007's guarantee is stated
+    // in terms of has to run before the first message rather than after it.
+    // Without devices to add, this channel would honestly report `incomplete`.
+    for (const userId of OTHERS) {
+      seedDevice(userId);
+    }
+
+    // Captured before the join, because the reconcile that now follows it
+    // adds the other members and mints welcomes for them: asserting an empty
+    // table afterwards would be asserting that reconcile did nothing.
+    const ours = mockMlsWelcomes().map((welcome) => welcome.id);
+    expect(ours).toHaveLength(1);
+
     await service.syncWelcomes();
 
     expect(latest().channels[channelId]).toEqual({ status: "ready" });
     // Acknowledged only after the join succeeded.
-    expect(mockMlsWelcomes()).toHaveLength(0);
+    const remaining = new Set(mockMlsWelcomes().map((welcome) => welcome.id));
+    expect(ours.filter((id) => remaining.has(id))).toHaveLength(0);
   });
 
   it("leaves a welcome for a sibling device alone", async () => {

@@ -533,7 +533,7 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       half — two tabs both minting a wrapping key and silently stranding each other's state —
       but a lock cannot make two devices into one. That needs a SharedWorker owning the device
       with the tabs as clients, which is a slice, not a patch
-- [ ] **Slice 3.2 — eviction by leaf signature key** ([ADR 007](adr/007-device-identity-and-verification.md)).
+- [x] **Slice 3.2 — eviction by leaf signature key** ([ADR 007](adr/007-device-identity-and-verification.md)) — *2026-08-29*.
       A leaf's credential identity is a string the enrolling client chose, and removal filters on
       it, so a leaf credentialed under a *staying* member's id is never stale and never removed:
       it survives every eviction and reads every epoch after. The fix is an allow-list sweep, not
@@ -542,7 +542,15 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       the removed user. Three touchpoints: a channel-scoped read of members' device signature
       keys (new endpoint → authz matrix + `/security-review`), a wasm export of leaf keys plus
       remove-by-key, and `reconcileMembers` switched to the key allow-list. Its regression test is
-      the attack: a leaf planted under a staying member's id, evicted by the first reconcile
+      the attack: a leaf planted under a staying member's id, evicted by the first reconcile.
+      Adversarial review found the property holds and fails closed — a directory page that
+      errors aborts the whole reconcile rather than sweeping against a short allow-list
+- [ ] **`failed` should self-retry the way `waiting` and `incomplete` do.** From slice 3.2's
+      adversarial review: exhausting the commit-retry budget leaves a channel `failed`, and only
+      a commit nudge, a member event, a reconnect or a reopen re-drives it. Deliberately not
+      fixed in 3.2: the fix is one more entry in the same five-second timer, and that timer is
+      already carrying two unbounded polls the slice-3.1 review flagged for backoff. Doing both
+      together is one coherent change; adding a third poll first is two
 - [ ] Multi-device: per-device keys, device verification, key sync. Verification is where the
       residue of ADR 007 goes: the sweep trusts the directory's key↔person mapping, and only two
       humans comparing key material out of band can close that — no server signature can, because

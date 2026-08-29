@@ -481,7 +481,13 @@ export class MlsService {
     );
     const missing = members
       .map((member) => member.user_id)
-      .filter((userId) => !inGroup.has(userId));
+      // Never this device's own user. A device that reached here is in the
+      // group — `openChannelOnce` sends it to `waiting` otherwise, and a
+      // device outside the group could not commit an add in any case — so
+      // "we are missing" can only ever be a lie told by a stale read, and
+      // acting on it would consume this device's own key packages to add a
+      // leaf it already has.
+      .filter((userId) => userId !== this.options.currentUserId && !inGroup.has(userId));
     if (missing.length === 0) {
       this.setChannel(channelId, { status: "ready" });
       return;
@@ -680,7 +686,22 @@ export class MlsService {
             // one wasted join attempt next time.
             console.warn("Could not acknowledge a welcome:", error);
           });
-        this.setChannel(welcome.channel_id, { status: "ready" });
+
+        // Reconcile before calling it ready, rather than setting ready here.
+        // A Welcome puts this device into a tree somebody else assembled, and
+        // `ready` is what enables the composer — so announcing ready straight
+        // from the join would let this device encrypt into a tree it has
+        // never swept, to whatever leaves that tree happens to hold. This is
+        // the first pass the ADR 007 guarantee is stated in terms of, and it
+        // belongs before the first message, not after it. It also sets the
+        // channel state itself (ready, incomplete, or failed on a directory
+        // it could not read whole), which is why nothing is set here.
+        try {
+          await this.reconcileMembers(welcome.channel_id);
+        } catch (error) {
+          console.warn(`Could not reconcile the joined channel ${welcome.channel_id}:`, error);
+          this.setChannel(welcome.channel_id, { status: "failed" });
+        }
       }
     });
   }
