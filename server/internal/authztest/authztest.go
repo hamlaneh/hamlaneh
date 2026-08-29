@@ -83,6 +83,12 @@ const (
 	// message they wrote. Optional — declared only by operations whose
 	// contract distinguishes the author.
 	MemberAuthor Principal = "member-author"
+	// ConferenceOwner is the ownership refinement: a member acting on a
+	// conference they made. It is MemberAuthor's shape for the one resource
+	// in this server whose authority is ownership rather than membership, and
+	// it is what makes the plain Member column below it mean "somebody
+	// else's" instead of "anybody's" (ADR 005).
+	ConferenceOwner Principal = "conference-owner"
 )
 
 // Principals returns every matrix column in stable order. It is the universe
@@ -94,7 +100,7 @@ func Principals() []Principal {
 		Anonymous, Member, MemberMustChange, MemberTotpPending,
 		MemberMustChangeTotpPending, Admin,
 		ChannelNonMember, ChannelMember, ChannelOwner,
-		AdminNonMember, AdminMember, MemberAuthor,
+		AdminNonMember, AdminMember, MemberAuthor, ConferenceOwner,
 	}
 }
 
@@ -169,6 +175,11 @@ type Fixture struct {
 	// OutsiderUserID is a real user who belongs to no channel: the target of
 	// an invite, and the peer of a newly opened direct message.
 	OutsiderUserID string
+
+	// ConferenceID names the cell's own conference, made by the acting user
+	// for the ownership refinement and by somebody else for every other
+	// principal. Set for cells whose contract path names a {conferenceId}.
+	ConferenceID string
 }
 
 // Entry is one endpoint's row in the authorization matrix.
@@ -229,11 +240,17 @@ func (e Entry) Target(fx Fixture) string {
 		"{channelId}", fx.ChannelID,
 		"{messageId}", fx.MessageID,
 		"{userId}", fx.MemberUserID,
+		"{conferenceId}", fx.ConferenceID,
 	).Replace(target)
 }
 
 // ChannelScoped reports whether this entry acts on a fixture channel.
 func (e Entry) ChannelScoped() bool { return e.Kind != "" }
+
+// ConferenceScoped reports whether this entry acts on a fixture conference.
+// Unlike a channel entry it needs no kind — a conference has exactly one
+// shape — so the contract path is what says so.
+func (e Entry) ConferenceScoped() bool { return strings.Contains(e.Path, conferenceSegment) }
 
 // RequiredPrincipals returns the columns this entry's shape must declare.
 func (e Entry) RequiredPrincipals() []Principal {
@@ -413,11 +430,20 @@ func adminEntry(method, path, target string, body func(Fixture) string, want int
 	return e
 }
 
-// publicEntry builds the row of an endpoint that answers every principal
-// identically. That uniformity is not a shortcut — on the invite routes it IS
-// the security property, because a signed-in caller learning something an
-// anonymous one cannot would be the leak these rows exist to forbid.
-func publicEntry(method, path, target string, body func(Fixture) string, want int, code string) Entry {
+// publicEntry builds the row of a capability-URL endpoint asked with a token
+// that was never issued: every principal gets the same 404, carrying code.
+//
+// That uniformity is not a shortcut — on the invite and conference routes it
+// IS the security property, twice over. A signed-in caller learning something
+// an anonymous one cannot would be a leak, and so would a guesser learning
+// which of unknown, expired, revoked and spent their token was.
+//
+// The status is fixed rather than a parameter because there is only one
+// answer these rows may pin. A public endpoint that succeeds for everybody —
+// the health probes, the instance document — is a different shape and is
+// registered as a literal, so it cannot borrow this helper's uniformity
+// argument without stating its own.
+func publicEntry(method, path, target string, body func(Fixture) string, code string) Entry {
 	e := Entry{
 		Method:        method,
 		Path:          path,
@@ -428,10 +454,8 @@ func publicEntry(method, path, target string, body func(Fixture) string, want in
 		WantCode:      map[Principal]string{},
 	}
 	for _, p := range InstancePrincipals() {
-		e.Want[p] = want
-		if code != "" {
-			e.WantCode[p] = code
-		}
+		e.Want[p] = http.StatusNotFound
+		e.WantCode[p] = code
 	}
 	return e
 }
@@ -504,6 +528,22 @@ const (
 	callPath      = channelPath + "/call"
 	callTokenPath = callPath + "/token"
 )
+
+// The conference surface's contract paths, and the segment that makes an
+// operation conference-scoped.
+const (
+	conferenceSegment = "{conferenceId}"
+	conferencesPath   = "/api/v1/conferences"
+	conferencePath    = conferencesPath + "/" + conferenceSegment
+	meetPath          = "/api/v1/meet/{token}"
+	meetJoinPath      = meetPath + "/join"
+)
+
+// guessedToken is a well-formed link that was never issued: the shape of a
+// real one, so the rows that present it pin the answer to a GUESS rather
+// than to a malformed string. It is what both the invite and the conference
+// public rows ask with.
+var guessedToken = strings.Repeat("z", 43)
 
 // matrixClientMsgID is the send row's idempotency key. Every cell posts into
 // its own fresh channel and the key is unique per (channel, author), so one
@@ -777,14 +817,73 @@ func instanceRegistry() []Entry {
 		// security story, so the matrix pins them rather than trusting the
 		// handlers to agree.
 		publicEntry(http.MethodGet, "/api/v1/invites/{token}",
-			"/api/v1/invites/"+strings.Repeat("z", 43), nil,
-			http.StatusNotFound, "invite_not_found"),
+			"/api/v1/invites/"+guessedToken, nil, "invite_not_found"),
 		publicEntry(http.MethodPost, "/api/v1/invites/{token}",
-			"/api/v1/invites/"+strings.Repeat("z", 43),
+			"/api/v1/invites/"+guessedToken,
 			func(fx Fixture) string {
 				return fmt.Sprintf(`{"username":"redeem%s","password":"a matrix passphrase"}`, fx.Unique)
 			},
-			http.StatusNotFound, "invite_not_found"),
+			"invite_not_found"),
+
+		// Phase 2 conferences (ADR 005) — the widest door in the product, and
+		// the four rows that pin how narrow it stays.
+		//
+		// The two /meet rows are asked with a well-formed link that was never
+		// issued. Every principal gets one 404: unknown, expired and revoked
+		// are one answer, and a session neither helps nor hinders — the same
+		// two properties the invite rows above pin, and here they matter
+		// more, because these are the routes an anonymous stranger reaches.
+		//
+		// The join row also pins an ordering: the matrix server configures no
+		// media plane, so a live link would answer 503, and this row's 404
+		// proves the link is resolved BEFORE the instance's configuration is
+		// consulted. A guesser learns nothing about this instance.
+		publicEntry(http.MethodGet, meetPath, "/api/v1/meet/"+guessedToken, nil,
+			"conference_not_found"),
+		publicEntry(http.MethodPost, meetJoinPath, "/api/v1/meet/"+guessedToken+"/join",
+			func(Fixture) string { return `{"display_name":"A Guest"}` },
+			"conference_not_found"),
+
+		// Listing is the caller's own view; every signed-in caller gets a 200,
+		// and what differs is the rows inside it, which is a scope question
+		// rather than a status one and is pinned in internal/httpserver.
+		sessionEntry(http.MethodGet, conferencesPath, "", nil, http.StatusOK, ""),
+		// Creating one is the 503 of an instance with no media plane: a link
+		// to a room this instance cannot open is worse than a refusal. Unlike
+		// the channel ticket, there is no channel to be a stranger to, so the
+		// 503 IS the answer rather than something a 404 must come before.
+		sessionEntry(http.MethodPost, conferencesPath, "",
+			func(fx Fixture) string { return fmt.Sprintf(`{"title":"matrix %s"}`, fx.Unique) },
+			http.StatusServiceUnavailable, "calls_unavailable"),
+		// The revocation is the ownership distinction, and this row is the
+		// whole of ADR 005's revocation authority. Its owner or an
+		// administrator may; anybody else gets the same 404 a conference that
+		// does not exist gets — never a 403, which would confirm one does.
+		//
+		// It is built as a literal because Member and Admin answer
+		// differently here, which is exactly what sessionEntry's shape
+		// assumes they never do.
+		{
+			Method: http.MethodDelete,
+			Path:   conferencePath,
+			Class:  ClassSession,
+			Want: map[Principal]int{
+				Anonymous:                   http.StatusUnauthorized,
+				MemberMustChange:            http.StatusForbidden,
+				MemberTotpPending:           http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusForbidden,
+				Member:                      http.StatusNotFound,
+				Admin:                       http.StatusNoContent,
+				ConferenceOwner:             http.StatusNoContent,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:                   "not_authenticated",
+				MemberMustChange:            "password_change_required",
+				MemberTotpPending:           "totp_enrollment_required",
+				MemberMustChangeTotpPending: "password_change_required",
+				Member:                      "conference_not_found",
+			},
+		},
 
 		// Phase 1.2, the endpoints decided without a channel. Nothing here
 		// turns on membership: the directory and the sidebar are the caller's

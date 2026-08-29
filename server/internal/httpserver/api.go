@@ -162,6 +162,19 @@ type Store interface {
 	ListScimTokens(ctx context.Context) ([]storage.ScimToken, error)
 	RevokeScimToken(ctx context.Context, id uuid.UUID) error
 
+	// Conference rooms (ADR 005). Only the digest of a link is ever stored,
+	// so nothing here takes or returns a raw one — the same shape
+	// invitations have. LiveConferenceByTokenHash collapses unknown, expired
+	// and revoked into ErrNotFound at the query, so the three cannot be told
+	// apart anywhere above it; ConferenceByID does the same for a revoked
+	// id, and says nothing about who may act on the row — that is
+	// internal/authz's, and it needs the owner this returns to decide it.
+	CreateConference(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, title string, expiresAt *time.Time) (storage.Conference, error)
+	ListConferences(ctx context.Context, ownerID uuid.UUID, all bool) ([]storage.Conference, error)
+	ConferenceByID(ctx context.Context, id uuid.UUID) (storage.Conference, error)
+	RevokeConference(ctx context.Context, id uuid.UUID) error
+	LiveConferenceByTokenHash(ctx context.Context, tokenHash []byte) (storage.Conference, error)
+
 	// Instance settings, including the derived accounts-without-two-step
 	// count the enforcement switch is read beside.
 	OrgSettings(ctx context.Context) (storage.OrgSettings, error)

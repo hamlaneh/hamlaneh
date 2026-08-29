@@ -864,6 +864,95 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/conferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your conference rooms.
+         * @description Yours, or every one on the instance if you administer it — an administrator must be able to find what they may revoke.
+         */
+        get: operations["listConferences"];
+        put?: never;
+        /**
+         * Make a room anyone with the link can join.
+         * @description Answers with the link. Only its hash is stored, as invite links and provisioning tokens are, so a stolen database yields nothing that can be presented.
+         *     The link does not expire unless you ask it to. Expiry by default argues for itself until you look at how these are used: the common one is a standing weekly meeting, and a link that dies unannounced drives worse behaviour — a fresh link minted for every meeting and pasted into more places than the last. It is always revocable, always visible to an administrator, and its creation and revocation are audited.
+         */
+        post: operations["createConference"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conferences/{conferenceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Kill the link, and the meeting behind it.
+         * @description The link stops admitting anybody, and the room it admitted to ends — a revocation that let the current meeting run on would not be a revocation.
+         *     Its owner or an administrator. Anyone else gets the same 404 they would get for a conference that does not exist, because a distinct refusal would confirm one does.
+         */
+        delete: operations["revokeConference"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meet/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What is behind this link.
+         * @description Enough to draw a join screen: the title, and whether anybody is in there. Holding the link is the entitlement to know that much.
+         *     Unknown, expired and revoked are one answer, indistinguishable, as they are for an invitation. A visitor learns whether their link works, never why it does not.
+         */
+        get: operations["previewConference"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meet/{token}/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Join as a guest.
+         * @description Mints a join ticket for this conference's room and nothing else. No session is created, no account is created or read, and no other endpoint honours this link.
+         *     Somebody with no account on this instance may join — that is what a conference link is for. An instance with registration closed stays exactly as closed: a guest holds a ticket to one room, not a way in.
+         *     The display name is whatever the guest types, so a guest can present as anyone. That is inherent to anonymous meetings and is mitigated by the people in the room, not by this endpoint. Said here rather than left to be discovered.
+         */
+        post: operations["joinConference"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels/{channelId}/call": {
         parameters: {
             query?: never;
@@ -1244,6 +1333,49 @@ export interface components {
          * @enum {string}
          */
         ChannelKind: "public" | "private" | "dm";
+        /** @description A conference as its owner or an administrator sees it. Never the link. */
+        Conference: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            /** @description Null when the account that made it is gone. */
+            created_by: components["schemas"]["UserSummary"] | null;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Null means it does not expire. See createConference.
+             */
+            expires_at?: string | null;
+            /** @description Whether anybody is in the room right now. */
+            active: boolean;
+        };
+        ConferencePage: {
+            conferences: components["schemas"]["Conference"][];
+        };
+        CreateConferenceRequest: {
+            /** @description What to call it. Guests see this before they join. */
+            title?: string;
+            /**
+             * Format: date-time
+             * @description Optional, for a link genuinely meant to be short-lived. Absent means it does not expire.
+             */
+            expires_at?: string | null;
+        };
+        CreatedConference: {
+            conference: components["schemas"]["Conference"];
+            /** @description The link, shown once. Only its hash is kept, so nothing can redisplay it — send it somewhere you trust. */
+            url: string;
+        };
+        /** @description What a link-holder may see before joining. Deliberately thin: a title and whether anybody is in there. Not who, and not the instance's name beyond what the page already shows. */
+        ConferencePreview: {
+            title: string;
+            active: boolean;
+        };
+        JoinConferenceRequest: {
+            /** @description What the room calls you. Not verified, and cannot be. */
+            display_name: string;
+        };
         CallParticipant: {
             user: components["schemas"]["UserSummary"];
             /** Format: date-time */
@@ -3159,6 +3291,147 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
+        };
+    };
+    listConferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The conferences you may see. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConferencePage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createConference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateConferenceRequest"];
+            };
+        };
+        responses: {
+            /** @description The conference, and its link. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedConference"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["RateLimited"];
+            /** @description Calls are not configured (code calls_unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    revokeConference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conferenceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link is dead and the room is closed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    previewConference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The conference behind the link. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConferencePreview"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    joinConference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JoinConferenceRequest"];
+            };
+        };
+        responses: {
+            /** @description The ticket. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallToken"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            /** @description Calls are not configured (code calls_unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     getChannelCall: {

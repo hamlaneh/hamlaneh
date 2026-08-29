@@ -74,19 +74,24 @@ func Can(_ context.Context, user *storage.User, action Action, resource any) boo
 		return canChannel(user, action, res)
 	case Message:
 		return canMessage(user, action, res)
+	case Conference:
+		return canConference(user, action, res)
 	}
 	switch action {
 	case AdminUsersList, AdminUsersCreate, AdminUsersUpdate, AdminUsersResetPassword,
 		AdminInvitesList, AdminInvitesCreate, AdminInvitesRevoke,
 		AdminOrgRead, AdminOrgUpdate, AdminAuditList,
-		AdminScimTokensList, AdminScimTokensCreate, AdminScimTokensRevoke:
+		AdminScimTokensList, AdminScimTokensCreate, AdminScimTokensRevoke,
+		ConferenceListAll:
 		return user.IsAdmin
 	case ChannelRead, ChannelUpdate, ChannelMemberAdd, ChannelMemberRemove,
-		MessageSend, MessageEdit, MessageDelete, ReadPositionSet, FileUpload, CallJoin:
+		MessageSend, MessageEdit, MessageDelete, ReadPositionSet, FileUpload, CallJoin,
+		ConferenceRevoke:
 		// Reached only when the caller passed no resource, or one of the
 		// wrong type. Every channel-scoped action is decided against a channel
-		// or a message; without one there is nothing to decide, and deny is
-		// the only safe answer to a question that was not fully asked.
+		// or a message, and revoking a conference against a conference;
+		// without one there is nothing to decide, and deny is the only safe
+		// answer to a question that was not fully asked.
 		return false
 	default:
 		return false

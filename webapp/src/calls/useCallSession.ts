@@ -17,6 +17,29 @@ const connectLiveKit: MediaConnect = async (url, token) => {
 export type CallStatus = "idle" | "connecting" | "connected";
 
 /**
+ * Asks the server for a join ticket for whatever `join` was given.
+ *
+ * There are two ways to be entitled to a room and they are different requests:
+ * a member asks the channel endpoint with a channel id, and a conference guest
+ * asks the conference endpoint with the display name they typed. Everything
+ * *after* the ticket — connect, publish, subscribe, discard — is identical, so
+ * this is the one seam rather than a second copy of the session below.
+ *
+ * The status travels with the token because 503 (calls are not configured on
+ * this instance at all) is a different sentence from "that did not work".
+ */
+export type MintTicket = (
+  target: string,
+) => Promise<{ token: string | undefined; status: number }>;
+
+const mintChannelTicket: MintTicket = async (channelId) => {
+  const { data, response } = await api.POST("/api/v1/channels/{channelId}/call/token", {
+    params: { path: { channelId } },
+  });
+  return { token: data?.token, status: response.status };
+};
+
+/**
  * Keys rather than sentences, so a failure follows a language switch — the
  * shape `SsoCard` already uses.
  */
@@ -28,14 +51,17 @@ export type CallErrorKey =
 
 export interface CallSessionController {
   status: CallStatus;
-  /** The channel this session belongs to; null while idle. */
-  channelId: string | null;
+  /**
+   * Whatever `join` was called with — a channel id for a channel call, the
+   * typed display name for a conference guest. Null while idle.
+   */
+  target: string | null;
   participants: MediaParticipant[];
   micEnabled: boolean;
   cameraEnabled: boolean;
   screenSharing: boolean;
   errorKey: CallErrorKey | null;
-  join: (channelId: string) => void;
+  join: (target: string) => void;
   leave: () => void;
   toggleMicrophone: () => void;
   toggleCamera: () => void;
@@ -50,10 +76,17 @@ export interface CallSessionController {
  * the connection is up. Nothing else about the media plane reaches the client:
  * the room name comes back with the ticket and the signal address is derived
  * from the page's own origin.
+ *
+ * `mintTicket` is the only thing a conference guest changes: a guest has no
+ * session and no channel, so the ticket comes from the conference endpoint —
+ * and everything after it is the same call this hook already ran.
  */
-export function useCallSession(connect: MediaConnect = connectLiveKit): CallSessionController {
+export function useCallSession(
+  connect: MediaConnect = connectLiveKit,
+  mintTicket: MintTicket = mintChannelTicket,
+): CallSessionController {
   const [status, setStatus] = useState<CallStatus>("idle");
-  const [channelId, setChannelId] = useState<string | null>(null);
+  const [target, setTarget] = useState<string | null>(null);
   const [participants, setParticipants] = useState<MediaParticipant[]>([]);
   const [errorKey, setErrorKey] = useState<CallErrorKey | null>(null);
 
@@ -75,36 +108,33 @@ export function useCallSession(connect: MediaConnect = connectLiveKit): CallSess
   }, []);
 
   const join = useCallback(
-    (target: string) => {
+    (next: string) => {
       generation.current += 1;
       const mine = generation.current;
       discard(sessionRef.current);
       sessionRef.current = null;
       setStatus("connecting");
-      setChannelId(target);
+      setTarget(next);
       setParticipants([]);
       setErrorKey(null);
 
       void (async () => {
         try {
-          const { data, response } = await api.POST(
-            "/api/v1/channels/{channelId}/call/token",
-            { params: { path: { channelId: target } } },
-          );
-          if (data === undefined) {
+          const ticket = await mintTicket(next);
+          if (ticket.token === undefined) {
             if (generation.current === mine) {
               setStatus("idle");
-              setChannelId(null);
+              setTarget(null);
               // 503 is the honest one: calls are not configured here at all,
               // which is a different sentence from "that did not work".
               setErrorKey(
-                response.status === 503 ? "calls.error.unavailable" : "calls.error.failed",
+                ticket.status === 503 ? "calls.error.unavailable" : "calls.error.failed",
               );
             }
             return;
           }
 
-          const session = await connect(callSignalUrl(), data.token);
+          const session = await connect(callSignalUrl(), ticket.token);
           if (generation.current !== mine) {
             discard(session);
             return;
@@ -123,7 +153,7 @@ export function useCallSession(connect: MediaConnect = connectLiveKit): CallSess
               // emptying itself.
               sessionRef.current = null;
               setStatus("idle");
-              setChannelId(null);
+              setTarget(null);
               setParticipants([]);
               setErrorKey("calls.error.ended");
               return;
@@ -150,13 +180,13 @@ export function useCallSession(connect: MediaConnect = connectLiveKit): CallSess
           console.warn("Joining the call failed:", error);
           if (generation.current === mine) {
             setStatus("idle");
-            setChannelId(null);
+            setTarget(null);
             setErrorKey("calls.error.failed");
           }
         }
       })();
     },
-    [connect, discard],
+    [connect, discard, mintTicket],
   );
 
   const leave = useCallback(() => {
@@ -164,7 +194,7 @@ export function useCallSession(connect: MediaConnect = connectLiveKit): CallSess
     discard(sessionRef.current);
     sessionRef.current = null;
     setStatus("idle");
-    setChannelId(null);
+    setTarget(null);
     setParticipants([]);
     setErrorKey(null);
   }, [discard]);
@@ -221,7 +251,7 @@ export function useCallSession(connect: MediaConnect = connectLiveKit): CallSess
 
   return {
     status,
-    channelId,
+    target,
     participants,
     micEnabled,
     cameraEnabled,

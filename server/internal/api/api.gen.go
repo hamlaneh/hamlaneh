@@ -413,6 +413,32 @@ type ChannelRef struct {
 	Slug *string     `json:"slug,omitempty"`
 }
 
+// Conference A conference as its owner or an administrator sees it. Never the link.
+type Conference struct {
+	// Active Whether anybody is in the room right now.
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// CreatedBy Null when the account that made it is gone.
+	CreatedBy *UserSummary `json:"created_by"`
+
+	// ExpiresAt Null means it does not expire. See createConference.
+	ExpiresAt *time.Time         `json:"expires_at,omitempty"`
+	Id        openapi_types.UUID `json:"id"`
+	Title     string             `json:"title"`
+}
+
+// ConferencePage defines model for ConferencePage.
+type ConferencePage struct {
+	Conferences []Conference `json:"conferences"`
+}
+
+// ConferencePreview What a link-holder may see before joining. Deliberately thin: a title and whether anybody is in there. Not who, and not the instance's name beyond what the page already shows.
+type ConferencePreview struct {
+	Active bool   `json:"active"`
+	Title  string `json:"title"`
+}
+
 // CreateChannelRequest defines model for CreateChannelRequest.
 type CreateChannelRequest struct {
 	// Kind Direct messages are opened through /api/v1/dms, not here.
@@ -423,6 +449,15 @@ type CreateChannelRequest struct {
 
 // CreateChannelRequestKind Direct messages are opened through /api/v1/dms, not here.
 type CreateChannelRequestKind string
+
+// CreateConferenceRequest defines model for CreateConferenceRequest.
+type CreateConferenceRequest struct {
+	// ExpiresAt Optional, for a link genuinely meant to be short-lived. Absent means it does not expire.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+
+	// Title What to call it. Guests see this before they join.
+	Title *string `json:"title,omitempty"`
+}
 
 // CreateInviteRequest defines model for CreateInviteRequest.
 type CreateInviteRequest struct {
@@ -438,11 +473,23 @@ type CreateScimTokenRequest struct {
 	Note *string `json:"note,omitempty"`
 }
 
+// CreatedConference defines model for CreatedConference.
+type CreatedConference struct {
+	// Conference A conference as its owner or an administrator sees it. Never the link.
+	Conference Conference `json:"conference"`
+
+	// Url The link, shown once. Only its hash is kept, so nothing can redisplay it — send it somewhere you trust.
+	Url string `json:"url"`
+}
+
 // CreatedInvite The link is in this response and nowhere else: only its hash is stored, exactly as password-reset tokens are.
 type CreatedInvite struct {
 	ExpiresAt time.Time          `json:"expires_at"`
 	Id        openapi_types.UUID `json:"id"`
-	Url       string             `json:"url"`
+
+	// Url `{base}/invite#token=<token>`. The token rides the **fragment**, which no browser sends to any server, so it cannot reach an access log, a Referer header or a proxy's history — the same reasoning the emailed reset link follows.
+	// The shape is written down here because leaving it unsaid is not free: this field said only "string" for two phases, the two halves drifted into a path form on the client and a fragment form on the server, and every real invitation landed on the sign-in screen with nothing failing loudly.
+	Url string `json:"url"`
 }
 
 // CreatedScimToken defines model for CreatedScimToken.
@@ -510,6 +557,12 @@ type InvitePage struct {
 // InvitePreview What the redemption screen draws before anybody has an account. Deliberately says nothing about who issued the invite or for whom.
 type InvitePreview struct {
 	OrgName string `json:"org_name"`
+}
+
+// JoinConferenceRequest defines model for JoinConferenceRequest.
+type JoinConferenceRequest struct {
+	// DisplayName What the room calls you. Not verified, and cannot be.
+	DisplayName string `json:"display_name"`
 }
 
 // LinkPreview The link-preview card: image, title, description, and the host line the client derives from url. Read-only, and always absent until the Phase 1.3 egress preview proxy exists.
@@ -1066,11 +1119,17 @@ type EditMessageJSONRequestBody = EditMessageRequest
 // SetReadPositionJSONRequestBody defines body for SetReadPosition for application/json ContentType.
 type SetReadPositionJSONRequestBody = SetReadPositionRequest
 
+// CreateConferenceJSONRequestBody defines body for CreateConference for application/json ContentType.
+type CreateConferenceJSONRequestBody = CreateConferenceRequest
+
 // OpenDirectMessageJSONRequestBody defines body for OpenDirectMessage for application/json ContentType.
 type OpenDirectMessageJSONRequestBody = OpenDirectMessageRequest
 
 // RedeemInviteJSONRequestBody defines body for RedeemInvite for application/json ContentType.
 type RedeemInviteJSONRequestBody = RedeemInviteRequest
+
+// JoinConferenceJSONRequestBody defines body for JoinConference for application/json ContentType.
+type JoinConferenceJSONRequestBody = JoinConferenceRequest
 
 // UpdateCurrentUserJSONRequestBody defines body for UpdateCurrentUser for application/json ContentType.
 type UpdateCurrentUserJSONRequestBody = UpdateCurrentUserRequest
@@ -1197,6 +1256,15 @@ type ServerInterface interface {
 	// SetReadPosition Move the caller's read position in a channel.
 	// (PUT /api/v1/channels/{channelId}/read)
 	SetReadPosition(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// ListConferences Your conference rooms.
+	// (GET /api/v1/conferences)
+	ListConferences(w http.ResponseWriter, r *http.Request)
+	// CreateConference Make a room anyone with the link can join.
+	// (POST /api/v1/conferences)
+	CreateConference(w http.ResponseWriter, r *http.Request)
+	// RevokeConference Kill the link, and the meeting behind it.
+	// (DELETE /api/v1/conferences/{conferenceId})
+	RevokeConference(w http.ResponseWriter, r *http.Request, conferenceId openapi_types.UUID)
 	// OpenDirectMessage Open — or reuse — the 1:1 direct message with one user.
 	// (POST /api/v1/dms)
 	OpenDirectMessage(w http.ResponseWriter, r *http.Request)
@@ -1209,6 +1277,12 @@ type ServerInterface interface {
 	// RedeemInvite Create an account from an invite.
 	// (POST /api/v1/invites/{token})
 	RedeemInvite(w http.ResponseWriter, r *http.Request, token string)
+	// PreviewConference What is behind this link.
+	// (GET /api/v1/meet/{token})
+	PreviewConference(w http.ResponseWriter, r *http.Request, token string)
+	// JoinConference Join as a guest.
+	// (POST /api/v1/meet/{token}/join)
+	JoinConference(w http.ResponseWriter, r *http.Request, token string)
 	// Search Search messages (and, from Phase 1.3, files).
 	// (GET /api/v1/search)
 	Search(w http.ResponseWriter, r *http.Request, params SearchParams)
@@ -2306,6 +2380,60 @@ func (siw *ServerInterfaceWrapper) SetReadPosition(w http.ResponseWriter, r *htt
 	handler.ServeHTTP(w, r)
 }
 
+// ListConferences operation middleware
+func (siw *ServerInterfaceWrapper) ListConferences(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListConferences(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateConference operation middleware
+func (siw *ServerInterfaceWrapper) CreateConference(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateConference(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeConference operation middleware
+func (siw *ServerInterfaceWrapper) RevokeConference(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "conferenceId" -------------
+	var conferenceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "conferenceId", r.PathValue("conferenceId"), &conferenceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "conferenceId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeConference(w, r, conferenceId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // OpenDirectMessage operation middleware
 func (siw *ServerInterfaceWrapper) OpenDirectMessage(w http.ResponseWriter, r *http.Request) {
 
@@ -2377,6 +2505,58 @@ func (siw *ServerInterfaceWrapper) RedeemInvite(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RedeemInvite(w, r, token)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PreviewConference operation middleware
+func (siw *ServerInterfaceWrapper) PreviewConference(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token" -------------
+	var token string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token", r.PathValue("token"), &token, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PreviewConference(w, r, token)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// JoinConference operation middleware
+func (siw *ServerInterfaceWrapper) JoinConference(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token" -------------
+	var token string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token", r.PathValue("token"), &token, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.JoinConference(w, r, token)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2922,6 +3102,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/members", wrapper.ListChannelMembers)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/members", wrapper.AddChannelMember)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/channels/{channelId}/members/{userId}", wrapper.RemoveChannelMember)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/conferences", wrapper.ListConferences)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/conferences", wrapper.CreateConference)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/conferences/{conferenceId}", wrapper.RevokeConference)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/meet/{token}", wrapper.PreviewConference)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/meet/{token}/join", wrapper.JoinConference)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/call", wrapper.GetChannelCall)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/call/token", wrapper.CreateCallToken)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages", wrapper.ListMessages)

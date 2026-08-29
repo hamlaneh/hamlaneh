@@ -453,7 +453,7 @@ public registration is off by default, it is **the** way users come into existen
 Goal: 1:1 and group calls that survive real-world NATs.
 
 - [x] LiveKit integration: server-side room/token service — LiveKit API keys never leave the server
-- [x] 1:1 calls from DMs; group calls in channels (conference rooms with links: slice 5)
+- [x] 1:1 calls from DMs; group calls in channels; conference rooms with links
 - [ ] Screen share; mute/camera controls; active-speaker UI
 - [x] TURN (LiveKit embedded — see ADR 005 for why, and it is credentials rather than features) in the compose stack, auto-configured by install.sh
 - Tests: token service authz via the matrix harness (no token for rooms you're not in); token

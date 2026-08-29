@@ -137,6 +137,8 @@ const (
 	budgetSSOFlow           budgetName = "sso-flow"
 	budgetSSOSettings       budgetName = "sso-settings"
 	budgetCallToken         budgetName = "call-token"
+	budgetConferenceCreate  budgetName = "conference-create"
+	budgetConferenceGuest   budgetName = "conference-guest"
 )
 
 // budgetSpec is one budget: how many requests fit its sliding window, how
@@ -287,6 +289,34 @@ var budgetSpecs = map[budgetName]budgetSpec{
 	// set stays roughly one minute's worth.
 	budgetCallToken: {limit: 30, window: time.Minute},
 
+	// Making a conference is the fourth endpoint that answers with a one-shot
+	// secret, and the first a plain member may ask for. It gets its own
+	// window rather than joining budgetAdminSecret: that budget's argument is
+	// about an administrator picking the cheapest of two admin-only
+	// endpoints, and this is neither admin-only nor part of that choice.
+	//
+	// What is bounded is the standing set of live doors. A conference link
+	// does not expire by default (ADR 005), so every call leaves a row that
+	// admits strangers until somebody revokes it — a loop would fill an
+	// administrator's revocation list with links they cannot tell apart. 30 a
+	// minute per account is far above the real flow, which is one click per
+	// meeting, and far below what such a loop needs.
+	budgetConferenceCreate: {limit: 30, window: time.Minute},
+
+	// The two public halves of a conference link share one per-IP window, for
+	// the reason the SSO flow's two halves do: each preview is meant to come
+	// back as one join, so splitting the budget would only multiply the
+	// total, and there is no account to key on — the whole point of the
+	// endpoint is that the caller may not have one.
+	//
+	// It is not a guessing defence: the link is 256 bits, and no budget makes
+	// that more or less findable. What it bounds is work a stranger can ask
+	// for — each preview and each join is a round trip to the media server,
+	// and each join mints a ticket. 30 a minute per address absorbs an
+	// office's worth of people behind one NAT joining a meeting together
+	// (each arrival is two requests) and is far below a useful loop.
+	budgetConferenceGuest: {limit: 30, window: time.Minute, perIP: true},
+
 	// Redeeming an invitation is a public route keyed on the client
 	// address (like the SSO flow above). It hashes the chosen
 	// password with argon2id before the token is known to be good — the same
@@ -423,6 +453,18 @@ var endpointBudgets = map[string]budgetName{
 	// openapi.yaml first and the budget follows it here.
 	"POST /api/v1/channels/{channelId}/call/token": budgetCallToken,
 	"GET /api/v1/channels/{channelId}/call":        budgetNone,
+
+	// Phase 2 conferences. Exactly the three routes the contract reserves a
+	// 429 on are budgeted. The list is the caller's own view and the
+	// revocation is one indexed update by somebody who already holds the
+	// authority to make it; both do cost one round trip to the media server,
+	// and if that ever needs bounding the 429 goes in openapi.yaml first and
+	// the budget follows it here.
+	"POST /api/v1/conferences":                  budgetConferenceCreate,
+	"GET /api/v1/meet/{token}":                  budgetConferenceGuest,
+	"POST /api/v1/meet/{token}/join":            budgetConferenceGuest,
+	"GET /api/v1/conferences":                   budgetNone,
+	"DELETE /api/v1/conferences/{conferenceId}": budgetNone,
 
 	// Reads and edits the contract reserves no 429 on. Listing messages is
 	// the read a client repeats most — a budget nobody declared must not

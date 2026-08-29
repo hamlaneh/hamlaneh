@@ -91,6 +91,12 @@ type fakeStore struct {
 	listScimTokens  func(ctx context.Context) ([]storage.ScimToken, error)
 	revokeScimToken func(ctx context.Context, id uuid.UUID) error
 
+	createConference          func(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, title string, expiresAt *time.Time) (storage.Conference, error)
+	listConferences           func(ctx context.Context, ownerID uuid.UUID, all bool) ([]storage.Conference, error)
+	conferenceByID            func(ctx context.Context, id uuid.UUID) (storage.Conference, error)
+	revokeConference          func(ctx context.Context, id uuid.UUID) error
+	liveConferenceByTokenHash func(ctx context.Context, tokenHash []byte) (storage.Conference, error)
+
 	appendAuditEntry func(ctx context.Context, e storage.AuditEntry, seal func(storage.AuditEntry) []byte) (storage.AuditEntry, error)
 	listAuditEntries func(ctx context.Context, params storage.ListAuditParams) ([]storage.AuditEntry, error)
 }
@@ -696,4 +702,41 @@ func (f *fakeStore) RevokeScimToken(ctx context.Context, id uuid.UUID) error {
 		return errFakeUnwired
 	}
 	return f.revokeScimToken(ctx, id)
+}
+
+func (f *fakeStore) CreateConference(ctx context.Context, createdBy uuid.UUID, tokenHash []byte,
+	title string, expiresAt *time.Time,
+) (storage.Conference, error) {
+	if f.createConference == nil {
+		return storage.Conference{}, errFakeUnwired
+	}
+	return f.createConference(ctx, createdBy, tokenHash, title, expiresAt)
+}
+
+func (f *fakeStore) ListConferences(ctx context.Context, ownerID uuid.UUID, all bool) ([]storage.Conference, error) {
+	if f.listConferences == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listConferences(ctx, ownerID, all)
+}
+
+func (f *fakeStore) ConferenceByID(ctx context.Context, id uuid.UUID) (storage.Conference, error) {
+	if f.conferenceByID == nil {
+		return storage.Conference{}, errFakeUnwired
+	}
+	return f.conferenceByID(ctx, id)
+}
+
+func (f *fakeStore) RevokeConference(ctx context.Context, id uuid.UUID) error {
+	if f.revokeConference == nil {
+		return errFakeUnwired
+	}
+	return f.revokeConference(ctx, id)
+}
+
+func (f *fakeStore) LiveConferenceByTokenHash(ctx context.Context, tokenHash []byte) (storage.Conference, error) {
+	if f.liveConferenceByTokenHash == nil {
+		return storage.Conference{}, errFakeUnwired
+	}
+	return f.liveConferenceByTokenHash(ctx, tokenHash)
 }

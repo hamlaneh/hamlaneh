@@ -18,9 +18,12 @@
 //
 // **Two token shapes, and they must never be confused.** A *join ticket* goes
 // to a browser and carries the least privilege that lets somebody talk:
-// roomJoin for one room, publish and subscribe, and nothing else. An *admin
-// token* never leaves this process — it is minted per RoomService call, lives
-// seconds, and is the only place roomAdmin or roomList ever appears.
+// roomJoin for one room, publish and subscribe, and nothing else. A guest's
+// is the same ticket with a random identity (GuestToken), because the
+// absences that matter for a member matter more for somebody with no account.
+// An *admin token* never leaves this process — it is minted per RoomService
+// call, lives seconds, and is the only place roomAdmin, roomList or
+// roomCreate ever appears.
 package calls
 
 import (
@@ -51,10 +54,25 @@ const (
 	EnvURL       = "HAMLANEH_LIVEKIT_URL"
 )
 
-// roomPrefix names a channel's room. Conferences will use "conf-" (ADR 005,
-// slice 5); the prefixes are distinct so a channel id can never be spelled as
-// a conference and the two namespaces cannot collide.
-const roomPrefix = "chan-"
+// roomPrefix names a channel's room, and conferencePrefix a conference's. The
+// prefixes are distinct so a channel id can never be spelled as a conference
+// and the two namespaces cannot collide (ADR 005).
+const (
+	roomPrefix       = "chan-"
+	conferencePrefix = "conf-"
+)
+
+// guestPrefix names a conference guest's participant identity, and is the
+// one thing that keeps the two identity spaces apart.
+//
+// Everything that resolves a participant back to a person parses the
+// identity as an account id: stateOf, and both ejection hooks. A guest has no
+// account, so their identity must be something uuid.Parse can never accept —
+// "guest-" plus a UUID is 42 characters, which is none of the four lengths it
+// takes. That is what makes a guest unable to be mistaken for a member by
+// anything downstream, rather than a convention downstream code has to
+// remember.
+const guestPrefix = "guest-"
 
 // JoinTTL is how long a join ticket lives. Two minutes, because a ticket has
 // no business outliving the click that asked for it, and because it costs a
@@ -184,8 +202,21 @@ func RoomFor(channelID uuid.UUID) string { return roomPrefix + channelID.String(
 
 // ChannelFor is the inverse, for the webhook: it reports the channel a room
 // name belongs to, and false for anything that is not one of ours.
-func ChannelFor(room string) (uuid.UUID, bool) {
-	rest, found := strings.CutPrefix(room, roomPrefix)
+func ChannelFor(room string) (uuid.UUID, bool) { return idFor(room, roomPrefix) }
+
+// ConferenceRoomFor is a conference's room name. Same shape as a channel's
+// and a different namespace, so no id can be spelled as both.
+func ConferenceRoomFor(conferenceID uuid.UUID) string {
+	return conferencePrefix + conferenceID.String()
+}
+
+// ConferenceFor is the inverse of ConferenceRoomFor.
+func ConferenceFor(room string) (uuid.UUID, bool) { return idFor(room, conferencePrefix) }
+
+// idFor reports the id behind a prefixed room name, and false for anything
+// that is not one of ours.
+func idFor(room, prefix string) (uuid.UUID, bool) {
+	rest, found := strings.CutPrefix(room, prefix)
 	if !found {
 		return uuid.Nil, false
 	}
@@ -226,24 +257,73 @@ type Ticket struct {
 // TestJoinTokenGrantsNothingElse decodes a real minted token and asserts each
 // absence, because a grant nobody notices creeping in is the failure mode
 // this whole design guards against.
-func (s *Service) JoinToken(channelID, userID uuid.UUID, displayName string) (Ticket, error) {
+func (s *Service) JoinToken(ctx context.Context, channelID, userID uuid.UUID, displayName string) (Ticket, error) {
 	if s == nil {
 		return Ticket{}, ErrNotConfigured
 	}
+	// The identity is the account id and nothing else. It is what the
+	// ejection hooks name a participant by, and what GET .../call resolves
+	// back into a person — so it must be the one identifier that cannot be
+	// chosen by the person holding the ticket.
+	return s.ticket(ctx, RoomFor(channelID), userID.String(), displayName)
+}
 
-	room := RoomFor(channelID)
+// GuestToken mints a join ticket for one conference guest.
+//
+// It is JoinToken's path, its grant set and its TTL, differing in exactly two
+// things — and the sameness is the point, because every absence that matters
+// for a member matters more for somebody with no account at all. There is one
+// minter here, not two that agree today.
+//
+// What differs:
+//
+//   - The room is a conference's, so the ticket opens that one room. A guest
+//     ticket cannot name a channel: the room comes from the conference id the
+//     server resolved out of a live link, never from the request.
+//   - The identity is a fresh random guest id rather than an account. Nothing
+//     downstream can mistake it for a member (see guestPrefix), and it is
+//     fresh per join so two guests are two participants and neither can be
+//     addressed by anyone who saw the other's ticket.
+//
+// The display name is whatever the guest typed. It is unverifiable by
+// construction and ADR 005 names that rather than hiding it: a guest can
+// present as anyone, and the people in the room are the mitigation.
+func (s *Service) GuestToken(ctx context.Context, conferenceID uuid.UUID, displayName string) (Ticket, error) {
+	if s == nil {
+		return Ticket{}, ErrNotConfigured
+	}
+	return s.ticket(ctx, ConferenceRoomFor(conferenceID), guestPrefix+uuid.NewString(), displayName)
+}
+
+// ticket mints one join ticket. Both callers above go through it, so the
+// grant set — and the room's existence — is decided once.
+//
+// The room is created here because the deploy stack runs with
+// `auto_create: false`, and that is what makes ending a meeting durable
+// rather than momentary. LiveKit tokens are stateless: DeleteRoom does not
+// invalidate the ones already out, and a connected participant is re-minted a
+// ten-minute token every five minutes which their client reconnects with. If
+// a join could instantiate a room, a revoked guest would be disconnected once
+// and simply rebuild it. So the server is the only thing that may create one,
+// and a join ticket deliberately carries no roomCreate grant.
+//
+// CreateRoom is idempotent — livekit-server v1.13.6 RoomManager.getOrCreateRoom
+// returns the room that is already there and resolves the concurrent-create
+// race under its own lock — so two people starting a call at the same moment
+// both succeed, which is what ADR 005's stable room names are for.
+func (s *Service) ticket(ctx context.Context, room, identity, displayName string) (Ticket, error) {
+	if err := s.createRoom(ctx, room); err != nil {
+		return Ticket{}, err
+	}
+
 	grant := &auth.VideoGrant{RoomJoin: true, Room: room}
 	grant.SetCanPublish(true)
 	grant.SetCanSubscribe(true)
 	grant.SetCanPublishData(false)
 
-	// The identity is the account id and nothing else. It is what the
-	// ejection hooks name a participant by, and what GET .../call resolves
-	// back into a person — so it must be the one identifier that cannot be
-	// chosen by the person holding the ticket.
 	expiresAt := time.Now().Add(JoinTTL)
 	token, err := auth.NewAccessToken(s.apiKey, s.apiSecret).
-		SetIdentity(userID.String()).
+		SetIdentity(identity).
 		SetName(displayName).
 		SetValidFor(JoinTTL).
 		SetVideoGrant(grant).
@@ -405,10 +485,114 @@ func (s *Service) EjectEverywhere(ctx context.Context, userID uuid.UUID) {
 	}()
 }
 
-// liveRooms names every room currently open on the media server. This is the
-// one call that needs roomList, and the token that carries it is minted here,
-// used on the next line, and never seen by anybody.
+// liveRooms names every channel room currently open on the media server.
 func (s *Service) liveRooms(ctx context.Context) ([]string, error) {
+	rooms, err := s.listRooms(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(rooms))
+	for _, room := range rooms {
+		if _, ours := ChannelFor(room.GetName()); ours {
+			names = append(names, room.GetName())
+		}
+	}
+	return names, nil
+}
+
+// ActiveConferences reports which of the named conferences somebody is in
+// right now. It is the whole of what a conference's `active` needs, and it is
+// deliberately less than State reads: a conference's participants are guests
+// this server cannot name, so there is nothing to resolve and nothing worth
+// telling a link-holder beyond whether the meeting is happening.
+//
+// One round trip for a whole page, scoped to the rooms asked about rather
+// than the instance's. An empty ask is answered without one.
+//
+// The count, not the room's existence, is the question: a room lingers for a
+// few minutes after its last participant leaves, and "somebody is in there"
+// must not be true of an empty one.
+func (s *Service) ActiveConferences(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
+	active := map[uuid.UUID]bool{}
+	if s == nil || len(ids) == 0 {
+		// No media plane means no meeting, which is the truth about that
+		// install rather than an error — the same answer State gives.
+		return active, nil
+	}
+
+	names := make([]string, 0, len(ids))
+	for _, id := range ids {
+		names = append(names, ConferenceRoomFor(id))
+	}
+	rooms, err := s.listRooms(ctx, names)
+	if err != nil {
+		return nil, err
+	}
+	for _, room := range rooms {
+		if room.GetNumParticipants() == 0 {
+			continue
+		}
+		if id, ours := ConferenceFor(room.GetName()); ours {
+			active[id] = true
+		}
+	}
+	return active, nil
+}
+
+// CloseConference ends the meeting in one conference's room.
+//
+// It is the second half of a revocation, and the half that makes it one: a
+// revocation that killed the link and let the current meeting run on would
+// not be a revocation (ADR 005). DeleteRoom disconnects everybody in the room
+// rather than waiting for them to leave.
+//
+// A room that is not there is success, not a failure: rooms exist only while
+// somebody is in one, so a conference nobody is meeting in is already closed.
+func (s *Service) CloseConference(ctx context.Context, conferenceID uuid.UUID) error {
+	if s == nil {
+		// No media plane, so there is no meeting to end.
+		return nil
+	}
+
+	room := ConferenceRoomFor(conferenceID)
+	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	defer cancel()
+
+	ctx, err := s.authorize(ctx, &auth.VideoGrant{RoomCreate: true, Room: room})
+	if err != nil {
+		return err
+	}
+	if _, err := s.rooms.DeleteRoom(ctx, &livekit.DeleteRoomRequest{Room: room}); err != nil &&
+		!isNotFound(err) {
+		return fmt.Errorf("delete room: %w", err)
+	}
+	return nil
+}
+
+// createRoom makes sure a room exists before a ticket for it is minted. See
+// ticket for why the server, and only the server, may do this.
+//
+// It is idempotent, so it needs no already-exists handling: LiveKit answers
+// with the room that is already there.
+func (s *Service) createRoom(ctx context.Context, room string) error {
+	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	defer cancel()
+
+	ctx, err := s.authorize(ctx, &auth.VideoGrant{RoomCreate: true, Room: room})
+	if err != nil {
+		return err
+	}
+	if _, err := s.rooms.CreateRoom(ctx, &livekit.CreateRoomRequest{Name: room}); err != nil {
+		return fmt.Errorf("create room: %w", err)
+	}
+	return nil
+}
+
+// listRooms asks the media server which of the named rooms are open; nil
+// names asks about all of them. This is the one call that needs roomList, and
+// the token that carries it is minted here, used on the next line, and never
+// seen by anybody.
+func (s *Service) listRooms(ctx context.Context, names []string) ([]*livekit.Room, error) {
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
@@ -416,18 +600,11 @@ func (s *Service) liveRooms(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := s.rooms.ListRooms(ctx, &livekit.ListRoomsRequest{})
+	resp, err := s.rooms.ListRooms(ctx, &livekit.ListRoomsRequest{Names: names})
 	if err != nil {
 		return nil, fmt.Errorf("list rooms: %w", err)
 	}
-
-	names := make([]string, 0, len(resp.GetRooms()))
-	for _, room := range resp.GetRooms() {
-		if _, ours := ChannelFor(room.GetName()); ours {
-			names = append(names, room.GetName())
-		}
-	}
-	return names, nil
+	return resp.GetRooms(), nil
 }
 
 // ejectWithRetry removes one participant, retrying once.

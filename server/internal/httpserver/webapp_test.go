@@ -204,6 +204,17 @@ func TestWebappRoutes(t *testing.T) {
 			wantBodyContain:  `id="root"`,
 		},
 		{
+			// A conference link is the one client route whose token is a path
+			// segment, so the subtree has to answer or every link 404s at the
+			// document before the app runs.
+			name:             "conference link path serves the document",
+			path:             "/meet/aaaaaaaaaaaaaaaaaaaaaaaa",
+			wantStatus:       http.StatusOK,
+			wantContentType:  "text/html; charset=utf-8",
+			wantCacheControl: "no-cache",
+			wantBodyContain:  `id="root"`,
+		},
+		{
 			name:             "hashed script is cached forever",
 			path:             fixtureScript,
 			wantStatus:       http.StatusOK,

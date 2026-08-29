@@ -312,6 +312,18 @@ was not entitled to read the message it points at.
   changed; a REST read says what is true. That distinction is load-bearing rather than stylistic
   — the events carry no sequence number and are never replayed, so a client that trusted them
   would paint a banner for a call that ended while it was disconnected.
+- **Conference rooms (Phase 2).** A link anybody holding it can open, including somebody with no
+  account on this instance — that is the feature, and it is also the widest door in the product,
+  which is why it landed last. What confines it is that the link buys exactly one media room: no
+  session, no account, and no other endpoint honours it. An instance with registration closed
+  stays exactly as closed. Unknown, expired and revoked links answer identically, so a visitor
+  learns whether their link works and never why it does not.
+
+  Revoking a link ends the meeting behind it, and making that true took a second pass. Media
+  tokens are stateless, so deleting a room does not invalidate the tickets already out — and
+  while the media server was allowed to instantiate a room on demand, a revoked guest was
+  disconnected once, reconnected, rebuilt the room and stayed. The server is now the only thing
+  that can create a room, so a join for one that is gone is refused.
 
 ## What's next
 

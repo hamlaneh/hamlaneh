@@ -220,9 +220,20 @@ services:
           enabled: true
           udp_port: 3478
         room:
-          # Rooms are never pre-created; the first authorized token to arrive
-          # instantiates one, and it closes when the last participant leaves.
-          auto_create: true
+          # A join token must NOT be able to bring a room back. Our server
+          # creates the room when it mints a ticket, and it is the only thing
+          # that may -- a join ticket carries no roomCreate grant, so with
+          # auto_create off LiveKit answers a join for a room that is not
+          # there with 404 instead of instantiating one.
+          #
+          # That is what makes revocation durable. LiveKit tokens are
+          # stateless and DeleteRoom does not invalidate them; a connected
+          # participant is re-minted a ~10-minute token every five minutes and
+          # the client auto-reconnects with it. Left on, a revoked guest is
+          # disconnected once, reconnects, RECREATES the room and stays -- for
+          # as long as they keep reconnecting inside their rolling token.
+          # Ending the meeting has to mean it stays ended.
+          auto_create: false
         webhook:
           # How the server learns a call started or ended, so it can tell the
           # rest of the channel. Without this block LiveKit delivers nothing:

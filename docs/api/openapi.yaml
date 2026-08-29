@@ -1713,6 +1713,175 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/v1/conferences:
+    get:
+      tags: [conferences]
+      operationId: listConferences
+      summary: Your conference rooms.
+      description: >
+        Yours, or every one on the instance if you administer it — an
+        administrator must be able to find what they may revoke.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: The conferences you may see.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConferencePage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [conferences]
+      operationId: createConference
+      summary: Make a room anyone with the link can join.
+      description: >
+        Answers with the link. Only its hash is stored, as invite links and
+        provisioning tokens are, so a stolen database yields nothing that can
+        be presented.
+
+        The link does not expire unless you ask it to. Expiry by default
+        argues for itself until you look at how these are used: the common
+        one is a standing weekly meeting, and a link that dies unannounced
+        drives worse behaviour — a fresh link minted for every meeting and
+        pasted into more places than the last. It is always revocable, always
+        visible to an administrator, and its creation and revocation are
+        audited.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateConferenceRequest"
+      responses:
+        "201":
+          description: The conference, and its link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedConference"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: Calls are not configured (code calls_unavailable).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/conferences/{conferenceId}:
+    delete:
+      tags: [conferences]
+      operationId: revokeConference
+      summary: Kill the link, and the meeting behind it.
+      description: >
+        The link stops admitting anybody, and the room it admitted to ends —
+        a revocation that let the current meeting run on would not be a
+        revocation.
+
+        Its owner or an administrator. Anyone else gets the same 404 they
+        would get for a conference that does not exist, because a distinct
+        refusal would confirm one does.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: conferenceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: The link is dead and the room is closed.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/meet/{token}:
+    get:
+      tags: [conferences]
+      operationId: previewConference
+      summary: What is behind this link.
+      description: >
+        Enough to draw a join screen: the title, and whether anybody is in
+        there. Holding the link is the entitlement to know that much.
+
+        Unknown, expired and revoked are one answer, indistinguishable, as
+        they are for an invitation. A visitor learns whether their link works,
+        never why it does not.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The conference behind the link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConferencePreview"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/meet/{token}/join:
+    post:
+      tags: [conferences]
+      operationId: joinConference
+      summary: Join as a guest.
+      description: >
+        Mints a join ticket for this conference's room and nothing else. No
+        session is created, no account is created or read, and no other
+        endpoint honours this link.
+
+        Somebody with no account on this instance may join — that is what a
+        conference link is for. An instance with registration closed stays
+        exactly as closed: a guest holds a ticket to one room, not a way in.
+
+        The display name is whatever the guest types, so a guest can present
+        as anyone. That is inherent to anonymous meetings and is mitigated by
+        the people in the room, not by this endpoint. Said here rather than
+        left to be discovered.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JoinConferenceRequest"
+      responses:
+        "201":
+          description: The ticket.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallToken"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: Calls are not configured (code calls_unavailable).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/channels/{channelId}/call:
     get:
       tags: [channels]
@@ -2693,6 +2862,83 @@ components:
         directory and join flow can arrive without a schema change.
       enum: [public, private, dm]
 
+    Conference:
+      type: object
+      description: A conference as its owner or an administrator sees it. Never the link.
+      required: [id, title, created_by, created_at, active]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        created_by:
+          allOf: [{ $ref: "#/components/schemas/UserSummary" }]
+          nullable: true
+          description: Null when the account that made it is gone.
+        created_at: { type: string, format: date-time }
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Null means it does not expire. See createConference.
+        active:
+          type: boolean
+          description: Whether anybody is in the room right now.
+
+    ConferencePage:
+      type: object
+      required: [conferences]
+      properties:
+        conferences:
+          type: array
+          items:
+            $ref: "#/components/schemas/Conference"
+
+    CreateConferenceRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          maxLength: 120
+          description: What to call it. Guests see this before they join.
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            Optional, for a link genuinely meant to be short-lived. Absent
+            means it does not expire.
+
+    CreatedConference:
+      type: object
+      required: [conference, url]
+      properties:
+        conference: { $ref: "#/components/schemas/Conference" }
+        url:
+          type: string
+          description: >
+            The link, shown once. Only its hash is kept, so nothing can
+            redisplay it — send it somewhere you trust.
+
+    ConferencePreview:
+      type: object
+      description: >
+        What a link-holder may see before joining. Deliberately thin: a title
+        and whether anybody is in there. Not who, and not the instance's name
+        beyond what the page already shows.
+      required: [title, active]
+      properties:
+        title: { type: string }
+        active: { type: boolean }
+
+    JoinConferenceRequest:
+      type: object
+      required: [display_name]
+      properties:
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: What the room calls you. Not verified, and cannot be.
+
     CallParticipant:
       type: object
       required: [user, joined_at]
@@ -2976,7 +3222,19 @@ components:
       required: [id, url, expires_at]
       properties:
         id: { type: string, format: uuid }
-        url: { type: string }
+        url:
+          type: string
+          description: >
+            `{base}/invite#token=<token>`. The token rides the **fragment**,
+            which no browser sends to any server, so it cannot reach an access
+            log, a Referer header or a proxy's history — the same reasoning
+            the emailed reset link follows.
+
+            The shape is written down here because leaving it unsaid is not
+            free: this field said only "string" for two phases, the two halves
+            drifted into a path form on the client and a fragment form on the
+            server, and every real invitation landed on the sign-in screen
+            with nothing failing loudly.
         expires_at: { type: string, format: date-time }
 
     ScimToken:

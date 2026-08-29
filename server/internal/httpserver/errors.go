@@ -107,6 +107,13 @@ const (
 	// one endpoint rather than a degraded instance — the same shape
 	// sso_unavailable has.
 	codeCallsUnavailable errorCode = "calls_unavailable"
+	// Phase 2 conferences (ADR 005). ONE code for every way a conference can
+	// fail to be reachable: a link that is unknown, expired or revoked, an id
+	// that names nothing, and an id the caller is neither the owner nor an
+	// administrator of. A visitor learns whether their link works and never
+	// why it does not; a caller who may not revoke learns nothing about
+	// whether there was anything to revoke.
+	codeConferenceNotFound errorCode = "conference_not_found"
 	// codeNotFound answers a path under /api that no contract route claims.
 	// It is the router's answer, not a resource's: the contract's
 	// resource-level 404s carry their own codes (session_not_found,

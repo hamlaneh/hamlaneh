@@ -136,6 +136,24 @@ var routePolicies = map[string]routePolicy{
 	"GET /api/v1/channels/{channelId}/call":        {class: classSession},
 	"POST /api/v1/channels/{channelId}/call/token": {class: classSession},
 
+	// Phase 2 conferences (ADR 005). The three signed-in routes are ordinary
+	// session work — making a conference needs no permission beyond a
+	// session, and who may revoke one is a resource-level authz.Can call
+	// inside the handler, because it turns on who made it.
+	//
+	// The two /meet routes are public and MUST be: a conference link is for
+	// somebody with no account on this instance, which is the feature. Being
+	// public leaks nothing — every unusable link answers one 404 on both, and
+	// a session neither helps nor hinders, exactly as on the invite pair.
+	// What keeps the door narrow is not this table but what the link buys: a
+	// ticket to one media room, no session, and no other route in this table
+	// honouring it.
+	"GET /api/v1/conferences":                   {class: classSession},
+	"POST /api/v1/conferences":                  {class: classSession},
+	"DELETE /api/v1/conferences/{conferenceId}": {class: classSession},
+	"GET /api/v1/meet/{token}":                  {class: classPublic},
+	"POST /api/v1/meet/{token}/join":            {class: classPublic},
+
 	// Phase 1.1b self-service security. All session-gated; none joins the
 	// must-change trio, because a user who owes a password change fixes that
 	// before touching their second factor or their device list.

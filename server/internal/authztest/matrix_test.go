@@ -65,6 +65,10 @@ var relations = map[Principal]relation{
 	AdminNonMember:              {session: true, admin: true},
 	AdminMember:                 {session: true, admin: true, member: true},
 	MemberAuthor:                {session: true, member: true, author: true},
+	// creator carries the same meaning it does for a channel — the acting
+	// user made the fixture resource — so a conference needs no field of its
+	// own. Every other principal's conference is somebody else's.
+	ConferenceOwner: {session: true, creator: true},
 }
 
 // cell is one provisioned matrix cell: the acting user's fixture, its live
@@ -121,9 +125,41 @@ func provisionCell(ctx context.Context, t *testing.T, store *storage.Store, pool
 		fx.MessageID = messageID.String()
 		fx.MemberUserID = otherMemberID.String()
 	}
+	if entry.ConferenceScoped() {
+		fx.ConferenceID = provisionConference(ctx, t, store, rel, seq, actor).String()
+	}
 
 	c.fx = fx
 	return c
+}
+
+// provisionConference builds the cell's conference, made by the acting user
+// when the principal owns it and by a fresh stranger otherwise.
+//
+// The stranger is the point: without it every cell would act on its own
+// conference and the plain Member row would be asserting the owner's answer
+// while claiming to assert somebody else's. A conference has no membership to
+// arrange — that is the whole feature — so who made it is the only fact to
+// set up.
+func provisionConference(ctx context.Context, t *testing.T, store *storage.Store,
+	rel relation, seq int64, actor storage.User,
+) uuid.UUID {
+	t.Helper()
+
+	creator := actor
+	if !rel.creator {
+		creator = newFixtureUser(ctx, t, store, fmt.Sprintf("mx%dk", seq), false, false)
+	}
+
+	// The digest is per cell, because link_token_hash is UNIQUE and the cells
+	// run in parallel against one database.
+	_, tokenHash := session.NewToken()
+	conf, err := store.CreateConference(ctx, creator.ID, tokenHash,
+		fmt.Sprintf("matrix %d", seq), nil)
+	if err != nil {
+		t.Fatalf("create fixture conference: %v", err)
+	}
+	return conf.ID
 }
 
 // provisionChannel builds the cell's channel: one of the entry's kind,

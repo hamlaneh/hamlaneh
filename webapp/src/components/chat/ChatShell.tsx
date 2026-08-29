@@ -162,7 +162,7 @@ export function ChatShell({
   /* The call being drawn is not necessarily the conversation being read: the
      surface stays put while the reader moves around, because a call you cannot
      see is a call you cannot leave. */
-  const callChannel = state.channels.find((channel) => channel.id === call.channelId);
+  const callChannel = state.channels.find((channel) => channel.id === call.target);
   const ring = state.ring;
   const ringChannel = state.channels.find((channel) => channel.id === ring?.channelId);
   const ringCaller =
@@ -264,7 +264,7 @@ export function ChatShell({
 
         {/* The strip is for people not in the call, so it is absent once this
             channel's call is the one being drawn below. */}
-        {callsEnabled && activeChannel !== undefined && call.channelId !== activeChannel.id ? (
+        {callsEnabled && activeChannel !== undefined && call.target !== activeChannel.id ? (
           <CallStrip
             call={state.calls[activeChannel.id]}
             busy={call.status === "connecting"}

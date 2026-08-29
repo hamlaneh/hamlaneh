@@ -68,6 +68,12 @@ type webapp struct {
 //	/invite   the redemption screen an invitation link lands on. Like /reset,
 //	          its token rides in the URL fragment (invite_handlers.go), so
 //	          the server only ever sees this bare path
+//	/meet/... the guest page a conference link opens. The token is a path
+//	          segment here rather than a fragment, unlike /reset and /invite:
+//	          it is not a credential somebody emailed to one person, it is a
+//	          standing link meant to be pasted into a calendar entry, and it
+//	          must survive a reload. The server sees it and does not read it
+//	          — the redemption endpoint is what checks it
 //	/admin    webapp/src/screens/AdminApp.tsx — the account menu links to it
 //	          with a plain anchor, so it is a real navigation the server has
 //	          to answer, and the pane routes below it (invites, settings,
@@ -85,6 +91,7 @@ func routeWebapp(mux *http.ServeMux, files fs.FS) {
 	mux.HandleFunc("GET /invite", a.serveIndex)
 	mux.HandleFunc("GET /c/", a.serveIndex)
 	mux.HandleFunc("GET /admin", a.serveIndex)
+	mux.HandleFunc("GET /meet/", a.serveIndex)
 	mux.HandleFunc("GET /admin/", a.serveIndex)
 
 	mux.HandleFunc("GET /assets/", a.serveHashedAsset)

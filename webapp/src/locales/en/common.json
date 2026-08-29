@@ -446,7 +446,42 @@
     "nav": {
       "language": "Language",
       "security": "Security",
-      "appearance": "Appearance"
+      "appearance": "Appearance",
+      "meetings": "Meetings"
+    },
+    "meetings": {
+      "title": "Meeting links",
+      "lede": "A meeting room anyone with the link can join, including people with no account here. The link keeps working until you revoke it.",
+      "titleLabel": "What to call it",
+      "create": "Create a meeting link",
+      "empty": "You have no meeting links yet.",
+      "linkOnceNote": "The link is shown once, when you create it. Only a hash of it is stored, so it cannot be shown again — create a new one if you lose it.",
+      "revoke": "Revoke",
+      "live": "Someone is in it",
+      "idle": "Nobody in it",
+      "noExpiry": "Does not expire",
+      "creatorGone": "Account removed",
+      "loadFailed": "Your meeting links could not be loaded.",
+      "actionFailed": "That did not work. Try again.",
+      "column": {
+        "title": "Meeting",
+        "createdBy": "Created by",
+        "created": "Created",
+        "expires": "Expires",
+        "status": "Now",
+        "actions": "Actions"
+      },
+      "created": {
+        "title": "Meeting link created",
+        "lede": "Anyone with this link can join {{title}}.",
+        "warning": "This is the only time the link is shown. The server keeps a hash of it and nothing else, so it cannot show it to you again — copy or download it before you close this.",
+        "note": "Anyone who has the link can join, so send it only where you would say the same thing out loud. You can revoke it at any time.",
+        "linkLabel": "Meeting link"
+      },
+      "revokeConfirm": {
+        "title": "Revoke this meeting link?",
+        "body": "The link stops working for everyone, and the meeting behind it ends — anyone in the room right now is disconnected. This cannot be undone."
+      }
     },
     "leave": {
       "title": "Leave without saving?",
@@ -789,6 +824,23 @@
       "failed": "The call could not be joined.",
       "device": "The microphone or camera could not be used. Check this site’s permissions in the browser.",
       "ended": "The call ended."
+    }
+  },
+  "meet": {
+    "join": "Join the meeting",
+    "nameLabel": "Your name",
+    "nameHint": "What the room calls you. Nothing checks it, so treat any name in a meeting as a claim.",
+    "active": "People are already in this meeting.",
+    "empty": "Nobody is here yet. You can go in and wait.",
+    "guestNote": "You are joining one meeting as a guest. No account is created for you, and this link opens nothing else here.",
+    "goHome": "Go to the home page",
+    "unusable": {
+      "title": "This meeting link does not work",
+      "body": "The link may have expired, been revoked, or never have existed. Ask whoever sent it to you for a new one."
+    },
+    "unreachable": {
+      "title": "This meeting could not be checked",
+      "body": "We could not reach the server. Try again in a moment."
     }
   },
   "redeemInvite": {

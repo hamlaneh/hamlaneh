@@ -20,10 +20,23 @@ channel was deleted" case is unreachable today.
 
 ## Decisions
 
-**One stable room per conversation, created on demand.** A LiveKit room maps to a `channels` row
-— DM or named channel alike — as `chan-<uuid>`; conferences are `conf-<uuid>`. Rooms are never
-pre-created: LiveKit instantiates one when the first authorised token joins, and closes it after
-the last participant leaves.
+**One stable room per conversation, created by the server when it mints a ticket.** A LiveKit
+room maps to a `channels` row — DM or named channel alike — as `chan-<uuid>`; conferences are
+`conf-<uuid>`. The room is made at mint time and closes after the last participant leaves.
+
+The first draft let LiveKit's own `auto_create` instantiate a room when the first authorised
+token arrived, which was simpler and was wrong. Tokens are stateless and deleting a room does not
+invalidate them; a connected participant is re-minted a ten-minute token every five minutes, and
+the client reconnects with it. So a revoked guest was disconnected once, reconnected, **recreated
+the room**, and stayed — for as long as they kept reconnecting inside their rolling token. The
+claim two paragraphs below, that revoking a conference ends the meeting, was false in exactly the
+case revocation exists for.
+
+With `auto_create` off and no `roomCreate` grant on any join ticket, the server is the only thing
+that can bring a room into being, and a join for a room that is not there is refused. That is
+what makes ending a meeting mean it stays ended. Creation is idempotent — the room manager
+returns the existing room and resolves the concurrent race under its own lock — so two people
+starting a call at the same moment still both succeed, which is what the stable name was for.
 
 A per-call id would need a `calls` table, a current-call pointer, and a race when two people
 start a call at once. A stable name needs none of that: minting is deterministic, and two
@@ -120,6 +133,23 @@ one join route honours it. A link-holder who is not an instance member may join 
 feature — but a closed-registration instance stays exactly as closed, because the guest receives
 a token for one `conf-` room and nothing else. Unknown, expired and revoked links all answer the
 same 404, as invites do. Revocation ends the live room rather than merely refusing the next join.
+
+**A conference link carries its token in the path, and an invitation carries its token in a
+fragment.** The two look inconsistent and are not, so the difference is written here rather than
+left for somebody to tidy away.
+
+An invitation is a credential emailed to one person, used once. A fragment never reaches any
+server, so the token cannot land in an access log or a Referer header, and that protection is
+worth having because nothing else in the flow puts the token in front of a server until the
+person actually redeems it.
+
+A conference link is a standing capability, pasted into a calendar entry and clicked by many
+people over months. It has to survive a reload and a copy out of the address bar. More
+decisively, the preview and join endpoints take the token in the path, so it reaches the access
+log the moment anybody opens the page — a fragment on the page would protect nothing while
+costing the link its ordinary behaviour. What bounds the exposure instead is what the link buys:
+one media room, revocable at any moment, with the revocation ending the meeting as well as the
+link.
 
 **Conference links do not expire by default.** Secure-by-default argues for expiry; the dominant
 use is a standing weekly link, and an expiry that surprises people drives worse behaviour —

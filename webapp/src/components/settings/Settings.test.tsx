@@ -98,11 +98,14 @@ describe("settings panel", () => {
 
     expect(panel).toHaveAttribute("aria-modal", "true");
     // The section nav is a tab list; Security is the section the artboards draw.
+    // Meetings is appended after the drawn three, which is what keeps the three
+    // in the positions the artboard gives them.
     const tabs = within(panel).getAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual([
       en.settings.nav.language,
       en.settings.nav.security,
       en.settings.nav.appearance,
+      en.settings.nav.meetings,
     ]);
     expect(
       within(panel).getByRole("tab", { name: en.settings.nav.security }),
