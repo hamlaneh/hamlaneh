@@ -196,7 +196,9 @@ export class Keystore {
    * MLS-unavailable path.
    */
   static async open(store: KeyValueStore): Promise<Keystore | null> {
-    const subtle = globalThis.crypto?.subtle as SubtleCrypto | undefined;
+    // Typed as always present, and absent in reality on an insecure origin —
+    // which is exactly the context this has to refuse rather than assume.
+    const subtle = (globalThis.crypto as Crypto | undefined)?.subtle;
     if (subtle === undefined) {
       // No WebCrypto means no honest way to store this state. Refusing is the
       // only correct answer: writing the map unwrapped is not a fallback.

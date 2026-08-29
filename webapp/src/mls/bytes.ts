@@ -31,7 +31,6 @@ export function fromBase64(value: string): Uint8Array {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- index is bounded by the loop
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;

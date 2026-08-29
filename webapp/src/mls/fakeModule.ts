@@ -180,7 +180,7 @@ class FakeDevice implements MlsDeviceHandle {
     const group = this.require(groupId);
     return {
       epoch: BigInt(group.epoch),
-      ciphertext: encoder.encode(`${MESSAGE_PREFIX}${group.epoch}:${plaintext}`),
+      ciphertext: encoder.encode(`${MESSAGE_PREFIX}${String(group.epoch)}:${plaintext}`),
     };
   }
 

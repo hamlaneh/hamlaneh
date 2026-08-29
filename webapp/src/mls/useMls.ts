@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import type { Message } from "../chat/types";
 import { MlsService } from "./service";
@@ -38,19 +38,15 @@ export interface MlsController {
  */
 export function useMls(currentUserId: string): MlsController {
   const [state, setState] = useState<MlsState>(initialMlsState);
-  const serviceRef = useRef<MlsService | null>(null);
 
-  // Built lazily and once per user: constructing the service does nothing on
-  // its own — no wasm, no IndexedDB — until an encrypted channel is opened.
-  const service = useMemo(() => {
-    const created = new MlsService({ currentUserId, onChange: setState });
-    serviceRef.current = created;
-    return created;
-  }, [currentUserId]);
-
-  useEffect(() => {
-    setState(initialMlsState);
-  }, [service]);
+  // Built once per user: constructing the service does nothing on its own —
+  // no wasm, no IndexedDB — until an encrypted channel is opened. A different
+  // user means a different signed-in app and therefore a fresh tree, so there
+  // is no state to reset here when the id changes.
+  const service = useMemo(
+    () => new MlsService({ currentUserId, onChange: setState }),
+    [currentUserId],
+  );
 
   const openChannel = useCallback(
     (channelId: string) => {
