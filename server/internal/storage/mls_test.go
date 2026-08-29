@@ -324,7 +324,7 @@ func TestSubmitMlsCommitIntegration(t *testing.T) {
 		ChannelID: fx.channelID,
 		Epoch:     0,
 		Message:   []byte("commit-one"),
-		Welcomes:  []storage.MlsWelcomeDelivery{{DeviceID: device.ID, Welcome: []byte("welcome-bob")}},
+		Welcomes:  []storage.MlsWelcomeDelivery{{DeviceIDs: []uuid.UUID{device.ID}, Welcome: []byte("welcome-bob")}},
 	})
 	if err != nil {
 		t.Fatalf("SubmitMlsCommit: %v", err)
@@ -469,16 +469,16 @@ func TestSubmitMlsCommitWelcomeAtomicityIntegration(t *testing.T) {
 	mustCreateGroup(ctx, t, fx.store, fx.channelID, "atomic-group")
 	good := mustRegisterDevice(ctx, t, fx.store, fx.bob.ID, "bob-good")
 
-	// The second Welcome names a device that does not exist. The insert is
-	// one statement over both, so this is the foreign key firing inside the
-	// commit's transaction.
+	// One Welcome naming a real device and a device that does not exist. The
+	// fan-out is one statement over both ids, so this is the foreign key
+	// firing inside the commit's transaction — and it proves the atomicity
+	// holds WITHIN a delivery, not merely between deliveries.
 	_, err := fx.store.SubmitMlsCommit(ctx, storage.NewMlsCommit{
 		ChannelID: fx.channelID,
 		Epoch:     0,
 		Message:   []byte("commit-with-a-bad-welcome"),
 		Welcomes: []storage.MlsWelcomeDelivery{
-			{DeviceID: good.ID, Welcome: []byte("this one is fine")},
-			{DeviceID: uuid.New(), Welcome: []byte("this device does not exist")},
+			{DeviceIDs: []uuid.UUID{good.ID, uuid.New()}, Welcome: []byte("one blob, one bad recipient")},
 		},
 	})
 	if !errors.Is(err, storage.ErrMlsDeviceNotFound) {
@@ -571,31 +571,42 @@ func TestMlsWelcomesIntegration(t *testing.T) {
 	laptop := mustRegisterDevice(ctx, t, fx.store, fx.bob.ID, "bob-laptop")
 	phone := mustRegisterDevice(ctx, t, fx.store, fx.bob.ID, "bob-phone")
 
+	// ONE Welcome covering both devices, which is what MLS produces: a
+	// commit that adds a person adds all their claimed leaves, and the blob
+	// is shared. Storage fans it out to one row per device — that is what
+	// makes acknowledgement per device possible.
 	if _, cErr := fx.store.SubmitMlsCommit(ctx, storage.NewMlsCommit{
 		ChannelID: fx.channelID,
 		Epoch:     0,
 		Message:   []byte("adding bob"),
 		Welcomes: []storage.MlsWelcomeDelivery{
-			{DeviceID: laptop.ID, Welcome: []byte("for the laptop")},
-			{DeviceID: phone.ID, Welcome: []byte("for the phone")},
+			{DeviceIDs: []uuid.UUID{laptop.ID, phone.ID}, Welcome: []byte("for both of bob's devices")},
 		},
 	}); cErr != nil {
 		t.Fatalf("SubmitMlsCommit: %v", cErr)
 	}
 
-	// All of a user's devices on one list: a Welcome is encrypted to one
-	// device's key package, so a sibling holds bytes it cannot open.
+	// All of a user's devices on one list, one row each, every row carrying
+	// the shared blob.
 	welcomes, err := fx.store.ListMlsWelcomes(ctx, fx.bob.ID)
 	if err != nil {
 		t.Fatalf("ListMlsWelcomes: %v", err)
 	}
 	if len(welcomes) != 2 {
-		t.Fatalf("bob has %d welcomes, want 2", len(welcomes))
+		t.Fatalf("bob has %d welcomes, want one row per device (2)", len(welcomes))
 	}
+	addressed := map[uuid.UUID]bool{}
 	for _, wl := range welcomes {
 		if wl.ChannelID != fx.channelID || string(wl.GroupID) != string(group.GroupID) {
 			t.Errorf("welcome %+v does not name the channel's group", wl)
 		}
+		if string(wl.Welcome) != "for both of bob's devices" {
+			t.Errorf("welcome %+v does not carry the shared blob", wl)
+		}
+		addressed[wl.DeviceID] = true
+	}
+	if !addressed[laptop.ID] || !addressed[phone.ID] {
+		t.Errorf("the fan-out reached %v, want both the laptop and the phone", addressed)
 	}
 
 	// Nobody else's list is touched by them.
@@ -603,13 +614,17 @@ func TestMlsWelcomesIntegration(t *testing.T) {
 		t.Errorf("alice sees %d of bob's welcomes (err %v); want none", len(others), listErr)
 	}
 
-	// Another user's welcome answers not-found and, crucially, is NOT
-	// deleted by the attempt.
-	if ackErr := fx.store.DeleteMlsWelcome(ctx, fx.alice.ID, welcomes[0].ID); !errors.Is(ackErr, storage.ErrMlsWelcomeNotFound) {
-		t.Errorf("acknowledging another user's welcome: %v, want ErrMlsWelcomeNotFound", ackErr)
+	// Alice acknowledging bob's welcome succeeds and changes nothing. Both
+	// halves are the property, and the second is the one that matters: the
+	// user id is in the WHERE clause, so the row is not hers to touch. A
+	// distinct error here would be the leak the uniform answer exists to
+	// remove — success that deletes nothing is what makes "a guessed id
+	// confirms nothing" true rather than merely stated.
+	if ackErr := fx.store.DeleteMlsWelcome(ctx, fx.alice.ID, welcomes[0].ID); ackErr != nil {
+		t.Errorf("acknowledging another user's welcome: %v, want the same silent success", ackErr)
 	}
 	if still, listErr := fx.store.ListMlsWelcomes(ctx, fx.bob.ID); listErr != nil || len(still) != 2 {
-		t.Errorf("the refused acknowledgement removed a welcome: %d left (err %v)", len(still), listErr)
+		t.Errorf("alice's acknowledgement removed one of bob's welcomes: %d left (err %v)", len(still), listErr)
 	}
 
 	// The owner's acknowledgement removes exactly one, and repeating it is

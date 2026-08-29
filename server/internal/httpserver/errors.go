@@ -135,12 +135,15 @@ const (
 	// channel. It is distinct from channel_not_found because the caller can
 	// already see the channel; what they got wrong is who they named.
 	codeMemberNotFound errorCode = "member_not_found"
-	// The two not-found answers openapi.yaml leaves to the generic NotFound
-	// response. A device id that is not the caller's own and one that names
-	// nothing are one answer, so a guess confirms nothing about anybody
-	// else's devices.
-	codeMlsDeviceNotFound  errorCode = "mls_device_not_found"
-	codeMlsWelcomeNotFound errorCode = "mls_welcome_not_found"
+	// codeMlsDeviceNotFound answers a key-package publish under a device id
+	// that is not the caller's own, and one that names nothing at all, with
+	// one answer — so a guess confirms nothing about anybody else's devices.
+	//
+	// It is the only not-found code on this surface. Acknowledging a Welcome
+	// deliberately has none: that endpoint is a uniform 204, because a 404
+	// for foreign ids would itself be the distinguisher it looks like it
+	// prevents (openapi.yaml, acknowledgeMlsWelcome).
+	codeMlsDeviceNotFound errorCode = "mls_device_not_found"
 
 	// codeNotFound answers a path under /api that no contract route claims.
 	// It is the router's answer, not a resource's: the contract's

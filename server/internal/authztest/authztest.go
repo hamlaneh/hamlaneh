@@ -959,9 +959,14 @@ func instanceRegistry() []Entry {
 			func(Fixture) string { return fmt.Sprintf(`{"key_packages":[%q]}`, mlsBlob) },
 			http.StatusNotFound, "mls_device_not_found"),
 		sessionEntry(http.MethodGet, mlsWelcomesPath, "", nil, http.StatusOK, ""),
-		// Acknowledgement is idempotent, so an id naming nothing is the 204
-		// the contract promises rather than a 404. The row pins that: "already
-		// gone" is the outcome the caller wanted.
+		// Acknowledgement is a uniform 204 for every id — one that names
+		// nothing, one already acknowledged, one belonging to somebody else.
+		// The uniformity IS the security property, so the matrix pins it:
+		// this row asks with an id that was never issued and requires the
+		// same answer a real one gets, because a 404 here would be exactly
+		// the distinguisher the design removes. That foreign rows are not
+		// deleted is the other half, and is pinned in storage
+		// (TestMlsWelcomesIntegration) where a row exists to survive.
 		sessionEntry(http.MethodDelete, mlsWelcomePath,
 			"/api/v1/users/me/mls/welcomes/00000000-0000-4000-8000-0000000000e1",
 			nil, http.StatusNoContent, ""),
@@ -1382,13 +1387,16 @@ func mlsEntries() []Entry {
 	entries = append(entries, bothKinds(http.MethodPost, mlsGroupPath, groupBody,
 		members(notEncrypted, notEncrypted, notEncrypted))...)
 
-	// The claim names a real member of the cell's own channel, so a member
-	// reaches the real answer — 200 with both lists empty, because nobody in
-	// a fresh fixture has registered an MLS device. Naming a stranger would
-	// pin member_not_found instead and say nothing about who may claim.
+	// Claiming names a real member of the cell's own channel, so the refusal
+	// a member reaches is the channel's mode and nothing else: a claim
+	// consumes a single-use key package, and on a channel that can never
+	// have a group it would be a free pool-drain against anyone you share a
+	// plaintext room with. That the two non-member columns still answer 404
+	// is the ordering this row pins — the mode gate runs after membership,
+	// so it cannot become a way to probe which channels exist.
 	claimBody := func(fx Fixture) string { return fmt.Sprintf(`{"user_id":%q}`, fx.MemberUserID) }
 	entries = append(entries, bothKinds(http.MethodPost, mlsClaimsPath, claimBody,
-		members(read, read, read))...)
+		members(notEncrypted, notEncrypted, notEncrypted))...)
 
 	// The commit log of a channel with no group is empty rather than absent:
 	// there is nothing to apply, which is what a caught-up client sees too.

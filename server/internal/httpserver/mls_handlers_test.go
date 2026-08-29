@@ -27,10 +27,12 @@ var mlsBlobB64 = base64.StdEncoding.EncodeToString([]byte("blob"))
 
 const (
 	mlsDeviceID  = "aaaaaaaa-0000-4000-8000-000000000001"
+	mlsDeviceID2 = "aaaaaaaa-0000-4000-8000-000000000002"
 	mlsWelcomeID = "bbbbbbbb-0000-4000-8000-000000000001"
 )
 
 func mlsDeviceUUID() uuid.UUID  { return uuid.MustParse(mlsDeviceID) }
+func mlsDeviceUUID2() uuid.UUID { return uuid.MustParse(mlsDeviceID2) }
 func mlsWelcomeUUID() uuid.UUID { return uuid.MustParse(mlsWelcomeID) }
 
 func TestRegisterMlsDevice(t *testing.T) {
@@ -337,9 +339,31 @@ func TestClaimMlsKeyPackages(t *testing.T) {
 		wantError(t, rec, http.StatusNotFound, "member_not_found")
 	})
 
+	// A claim consumes a single-use package, so on a channel that can never
+	// have a group it is a free pool-drain against anyone you share a
+	// plaintext room with. claimMlsKeyPackages stays unwired here: reaching
+	// storage would be a 500, which is what proves nothing was consumed.
+	t.Run("a plaintext channel is refused", func(t *testing.T) {
+		t.Parallel()
+		rec := do(t, memberStore(), request(http.MethodPost, channelPath("/mls/key-package-claims"), body,
+			withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusBadRequest, "e2ee_not_enabled")
+	})
+
 	t.Run("a stranger to the channel is refused first", func(t *testing.T) {
 		t.Parallel()
 		store := channelStore(fixtureUser(), encryptedChannel(), false)
+		rec := do(t, store, request(http.MethodPost, channelPath("/mls/key-package-claims"), body,
+			withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusNotFound, "channel_not_found")
+	})
+
+	// And a stranger to a PLAINTEXT channel still gets the channel's 404,
+	// not the mode refusal: membership is decided first, so the new gate
+	// cannot become a way to probe which channels exist.
+	t.Run("a stranger to a plaintext channel learns nothing about its mode", func(t *testing.T) {
+		t.Parallel()
+		store := channelStore(fixtureUser(), fixtureChannel(), false)
 		rec := do(t, store, request(http.MethodPost, channelPath("/mls/key-package-claims"), body,
 			withSessionCookie("tok"), withCSRF()))
 		wantError(t, rec, http.StatusNotFound, "channel_not_found")
@@ -452,8 +476,12 @@ func TestSubmitMlsCommit(t *testing.T) {
 		}
 		rt := &recordingRealtime{}
 
+		// One Welcome covering two devices — the shape MLS actually
+		// produces, and the one the handler has to carry through without
+		// copying the blob per recipient.
 		rec := doRealtime(t, store, rt, request(http.MethodPost, channelPath("/mls/commits"),
-			commitBody(fmt.Sprintf(`[{"device_id":%q,"welcome":%q}]`, mlsDeviceID, mlsBlobB64)),
+			commitBody(fmt.Sprintf(`[{"device_ids":[%q,%q],"welcome":%q}]`,
+				mlsDeviceID, mlsDeviceID2, mlsBlobB64)),
 			withSessionCookie("tok"), withCSRF()))
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
@@ -461,9 +489,11 @@ func TestSubmitMlsCommit(t *testing.T) {
 		if got.Epoch != 0 || string(got.Message) != "blob" {
 			t.Errorf("storage got %+v, want the decoded commit at epoch 0", got)
 		}
-		if len(got.Welcomes) != 1 || got.Welcomes[0].DeviceID != mlsDeviceUUID() ||
+		if len(got.Welcomes) != 1 || len(got.Welcomes[0].DeviceIDs) != 2 ||
+			got.Welcomes[0].DeviceIDs[0] != mlsDeviceUUID() ||
+			got.Welcomes[0].DeviceIDs[1] != mlsDeviceUUID2() ||
 			string(got.Welcomes[0].Welcome) != "blob" {
-			t.Errorf("storage got welcomes %+v, want the one decoded delivery", got.Welcomes)
+			t.Errorf("storage got welcomes %+v, want one delivery naming both devices", got.Welcomes)
 		}
 
 		commits, welcomes := rt.mlsEvents()
@@ -515,23 +545,35 @@ func TestSubmitMlsCommit(t *testing.T) {
 		}
 
 		rec := do(t, store, request(http.MethodPost, channelPath("/mls/commits"),
-			commitBody(fmt.Sprintf(`[{"device_id":%q,"welcome":%q}]`, mlsDeviceID, mlsBlobB64)),
+			commitBody(fmt.Sprintf(`[{"device_ids":[%q],"welcome":%q}]`, mlsDeviceID, mlsBlobB64)),
 			withSessionCookie("tok"), withCSRF()))
 		wantError(t, rec, http.StatusBadRequest, "invalid_request")
 	})
 
 	t.Run("refuses a malformed submission", func(t *testing.T) {
 		t.Parallel()
-		duplicate := fmt.Sprintf(`[{"device_id":%q,"welcome":%q},{"device_id":%q,"welcome":%q}]`,
+		// Duplicates ACROSS two Welcomes, not within one: the per-Welcome
+		// check that looks sufficient would let this through, and it is the
+		// case that would leave one device a queue of Welcomes into a single
+		// group.
+		duplicateAcross := fmt.Sprintf(`[{"device_ids":[%q],"welcome":%q},{"device_ids":[%q],"welcome":%q}]`,
 			mlsDeviceID, mlsBlobB64, mlsDeviceID, mlsBlobB64)
+		duplicateWithin := fmt.Sprintf(`[{"device_ids":[%q,%q],"welcome":%q}]`,
+			mlsDeviceID, mlsDeviceID, mlsBlobB64)
+		tooManyWelcomes := "[" + strings.TrimSuffix(strings.Repeat(
+			fmt.Sprintf(`{"device_ids":[%q],"welcome":%q},`, mlsDeviceID, mlsBlobB64), 9), ",") + "]"
 		for name, body := range map[string]string{
-			"negative epoch":       fmt.Sprintf(`{"epoch":-1,"message":%q}`, mlsBlobB64),
-			"empty message":        `{"epoch":0,"message":""}`,
-			"message not base64":   `{"epoch":0,"message":"not base64!"}`,
-			"duplicate device ids": commitBody(duplicate),
-			"welcome not base64":   commitBody(fmt.Sprintf(`[{"device_id":%q,"welcome":"not base64!"}]`, mlsDeviceID)),
+			"negative epoch":                         fmt.Sprintf(`{"epoch":-1,"message":%q}`, mlsBlobB64),
+			"empty message":                          `{"epoch":0,"message":""}`,
+			"message not base64":                     `{"epoch":0,"message":"not base64!"}`,
+			"duplicate device ids across welcomes":   commitBody(duplicateAcross),
+			"duplicate device ids within a welcome":  commitBody(duplicateWithin),
+			"more welcomes than the contract allows": commitBody(tooManyWelcomes),
+			"a welcome naming no devices": commitBody(
+				fmt.Sprintf(`[{"device_ids":[],"welcome":%q}]`, mlsBlobB64)),
+			"welcome not base64": commitBody(fmt.Sprintf(`[{"device_ids":[%q],"welcome":"not base64!"}]`, mlsDeviceID)),
 			"welcome with nil device": commitBody(
-				`[{"device_id":"00000000-0000-0000-0000-000000000000","welcome":"` + mlsBlobB64 + `"}]`),
+				`[{"device_ids":["00000000-0000-0000-0000-000000000000"],"welcome":"` + mlsBlobB64 + `"}]`),
 		} {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
@@ -600,7 +642,7 @@ func TestMlsWelcomes(t *testing.T) {
 		}
 	})
 
-	t.Run("acknowledgement is idempotent and scoped to the caller", func(t *testing.T) {
+	t.Run("acknowledgement always answers 204, scoped to the caller", func(t *testing.T) {
 		t.Parallel()
 		path := "/api/v1/users/me/mls/welcomes/" + mlsWelcomeID
 
@@ -614,23 +656,36 @@ func TestMlsWelcomes(t *testing.T) {
 		if rec.Code != http.StatusNoContent {
 			t.Fatalf("got status %d, want 204 (body %s)", rec.Code, rec.Body.String())
 		}
+		// The user is the session's, always: it is what scopes the delete,
+		// and nothing in the request could name another.
 		if gotUser != fixtureUser().ID || gotWelcome != mlsWelcomeUUID() {
 			t.Errorf("storage got (%s, %s), want the session's user and the path's welcome", gotUser, gotWelcome)
 		}
 
-		// Another user's welcome is 404, which the contract distinguishes
-		// from the idempotent 204 above.
-		store.deleteMlsWelcome = func(context.Context, uuid.UUID, uuid.UUID) error {
-			return fmt.Errorf("wrapped: %w", storage.ErrMlsWelcomeNotFound)
-		}
-		rec = do(t, store, request(http.MethodDelete, path, "", withSessionCookie("tok"), withCSRF()))
-		wantError(t, rec, http.StatusNotFound, "mls_welcome_not_found")
-
-		// And an unexpected storage failure is a 500, never a quiet 204.
+		// A storage failure is a 500, never a quiet 204 — the uniform answer
+		// is about who owns the row, not about swallowing errors.
 		store.deleteMlsWelcome = func(context.Context, uuid.UUID, uuid.UUID) error {
 			return errors.New("boom")
 		}
 		rec = do(t, store, request(http.MethodDelete, path, "", withSessionCookie("tok"), withCSRF()))
 		wantError(t, rec, http.StatusInternalServerError, "internal_error")
+	})
+
+	// The handler has no branch that could answer anything but 204 for a
+	// welcome id, whoever it belongs to: there is no not-found path left to
+	// take. Whether the row survives is storage's property and is pinned
+	// there (TestMlsWelcomesIntegration).
+	t.Run("no id answers anything but 204", func(t *testing.T) {
+		t.Parallel()
+		store := authedStore(fixtureUser())
+		store.deleteMlsWelcome = func(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+
+		for _, id := range []string{mlsWelcomeID, "00000000-0000-4000-8000-00000000dead"} {
+			rec := do(t, store, request(http.MethodDelete,
+				"/api/v1/users/me/mls/welcomes/"+id, "", withSessionCookie("tok"), withCSRF()))
+			if rec.Code != http.StatusNoContent {
+				t.Errorf("acknowledging %s got status %d, want 204", id, rec.Code)
+			}
+		}
 	})
 }

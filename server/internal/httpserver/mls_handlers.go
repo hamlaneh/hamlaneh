@@ -45,7 +45,8 @@ const (
 	maxGroupIDB64        = 96
 	maxCommitB64         = 350000
 	maxWelcomeB64        = 350000
-	maxWelcomesPerCommit = 200
+	maxWelcomesPerCommit = 8
+	maxDevicesPerWelcome = 200
 	maxCiphertextB64     = 45000
 	maxCommitPageLimit   = 50
 )
@@ -56,21 +57,14 @@ const (
 // far more than this on an upload.
 const maxKeyPackagesBody int64 = 512 << 10
 
-// maxCommitBody bounds a commit submission, and it is a deliberate refusal to
-// honour the contract's arithmetic maximum.
+// maxCommitBody is the 8 MiB cap the contract states on this endpoint
+// (openapi.yaml, SubmitMlsCommitRequest.welcomes), enforced here because a
+// JSON body has to be held in memory to be decoded and the per-item caps
+// alone would otherwise read as multiplying past it.
 //
-// That maximum is 350000 characters of commit plus 200 Welcomes of 350000
-// each: roughly 70 MB in one JSON body, which has to be held in memory to be
-// decoded. No MLS deployment produces it — a Welcome is kilobytes, and the
-// 350000 cap on one exists to be far past the real number rather than to be
-// reachable — but a caller who simply sends it would cost this server 70 MB
-// per request.
-//
-// 8 MiB is what fits the real worst case with a wide margin: a 50-member
-// bootstrap is 50 Welcomes, and even at 40 KiB each that is 2 MB. A request
-// above this answers 400 rather than being served, which IS a narrowing of
-// the contract and is reported as one — the fix belongs in openapi.yaml,
-// either as a smaller per-Welcome cap or as a stated total.
+// It is a real bound rather than a formality: eight Welcomes of 350000
+// characters is 2.8 MB, so a genuine large-group commit fits several times
+// over, and nothing under the contract's own limits is refused by it.
 const maxCommitBody int64 = 8 << 20
 
 // RegisterMlsDevice records this client instance as an MLS device.
@@ -232,9 +226,20 @@ func (s *apiServer) CreateMlsGroup(w http.ResponseWriter, r *http.Request, chann
 // non-member target answers 404 member_not_found — distinct from the
 // channel's own 404, because the caller can already see the channel and what
 // they got wrong is who they named.
+//
+// Refused on a channel without e2ee, and that refusal is a security control
+// rather than tidiness: a claim consumes a single-use package, so without it
+// anybody sharing any plaintext channel with a person could drain that
+// person's pool and leave them unaddable to groups they have nothing to do
+// with. A channel that can never have a group has no business claiming for
+// one.
 func (s *apiServer) ClaimMlsKeyPackages(w http.ResponseWriter, r *http.Request, channelID api.ChannelId) {
 	sc, ok := s.channelMlsScope(w, r, channelID, authz.MlsWrite)
 	if !ok {
+		return
+	}
+	if !sc.channel.E2EE {
+		writeE2EENotEnabled(w, r, "this channel is not end-to-end encrypted")
 		return
 	}
 
@@ -379,15 +384,20 @@ func (s *apiServer) SubmitMlsCommit(w http.ResponseWriter, r *http.Request, chan
 
 // commitWelcomes validates the Welcomes riding along with a commit.
 //
-// Only the shape rules live here: how many, distinct devices, and decodable
-// blobs within their cap. Whether a device id names anything is not a
-// question a handler can answer without racing the answer, so it is left to
-// the foreign key inside the commit's own transaction.
+// One Welcome names many devices, because MLS produces one Welcome covering
+// every member a commit adds and each recipient extracts its own secrets from
+// it. Only the shape rules live here: how many Welcomes, how many devices
+// each, distinctness, and decodable blobs within their cap. Whether a device
+// id names anything is not a question a handler can answer without racing the
+// answer, so it is left to the foreign key inside the commit's own
+// transaction.
 //
-// Duplicate device ids are a 400 rather than a silent de-duplication, the
-// same call the send path makes about attachment ids: two Welcomes for one
-// device is a client bug, and storing both would leave that device a queue of
-// Welcomes to one group where the protocol expects one.
+// Distinctness is checked ACROSS the whole request rather than within each
+// Welcome, and that is the rule worth stating: two Welcomes naming one device
+// would leave it a queue of Welcomes into a single group where the protocol
+// expects one, and the per-Welcome check that looks sufficient would let that
+// through. It is a 400 rather than a silent de-duplication, the same call the
+// send path makes about attachment ids.
 func commitWelcomes(w http.ResponseWriter, r *http.Request, req api.SubmitMlsCommitRequest) ([]storage.MlsWelcomeDelivery, bool) {
 	if req.Welcomes == nil {
 		return nil, true
@@ -399,21 +409,28 @@ func commitWelcomes(w http.ResponseWriter, r *http.Request, req api.SubmitMlsCom
 		return nil, false
 	}
 
-	seen := make(map[uuid.UUID]bool, len(deliveries))
+	seen := map[uuid.UUID]bool{}
 	out := make([]storage.MlsWelcomeDelivery, 0, len(deliveries))
 	for _, d := range deliveries {
-		if d.DeviceId == uuid.Nil || seen[d.DeviceId] {
+		if len(d.DeviceIds) < 1 || len(d.DeviceIds) > maxDevicesPerWelcome {
 			writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
-				"welcomes must name distinct device ids")
+				fmt.Sprintf("each welcome must name 1 to %d device ids", maxDevicesPerWelcome))
 			return nil, false
 		}
-		seen[d.DeviceId] = true
+		for _, id := range d.DeviceIds {
+			if id == uuid.Nil || seen[id] {
+				writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+					"welcomes must name distinct device ids")
+				return nil, false
+			}
+			seen[id] = true
+		}
 
 		blob, ok := decodeBlob(w, r, d.Welcome, "welcomes[].welcome", maxWelcomeB64)
 		if !ok {
 			return nil, false
 		}
-		out = append(out, storage.MlsWelcomeDelivery{DeviceID: d.DeviceId, Welcome: blob})
+		out = append(out, storage.MlsWelcomeDelivery{DeviceIDs: d.DeviceIds, Welcome: blob})
 	}
 	return out, true
 }
@@ -454,21 +471,19 @@ func (s *apiServer) ListMlsWelcomes(w http.ResponseWriter, r *http.Request) {
 
 // AcknowledgeMlsWelcome drops a Welcome the caller's device has joined with.
 //
-// Idempotent: acknowledging one that is already gone is 204 again, which is
-// the state the caller asked for. Another user's Welcome answers 404 — the
-// contract distinguishes the two.
+// Always 204. The delete is scoped to the caller's own devices' rows in SQL,
+// so an id naming another user's Welcome, or naming nothing at all, removes
+// nothing and answers exactly like an already-acknowledged one. There is no
+// branch here that could tell them apart, which is the point: a 404 for
+// foreign ids reads as non-leaking and is not, because nothing-versus-404 is
+// itself the distinguisher.
 func (s *apiServer) AcknowledgeMlsWelcome(w http.ResponseWriter, r *http.Request, welcomeID api.MlsWelcomeId) {
 	prin, store, ok := s.selfScope(w, r, "acknowledge mls welcome")
 	if !ok {
 		return
 	}
 
-	err := store.DeleteMlsWelcome(r.Context(), prin.user.ID, welcomeID)
-	if errors.Is(err, storage.ErrMlsWelcomeNotFound) {
-		writeError(w, r, http.StatusNotFound, codeMlsWelcomeNotFound, "no such welcome")
-		return
-	}
-	if err != nil {
+	if err := store.DeleteMlsWelcome(r.Context(), prin.user.ID, welcomeID); err != nil {
 		internalError(w, r, err)
 		return
 	}

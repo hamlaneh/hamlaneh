@@ -59,10 +59,6 @@ var (
 	// caller may act on — another user's, or none at all. The two are one
 	// answer on purpose.
 	ErrMlsDeviceNotFound = errors.New("storage: mls device not found")
-	// ErrMlsWelcomeNotFound reports a welcome that exists and belongs to
-	// somebody else. A welcome that is simply gone is not an error:
-	// acknowledgement is idempotent.
-	ErrMlsWelcomeNotFound = errors.New("storage: mls welcome not found")
 )
 
 // MlsDevice is one client instance's leaf identity. A leaf is a device, not a
@@ -112,21 +108,31 @@ type MlsKeyPackageClaim struct {
 	KeyPackage []byte
 }
 
-// MlsWelcomeDelivery is one Welcome a commit carries, addressed to the device
-// whose key package it was built against.
+// MlsWelcomeDelivery is one Welcome a commit carries, addressed to every
+// device it was built against.
+//
+// One blob, many devices, because that is what MLS produces: a commit that
+// adds five members yields ONE Welcome covering all five, and each recipient
+// extracts its own secrets from it. Carrying the blob once rather than per
+// device is what keeps a commit's request proportional to the tree instead of
+// to the tree times the member count.
+//
+// Storage still keeps one pending row per device — that is what makes a
+// per-device acknowledgement possible — and the fan-out happens in the INSERT
+// (insertWelcomesQuery), so the bytes are never copied in Go.
 type MlsWelcomeDelivery struct {
-	DeviceID uuid.UUID
-	Welcome  []byte
+	DeviceIDs []uuid.UUID
+	Welcome   []byte
 }
 
 // NewMlsCommit carries one commit submission. Epoch is what the commit was
 // built at — the compare-and-swap expectation, not the epoch the row will
-// carry.
+// carry, which is that plus one.
 //
-// There is no sender device here because the contract's request carries none:
-// mls_commits.sender_device_id and mls_groups.creator_device_id stay NULL
-// until a contract change gives a client a way to name one. Filling either
-// from anything else would be the server inventing an attribution.
+// Nothing here names a sending device, and the schema has no column for one
+// (migration 0017): no request in the contract carries a device id the server
+// could verify, and the session already identifies the user. That is the
+// attribution that is true.
 type NewMlsCommit struct {
 	ChannelID uuid.UUID
 	Epoch     int64
@@ -183,15 +189,20 @@ const advanceEpochQuery = `UPDATE mls_groups SET epoch = epoch + 1
 	WHERE channel_id = $1 AND epoch = $2
 	RETURNING epoch`
 
-// insertWelcomesQuery stores every Welcome of one commit in one statement.
+// insertWelcomesQuery fans one Welcome out to every device it names: one row
+// per recipient, all sharing the blob the client uploaded once.
+//
+// The fan-out is here rather than in Go so the bytes are bound once per
+// statement no matter how many devices the Welcome covers — the difference
+// between a request proportional to the tree and one proportional to the tree
+// times the member count.
 //
 // It inserts through unnest rather than joining mls_devices, so a device id
 // naming nothing violates the foreign key instead of being silently dropped.
 // A committed add whose Welcome vanished is a forked group; failing loudly
 // inside the commit's transaction is what keeps that impossible.
 const insertWelcomesQuery = `INSERT INTO mls_welcomes (channel_id, recipient_device_id, welcome)
-	SELECT $1, w.device_id, w.welcome
-	FROM unnest($2::uuid[], $3::bytea[]) AS w(device_id, welcome)`
+	SELECT $1, d, $3 FROM unnest($2::uuid[]) AS d`
 
 // welcomeColumns is the canonical column list of a pending Welcome, in the
 // order scanMlsWelcome expects.
@@ -422,17 +433,20 @@ func (s *Store) SubmitMlsCommit(ctx context.Context, nc NewMlsCommit) (MlsCommit
 			return nil
 		}
 
-		deviceIDs := make([]uuid.UUID, 0, len(nc.Welcomes))
-		blobs := make([][]byte, 0, len(nc.Welcomes))
+		// One statement per Welcome rather than one for all of them: each
+		// carries its own blob, and binding it once per statement is what
+		// keeps a Welcome covering two hundred devices from being copied two
+		// hundred times. The contract caps a commit at eight Welcomes, so
+		// this loop is eight statements at worst.
+		var recipients []uuid.UUID
 		for _, w := range nc.Welcomes {
-			deviceIDs = append(deviceIDs, w.DeviceID)
-			blobs = append(blobs, w.Welcome)
-		}
-		if _, insErr := tx.Exec(ctx, insertWelcomesQuery, nc.ChannelID, deviceIDs, blobs); insErr != nil {
-			return mapMlsWelcomeConflict(insErr)
+			if _, insErr := tx.Exec(ctx, insertWelcomesQuery, nc.ChannelID, w.DeviceIDs, w.Welcome); insErr != nil {
+				return mapMlsWelcomeConflict(insErr)
+			}
+			recipients = append(recipients, w.DeviceIDs...)
 		}
 
-		out.WelcomeUserIDs, err = mlsDeviceOwners(ctx, tx, deviceIDs)
+		out.WelcomeUserIDs, err = mlsDeviceOwners(ctx, tx, recipients)
 		return err
 	})
 	if err != nil {
@@ -529,31 +543,23 @@ func (s *Store) ListMlsWelcomes(ctx context.Context, userID uuid.UUID) ([]MlsWel
 
 // DeleteMlsWelcome acknowledges a Welcome after the caller's device joined.
 //
-// Idempotent: a Welcome that is already gone is success, because that is the
-// state the caller asked for. A Welcome that exists and belongs to somebody
-// else is ErrMlsWelcomeNotFound — the contract distinguishes the two, and the
-// distinction costs one EXISTS on the id that just matched nothing.
+// The user id is part of the WHERE clause, not a check made before it, and
+// that single fact carries the whole security property: an id naming somebody
+// else's Welcome matches nothing, so it can neither remove foreign state nor
+// be told apart from an id naming nothing at all. Success either way — how
+// many rows it touched is not something this reports, because reporting it is
+// exactly the distinguisher the uniform 204 exists to remove.
+//
+// It is idempotent for free, for the same reason: an already-acknowledged
+// Welcome is a row that is no longer there.
 func (s *Store) DeleteMlsWelcome(ctx context.Context, userID, welcomeID uuid.UUID) error {
-	tag, err := s.pool.Exec(ctx,
+	_, err := s.pool.Exec(ctx,
 		`DELETE FROM mls_welcomes w
 		 USING mls_devices d
 		 WHERE w.id = $1 AND d.id = w.recipient_device_id AND d.user_id = $2`,
 		welcomeID, userID)
 	if err != nil {
 		return fmt.Errorf("acknowledge mls welcome: %w", err)
-	}
-	if tag.RowsAffected() > 0 {
-		return nil
-	}
-
-	var others bool
-	if err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM mls_welcomes WHERE id = $1)`, welcomeID,
-	).Scan(&others); err != nil {
-		return fmt.Errorf("acknowledge mls welcome: %w", err)
-	}
-	if others {
-		return fmt.Errorf("acknowledge mls welcome: %w", ErrMlsWelcomeNotFound)
 	}
 	return nil
 }
@@ -633,14 +639,12 @@ func scanMlsGroup(row pgx.Row) (MlsGroup, error) {
 	return g, nil
 }
 
-// scanMlsWelcome scans one welcomeColumns row.
+// scanMlsWelcome scans one welcomeColumns row. Its only caller iterates a
+// result set, so there is no no-rows case to translate: an empty list is a
+// user with nothing waiting, not an error.
 func scanMlsWelcome(row pgx.Row) (MlsWelcome, error) {
 	var w MlsWelcome
-	err := row.Scan(&w.ID, &w.ChannelID, &w.GroupID, &w.DeviceID, &w.Welcome, &w.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return MlsWelcome{}, ErrMlsWelcomeNotFound
-	}
-	if err != nil {
+	if err := row.Scan(&w.ID, &w.ChannelID, &w.GroupID, &w.DeviceID, &w.Welcome, &w.CreatedAt); err != nil {
 		return MlsWelcome{}, err
 	}
 	return w, nil
