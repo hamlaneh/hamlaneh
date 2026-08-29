@@ -1128,7 +1128,7 @@ export interface paths {
         get?: never;
         /**
          * Replace this device's pool of unclaimed key packages.
-         * @description Replace-all semantics, deliberately: a key package embeds its own expiry, which the server cannot read, so instead of the server guessing at staleness the client publishes a fresh batch on every connect and the previous unclaimed pool is deleted in the same transaction. Claimed packages are already gone (claims are consuming). A device may only publish to itself — another user's device id, or your own other device, answers 404. The server never validates that a package matches the device's signature key: a client uploading garbage only makes itself unaddable.
+         * @description Replace-all semantics, deliberately: a key package embeds its own expiry, which the server cannot read, so instead of the server guessing at staleness the client publishes a fresh batch on every connect and the previous unclaimed pool is deleted in the same transaction. Claimed packages are already gone (claims are consuming). Scoped to the caller's own devices — another user's device id answers 404 mls_device_not_found. Which of your own devices you publish under is not the server's to police: a session is not bound to a device, so it cannot tell, and does not need to — packages published under the wrong own-device, like garbage packages, only break your own addability. The server never validates that a package matches the device's signature key for the same reason.
          */
         put: operations["replaceMlsKeyPackages"];
         post?: never;
@@ -1179,7 +1179,7 @@ export interface paths {
         put?: never;
         /**
          * Claim one key package per device of a member, to add them.
-         * @description Consuming read — each returned package is deleted in the same transaction and can never be handed out twice, because a key package is single-use by protocol and reusing one across groups is the bug this endpoint exists to make impossible. Deliberately channel-scoped rather than a public directory: the caller must be a member and the target must be a member of this channel, which kills the enumerate-and-exhaust surface a Signal-style open fetch would carry — on a closed instance nobody needs to claim packages of a person they share no conversation with. A target device whose pool is empty appears in missing_device_ids; a target with no devices at all returns both lists empty, and the client renders "cannot add yet" rather than pretending. The target being a non-member answers 404 member_not_found.
+         * @description Consuming read — each returned package is deleted in the same transaction and can never be handed out twice, because a key package is single-use by protocol and reusing one across groups is the bug this endpoint exists to make impossible. Deliberately channel-scoped rather than a public directory: the caller must be a member and the target must be a member of this channel, which kills the enumerate-and-exhaust surface a Signal-style open fetch would carry — on a closed instance nobody needs to claim packages of a person they share no conversation with. A target device whose pool is empty appears in missing_device_ids; a target with no devices at all returns both lists empty, and the client renders "cannot add yet" rather than pretending. The target being a non-member answers 404 member_not_found. Refused on a channel without e2ee (400 e2ee_not_enabled): a claim exists to add someone to this channel's group, and a channel with no possible group would make this endpoint a free pool-drain against anyone you share a plaintext channel with.
          */
         post: operations["claimMlsKeyPackages"];
         delete?: never;
@@ -1200,7 +1200,7 @@ export interface paths {
         };
         /**
          * The commit log after a given epoch, ascending.
-         * @description How a client catches up: it holds group state at epoch N and fetches every commit after N, in order, applying each. A brand-new joiner needs nothing here — its Welcome is self-contained. Pages by epoch: the last epoch received is the next after_epoch, and an empty page means caught up. The log is durable, unlike the WS replay buffer, because a device offline for a week must still be able to advance.
+         * @description How a client catches up: it holds group state at epoch N and fetches every commit after N, in order, applying each. A brand-new joiner needs nothing here — its Welcome is self-contained. Pages by epoch: the last epoch received is the next after_epoch, and an empty page means caught up. The log is durable, unlike the WS replay buffer, because a device offline for a week must still be able to advance. A channel whose group does not exist yet answers a 200 empty page — the log of a group that is not there holds nothing, and the client flow has already asked GET …/mls/group before it gets here.
          */
         get: operations["listMlsCommits"];
         put?: never;
@@ -1249,7 +1249,7 @@ export interface paths {
         post?: never;
         /**
          * Acknowledge a Welcome after successfully joining.
-         * @description Idempotent — deleting an already-acknowledged Welcome is still 204. Another user's Welcome answers 404, so a guessed id confirms nothing.
+         * @description Always 204. The DELETE is scoped to the caller's own devices' rows, so an id naming another user's Welcome, or nothing at all, deletes nothing and answers exactly like an already-acknowledged one — a guessed id can neither remove foreign state nor learn whether it named any. (An earlier draft answered 404 for foreign ids, which read as non-leaking and was not: nothing-vs-404 was a distinguisher. Uniform 204 is what makes the claim true.)
          */
         delete: operations["acknowledgeMlsWelcome"];
         options?: never;
@@ -1974,17 +1974,20 @@ export interface components {
             epoch: number;
             /** @description Base64 MLSMessage carrying the commit. The cap (~256 KiB raw) bounds a commit for a large tree; measured today a two-member commit is under 1 KiB. */
             message: string;
-            /** @description Welcomes for the devices this commit adds, stored atomically with the commit — a committed add whose Welcome was lost is a forked group. */
+            /** @description Welcomes for the devices this commit adds, stored atomically with the commit — a committed add whose Welcome was lost is a forked group. MLS produces ONE Welcome covering every member a commit adds, so a delivery names many devices and carries the blob once; a shape that repeated the blob per device would multiply a tree-sized payload by the member count, which is the 70 MB request the first implementation caught. The whole request is additionally bounded by an 8 MiB body cap on this endpoint, stated here so the per-item caps cannot be read as multiplying past it. */
             welcomes?: components["schemas"]["MlsWelcomeDelivery"][];
         };
         MlsWelcomeDelivery: {
-            /** Format: uuid */
-            device_id: string;
-            /** @description Base64 Welcome, encrypted to that device's claimed key package. */
+            /** @description Every claimed device this Welcome covers. The server stores one pending-Welcome row per device; each recipient extracts its own secrets from the shared blob. */
+            device_ids: string[];
+            /** @description Base64 Welcome, encrypted to the claimed key packages of every device it names. */
             welcome: string;
         };
         MlsCommit: {
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description The epoch the group REACHED by this commit — the submitted epoch plus one. This is the only numbering under which after_epoch=<your epoch> returns exactly the commits you have not applied, and under which a fresh group at epoch 0 has an empty log.
+             */
             epoch: number;
             /** @description Base64, as submitted. */
             message: string;
@@ -4286,7 +4289,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Acknowledged (now, or already was). */
+            /** @description Acknowledged, already acknowledged, or never yours to acknowledge — indistinguishable by design. */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -4294,7 +4297,6 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Unauthorized"];
-            404: components["responses"]["NotFound"];
         };
     };
     search: {

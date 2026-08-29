@@ -42,12 +42,16 @@ CREATE INDEX mls_key_packages_device_idx ON mls_key_packages (device_id);
 -- no lock, no read-then-write window. epoch is the sequencing claim the
 -- commit CAS advances; it counts accepted commits and asserts nothing
 -- cryptographic.
+-- No creator or sender attribution columns, deliberately: no request in
+-- the contract carries a device id the server could verify, and a column
+-- filled from an unverifiable claim — or left NULL forever — is schema
+-- asserting knowledge the server does not have. The session identifies
+-- the user on every call; that is the attribution that is true.
 CREATE TABLE mls_groups (
-    channel_id        uuid PRIMARY KEY REFERENCES channels (id) ON DELETE CASCADE,
-    group_id          bytea NOT NULL UNIQUE,
-    epoch             bigint NOT NULL DEFAULT 0,
-    creator_device_id uuid REFERENCES mls_devices (id) ON DELETE SET NULL,
-    created_at        timestamptz NOT NULL DEFAULT now()
+    channel_id uuid PRIMARY KEY REFERENCES channels (id) ON DELETE CASCADE,
+    group_id   bytea NOT NULL UNIQUE,
+    epoch      bigint NOT NULL DEFAULT 0,
+    created_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- The durable commit log — unlike the WS replay buffer, because a device
@@ -58,12 +62,15 @@ CREATE TABLE mls_groups (
 -- CAS were bypassed. Retention is unbounded in this slice; pruning
 -- requires a device-eviction policy and is deliberately deferred with
 -- the multi-device slice.
+-- epoch here is the epoch the group REACHED by this commit (submitted
+-- epoch plus one): the only numbering under which after_epoch=<mine>
+-- returns exactly what a client has not applied, and a fresh group at 0
+-- has an empty log.
 CREATE TABLE mls_commits (
-    channel_id       uuid NOT NULL REFERENCES mls_groups (channel_id) ON DELETE CASCADE,
-    epoch            bigint NOT NULL,
-    sender_device_id uuid REFERENCES mls_devices (id) ON DELETE SET NULL,
-    message          bytea NOT NULL,
-    created_at       timestamptz NOT NULL DEFAULT now(),
+    channel_id uuid NOT NULL REFERENCES mls_groups (channel_id) ON DELETE CASCADE,
+    epoch      bigint NOT NULL,
+    message    bytea NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (channel_id, epoch)
 );
 
