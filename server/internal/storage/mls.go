@@ -111,6 +111,19 @@ type MlsKeyPackageClaim struct {
 	KeyPackage []byte
 }
 
+// MlsMemberDevice is one current channel member and the signature keys of
+// every device they have registered.
+//
+// SignaturePublicKeys is empty — never absent — for a member who has
+// registered no device. The distinction is the whole reason this type has a
+// list rather than the query having an inner join: a client sweeping its tree
+// must be able to tell "this person has no device" from "this person is not a
+// member", and only the first of those leaves their leaves alone.
+type MlsMemberDevice struct {
+	UserID              uuid.UUID
+	SignaturePublicKeys [][]byte
+}
+
 // MlsWelcomeDelivery is one Welcome a commit carries, addressed to every
 // device it was built against.
 //
@@ -228,6 +241,36 @@ const welcomeOutsidersQuery = `SELECT count(*) FROM unnest($2::uuid[]) AS d(id)
 	WHERE NOT EXISTS (
 		SELECT 1 FROM channel_members m WHERE m.channel_id = $1 AND m.user_id = dev.user_id
 	)`
+
+// memberDevicesQuery is the eviction allow-list, one page at a time
+// (ADR 007 decision 2): every CURRENT member of the channel, each with the
+// signature keys of every device they have registered.
+//
+// The LEFT JOIN is the security-relevant word in it, and it cannot be
+// narrowed to an inner join by anybody optimizing this later. The sweep it
+// feeds evicts every leaf whose key is not in the answer, so a member dropped
+// from a page — which is what an inner join does to a member who has
+// registered no device yet — is a member whose real leaves the next
+// reconciliation evicts. Their absence would read as "nobody", and the empty
+// key list is what says "somebody, with nothing registered".
+//
+// It drives from channel_members rather than from mls_devices for the mirror
+// reason: a device belonging to a NON-member has no row here to be aggregated
+// onto, so it can never reach a page, and the allow-list never authorizes a
+// leaf of somebody who has left.
+//
+// Paging is a keyset on user id — the channel_members primary key
+// (channel_id, user_id), so a page is an index range scan rather than an
+// offset — and the order is total, so a full walk covers every member exactly
+// once.
+const memberDevicesQuery = `SELECT m.user_id,
+	    array_remove(array_agg(d.signature_public_key ORDER BY d.created_at, d.id), NULL)
+	FROM channel_members m
+	LEFT JOIN mls_devices d ON d.user_id = m.user_id
+	WHERE m.channel_id = $1 AND ($2::uuid IS NULL OR m.user_id > $2)
+	GROUP BY m.user_id
+	ORDER BY m.user_id
+	LIMIT $3`
 
 // welcomeColumns is the canonical column list of a pending Welcome, in the
 // order scanMlsWelcome expects.
@@ -412,6 +455,43 @@ func (s *Store) ClaimMlsKeyPackages(ctx context.Context, channelID, targetUserID
 		return nil, nil, fmt.Errorf("claim mls key packages: %w", err)
 	}
 	return claims, missing, nil
+}
+
+// ListMlsMemberDevices returns one page of the channel's current members with
+// their device signature keys, ordered by user id.
+//
+// This is the allow-list an eviction sweep is built from (ADR 007): after
+// reconciliation, every leaf whose signature key these pages do not map to a
+// current member has been evicted. A client must therefore read EVERY page
+// before sweeping — an allow-list built from half the roster evicts the half
+// it never read — which is why after is a position in a total order rather
+// than a filter.
+//
+// A member with no devices is returned with an empty key list rather than
+// omitted; memberDevicesQuery's LEFT JOIN is what makes that structural.
+//
+// It applies no visibility check: who may read this is the authz layer's
+// question, decided from the same membership every other channel-scoped path
+// is decided from.
+func (s *Store) ListMlsMemberDevices(ctx context.Context, channelID uuid.UUID, after *uuid.UUID, limit int) ([]MlsMemberDevice, error) {
+	rows, err := s.pool.Query(ctx, memberDevicesQuery, channelID, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list mls member devices: %w", err)
+	}
+	defer rows.Close()
+
+	members := []MlsMemberDevice{}
+	for rows.Next() {
+		m := MlsMemberDevice{SignaturePublicKeys: [][]byte{}}
+		if scanErr := rows.Scan(&m.UserID, &m.SignaturePublicKeys); scanErr != nil {
+			return nil, fmt.Errorf("list mls member devices: %w", scanErr)
+		}
+		members = append(members, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list mls member devices: %w", err)
+	}
+	return members, nil
 }
 
 // SubmitMlsCommit accepts a commit if the epoch it was built at is still the
