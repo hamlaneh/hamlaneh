@@ -174,6 +174,13 @@ var routePolicies = map[string]routePolicy{
 	"GET /api/v1/channels/{channelId}/mls/commits":             {class: classSession},
 	"POST /api/v1/channels/{channelId}/mls/commits":            {class: classSession},
 
+	// Phase 3 slice 2: the member-device directory (ADR 007). Same class as
+	// the five above and for the same reason — membership is the whole rule,
+	// asked by an explicit authz.Can inside the handler. The information is
+	// the class co-members already learn at claim time, so nothing about the
+	// gate changes because the read is the one an eviction sweep trusts.
+	"GET /api/v1/channels/{channelId}/mls/member-devices": {class: classSession},
+
 	// Phase 1.1b self-service security. All session-gated; none joins the
 	// must-change trio, because a user who owes a password change fixes that
 	// before touching their second factor or their device list.

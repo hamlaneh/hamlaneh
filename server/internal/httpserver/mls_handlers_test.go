@@ -370,6 +370,202 @@ func TestClaimMlsKeyPackages(t *testing.T) {
 	})
 }
 
+// The member-device directory (ADR 007). It is a read, so most of what these
+// pin is refusal ordering and wire shape — but two of them are the reason the
+// endpoint is worth testing at all: a stranger must learn nothing, and a
+// member with no devices must survive the trip to JSON as an empty array
+// rather than as an absence.
+
+// memberDevicesPath is the roster read's request target.
+func memberDevicesPath() string { return channelPath("/mls/member-devices") }
+
+// memberDevicesGet builds the roster read as the fixture member.
+func memberDevicesGet(query string) *http.Request {
+	return request(http.MethodGet, memberDevicesPath()+query, "", withSessionCookie("tok"))
+}
+
+func TestListMlsMemberDevices(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns each member with their keys", func(t *testing.T) {
+		t.Parallel()
+		store := encryptedMemberStore()
+		var gotChannel uuid.UUID
+		var gotAfter *uuid.UUID
+		var gotLimit int
+		store.listMlsMemberDevices = func(_ context.Context, channelID uuid.UUID, after *uuid.UUID, limit int) ([]storage.MlsMemberDevice, error) {
+			gotChannel, gotAfter, gotLimit = channelID, after, limit
+			return []storage.MlsMemberDevice{
+				{UserID: fixtureUser().ID, SignaturePublicKeys: [][]byte{[]byte("blob")}},
+				// A member who has registered nothing.
+				{UserID: peerUUID(), SignaturePublicKeys: [][]byte{}},
+			}, nil
+		}
+
+		rec := do(t, store, memberDevicesGet(""))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		if gotChannel != channelUUID() || gotAfter != nil {
+			t.Errorf("storage got (%s, after=%v), want the path's channel from the start", gotChannel, gotAfter)
+		}
+		// The contract's default is its maximum, and the handler asks for one
+		// row beyond the page to learn whether another exists.
+		if gotLimit != 201 {
+			t.Errorf("storage got limit %d, want the 200 default plus the lookahead row", gotLimit)
+		}
+
+		var page api.MlsMemberDevicePage
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatalf("body is not an MlsMemberDevicePage: %v", err)
+		}
+		if len(page.Members) != 2 {
+			t.Fatalf("members = %+v, want both", page.Members)
+		}
+		if page.Members[0].SignaturePublicKeys[0] != mlsBlobB64 {
+			t.Errorf("keys = %v, want the registered key as base64", page.Members[0].SignaturePublicKeys)
+		}
+		if page.NextCursor != nil {
+			t.Errorf("next_cursor = %v on a short page, want absent", *page.NextCursor)
+		}
+	})
+
+	// The one a future "optimization" breaks, pinned here at the wire.
+	//
+	// The contract makes signature_public_keys required, and a member with no
+	// devices must arrive as an empty array: a JSON null is a crash in the
+	// client, and being dropped from the page entirely is worse than a crash
+	// — the member becomes indistinguishable from a non-member, and the
+	// allow-list assembled from this body evicts their real leaves.
+	t.Run("a member with no devices is an empty array, not an absence", func(t *testing.T) {
+		t.Parallel()
+		store := encryptedMemberStore()
+		store.listMlsMemberDevices = func(context.Context, uuid.UUID, *uuid.UUID, int) ([]storage.MlsMemberDevice, error) {
+			return []storage.MlsMemberDevice{{UserID: peerUUID()}}, nil
+		}
+
+		rec := do(t, store, memberDevicesGet(""))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, `"signature_public_keys":[]`) {
+			t.Errorf("body %s, want the member present with an empty key array", body)
+		}
+		if !strings.Contains(body, peerUUID().String()) {
+			t.Errorf("body %s, want the member's own id present", body)
+		}
+	})
+
+	t.Run("pages with a cursor that carries the position", func(t *testing.T) {
+		t.Parallel()
+		store := encryptedMemberStore()
+		var gotAfter *uuid.UUID
+		var gotLimit int
+		store.listMlsMemberDevices = func(_ context.Context, _ uuid.UUID, after *uuid.UUID, limit int) ([]storage.MlsMemberDevice, error) {
+			gotAfter, gotLimit = after, limit
+			// One more than the page asked for, which is the signal there is
+			// another page.
+			return []storage.MlsMemberDevice{
+				{UserID: fixtureUser().ID},
+				{UserID: peerUUID()},
+			}, nil
+		}
+
+		rec := do(t, store, memberDevicesGet("?limit=1"))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		if gotLimit != 2 {
+			t.Errorf("storage got limit %d, want the requested 1 plus the lookahead row", gotLimit)
+		}
+
+		var page api.MlsMemberDevicePage
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatalf("body is not an MlsMemberDevicePage: %v", err)
+		}
+		if len(page.Members) != 1 || page.Members[0].UserId != fixtureUser().ID {
+			t.Fatalf("members = %+v, want the page trimmed to the first", page.Members)
+		}
+		if page.NextCursor == nil {
+			t.Fatal("next_cursor is absent; the lookahead row says another page exists, " +
+				"and a client that stops here sweeps against half a roster")
+		}
+
+		// Feeding it back resumes AFTER the last member handed out, which is
+		// what makes a full walk cover everybody exactly once.
+		rec = do(t, store, memberDevicesGet("?limit=1&cursor="+*page.NextCursor))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("second page got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		if gotAfter == nil || *gotAfter != fixtureUser().ID {
+			t.Errorf("storage resumed after %v, want the last member of the previous page (%s)",
+				gotAfter, fixtureUser().ID)
+		}
+	})
+
+	t.Run("refuses a limit outside the contract's bounds", func(t *testing.T) {
+		t.Parallel()
+		for name, query := range map[string]string{
+			"zero":         "?limit=0",
+			"negative":     "?limit=-1",
+			"over the max": "?limit=201",
+		} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				// listMlsMemberDevices stays unwired: reaching it is a 500.
+				rec := do(t, encryptedMemberStore(), memberDevicesGet(query))
+				wantError(t, rec, http.StatusBadRequest, "invalid_request")
+			})
+		}
+	})
+
+	// The same answer every other paged read gives, from the same helper: a
+	// cursor is opaque, so the only honest advice is to start the page again.
+	t.Run("refuses a malformed cursor", func(t *testing.T) {
+		t.Parallel()
+		rec := do(t, encryptedMemberStore(), memberDevicesGet("?cursor=not-a-cursor"))
+		wantError(t, rec, http.StatusBadRequest, "invalid_request")
+	})
+
+	// A channel with no group has no tree to sweep. listMlsMemberDevices
+	// stays unwired: reaching storage would be a 500.
+	t.Run("a plaintext channel is refused", func(t *testing.T) {
+		t.Parallel()
+		rec := do(t, memberStore(), memberDevicesGet(""))
+		wantError(t, rec, http.StatusBadRequest, "e2ee_not_enabled")
+	})
+
+	// The row this endpoint most needs. A stranger who could read this would
+	// learn the entire roster of a channel they cannot see — every member's
+	// id, and how many devices each has. The refusal is the channel's own
+	// 404, and storage is never reached, so nothing was even assembled.
+	t.Run("a stranger to the channel learns nothing", func(t *testing.T) {
+		t.Parallel()
+		store := channelStore(fixtureUser(), encryptedChannel(), false)
+		store.listMlsMemberDevices = func(context.Context, uuid.UUID, *uuid.UUID, int) ([]storage.MlsMemberDevice, error) {
+			t.Error("storage was reached for a non-member; the roster was assembled before the refusal")
+			return nil, nil
+		}
+
+		rec := do(t, store, memberDevicesGet(""))
+		wantError(t, rec, http.StatusNotFound, "channel_not_found")
+		if body := rec.Body.String(); strings.Contains(body, peerUUID().String()) {
+			t.Errorf("the refusal body %s names a member", body)
+		}
+	})
+
+	// And a stranger to a PLAINTEXT channel still gets the channel's 404,
+	// not the mode refusal: membership is decided first, so the mode gate
+	// cannot become a way to probe which channels exist.
+	t.Run("a stranger to a plaintext channel learns nothing about its mode", func(t *testing.T) {
+		t.Parallel()
+		store := channelStore(fixtureUser(), fixtureChannel(), false)
+		rec := do(t, store, memberDevicesGet(""))
+		wantError(t, rec, http.StatusNotFound, "channel_not_found")
+	})
+}
+
 func TestListMlsCommits(t *testing.T) {
 	t.Parallel()
 

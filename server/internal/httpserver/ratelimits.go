@@ -141,6 +141,7 @@ const (
 	budgetConferenceGuest   budgetName = "conference-guest"
 	budgetMlsDirectory      budgetName = "mls-directory"
 	budgetMlsGroupWork      budgetName = "mls-group-work"
+	budgetMlsMemberDevices  budgetName = "mls-member-devices"
 )
 
 // budgetSpec is one budget: how many requests fit its sliding window, how
@@ -356,6 +357,31 @@ var budgetSpecs = map[budgetName]budgetSpec{
 	// conversation-write: those are one small row each.
 	budgetMlsGroupWork: {limit: 180, window: time.Minute},
 
+	// The member-device directory (ADR 007): the roster read a client
+	// assembles its eviction allow-list from. It gets its own window rather
+	// than joining budgetMlsGroupWork, which is a WRITE budget whose number
+	// is argued from commit bodies of up to 8 MiB; this is one indexed range
+	// scan over the channel_members primary key.
+	//
+	// The burst it must clear is set by the protocol rather than by the user,
+	// which is what makes it the loosest MLS budget. Every accepted commit in
+	// a channel nudges every member, and every nudged client reconciles — so
+	// a group bootstrap of many members costs each member's client one read
+	// per commit it hears about, not one per action its user took. A large
+	// roster then multiplies that by its page count (200 members a page). The
+	// idle client beside it spends 12 a minute on the 5-second retry poll.
+	//
+	// 240 a minute clears that storm with room and is still far below what
+	// walking the roster in a loop needs. Making it tighter would fail the
+	// one flow it exists to permit, and the failure would be silent in the
+	// worst way: a client refused mid-walk assembles a PARTIAL allow-list,
+	// and a sweep run against a partial roster evicts the members it never
+	// read. So the direction of error matters here — this budget is
+	// deliberately generous, and the endpoint is a bounded page over data
+	// co-members already learn at claim time, so the disclosure it bounds is
+	// nil and the work it bounds is small.
+	budgetMlsMemberDevices: {limit: 240, window: time.Minute},
+
 	// Redeeming an invitation is a public route keyed on the client
 	// address (like the SSO flow above). It hashes the chosen
 	// password with argon2id before the token is known to be good — the same
@@ -519,6 +545,15 @@ var endpointBudgets = map[string]budgetName{
 	"DELETE /api/v1/users/me/mls/welcomes/{welcomeId}":         budgetNone,
 	"GET /api/v1/channels/{channelId}/mls/group":               budgetNone,
 	"GET /api/v1/channels/{channelId}/mls/commits":             budgetNone,
+
+	// Phase 3 slice 2: the member-device directory (ADR 007). Unlike the two
+	// reads above it, the contract DOES reserve a 429 on this one, and this
+	// table follows the contract rather than the family resemblance. The
+	// difference is real: those two hand back state a client applies to its
+	// own group, while this one is the answer an eviction decision is made
+	// from, and a read that important is better with a declared ceiling than
+	// with none.
+	"GET /api/v1/channels/{channelId}/mls/member-devices": budgetMlsMemberDevices,
 
 	// Reads and edits the contract reserves no 429 on. Listing messages is
 	// the read a client repeats most — a budget nobody declared must not
