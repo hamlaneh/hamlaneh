@@ -28,6 +28,17 @@ function dropMockServiceWorker(): Plugin {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), dropMockServiceWorker()],
+  resolve: {
+    alias: {
+      // The compiled MLS wrapper (webapp/src-mls/build.sh). An alias rather
+      // than a relative import so `tsc` can type it from the ambient
+      // declaration in src/mls/hamlaneh-mls.d.ts, which is what lets a
+      // checkout where the crate has never been built still typecheck and run
+      // its unit tests. src/mls/wasm.ts imports it dynamically, so only a
+      // build that actually reaches encrypted chat needs the artifact.
+      "hamlaneh-mls": path.resolve(import.meta.dirname, "src-mls/pkg/hamlaneh_mls.js"),
+    },
+  },
   test: {
     environment: "jsdom",
     // worker_threads instead of child processes: faster for this suite and
