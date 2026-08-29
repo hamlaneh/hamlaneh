@@ -1,9 +1,10 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { delay, http, HttpResponse } from "msw";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { resetMockAuth } from "../mocks/handlers";
 import { server } from "../mocks/node";
+import type { MlsState } from "../mls/types";
 import { initialMlsState } from "../mls/types";
 import type { MlsController } from "../mls/useMls";
 import { useMls } from "../mls/useMls";
@@ -100,10 +101,15 @@ class SelfAnsweringSocket {
   }
 }
 
+/** How many times a spy has been called, without fighting the mock types. */
+function calls(spy: unknown): number {
+  return (spy as { mock: { calls: unknown[] } }).mock.calls.length;
+}
+
 /** Every method a spy; the hook only ever calls, never reads a result. */
-function spyController(): MlsController {
+function spyController(channels: MlsState["channels"] = {}): MlsController {
   return {
-    state: initialMlsState,
+    state: { ...initialMlsState, channels },
     openChannel: vi.fn(),
     syncChannel: vi.fn(),
     syncWelcomes: vi.fn(),
@@ -219,6 +225,91 @@ describe("opening an encrypted channel on a cold load", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(mls.syncWelcomes).toHaveBeenCalledTimes(1);
     unmount();
+  });
+});
+
+describe("a group that could not be finished in one go", () => {
+  /**
+   * The second half of the same real-stack failure, and the one that cost the
+   * e2e its first green run: the client that creates the group cannot add a
+   * member who has never opened the app, because that member has published no
+   * key packages — and no event ever tells the group that a device appeared.
+   * Whoever is outside stays outside until somebody asks again.
+   */
+  it("re-reconciles while somebody still cannot be added", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const mls = spyController({
+        [CHANNEL_ID]: { status: "incomplete", unreachableUserIds: ["u-newcomer"] },
+      });
+      slowChannelList([ENCRYPTED_CHANNEL]);
+
+      const { unmount } = renderChat(mls);
+      await waitFor(() => {
+        expect(mls.openChannel).toHaveBeenCalledWith(CHANNEL_ID);
+      });
+      // One sync already happened when the socket came up — the retry has to
+      // be counted on top of it, not confused with it.
+      const before = calls(mls.syncChannel);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      // syncChannel, not openChannel: this client can already send, and
+      // going back through "opening" would disable its composer on a timer.
+      expect(mls.syncChannel).toHaveBeenCalledWith(CHANNEL_ID);
+      expect(calls(mls.syncChannel)).toBeGreaterThan(before);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-asks whether it has been added yet while it waits", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const mls = spyController({ [CHANNEL_ID]: { status: "waiting" } });
+      slowChannelList([ENCRYPTED_CHANNEL]);
+
+      const { unmount } = renderChat(mls);
+      await waitFor(() => {
+        expect(mls.openChannel).toHaveBeenCalledWith(CHANNEL_ID);
+      });
+      const before = calls(mls.openChannel);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      // A Welcome nudge reaches sockets, so one sent while this client was
+      // reconnecting is simply gone; asking again is how it finds out.
+      expect(calls(mls.openChannel)).toBeGreaterThan(before);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops asking once the group is whole", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const mls = spyController({ [CHANNEL_ID]: { status: "ready" } });
+      slowChannelList([ENCRYPTED_CHANNEL]);
+
+      const { unmount } = renderChat(mls);
+      await waitFor(() => {
+        expect(mls.openChannel).toHaveBeenCalledWith(CHANNEL_ID);
+      });
+
+      const before = calls(mls.syncChannel);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+      // Four retry windows have passed and nothing asked again.
+      expect(calls(mls.syncChannel)).toBe(before);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

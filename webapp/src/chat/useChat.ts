@@ -15,6 +15,21 @@ export type RealtimeOverrides = Partial<
 >;
 
 const HISTORY_PAGE_SIZE = 50;
+
+/**
+ * How often an encrypted channel that could not finish its group setup asks
+ * again.
+ *
+ * There is no event for the thing it is waiting on. A member who has never
+ * opened the app has published no key packages, so the client bootstrapping
+ * the group cannot add them — and nothing in the protocol tells the group
+ * later that a device has appeared. Without this, the first person into a
+ * channel creates a group of one and everybody invited before their first
+ * sign-in stays outside it forever, which is exactly what the real stack did.
+ * Five seconds is a conversation someone is looking at; it stops the moment
+ * the group is whole.
+ */
+const MLS_RETRY_MS = 5_000;
 const SEARCH_PAGE_SIZE = 20;
 
 export interface ChatController {
@@ -436,6 +451,43 @@ export function useChat({
     }
     mlsRef.current.openChannel(channelId);
   }, [activeChannelIsE2ee, channelId, mlsRef]);
+
+  /*
+   * The two states that resolve themselves only if somebody asks again.
+   *
+   * `incomplete` — this client is in the group and could not add everyone.
+   * It re-reconciles, which claims key packages for whoever is still outside.
+   *
+   * `waiting` — the group exists and this device is not in it yet. A Welcome
+   * normally arrives as an `mls_welcome` nudge, but that event reaches
+   * sockets, so one sent while this client was reconnecting is simply gone.
+   * Re-opening the channel is how it finds out anyway.
+   *
+   * Neither is polled for its own sake: both stop as soon as the state moves.
+   */
+  const channelMlsStatus =
+    channelId === undefined ? undefined : mls.state.channels[channelId]?.status;
+  useEffect(() => {
+    if (
+      channelId === undefined ||
+      (channelMlsStatus !== "incomplete" && channelMlsStatus !== "waiting")
+    ) {
+      return undefined;
+    }
+    const timer = setInterval(() => {
+      if (channelMlsStatus === "waiting") {
+        mlsRef.current.openChannel(channelId);
+      } else {
+        // Not openChannel: that would go back through `opening`, and this
+        // client can already send — briefly disabling its composer every few
+        // seconds would be a worse bug than the one being fixed.
+        mlsRef.current.syncChannel(channelId);
+      }
+    }, MLS_RETRY_MS);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [channelId, channelMlsStatus, mlsRef]);
 
   /*
    * Decryption follows whatever is loaded, rather than being wired into every
