@@ -2411,6 +2411,58 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /api/v1/channels/{channelId}/mls/member-devices:
+    parameters:
+      - $ref: "#/components/parameters/ChannelId"
+    get:
+      tags: [mls]
+      operationId: listMlsMemberDevices
+      summary: Every current member's registered device signature keys.
+      description: >
+        The allow-list a client sweeps the MLS tree against (ADR 007). A leaf
+        whose signature key does not appear here belongs to nobody who is
+        currently in this channel, and reconciliation evicts it — which is
+        what makes removal hold against a leaf credentialed under somebody
+        else's id, since the credential is a string the enrolling client
+        chose and is never again read for a security decision.
+        Deliberately the whole roster in one answer rather than a per-user
+        lookup: the sweep is "evict what is not allowed", and a per-user
+        question can only ever confirm keys the directory already attributes
+        correctly — the planted leaf is precisely the one no per-user answer
+        names. Members only, so the same 404 as every channel-scoped path,
+        and refused on a channel without e2ee (400 e2ee_not_enabled) since a
+        channel with no group has no tree to sweep. Co-members already learn
+        device ids at claim time, so this exposes the same information class
+        and adds no reach. The keys are the server's claim, not a proof: the
+        directory is written under an authenticated session and never
+        signature-verified, and closing that residue is the verification
+        slice's job, not this endpoint's.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: cursor
+          in: query
+          description: From a previous page's next_cursor.
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 200 }
+      responses:
+        "200":
+          description: One page of members and their device keys.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MlsMemberDevicePage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /api/v1/channels/{channelId}/mls/key-package-claims:
     parameters:
       - $ref: "#/components/parameters/ChannelId"
@@ -4204,6 +4256,39 @@ components:
           description: >
             The member whose devices are being added. May be the caller —
             that is how a person's own second device gets added.
+
+    MlsMemberDevice:
+      type: object
+      description: >
+        One member and the signature keys of every device they have
+        registered. A member with no devices yet appears with an empty list
+        rather than being omitted, so a client can tell "has no device" from
+        "is not a member" without a second question.
+      required: [user_id, signature_public_keys]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        signature_public_keys:
+          type: array
+          items:
+            type: string
+          description: Base64, as registered. Opaque to the server.
+
+    MlsMemberDevicePage:
+      type: object
+      required: [members]
+      properties:
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/MlsMemberDevice"
+        next_cursor:
+          type: string
+          description: >
+            Present when another page exists. A client must read every page
+            before sweeping: an allow-list built from half the roster would
+            evict the members it had not read yet.
 
     MlsKeyPackageClaim:
       type: object

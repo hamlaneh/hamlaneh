@@ -1165,6 +1165,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/{channelId}/mls/member-devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Every current member's registered device signature keys.
+         * @description The allow-list a client sweeps the MLS tree against (ADR 007). A leaf whose signature key does not appear here belongs to nobody who is currently in this channel, and reconciliation evicts it — which is what makes removal hold against a leaf credentialed under somebody else's id, since the credential is a string the enrolling client chose and is never again read for a security decision. Deliberately the whole roster in one answer rather than a per-user lookup: the sweep is "evict what is not allowed", and a per-user question can only ever confirm keys the directory already attributes correctly — the planted leaf is precisely the one no per-user answer names. Members only, so the same 404 as every channel-scoped path, and refused on a channel without e2ee (400 e2ee_not_enabled) since a channel with no group has no tree to sweep. Co-members already learn device ids at claim time, so this exposes the same information class and adds no reach. The keys are the server's claim, not a proof: the directory is written under an authenticated session and never signature-verified, and closing that residue is the verification slice's job, not this endpoint's.
+         */
+        get: operations["listMlsMemberDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels/{channelId}/mls/key-package-claims": {
         parameters: {
             query?: never;
@@ -1954,6 +1977,18 @@ export interface components {
              * @description The member whose devices are being added. May be the caller — that is how a person's own second device gets added.
              */
             user_id: string;
+        };
+        /** @description One member and the signature keys of every device they have registered. A member with no devices yet appears with an empty list rather than being omitted, so a client can tell "has no device" from "is not a member" without a second question. */
+        MlsMemberDevice: {
+            /** Format: uuid */
+            user_id: string;
+            /** @description Base64, as registered. Opaque to the server. */
+            signature_public_keys: string[];
+        };
+        MlsMemberDevicePage: {
+            members: components["schemas"]["MlsMemberDevice"][];
+            /** @description Present when another page exists. A client must read every page before sweeping: an allow-list built from half the roster would evict the members it had not read yet. */
+            next_cursor?: string;
         };
         MlsKeyPackageClaim: {
             /** Format: uuid */
@@ -4156,6 +4191,37 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listMlsMemberDevices: {
+        parameters: {
+            query?: {
+                /** @description From a previous page's next_cursor. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of members and their device keys. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsMemberDevicePage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
         };
     };

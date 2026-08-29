@@ -713,6 +713,21 @@ type MlsKeyPackagePool struct {
 	UnclaimedCount int `json:"unclaimed_count"`
 }
 
+// MlsMemberDevice One member and the signature keys of every device they have registered. A member with no devices yet appears with an empty list rather than being omitted, so a client can tell "has no device" from "is not a member" without a second question.
+type MlsMemberDevice struct {
+	// SignaturePublicKeys Base64, as registered. Opaque to the server.
+	SignaturePublicKeys []string           `json:"signature_public_keys"`
+	UserId              openapi_types.UUID `json:"user_id"`
+}
+
+// MlsMemberDevicePage defines model for MlsMemberDevicePage.
+type MlsMemberDevicePage struct {
+	Members []MlsMemberDevice `json:"members"`
+
+	// NextCursor Present when another page exists. A client must read every page before sweeping: an allow-list built from half the roster would evict the members it had not read yet.
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
 // MlsMessageEnvelope The encrypted half of a message in an e2ee channel. The server stores and echoes it without parsing; content is the empty string wherever this is present, so nothing the server can read ever carries the words. Deleting the message erases the ciphertext exactly as it erases content; editing replaces it and stamps edited_at as for any edit.
 type MlsMessageEnvelope struct {
 	// Ciphertext Base64 MLSMessage (application message). Cap ~32 KiB raw: a 4000-character message plus MLS framing fits with room, and the resulting message_created frame stays far under the 64 KiB WebSocket cap.
@@ -1216,6 +1231,13 @@ type ListMlsCommitsParams struct {
 	Limit      *int  `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// ListMlsMemberDevicesParams defines parameters for ListMlsMemberDevices.
+type ListMlsMemberDevicesParams struct {
+	// Cursor From a previous page's next_cursor.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // SearchParams defines parameters for Search.
 type SearchParams struct {
 	Q     string      `form:"q" json:"q"`
@@ -1451,6 +1473,9 @@ type ServerInterface interface {
 	// ClaimMlsKeyPackages Claim one key package per device of a member, to add them.
 	// (POST /api/v1/channels/{channelId}/mls/key-package-claims)
 	ClaimMlsKeyPackages(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// ListMlsMemberDevices Every current member's registered device signature keys.
+	// (GET /api/v1/channels/{channelId}/mls/member-devices)
+	ListMlsMemberDevices(w http.ResponseWriter, r *http.Request, channelId ChannelId, params ListMlsMemberDevicesParams)
 	// SetReadPosition Move the caller's read position in a channel.
 	// (PUT /api/v1/channels/{channelId}/read)
 	SetReadPosition(w http.ResponseWriter, r *http.Request, channelId ChannelId)
@@ -2723,6 +2748,61 @@ func (siw *ServerInterfaceWrapper) ClaimMlsKeyPackages(w http.ResponseWriter, r 
 	handler.ServeHTTP(w, r)
 }
 
+// ListMlsMemberDevices operation middleware
+func (siw *ServerInterfaceWrapper) ListMlsMemberDevices(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListMlsMemberDevicesParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMlsMemberDevices(w, r, channelId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SetReadPosition operation middleware
 func (siw *ServerInterfaceWrapper) SetReadPosition(w http.ResponseWriter, r *http.Request) {
 
@@ -3568,6 +3648,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/users/me/mls/devices/{deviceId}/key-packages", wrapper.ReplaceMlsKeyPackages)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/group", wrapper.GetMlsGroup)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/group", wrapper.CreateMlsGroup)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/member-devices", wrapper.ListMlsMemberDevices)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/key-package-claims", wrapper.ClaimMlsKeyPackages)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/commits", wrapper.ListMlsCommits)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/commits", wrapper.SubmitMlsCommit)
