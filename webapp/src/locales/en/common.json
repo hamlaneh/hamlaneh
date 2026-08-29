@@ -802,7 +802,7 @@
       "cannotAddYet": "Not everyone can read this conversation yet: {{names}} have no device set up for encryption. They will be added once they sign in.",
       "nameSeparator": ", ",
       "channelFailed": "This conversation's encryption could not be set up. Nothing can be sent here until it is.",
-      "unavailable": "Encryption is unavailable in this browser, so encrypted conversations cannot be read or written here.",
+      "unavailable": "Encryption could not be started in this session, so encrypted conversations cannot be read or written here.",
       "composerNotReady": "You cannot send here until this conversation's encryption is ready.",
       "decrypting": "Decrypting…",
       "cannotDecrypt": "This message cannot be decrypted on this device."

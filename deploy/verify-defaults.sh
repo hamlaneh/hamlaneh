@@ -127,7 +127,12 @@ check_security_headers() {
     failure "CSP frame-ancestors 'none' missing"
   fi
 
-  if grep -q "unsafe-inline\|unsafe-eval" <<<"$csp"; then
+  # The quotes are part of the match, deliberately: CSP keywords are quoted
+# tokens, and 'wasm-unsafe-eval' — which the app DOES carry so the MLS core
+# can compile (ADR 006) — contains the bare substring "unsafe-eval" while
+# being a strictly narrower allowance (wasm compilation only, no JS eval).
+# An unquoted grep here would fail the build for the wrong directive.
+if grep -q "'unsafe-inline'\|'unsafe-eval'" <<<"$csp"; then
     failure "CSP allows an unsafe source: ${csp}"
   else
     pass "CSP allows no 'unsafe-inline' or 'unsafe-eval'"
