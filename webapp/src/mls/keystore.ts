@@ -30,11 +30,29 @@
  * crash and never a silent fallback to plaintext.
  */
 
+import type { VerificationRecord, VerificationRecords } from "./types";
+
 const DATABASE_NAME = "hamlaneh-mls";
 const DATABASE_VERSION = 1;
 const STORE_NAME = "device";
 const WRAPPING_KEY_ID = "wrapping-key";
 const STATE_ID = "state";
+
+/**
+ * Verification records, beside the device state and under the same wrapping
+ * key (ADR 008, decision 1).
+ *
+ * Beside rather than inside `export_state`: these are the service's data, not
+ * the wasm module's, and nothing about verification enters `src-mls` — the
+ * glue-only rule of ADR 006 survives this slice. They carry the same honest
+ * ceiling as the state does, stated once in the module note above.
+ *
+ * The server stores none of these and never sees them. A record whose whole
+ * value is that the server did not author it is worth less than nothing stored
+ * where the server can write: a forged `verified` marks a planted key safe and
+ * the UI then renders the attack as safety.
+ */
+const RECORDS_ID = "verification";
 const IV_BYTES = 12;
 
 /** What a stored state record looks like. `iv` is fresh for every write. */
@@ -167,6 +185,45 @@ function copyOf(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   return copy;
 }
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+/**
+ * Parses stored verification records, dropping anything malformed.
+ *
+ * Validated field by field even though this is our own data: what comes back
+ * decides whether a `verified` badge is drawn, so a corrupt or truncated blob
+ * must degrade to "no record" — which re-pins and warns — rather than to a
+ * half-read object that renders a level nobody ever recorded. The one value
+ * that must never be invented is `verified`, so the level is matched exactly
+ * and anything else is thrown away with the record.
+ */
+function readRecords(json: string): VerificationRecords {
+  const parsed: unknown = JSON.parse(json);
+  if (typeof parsed !== "object" || parsed === null) {
+    return {};
+  }
+  const records: VerificationRecords = {};
+  for (const [userId, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof value !== "object" || value === null) {
+      continue;
+    }
+    const record = value as Partial<VerificationRecord>;
+    const keys = record.keys;
+    if (
+      record.userId !== userId ||
+      !Array.isArray(keys) ||
+      !keys.every((key) => typeof key === "string") ||
+      (record.level !== "pinned" && record.level !== "verified") ||
+      typeof record.at !== "number"
+    ) {
+      continue;
+    }
+    records[userId] = { userId, keys: [...keys], level: record.level, at: record.at };
+  }
+  return records;
+}
+
 function readStoredState(value: unknown): StoredState | null {
   if (typeof value !== "object" || value === null) {
     return null;
@@ -254,24 +311,43 @@ export class Keystore {
     });
   }
 
+  /** Encrypts `bytes` under the wrapping key and writes them at `id`. */
+  private async putWrapped(id: string, bytes: Uint8Array): Promise<void> {
+    const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      this.wrappingKey,
+      copyOf(bytes),
+    );
+    const record: StoredState = { iv, ciphertext: new Uint8Array(ciphertext) };
+    // Serialized against every other writer in this profile, so a write is
+    // never interleaved with another tab's. It does NOT make two tabs share
+    // one device: each still holds its own in wasm memory and the last one
+    // to save still wins the stored copy. What the lock buys is that the
+    // stored copy is always exactly one tab's state and never a torn mix of
+    // two. One device per profile needs a SharedWorker and is filed as its
+    // own roadmap item.
+    await withKeystoreLock(() => this.store.put(id, record));
+  }
+
+  /** The plaintext at `id`, or null when there is none or it will not open. */
+  private async getWrapped(id: string): Promise<Uint8Array | null> {
+    const record = readStoredState(await this.store.get(id));
+    if (record === null) {
+      return null;
+    }
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: record.iv },
+      this.wrappingKey,
+      record.ciphertext,
+    );
+    return new Uint8Array(plaintext);
+  }
+
   /** Encrypts and stores one device-state export. False when it could not. */
   async save(state: Uint8Array): Promise<boolean> {
     try {
-      const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
-      const ciphertext = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv },
-        this.wrappingKey,
-        copyOf(state),
-      );
-      const record: StoredState = { iv, ciphertext: new Uint8Array(ciphertext) };
-      // Serialized against every other writer in this profile, so a write is
-      // never interleaved with another tab's. It does NOT make two tabs share
-      // one device: each still holds its own in wasm memory and the last one
-      // to save still wins the stored copy. What the lock buys is that the
-      // stored copy is always exactly one tab's state and never a torn mix of
-      // two. One device per profile needs a SharedWorker and is filed as its
-      // own roadmap item.
-      await withKeystoreLock(() => this.store.put(STATE_ID, record));
+      await this.putWrapped(STATE_ID, state);
       return true;
     } catch (error) {
       // A failed write costs this device its groups on the next reload, which
@@ -290,19 +366,41 @@ export class Keystore {
    */
   async load(): Promise<Uint8Array | null> {
     try {
-      const record = readStoredState(await this.store.get(STATE_ID));
-      if (record === null) {
-        return null;
-      }
-      const plaintext = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: record.iv },
-        this.wrappingKey,
-        record.ciphertext,
-      );
-      return new Uint8Array(plaintext);
+      return await this.getWrapped(STATE_ID);
     } catch (error) {
       console.warn("Could not read the stored MLS device state:", error);
       return null;
+    }
+  }
+
+  /** Stores the verification records. False when they could not be written. */
+  async saveRecords(records: VerificationRecords): Promise<boolean> {
+    try {
+      await this.putWrapped(RECORDS_ID, encoder.encode(JSON.stringify(records)));
+      return true;
+    } catch (error) {
+      // Losing a write costs the user a re-pin — every peer reads as first
+      // sight again on the next load, which warns more rather than less.
+      console.warn("Could not store the MLS verification records:", error);
+      return false;
+    }
+  }
+
+  /**
+   * The verification records, or an empty set when there are none.
+   *
+   * Unreadable records read as absent, exactly as an unreadable device state
+   * does — and the consequence is the safe direction: every person is pinned
+   * again on first sight, so the user is asked more questions rather than
+   * fewer. Nothing here ever invents a `verified`.
+   */
+  async loadRecords(): Promise<VerificationRecords> {
+    try {
+      const bytes = await this.getWrapped(RECORDS_ID);
+      return bytes === null ? {} : readRecords(decoder.decode(bytes));
+    } catch (error) {
+      console.warn("Could not read the stored MLS verification records:", error);
+      return {};
     }
   }
 
@@ -310,6 +408,10 @@ export class Keystore {
   async clear(): Promise<void> {
     try {
       await this.store.delete(STATE_ID);
+      // The records go with it. They are one person's trust decisions, and
+      // leaving them for whoever signs in next would show that person a
+      // `verified` badge nobody on this device ever earned.
+      await this.store.delete(RECORDS_ID);
     } catch (error) {
       console.warn("Could not clear the stored MLS device state:", error);
     }
