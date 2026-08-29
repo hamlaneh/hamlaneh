@@ -274,6 +274,41 @@ an edge case.
 Empty conference: a link-holder arrives before anybody else. Waiting alone in a room is a state,
 and it should not read as broken.
 
+## Key verification (Phase 3, slice 3.3 — [ADR 008](../adr/008-key-verification.md))
+
+Two surfaces, both currently unbuilt and both carrying a security meaning that the visual design
+has to keep honest rather than soften.
+
+### `verification-sheet`
+
+Per person, reached from a conversation. Shows the safety number: sixty decimal digits in twelve
+five-digit groups, identical on both people's screens, plus a QR for same-room comparison. The
+number is the whole point, so it is the largest thing on the screen and must be readable aloud
+over a phone call — grouping and spacing carry that, not decoration.
+
+Three states it must draw, and they are not interchangeable: **unverified** (a number to compare,
+no badge), **pinned** (this device recorded these keys on first sight without a ceremony — real,
+weaker, and it must not look like verified), and **verified** (the humans compared and matched).
+The visual distance between pinned and verified is a security property: a design that renders
+them alike would make an unceremonied acceptance look like a proof.
+
+**Numerals:** ASCII digits in both locales, per the locked correction — a safety number read
+aloud in Persian has to be the same string the other person sees.
+
+### `verification-changed`
+
+Replaces the composer when a member's device keys have changed since this device accepted them.
+It has to say who, and what changed — a new device, or a replaced key — because those read very
+differently to a person deciding whether to worry.
+
+Two exits, and no third: run the ceremony, or accept explicitly. The design must not offer a
+dismiss, a "not now", or anything that returns the composer without a decision — ADR 008 calls
+each of those "silently encrypt to the new key wearing a delay". Reading and receiving continue
+normally in this state, so the warning belongs where the composer was, not over the history.
+
+The prompt about **your own account** (a device was registered to you; is it yours?) is the same
+component pointed at the reader, and it is the loudest one in the slice.
+
 ---
 
 *Maintained alongside the product: when a screen's scope changes in ROADMAP.md, its brief

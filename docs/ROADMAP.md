@@ -555,7 +555,15 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       residue of ADR 007 goes: the sweep trusts the directory's key↔person mapping, and only two
       humans comparing key material out of band can close that — no server signature can, because
       under PLAN §6.1's adversary 3 the signer is the adversary
-- [ ] Key verification UX: safety numbers/QR (key transparency log = post-v1)
+- [ ] **Slice 3.3 — key verification** ([ADR 008](adr/008-key-verification.md)): client-local
+      records in the wrapped keystore (never server-stored — a server that can *set* a verified
+      flag marks its own planted key safe), a safety number over a person's whole device-key set
+      with **your own half computed locally and never from the directory** (both halves from the
+      directory would show a planted key identically on both screens and the ceremony would bless
+      it), refusal on the send path because ADR 007 established there is no veto at commit-apply,
+      and TOFU pinning on by default. Client-only: no endpoint, no migration, no contract change.
+      **Its gate is the roadmap's own key-swap test**, which this design exists to make
+      implementable as written
 - [ ] Encrypted backups + user-held recovery keys; org-level recovery policy; recovery UX drills
 - [ ] Media E2EE via LiveKit insertable streams
 - [ ] Per-org mode choice at setup: **Strict E2EE** vs **Compliance mode** — clearly labeled,
