@@ -102,8 +102,12 @@ describe("the meetings table", () => {
     expect(within(retro).getByText(en.settings.meetings.creatorGone)).toBeInTheDocument();
 
     // The column people look for is absent and the page says why, rather than
-    // leaving them to hunt for a copy control that cannot exist.
+    // leaving them to hunt for a copy control that cannot exist: the absence
+    // is stated above the table, and no header or cell stands in for it.
+    expect(screen.getByText(en.settings.meetings.noLinkColumn)).toBeInTheDocument();
     expect(screen.getByText(en.settings.meetings.linkOnceNote)).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: /link/iu })).toBeNull();
+    expect(within(weekly).queryByRole("button", { name: /copy/iu })).toBeNull();
     expect(screen.queryByText(MINTED_URL)).toBeNull();
   });
 
@@ -122,8 +126,19 @@ describe("creating a meeting link", () => {
     render(<MeetingsSection />);
     await screen.findByRole("row", { name: /Weekly planning/u });
 
-    await user.type(screen.getByLabelText(en.settings.meetings.titleLabel), "Design review");
+    // Creation is the header action opening a dialog, not a text field kept
+    // permanently open above a table about the links that already exist.
+    expect(screen.queryByLabelText(en.settings.meetings.titleLabel)).toBeNull();
     await user.click(screen.getByRole("button", { name: en.settings.meetings.create }));
+
+    const form = await screen.findByRole("dialog", { name: en.settings.meetings.create });
+    await user.type(
+      within(form).getByLabelText(en.settings.meetings.titleLabel),
+      "Design review",
+    );
+    await user.click(
+      within(form).getByRole("button", { name: en.settings.meetings.createSubmit }),
+    );
 
     const panel = await screen.findByRole("dialog", {
       name: en.settings.meetings.created.title,

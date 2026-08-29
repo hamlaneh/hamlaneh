@@ -254,9 +254,22 @@ func (s *apiServer) PreviewConference(w http.ResponseWriter, r *http.Request, to
 		internalError(w, r, err)
 		return
 	}
+	// Whose meeting this is. The first draft withheld it, on the reasoning
+	// that a preview should say as little as possible -- and that left a
+	// visitor following a link from a chat message with no way to tell what
+	// they were about to walk into. InvitePreview already names the
+	// organisation on an equally unauthenticated screen, so the precedent
+	// was there to follow; a link-holder who can read the meeting's title
+	// learns nothing more dangerous from the name of its host.
+	settings, err := store.OrgSettings(r.Context())
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
 	writeJSONValue(w, r, http.StatusOK, api.ConferencePreview{
-		Title:  conf.Title,
-		Active: active[conf.ID],
+		OrgName: settings.OrgName,
+		Title:   conf.Title,
+		Active:  active[conf.ID],
 	})
 }
 

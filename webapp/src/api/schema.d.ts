@@ -1367,8 +1367,12 @@ export interface components {
             /** @description The link, shown once. Only its hash is kept, so nothing can redisplay it — send it somewhere you trust. */
             url: string;
         };
-        /** @description What a link-holder may see before joining. Deliberately thin: a title and whether anybody is in there. Not who, and not the instance's name beyond what the page already shows. */
+        /**
+         * @description What a link-holder may see before joining. Deliberately thin: whose instance is hosting, what the meeting is called, and whether anybody is in there. Not who created it, not who is in it, and nothing else about the instance.
+         *     `org_name` was left out of the first draft, on the reasoning that a preview should say as little as possible. That was wrong in a way the contract could have caught itself: `InvitePreview` carries the same field for the equally unauthenticated redemption screen, so the precedent already existed. And the cost of withholding it lands on the visitor — somebody following a link from a chat message, with no way to tell whose meeting they are about to walk into. A link-holder who can see the meeting's title learns nothing dangerous from the name of the organisation hosting it.
+         */
         ConferencePreview: {
+            org_name: string;
             title: string;
             active: boolean;
         };
@@ -1523,6 +1527,10 @@ export interface components {
         CreatedInvite: {
             /** Format: uuid */
             id: string;
+            /**
+             * @description `{base}/invite#token=<token>`. The token rides the **fragment**, which no browser sends to any server, so it cannot reach an access log, a Referer header or a proxy's history — the same reasoning the emailed reset link follows.
+             *     The shape is written down here because leaving it unsaid is not free: this field said only "string" for two phases, the two halves drifted into a path form on the client and a fragment form on the server, and every real invitation landed on the sign-in screen with nothing failing loudly.
+             */
             url: string;
             /** Format: date-time */
             expires_at: string;

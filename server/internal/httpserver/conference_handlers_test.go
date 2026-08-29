@@ -60,6 +60,9 @@ func conferenceStore() *fakeStore {
 	store.liveConferenceByTokenHash = func(context.Context, []byte) (storage.Conference, error) {
 		return liveConference(), nil
 	}
+	store.orgSettings = func(context.Context) (storage.OrgSettings, error) {
+		return storage.OrgSettings{OrgName: "Sanjab Coop"}, nil
+	}
 	return store
 }
 
@@ -303,6 +306,12 @@ func TestPreviewIsThin(t *testing.T) {
 	}
 	if preview.Title != "Weekly sync" || !preview.Active {
 		t.Errorf("preview = %+v, want the title and a live meeting", preview)
+	}
+	// Whose meeting it is. Required by the contract, and easy to leave as the
+	// zero value without anything failing: Go builds a struct with a missing
+	// required field perfectly happily, so only an assertion catches it.
+	if preview.OrgName != "Sanjab Coop" {
+		t.Errorf("preview org_name = %q, want the instance's name", preview.OrgName)
 	}
 	if body := rec.Body.String(); strings.Contains(body, "created_by") ||
 		strings.Contains(body, testConferenceID) || strings.Contains(body, "member") {

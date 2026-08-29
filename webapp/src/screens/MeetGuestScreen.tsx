@@ -7,6 +7,7 @@ import type { MintTicket } from "../calls/useCallSession";
 import { useCallSession } from "../calls/useCallSession";
 import { LanguageSwitcher } from "../components/LanguageSwitcher";
 import { CallView } from "../components/calls/CallView";
+import { ChevronRightIcon, CircleAlertIcon, InfoIcon } from "../components/icons";
 import { isolateAuto } from "../i18n/bidi";
 
 /** The contract's own bound (openapi.yaml → JoinConferenceRequest.display_name). */
@@ -14,7 +15,7 @@ const NAME_MAX = 64;
 
 type Preview =
   | { status: "loading" }
-  | { status: "ready"; title: string; active: boolean }
+  | { status: "ready"; org: string; title: string; active: boolean }
   /**
    * Unknown, expired and revoked are ONE answer — a 404 — and this page does
    * not guess which. Nothing in the response separates them, so a sentence
@@ -35,18 +36,65 @@ interface MeetGuestScreenProps {
 }
 
 /**
+ * The page's own thin top rule: identity at one end, language at the other.
+ *
+ * WHAT THE IDENTITY END CARRIES. "Sanjab Coop is hosting this meeting" — one
+ * line of text, deliberately not a logo lockup, because a wordmark over a
+ * centred card *is* the front-door treatment. The name is the organisation's,
+ * never the product's: naming Hamlaneh here would claim Hamlaneh is the host,
+ * which is both false and the refused wordmark by another route. It comes from
+ * `ConferencePreview.org_name`, the same thing `InvitePreview` already names on
+ * an equally unauthenticated screen — a visitor following a link out of a chat
+ * message otherwise has no way to tell whose meeting they are walking into.
+ *
+ * A dead link carries no name, because a 404 carries no body: the page knows
+ * the link failed and nothing about who issued it, and guessing is exactly what
+ * the rest of this screen refuses to do.
+ *
+ * Once joined the slot carries the meeting title, so a guest with the form
+ * gone still knows where they are.
+ */
+function MeetRule({ org, title }: { org?: string | undefined; title?: string | undefined }) {
+  const { t } = useTranslation();
+
+  return (
+    <header className="hm-meet__rule">
+      {title === undefined ? null : (
+        <span className="hm-meet__rule-title" dir="auto">
+          {title}
+        </span>
+      )}
+      {org === undefined ? null : (
+        <>
+          <span className="hm-meet__rule-org" dir="auto">
+            {org}
+          </span>
+          <span className="hm-meet__rule-divider" aria-hidden="true" />
+          <span className="hm-meet__rule-host">{t("meet.hostedBy")}</span>
+        </>
+      )}
+      <LanguageSwitcher />
+    </header>
+  );
+}
+
+/**
  * `meet-guest` — the page a conference link opens for somebody with no account
  * on this instance, and the only unauthenticated application surface in the
  * product besides sign-in.
  *
- * UNDESIGNED SURFACE — `docs/design/STATUS.md` has the call set PENDING and
- * this artboard is not drawn at all, so the page is plain semantic HTML with
- * no styling beyond structure. It deliberately does NOT reuse `AuthShell`,
- * `AuthForm` or `PrimaryButton`, which every other pre-session screen is built
- * from: those are the *sign-in* treatment, and wearing it is precisely how a
- * page starts implying that typing your name into it produces an account. It
- * does not. A guest gets a ticket to one room, no session, no user row
- * (openapi.yaml → joinConference).
+ * Artboards `meet-guest` and `meet-guest-dead`; the reasoning is in
+ * docs/design/CALLS_HANDOFF.md and the values are in `meet.css`.
+ *
+ * WHAT IT REFUSES, AND WHY THE REFUSAL IS THE DESIGN. No `AuthShell`, no
+ * `AuthForm`, no `PrimaryButton`, no `.hm-button`, no centred card on a tinted
+ * ground, no product wordmark lockup, and no link to sign-in or registration
+ * anywhere on the page. Every other pre-session screen is built from those,
+ * and wearing them is precisely how a page starts implying that typing your
+ * name into it produces an account. It does not. A guest gets a ticket to one
+ * room, no session, no user row (openapi.yaml → joinConference). What it wears
+ * instead is its own thin rule, a flush single column on the plain canvas, one
+ * field, one action, and a note saying in words that no account is created.
  *
  * The one delivered part it does use is `LanguageSwitcher`, because a stranger
  * has no account to carry a locale and no Settings panel to reach — see the
@@ -102,7 +150,7 @@ export function MeetGuestScreen({ token, media }: MeetGuestScreenProps) {
         setPreview(
           data === undefined
             ? { status: response.status === 404 ? "unusable" : "unreachable" }
-            : { status: "ready", title: data.title, active: data.active },
+            : { status: "ready", org: data.org_name, title: data.title, active: data.active },
         );
       } catch (requestError) {
         console.warn("Conference preview failed:", requestError);
@@ -144,9 +192,16 @@ export function MeetGuestScreen({ token, media }: MeetGuestScreenProps) {
 
   if (preview.status === "loading") {
     return (
-      <main>
-        <p role="status">{t("common.loading")}</p>
-      </main>
+      <div className="hm-meet">
+        <MeetRule />
+        <main className="hm-meet__body">
+          <div className="hm-meet__column">
+            <p className="hm-meet__hint" role="status">
+              {t("common.loading")}
+            </p>
+          </div>
+        </main>
+      </div>
     );
   }
 
@@ -154,13 +209,31 @@ export function MeetGuestScreen({ token, media }: MeetGuestScreenProps) {
     // One honest sentence and a way out. The way out is the instance's own
     // front door, not "sign in": a stranger has no account here and offering
     // one would answer a question they did not ask.
+    const unusable = preview.status === "unusable";
     return (
-      <main>
-        <LanguageSwitcher />
-        <h1>{t(preview.status === "unusable" ? "meet.unusable.title" : "meet.unreachable.title")}</h1>
-        <p>{t(preview.status === "unusable" ? "meet.unusable.body" : "meet.unreachable.body")}</p>
-        <a href="/">{t("meet.goHome")}</a>
-      </main>
+      <div className="hm-meet">
+        <MeetRule />
+        <main className="hm-meet__body">
+          <div className="hm-meet__column hm-meet__column--dead">
+            <span className="hm-meet__glyph" aria-hidden="true">
+              <CircleAlertIcon size={22} strokeWidth={1.85} />
+            </span>
+            <div className="hm-meet__heading">
+              <h1 className="hm-meet__title hm-meet__title--dead">
+                {t(unusable ? "meet.unusable.title" : "meet.unreachable.title")}
+              </h1>
+              <p className="hm-meet__body-text">
+                {t(unusable ? "meet.unusable.body" : "meet.unreachable.body")}
+              </p>
+            </div>
+            <div className="hm-meet__divider" />
+            <a className="hm-meet__home" href="/">
+              {t("meet.goHome")}
+              <ChevronRightIcon size={16} strokeWidth={1.85} className="hm-mirror-glyph" />
+            </a>
+          </div>
+        </main>
+      </div>
     );
   }
 
@@ -170,63 +243,102 @@ export function MeetGuestScreen({ token, media }: MeetGuestScreenProps) {
   // is also how somebody rejoins a room they stepped out of.
   if (call.status !== "idle" || call.errorKey !== null) {
     return (
-      <main>
-        <CallView
-          channelTitle={isolateAuto(preview.title)}
-          status={call.status}
-          participants={call.participants}
-          micEnabled={call.micEnabled}
-          cameraEnabled={call.cameraEnabled}
-          screenSharing={call.screenSharing}
-          errorKey={call.errorKey}
-          onToggleMicrophone={call.toggleMicrophone}
-          onToggleCamera={call.toggleCamera}
-          onToggleScreenShare={call.toggleScreenShare}
-          onLeave={call.leave}
-        />
-      </main>
+      <div className="hm-meet">
+        <MeetRule title={preview.title} />
+        <main className="hm-meet__call">
+          <CallView
+            channelTitle={isolateAuto(preview.title)}
+            status={call.status}
+            participants={call.participants}
+            micEnabled={call.micEnabled}
+            cameraEnabled={call.cameraEnabled}
+            screenSharing={call.screenSharing}
+            errorKey={call.errorKey}
+            onToggleMicrophone={call.toggleMicrophone}
+            onToggleCamera={call.toggleCamera}
+            onToggleScreenShare={call.toggleScreenShare}
+            onLeave={call.leave}
+          />
+        </main>
+      </div>
     );
   }
 
   return (
-    <main>
-      <LanguageSwitcher />
-      <h1>{isolateAuto(preview.title)}</h1>
-      {/* Arriving before anybody else is a state, not a fault (BRIEFS.md §5). */}
-      <p>{t(preview.active ? "meet.active" : "meet.empty")}</p>
+    <div className="hm-meet">
+      <MeetRule org={preview.org} />
+      <main className="hm-meet__body">
+        <div className="hm-meet__column">
+          <div className="hm-meet__heading">
+            <span className="hm-meet__eyebrow">{t("meet.eyebrow")}</span>
+            <h1 className="hm-meet__title">{isolateAuto(preview.title)}</h1>
+            {/* Arriving before anybody else is a state, not a fault
+                (BRIEFS.md §5). Shape and words, never colour alone — and
+                nothing animates: the preview was read once, on load. */}
+            <p className="hm-meet__presence" data-active={preview.active}>
+              <span className="hm-meet__presence-dot" aria-hidden="true" />
+              {t(preview.active ? "meet.active" : "meet.empty")}
+            </p>
+          </div>
 
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          const trimmed = name.trim();
-          // `required` blocks an empty field; a field of spaces gets past it,
-          // and the server's minLength would not catch that either.
-          if (trimmed !== "") {
-            call.join(trimmed);
-          }
-        }}
-      >
-        <label htmlFor={nameId}>{t("meet.nameLabel")}</label>
-        <input
-          id={nameId}
-          type="text"
-          required
-          maxLength={NAME_MAX}
-          autoComplete="name"
-          aria-describedby={hintId}
-          value={name}
-          onChange={(event) => {
-            setName(event.target.value);
-          }}
-        />
-        {/* Says out loud that a name here is a claim. A guest can present as
-            anyone and only the people in the room can tell — ADR 005 names
-            that weakness rather than hiding it, and so does the screen. */}
-        <p id={hintId}>{t("meet.nameHint")}</p>
-        <button type="submit">{t("meet.join")}</button>
-      </form>
+          <div className="hm-meet__divider" />
 
-      <p>{t("meet.guestNote")}</p>
-    </main>
+          <form
+            className="hm-meet__form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const trimmed = name.trim();
+              // `required` blocks an empty field; a field of spaces gets past
+              // it, and the server's minLength would not catch that either.
+              if (trimmed !== "") {
+                call.join(trimmed);
+              }
+            }}
+          >
+            <label className="hm-meet__label" htmlFor={nameId}>
+              {t("meet.nameLabel")}
+            </label>
+            {/* Stacked below 1280 and one row above it: a 64-character name
+                and a 44px target cannot share a 375 row. */}
+            <div className="hm-meet__row">
+              <div className="hm-meet__field">
+                <input
+                  className="hm-input"
+                  id={nameId}
+                  type="text"
+                  dir="auto"
+                  required
+                  maxLength={NAME_MAX}
+                  // Never `username` or `email`: a password manager offering
+                  // to save credentials here would say the opposite of the
+                  // copy below, and no account is created.
+                  autoComplete="name"
+                  aria-describedby={hintId}
+                  value={name}
+                  onChange={(event) => {
+                    setName(event.target.value);
+                  }}
+                />
+              </div>
+              <button className="hm-meet__join" type="submit">
+                {t("meet.join")}
+                <ChevronRightIcon size={17} strokeWidth={1.85} className="hm-mirror-glyph" />
+              </button>
+            </div>
+            {/* Says out loud that a name here is a claim. A guest can present as
+                anyone and only the people in the room can tell — ADR 005 names
+                that weakness rather than hiding it, and so does the screen. */}
+            <p className="hm-meet__hint" id={hintId}>
+              {t("meet.nameHint")}
+            </p>
+          </form>
+
+          <p className="hm-meet__note">
+            <InfoIcon size={17} strokeWidth={1.85} className="hm-meet__note-icon" />
+            <span>{t("meet.guestNote")}</span>
+          </p>
+        </div>
+      </main>
+    </div>
   );
 }

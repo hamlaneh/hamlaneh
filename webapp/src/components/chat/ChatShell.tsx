@@ -13,6 +13,7 @@ import type { RealtimeOverrides } from "../../chat/useChat";
 import { isUuid } from "../../chat/uuid";
 import { useInstance } from "../../instance/instanceInfo";
 import { CallRing } from "../calls/CallRing";
+import type { AwayCall } from "../calls/CallStrip";
 import { CallStrip } from "../calls/CallStrip";
 import { CallView } from "../calls/CallView";
 import { ChatHeader } from "./ChatHeader";
@@ -159,10 +160,37 @@ export function ChatShell({
   /** Interpolated into "Message {{target}}". */
   const composerTarget = isolatedTitle(activeChannel);
 
-  /* The call being drawn is not necessarily the conversation being read: the
-     surface stays put while the reader moves around, because a call you cannot
-     see is a call you cannot leave. */
-  const callChannel = state.channels.find((channel) => channel.id === call.target);
+  /* WHERE THE CALL SURFACE BELONGS.
+   *
+   * The call takes the upper region of its own conversation's pane, with the
+   * messages continuing beneath it — a sibling of the message column, never an
+   * overlay (CALLS_HANDOFF.md, "Leave, and where the call lives"). Reading
+   * another channel does not end the session: the call collapses to the banner
+   * strip carrying "Return to call", and that is the whole reason it is not an
+   * overlay — a call somebody navigated away from must still be leavable, and
+   * the way back is the only route to Leave.
+   *
+   * A call that has ended or failed has no conversation left to belong to: the
+   * session drops its target the moment it does. Its last word is drawn
+   * wherever the reader is, because acknowledging it is the whole interaction
+   * and a sentence waiting on a channel nobody is looking at is not one. */
+  const callTarget = call.target;
+  const callChannel = state.channels.find((channel) => channel.id === callTarget);
+  const inCall = callsEnabled && call.status !== "idle";
+  const callOver = callsEnabled && call.status === "idle" && call.errorKey !== null;
+  /** The call is in the conversation being read, so it takes the pane's top. */
+  const callHere = (inCall && callTarget === params.channelId) || callOver;
+  /** Still connected and no longer on screen: the strip becomes the way back. */
+  const away: AwayCall | undefined =
+    inCall && !callHere && callTarget !== null
+      ? {
+          title: isolatedTitle(callChannel),
+          onReturn: () => {
+            void navigate(`/c/${callTarget}`);
+          },
+        }
+      : undefined;
+
   const ring = state.ring;
   const ringChannel = state.channels.find((channel) => channel.id === ring?.channelId);
   const ringCaller =
@@ -262,15 +290,41 @@ export function ChatShell({
           onSettled={chat.settleConnection}
         />
 
-        {/* The strip is for people not in the call, so it is absent once this
-            channel's call is the one being drawn below. */}
-        {callsEnabled && activeChannel !== undefined && call.target !== activeChannel.id ? (
+        {/* The strip is for people not looking at the call: it is absent once
+            this channel's call is the one drawn below, and it takes the
+            collapsed form once the call is somewhere else. It outlives
+            `activeChannel` in that second case, because a channel that has
+            gone from the list is exactly when being stranded in an invisible
+            call would be worst. */}
+        {callsEnabled && !callHere && (activeChannel !== undefined || away !== undefined) ? (
           <CallStrip
-            call={state.calls[activeChannel.id]}
+            call={activeChannel === undefined ? undefined : state.calls[activeChannel.id]}
             busy={call.status === "connecting"}
             onJoin={() => {
-              call.join(activeChannel.id);
+              if (activeChannel !== undefined) {
+                call.join(activeChannel.id);
+              }
             }}
+            away={away}
+          />
+        ) : null}
+
+        {/* The call's own conversation, so the call sits above it and the
+            messages carry on beneath — nothing is hidden behind a call, and
+            people talk and type at once. */}
+        {callHere ? (
+          <CallView
+            channelTitle={isolatedTitle(callChannel)}
+            status={call.status}
+            participants={call.participants}
+            micEnabled={call.micEnabled}
+            cameraEnabled={call.cameraEnabled}
+            screenSharing={call.screenSharing}
+            errorKey={call.errorKey}
+            onToggleMicrophone={call.toggleMicrophone}
+            onToggleCamera={call.toggleCamera}
+            onToggleScreenShare={call.toggleScreenShare}
+            onLeave={call.leave}
           />
         ) : null}
 
@@ -354,24 +408,6 @@ export function ChatShell({
           />
         )}
       </main>
-
-      {/* Outside the channel column on purpose: the call belongs to a
-          conversation, but leaving it must stay reachable from any of them. */}
-      {callsEnabled && (call.status !== "idle" || call.errorKey !== null) ? (
-        <CallView
-          channelTitle={isolatedTitle(callChannel)}
-          status={call.status}
-          participants={call.participants}
-          micEnabled={call.micEnabled}
-          cameraEnabled={call.cameraEnabled}
-          screenSharing={call.screenSharing}
-          errorKey={call.errorKey}
-          onToggleMicrophone={call.toggleMicrophone}
-          onToggleCamera={call.toggleCamera}
-          onToggleScreenShare={call.toggleScreenShare}
-          onLeave={call.leave}
-        />
-      ) : null}
 
       <SearchResultsPanel
         search={state.search}

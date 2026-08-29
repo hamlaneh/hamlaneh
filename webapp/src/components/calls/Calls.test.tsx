@@ -421,6 +421,174 @@ describe("joining", () => {
   });
 });
 
+describe("where the call lives", () => {
+  it("collapses to the banner when the reader moves on, and the way back is on it", async () => {
+    const media = fakeMedia();
+    renderChat(`/c/${CHAT_CHANNELS.deploys}`, media.connect);
+    const user = userEvent.setup({ delay: null });
+    await user.click(await screen.findByRole("button", { name: en.calls.start }));
+
+    // In the call's own conversation the surface takes the pane's upper
+    // region: the call and the messages are siblings, and the composer is
+    // still there to type into.
+    const view = await screen.findByRole("region", { name: DEPLOYS_CALL });
+    const pane = view.closest("main");
+    expect(view.parentElement).toBe(pane);
+    expect(pane?.querySelector(".hm-composer")).not.toBeNull();
+
+    await user.click(screen.getByRole("link", { name: /general/ }));
+
+    // Navigating does not end the call — this is the whole reason the call is
+    // not an overlay. The session is still connected and the strip has become
+    // the way back to it.
+    expect(media.record.disconnects).toBe(0);
+    await waitFor(() => {
+      expect(screen.queryByRole("region", { name: DEPLOYS_CALL })).not.toBeInTheDocument();
+    });
+    const collapsed = strip();
+    expect(
+      within(collapsed).getByText(en.calls.strip.away.replace("{{channel}}", isolateLtr("#deploys"))),
+    ).toBeInTheDocument();
+    // It takes the slot over from the offer to start a second call, which
+    // there is no way to be in anyway.
+    expect(within(collapsed).queryByRole("button", { name: en.calls.start })).toBeNull();
+
+    await user.click(within(collapsed).getByRole("button", { name: en.calls.strip.return }));
+
+    // Back where it was, still connected, and now leavable again — which is
+    // what the collapse exists to preserve.
+    const back = await screen.findByRole("region", { name: DEPLOYS_CALL });
+    expect(media.record.connections).toHaveLength(1);
+    await user.click(within(back).getByRole("button", { name: en.calls.control.leave }));
+    expect(media.record.disconnects).toBe(1);
+  });
+});
+
+describe("what the design decided", () => {
+  /** Joins the call in #deploys and returns the room, ready to be moved. */
+  async function joined() {
+    const media = fakeMedia();
+    renderChat(`/c/${CHAT_CHANNELS.deploys}`, media.connect);
+    const user = userEvent.setup({ delay: null });
+    await user.click(await screen.findByRole("button", { name: en.calls.start }));
+    await screen.findByRole("list", { name: en.calls.view.participants });
+    return media;
+  }
+
+  function grid(): HTMLElement {
+    return screen.getByRole("list", { name: en.calls.view.participants });
+  }
+
+  it("stops the grid at twelve, and the twelfth cell is a count and not a person", async () => {
+    const media = await joined();
+
+    // Fourteen in the room: eleven tiles, and one cell that is a count.
+    media.replace([
+      ME,
+      ...Array.from({ length: 13 }, (_, index) =>
+        tile({ identity: `p${String(index)}`, name: `Person ${String(index)}` }),
+      ),
+    ]);
+
+    await waitFor(() => {
+      expect(within(grid()).getAllByRole("listitem")).toHaveLength(11);
+    });
+
+    // Twelve cells are drawn, but only eleven of them are participants: the
+    // count cell is presentational, so it is not one of the list's items.
+    const cells = grid().querySelectorAll("li");
+    expect(cells).toHaveLength(12);
+
+    const count = cells[11];
+    if (count === undefined) {
+      throw new Error("the grid should have a twelfth cell");
+    }
+    expect(count).toHaveAttribute("role", "presentation");
+    expect(count).toHaveTextContent(en.calls.view.more.replace("{{count}}", "3"));
+    // Not focusable as a person: nothing in it can be reached at all.
+    expect(count.querySelector("a, button, [tabindex], [role='listitem']")).toBeNull();
+    // And the people it stands for are named there rather than dropped.
+    expect(count).toHaveTextContent("Person 12");
+    expect(within(grid()).queryByText(isolateAuto("Person 12"))).not.toBeInTheDocument();
+  });
+
+  it("says every per-tile state in a word and a shape, not a colour", async () => {
+    const media = await joined();
+
+    media.replace([
+      ME,
+      tile({
+        identity: CHAT_USERS.nasrin.id,
+        name: CHAT_USERS.nasrin.display_name,
+        speaking: true,
+      }),
+      tile({ identity: CHAT_USERS.omid.id, name: CHAT_USERS.omid.display_name, micEnabled: false }),
+    ]);
+
+    const [me, nasrin, omid] = within(grid()).getAllByRole("listitem");
+    if (me === undefined || nasrin === undefined || omid === undefined) {
+      throw new Error("the call should have three tiles");
+    }
+
+    // Muted: the word, and the slashed glyph beside it in the same chip.
+    const muted = within(omid).getByText(en.calls.tile.muted);
+    expect(muted.querySelector("svg")).not.toBeNull();
+
+    // Camera off — the designed case: the words, and a glyph, under an avatar.
+    const off = within(me).getByText(en.calls.tile.cameraOff);
+    expect(off.querySelector("svg")).not.toBeNull();
+
+    // Speaking: the word, plus the state on the tile itself, which is what the
+    // ring on all four sides and the name weight are drawn from.
+    expect(within(nasrin).getByText(en.calls.tile.speaking)).toBeInTheDocument();
+    expect(nasrin).toHaveAttribute("data-speaking", "true");
+    expect(omid).toHaveAttribute("data-muted", "true");
+  });
+
+  it("says out loud that the whole screen is being shared, and stops from the warning itself", async () => {
+    const media = await joined();
+    const user = userEvent.setup({ delay: null });
+    const view = screen.getByRole("region", { name: DEPLOYS_CALL });
+
+    expect(within(view).queryByText(en.calls.share.warning)).toBeNull();
+
+    await user.click(within(view).getByRole("button", { name: en.calls.control.screenShare }));
+
+    // Persistent and not a toast: a message that has already disappeared
+    // cannot remind anybody, and this is the state people forget they are in.
+    const warning = await within(view).findByRole("status");
+    expect(warning).toHaveTextContent(en.calls.share.warning);
+    expect(warning).toHaveTextContent(en.calls.share.detail);
+
+    // Its own Stop, duplicating the toggle in the bar: somebody who has
+    // forgotten they are sharing is not looking at the control bar.
+    const stop = within(warning).getByRole("button", { name: en.calls.share.stop });
+    expect(stop).not.toBe(within(view).getByRole("button", { name: en.calls.control.screenShare }));
+    await user.click(stop);
+
+    expect(media.record.published).toEqual(["microphone:true", "screen:true", "screen:false"]);
+    await waitFor(() => {
+      expect(within(view).queryByRole("status")).toBeNull();
+    });
+  });
+
+  it("keeps Leave out of the toggle cluster in the order the mirror depends on", async () => {
+    await joined();
+
+    const bar = screen.getByRole("group", { name: en.calls.view.controls });
+    const leave = within(bar).getByRole("button", { name: en.calls.control.leave });
+    const microphone = within(bar).getByRole("button", { name: en.calls.control.microphone });
+
+    // The protecting distance is DOM order, not a pixel offset, which is the
+    // only reason it survives dir="rtl": the three toggles are clustered in
+    // their own element and Leave is the last thing in the bar, with the
+    // count and a rule between them.
+    expect(microphone.parentElement).not.toBe(leave.parentElement);
+    expect(leave.previousElementSibling?.tagName).not.toBe("BUTTON");
+    expect(bar.lastElementChild).toBe(leave);
+  });
+});
+
 describe("Persian", () => {
   it("keeps app-generated counts in ASCII digits", async () => {
     await i18n.changeLanguage("fa");

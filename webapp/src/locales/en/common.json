@@ -454,8 +454,13 @@
       "lede": "A meeting room anyone with the link can join, including people with no account here. The link keeps working until you revoke it.",
       "titleLabel": "What to call it",
       "create": "Create a meeting link",
+      "createSubmit": "Create link",
       "empty": "You have no meeting links yet.",
+      "noLinkColumn": "There is no link column, and there cannot be.",
       "linkOnceNote": "The link is shown once, when you create it. Only a hash of it is stored, so it cannot be shown again — create a new one if you lose it.",
+      "yourLinks": "Your links",
+      "readWhenOpened": "Read when this panel opened",
+      "refresh": "Refresh",
       "revoke": "Revoke",
       "live": "Someone is in it",
       "idle": "Nobody in it",
@@ -794,7 +799,11 @@
     "dismiss": "Dismiss",
     "strip": {
       "label": "Call in this conversation",
-      "inProgress": "{{count}} in the call"
+      "inProgress": "{{count}} in the call",
+      "idle": "No call in this channel",
+      "idleHint": "Whoever joins first opens the room",
+      "away": "You are in the call in {{channel}}",
+      "return": "Return to call"
     },
     "tile": {
       "speaking": "Speaking",
@@ -804,7 +813,9 @@
     },
     "view": {
       "heading": "Call in {{channel}}",
-      "participants": "In this call"
+      "participants": "In this call",
+      "controls": "Call controls",
+      "more": "+{{count}} more"
     },
     "control": {
       "microphone": "Microphone",
@@ -812,12 +823,18 @@
       "screenShare": "Share screen",
       "leave": "Leave call"
     },
+    "share": {
+      "warning": "You are sharing your whole screen.",
+      "detail": "Everyone in the call can see anything you open.",
+      "stop": "Stop sharing"
+    },
     "ring": {
       "label": "Incoming call",
       "from": "{{name}} is calling",
       "accept": "Answer",
       "dismiss": "Dismiss",
-      "unknown": "Someone"
+      "unknown": "Someone",
+      "note": "Dismissing closes this. The caller is not told, and no missed-call message is left behind."
     },
     "error": {
       "unavailable": "Calls are not available on this instance.",
@@ -827,6 +844,8 @@
     }
   },
   "meet": {
+    "eyebrow": "Meeting",
+    "hostedBy": "is hosting this meeting",
     "join": "Join the meeting",
     "nameLabel": "Your name",
     "nameHint": "What the room calls you. Nothing checks it, so treat any name in a meeting as a claim.",

@@ -1,7 +1,9 @@
-import { useCallback, useId, useState } from "react";
+import { useCallback, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ConfirmDialog } from "./ConfirmDialog";
+import { SettingsButton } from "./SettingsButton";
+import { useFocusTrap } from "./useFocusTrap";
 import { api } from "../../api/client";
 import type { components } from "../../api/schema";
 // The generic loading / ready / failed machine the admin tables run on.
@@ -11,6 +13,8 @@ import type { components } from "../../api/schema";
 import { useAdminResource } from "../../admin/useAdminResource";
 import { formatActivationDate } from "../../settings/sessionTime";
 import { CredentialsPanel } from "../admin/CredentialsPanel";
+import { NoticeBanner } from "../auth/NoticeBanner";
+import { EyeOffIcon, PlusIcon, RefreshCwIcon, XIcon } from "../icons";
 
 type Conference = components["schemas"]["Conference"];
 type CreatedConference = components["schemas"]["CreatedConference"];
@@ -44,6 +48,135 @@ async function revokeConference(conferenceId: string): Promise<void> {
 }
 
 /**
+ * Whether anybody is in the room, as a shape and a word rather than a colour:
+ * a filled dot with a ring plus "Someone is in it", a hollow dot plus "Nobody
+ * in it".
+ *
+ * It deliberately does not pulse or animate. Nothing feeds this screen live —
+ * no event, no poll — so movement would promise a liveness the value does not
+ * have. The header above the table says when it was read instead.
+ */
+function Presence({ active }: { active: boolean }) {
+  const { t } = useTranslation();
+
+  return (
+    <span className="hm-meetings-presence" data-active={active}>
+      <span className="hm-meetings-presence__dot" aria-hidden="true" />
+      {t(active ? "settings.meetings.live" : "settings.meetings.idle")}
+    </span>
+  );
+}
+
+/**
+ * Creating a meeting link, as the header action's dialog rather than an inline
+ * form — exactly as `Create invite link` does on the admin rail, and wearing
+ * that dialog's delivered treatment. Creation ends in the show-once
+ * credentials panel, so the act is already modal; an inline form would keep a
+ * text field permanently open above a table whose whole point is the links
+ * that already exist.
+ */
+function CreateMeetingDialog({
+  busy,
+  failed,
+  onCreate,
+  onCancel,
+}: {
+  busy: boolean;
+  failed: boolean;
+  onCreate: (title: string) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const titleId = useId();
+  const fieldId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const handleTrapKey = useFocusTrap(dialogRef);
+  const [title, setTitle] = useState("");
+
+  return (
+    <div className="hm-admin-modal__scrim">
+      <div
+        ref={dialogRef}
+        className="hm-admin-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            onCancel();
+            return;
+          }
+          handleTrapKey(event);
+        }}
+      >
+        <div className="hm-admin-modal__header">
+          <div>
+            <h3 className="hm-admin-modal__title" id={titleId}>
+              {t("settings.meetings.create")}
+            </h3>
+            <p className="hm-admin-modal__subtitle">{t("settings.meetings.lede")}</p>
+          </div>
+          <button
+            type="button"
+            className="hm-admin-modal__close"
+            aria-label={t("chat.common.close")}
+            onClick={onCancel}
+          >
+            <XIcon size={18} strokeWidth={1.85} />
+          </button>
+        </div>
+
+        <form
+          className="hm-admin-modal__form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onCreate(title);
+          }}
+        >
+          <div className="hm-admin-modal__body">
+            <div className="hm-field">
+              <label className="hm-label" htmlFor={fieldId}>
+                {t("settings.meetings.titleLabel")}
+              </label>
+              <input
+                className="hm-input"
+                id={fieldId}
+                type="text"
+                dir="auto"
+                required
+                autoComplete="off"
+                maxLength={TITLE_MAX}
+                value={title}
+                onChange={(event) => {
+                  setTitle(event.target.value);
+                }}
+              />
+            </div>
+            {failed ? (
+              <NoticeBanner tone="danger" message={t("settings.meetings.actionFailed")} />
+            ) : null}
+          </div>
+          <div className="hm-admin-modal__footer">
+            <button
+              type="submit"
+              className="hm-settings-button hm-settings-button--primary"
+              data-busy={busy}
+              disabled={busy}
+              aria-busy={busy}
+            >
+              {busy ? t("settings.working") : t("settings.meetings.createSubmit")}
+            </button>
+            <SettingsButton label={t("settings.cancel")} disabled={busy} onClick={onCancel} />
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/**
  * "Meetings" — the conference rooms this account owns, and their links.
  *
  * WHERE THIS LIVES, AND WHY HERE. Creating one is not an administrator's act:
@@ -56,19 +189,22 @@ async function revokeConference(conferenceId: string): Promise<void> {
  * `appearance` keep the positions the artboard gives them; that is the same
  * move the SCIM section made on the admin rail.
  *
- * UNDESIGNED SURFACE — no artboard draws this, so the body is plain semantic
- * HTML with none of the delivered card, table or button treatments
- * (docs/design/STATUS.md, "Meetings"). Two things are reused, and only because
- * each is an act already drawn: `CredentialsPanel` is the show-once step every
- * value the server keeps only a hash of goes through, and `ConfirmDialog` is
- * the confirm invite and token revocation already use.
+ * A RECORDS TABLE IS RIGHT, ONCE THE ABSENCE IS STATED. What people do here is
+ * audit and revoke, which is row work. The link can never be a column — the
+ * server keeps only a hash — so the table carries no blank link cell, no
+ * disabled Copy and no tooltip explaining a missing value. The note sits above
+ * the table, in the reader's path, before they start hunting for the column
+ * (artboard `settings-meetings`).
+ *
+ * Everything visual is delivered: the admin table treatment, the destructive
+ * row outline, the admin retry-in-place control, `CredentialsPanel` for the
+ * show-once step every hash-only value goes through, and `ConfirmDialog` for a
+ * revocation that disconnects whoever is in the room.
  */
 export function MeetingsSection() {
   const { t, i18n } = useTranslation();
   const conferences = useAdminResource(useCallback(() => listConferences(), []));
-  const titleId = useId();
 
-  const [title, setTitle] = useState("");
   /**
    * The link, held for exactly as long as the panel is open. Clearing it on
    * acknowledgement IS the show-once gate: the server stores only a hash and
@@ -76,6 +212,7 @@ export function MeetingsSection() {
    * nothing on this instance that can put the link back on screen.
    */
   const [created, setCreated] = useState<CreatedConference | null>(null);
+  const [creating, setCreating] = useState(false);
   const [confirming, setConfirming] = useState<Conference | null>(null);
   const [busy, setBusy] = useState(false);
   /** A flag rather than a message, so the failure follows a language switch. */
@@ -83,7 +220,7 @@ export function MeetingsSection() {
 
   const rows = conferences.state.status === "ready" ? conferences.state.data : [];
 
-  const create = () => {
+  const create = (title: string) => {
     const trimmed = title.trim();
     // `required` blocks an empty field; a field of spaces gets past it.
     if (busy || trimmed === "") {
@@ -94,7 +231,7 @@ export function MeetingsSection() {
     void (async () => {
       try {
         setCreated(await createConference(trimmed));
-        setTitle("");
+        setCreating(false);
         conferences.reload();
       } catch (requestError) {
         console.warn("Creating the meeting failed:", requestError);
@@ -123,98 +260,146 @@ export function MeetingsSection() {
   };
 
   return (
-    <section>
-      <h3>{t("settings.meetings.title")}</h3>
-      <p>{t("settings.meetings.lede")}</p>
-
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          create();
-        }}
-      >
-        <label htmlFor={titleId}>{t("settings.meetings.titleLabel")}</label>
-        <input
-          id={titleId}
-          type="text"
-          required
-          autoComplete="off"
-          maxLength={TITLE_MAX}
-          value={title}
-          onChange={(event) => {
-            setTitle(event.target.value);
+    <>
+      <div className="hm-settings__section-head">
+        <div className="hm-settings__heading">
+          <h3 className="hm-settings__title">{t("settings.meetings.title")}</h3>
+          <p className="hm-settings__lede">{t("settings.meetings.lede")}</p>
+        </div>
+        <SettingsButton
+          label={t("settings.meetings.create")}
+          tone="primary"
+          icon={<PlusIcon size={17} strokeWidth={2.1} />}
+          disabled={busy}
+          onClick={() => {
+            setFailed(false);
+            setCreating(true);
           }}
         />
-        <button type="submit" disabled={busy}>
-          {busy ? t("settings.working") : t("settings.meetings.create")}
-        </button>
-      </form>
+      </div>
 
-      {failed ? <p role="alert">{t("settings.meetings.actionFailed")}</p> : null}
+      <div className="hm-settings__scroll">
+        {/* The missing column is the one people look for, so the page says why
+            before they hunt for it: there is no "copy link" here, and there
+            cannot be. */}
+        <div className="hm-settings-note-banner" data-tone="neutral">
+          <EyeOffIcon size={17} strokeWidth={1.75} className="hm-settings-note-banner__icon" />
+          <span>
+            <strong>{t("settings.meetings.noLinkColumn")}</strong>{" "}
+            <span>{t("settings.meetings.linkOnceNote")}</span>
+          </span>
+        </div>
 
-      {conferences.state.status === "loading" ? (
-        <p role="status">{t("common.loading")}</p>
-      ) : conferences.state.status === "error" ? (
-        <>
-          <p role="alert">{t("settings.meetings.loadFailed")}</p>
-          <button type="button" onClick={conferences.reload}>
-            {t("admin.error.retry")}
-          </button>
-        </>
-      ) : rows.length === 0 ? (
-        <p>{t("settings.meetings.empty")}</p>
-      ) : (
-        <>
-          <table>
-            <caption>{t("settings.meetings.title")}</caption>
-            <thead>
-              <tr>
-                <th scope="col">{t("settings.meetings.column.title")}</th>
-                <th scope="col">{t("settings.meetings.column.createdBy")}</th>
-                <th scope="col">{t("settings.meetings.column.created")}</th>
-                <th scope="col">{t("settings.meetings.column.expires")}</th>
-                <th scope="col">{t("settings.meetings.column.status")}</th>
-                <th scope="col">{t("settings.meetings.column.actions")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((conference) => (
-                <tr key={conference.id}>
-                  <td dir="auto">{conference.title}</td>
-                  {/* Null when the account that made it is gone; an
-                      administrator's list can hold those. */}
-                  <td>
-                    {conference.created_by?.display_name ?? t("settings.meetings.creatorGone")}
-                  </td>
-                  <td>{formatActivationDate(conference.created_at, i18n.language)}</td>
-                  <td>
-                    {conference.expires_at == null
-                      ? t("settings.meetings.noExpiry")
-                      : formatActivationDate(conference.expires_at, i18n.language)}
-                  </td>
-                  <td>
-                    {t(conference.active ? "settings.meetings.live" : "settings.meetings.idle")}
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        setConfirming(conference);
-                      }}
-                    >
-                      {t("settings.meetings.revoke")}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {/* Said on the page, because the missing column is the one people
-              look for: there is no "copy link" here and there cannot be. */}
-          <p>{t("settings.meetings.linkOnceNote")}</p>
-        </>
-      )}
+        {failed && !creating ? (
+          <NoticeBanner tone="danger" message={t("settings.meetings.actionFailed")} />
+        ) : null}
+
+        {conferences.state.status === "loading" ? (
+          <p className="hm-settings__note" role="status">
+            {t("common.loading")}
+          </p>
+        ) : conferences.state.status === "error" ? (
+          <>
+            <NoticeBanner tone="danger" message={t("settings.meetings.loadFailed")} />
+            <SettingsButton label={t("admin.error.retry")} onClick={conferences.reload} />
+          </>
+        ) : rows.length === 0 ? (
+          <p className="hm-settings__note">{t("settings.meetings.empty")}</p>
+        ) : (
+          <>
+            {/* Read once, when this panel opened — said in words, with the way
+                to read it again beside them. */}
+            <div className="hm-meetings-tablehead">
+              <span className="hm-meetings-tablehead__label">
+                {t("settings.meetings.yourLinks")}
+              </span>
+              <span className="hm-meetings-tablehead__divider" aria-hidden="true" />
+              <span className="hm-meetings-tablehead__read">
+                {t("settings.meetings.readWhenOpened")}
+              </span>
+              <SettingsButton
+                label={t("settings.meetings.refresh")}
+                icon={<RefreshCwIcon size={15} strokeWidth={2} />}
+                onClick={conferences.reload}
+              />
+            </div>
+
+            <div className="hm-admin-card">
+              <div className="hm-admin-scroll">
+                <table
+                  className="hm-admin-table hm-meetings-table"
+                  aria-label={t("settings.meetings.yourLinks")}
+                >
+                  <thead>
+                    <tr>
+                      <th scope="col">{t("settings.meetings.column.title")}</th>
+                      <th scope="col">{t("settings.meetings.column.createdBy")}</th>
+                      <th scope="col">{t("settings.meetings.column.created")}</th>
+                      <th scope="col">{t("settings.meetings.column.expires")}</th>
+                      <th scope="col">{t("settings.meetings.column.status")}</th>
+                      <th scope="col">{t("settings.meetings.column.actions")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((conference) => (
+                      <tr key={conference.id}>
+                        <td dir="auto">
+                          <span className="hm-meetings-title">{conference.title}</span>
+                        </td>
+                        {/* Null when the account that made it is gone; an
+                            administrator's list can hold those. */}
+                        <td>
+                          {conference.created_by?.display_name ??
+                            t("settings.meetings.creatorGone")}
+                        </td>
+                        <td>
+                          <span className="hm-admin-mono" dir="ltr">
+                            {formatActivationDate(conference.created_at, i18n.language)}
+                          </span>
+                        </td>
+                        {conference.expires_at == null ? (
+                          <td data-muted="true">{t("settings.meetings.noExpiry")}</td>
+                        ) : (
+                          <td>
+                            <span className="hm-admin-mono" dir="ltr">
+                              {formatActivationDate(conference.expires_at, i18n.language)}
+                            </span>
+                          </td>
+                        )}
+                        <td>
+                          <Presence active={conference.active} />
+                        </td>
+                        <td>
+                          <SettingsButton
+                            label={t("settings.meetings.revoke")}
+                            tone="danger"
+                            disabled={busy}
+                            onClick={() => {
+                              setConfirming(conference);
+                            }}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {creating ? (
+        <CreateMeetingDialog
+          busy={busy}
+          failed={failed}
+          onCreate={create}
+          onCancel={() => {
+            setCreating(false);
+            setFailed(false);
+          }}
+        />
+      ) : null}
 
       {created === null ? null : (
         <CredentialsPanel
@@ -251,6 +436,6 @@ export function MeetingsSection() {
           }}
         />
       )}
-    </section>
+    </>
   );
 }

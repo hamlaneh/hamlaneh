@@ -433,10 +433,12 @@ type ConferencePage struct {
 	Conferences []Conference `json:"conferences"`
 }
 
-// ConferencePreview What a link-holder may see before joining. Deliberately thin: a title and whether anybody is in there. Not who, and not the instance's name beyond what the page already shows.
+// ConferencePreview What a link-holder may see before joining. Deliberately thin: whose instance is hosting, what the meeting is called, and whether anybody is in there. Not who created it, not who is in it, and nothing else about the instance.
+// `org_name` was left out of the first draft, on the reasoning that a preview should say as little as possible. That was wrong in a way the contract could have caught itself: `InvitePreview` carries the same field for the equally unauthenticated redemption screen, so the precedent already existed. And the cost of withholding it lands on the visitor — somebody following a link from a chat message, with no way to tell whose meeting they are about to walk into. A link-holder who can see the meeting's title learns nothing dangerous from the name of the organisation hosting it.
 type ConferencePreview struct {
-	Active bool   `json:"active"`
-	Title  string `json:"title"`
+	Active  bool   `json:"active"`
+	OrgName string `json:"org_name"`
+	Title   string `json:"title"`
 }
 
 // CreateChannelRequest defines model for CreateChannelRequest.

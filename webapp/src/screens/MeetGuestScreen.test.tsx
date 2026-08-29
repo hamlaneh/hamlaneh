@@ -21,6 +21,7 @@ const TOKEN = "fixture-conference-link-not-a-real-one";
 const TICKET = "fixture-conference-ticket-not-a-real-one";
 
 const TITLE = "Thursday planning";
+const ORG = "Sanjab Coop";
 
 /**
  * A media client that connects to nothing, recording what it was asked to
@@ -63,7 +64,9 @@ function guestTile(name: string): MediaParticipant {
 /** The preview a live link answers with. */
 function installPreview(active = false) {
   server.use(
-    http.get("/api/v1/meet/:token", () => HttpResponse.json({ title: TITLE, active })),
+    http.get("/api/v1/meet/:token", () =>
+      HttpResponse.json({ org_name: ORG, title: TITLE, active }),
+    ),
   );
 }
 
@@ -101,6 +104,35 @@ describe("the conference preview", () => {
     expect(screen.getAllByRole("textbox")).toHaveLength(1);
     expect(screen.queryByLabelText(/password/iu)).toBeNull();
     expect(screen.getByText(en.meet.guestNote)).toBeInTheDocument();
+
+    // Never `username` or `email`: a password manager offering to save
+    // credentials here would say the opposite of the copy above it.
+    expect(screen.getByLabelText(en.meet.nameLabel)).toHaveAttribute("autocomplete", "name");
+
+    // And no way in. The page carries no link at all — not to sign-in, not to
+    // registration — because wearing the front door's affordances is how a
+    // page starts implying that typing your name into it makes an account.
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+  });
+
+  it("names the organisation hosting the meeting, in text, with no way in beside it", async () => {
+    installPreview();
+    render(<MeetGuestScreen token={TOKEN} media={fakeMedia([]).connect} />);
+
+    // One line of text and no logo lockup: a visitor following a link out of a
+    // chat message can tell whose meeting they are walking into, which showing
+    // nothing denies them — and the name is the organisation's, never the
+    // product's, which would claim Hamlaneh is the host.
+    expect(await screen.findByText(ORG)).toBeInTheDocument();
+    expect(screen.getByText(en.meet.hostedBy)).toBeInTheDocument();
+    // And the host is the organisation, not us: the product's name appearing
+    // here would be the refused wordmark by another route.
+    expect(screen.queryByText(en.app.name)).toBeNull();
+
+    // Naming the instance does not turn this into the front door: still no
+    // link at all, to sign-in or to registration.
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+    expect(screen.queryByText(/sign in|register/iu)).toBeNull();
   });
 
   it("says somebody is already in there when somebody is", async () => {
@@ -125,8 +157,11 @@ describe("a dead link", () => {
     expect(en.meet.unusable.body).toMatch(/revoked/u);
     expect(en.meet.unusable.body).toMatch(/never have existed/u);
 
-    // A way out, and no way in.
+    // A way out, and no way in. The only link on the page is the instance's
+    // own front door: a stranger has no account here, so a sign-in or
+    // registration link would answer a question they did not ask.
     expect(screen.getByRole("link", { name: en.meet.goHome })).toHaveAttribute("href", "/");
+    expect(screen.getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual(["/"]);
     expect(screen.queryByLabelText(en.meet.nameLabel)).toBeNull();
   });
 
