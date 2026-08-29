@@ -2311,10 +2311,13 @@ paths:
         guessing at staleness the client publishes a fresh batch on every
         connect and the previous unclaimed pool is deleted in the same
         transaction. Claimed packages are already gone (claims are consuming).
-        A device may only publish to itself — another user's device id, or
-        your own other device, answers 404. The server never validates that a
-        package matches the device's signature key: a client uploading
-        garbage only makes itself unaddable.
+        Scoped to the caller's own devices — another user's device id
+        answers 404 mls_device_not_found. Which of your own devices you
+        publish under is not the server's to police: a session is not bound
+        to a device, so it cannot tell, and does not need to — packages
+        published under the wrong own-device, like garbage packages, only
+        break your own addability. The server never validates that a
+        package matches the device's signature key for the same reason.
       security:
         - sessionCookie: []
       requestBody:
@@ -2428,7 +2431,11 @@ paths:
         appears in missing_device_ids; a target with no devices at all
         returns both lists empty, and the client renders "cannot add yet"
         rather than pretending. The target being a non-member answers 404
-        member_not_found.
+        member_not_found. Refused on a channel without e2ee (400
+        e2ee_not_enabled): a claim exists to add someone to this channel's
+        group, and a channel with no possible group would make this
+        endpoint a free pool-drain against anyone you share a plaintext
+        channel with.
       security:
         - sessionCookie: []
       requestBody:
@@ -2467,6 +2474,9 @@ paths:
         the last epoch received is the next after_epoch, and an empty page
         means caught up. The log is durable, unlike the WS replay buffer,
         because a device offline for a week must still be able to advance.
+        A channel whose group does not exist yet answers a 200 empty page —
+        the log of a group that is not there holds nothing, and the client
+        flow has already asked GET …/mls/group before it gets here.
       security:
         - sessionCookie: []
       parameters:
@@ -2568,17 +2578,20 @@ paths:
       operationId: acknowledgeMlsWelcome
       summary: Acknowledge a Welcome after successfully joining.
       description: >
-        Idempotent — deleting an already-acknowledged Welcome is still 204.
-        Another user's Welcome answers 404, so a guessed id confirms nothing.
+        Always 204. The DELETE is scoped to the caller's own devices'
+        rows, so an id naming another user's Welcome, or nothing at all,
+        deletes nothing and answers exactly like an already-acknowledged
+        one — a guessed id can neither remove foreign state nor learn
+        whether it named any. (An earlier draft answered 404 for foreign
+        ids, which read as non-leaking and was not: nothing-vs-404 was a
+        distinguisher. Uniform 204 is what makes the claim true.)
       security:
         - sessionCookie: []
       responses:
         "204":
-          description: Acknowledged (now, or already was).
+          description: Acknowledged, already acknowledged, or never yours to acknowledge — indistinguishable by design.
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
 
   /api/v1/search:
     get:
@@ -4244,26 +4257,43 @@ components:
             commit is under 1 KiB.
         welcomes:
           type: array
-          maxItems: 200
+          maxItems: 8
           items:
             $ref: "#/components/schemas/MlsWelcomeDelivery"
           description: >
             Welcomes for the devices this commit adds, stored atomically
             with the commit — a committed add whose Welcome was lost is a
-            forked group.
+            forked group. MLS produces ONE Welcome covering every member a
+            commit adds, so a delivery names many devices and carries the
+            blob once; a shape that repeated the blob per device would
+            multiply a tree-sized payload by the member count, which is the
+            70 MB request the first implementation caught. The whole request
+            is additionally bounded by an 8 MiB body cap on this endpoint,
+            stated here so the per-item caps cannot be read as multiplying
+            past it.
 
     MlsWelcomeDelivery:
       type: object
-      required: [device_id, welcome]
+      required: [device_ids, welcome]
       properties:
-        device_id:
-          type: string
-          format: uuid
+        device_ids:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            type: string
+            format: uuid
+          description: >
+            Every claimed device this Welcome covers. The server stores one
+            pending-Welcome row per device; each recipient extracts its own
+            secrets from the shared blob.
         welcome:
           type: string
           minLength: 1
           maxLength: 350000
-          description: Base64 Welcome, encrypted to that device's claimed key package.
+          description: >
+            Base64 Welcome, encrypted to the claimed key packages of every
+            device it names.
 
     MlsCommit:
       type: object
@@ -4272,6 +4302,13 @@ components:
         epoch:
           type: integer
           format: int64
+          minimum: 1
+          description: >
+            The epoch the group REACHED by this commit — the submitted
+            epoch plus one. This is the only numbering under which
+            after_epoch=<your epoch> returns exactly the commits you have
+            not applied, and under which a fresh group at epoch 0 has an
+            empty log.
         message:
           type: string
           description: Base64, as submitted.
