@@ -342,6 +342,25 @@ was not entitled to read the message it points at.
   message keys; the local plaintext store is its own slice). Conference guests are outside
   E2EE by decision, not omission (ADR 006).
 
+- **Removal that actually removes (Phase 3, slice 2, [ADR 007](adr/007-device-identity-and-verification.md)).**
+  A leaf's credential identity is a string the enrolling client chose, so evicting by it — which
+  is what slice 1 did — left a leaf credentialed under a *staying* member's id unremovable:
+  never stale, never selected, reading every epoch that followed. Membership reconciliation is
+  now an allow-list sweep instead. `GET /api/v1/channels/{id}/mls/member-devices` returns every
+  current member with the signature keys of their registered devices, and any leaf whose key is
+  not in that set is evicted before anyone is added. An allow-list rather than a per-user
+  lookup, because the planted leaf's key is precisely the one no per-user question names; read
+  whole or not at all, because a half-read roster would evict the members it had not reached.
+  The credential is demoted to a display hint and no longer decides anything.
+
+  What this changed, said plainly: the guarantee stopped resting on every past member having
+  been honest and now rests on the directory having been honest at reconcile time. It holds
+  against a removed member and against an insider — the attack slice 1's review demonstrated —
+  and it does **not** hold against a server that lies about whose key is whose. Only two humans
+  comparing key material out of band can close that, which is the verification slice; a
+  server-signed credential cannot, because under the threat model's compromised server the
+  signer is the adversary.
+
 ## What's next
 
 **Phase 3 — end-to-end encryption with MLS.** The foundations are decided and the transport is

@@ -20,11 +20,12 @@ type MlsMemberDevice = components["schemas"]["MlsMemberDevice"];
  *
  * Two invariants run through the whole file:
  *
- *  - **One operation per group at a time.** MLS state is a ratchet; two
- *    concurrent encrypts or two concurrent commit attempts on one group would
- *    interleave into state neither of them expected. Every mutation goes
- *    through `runOn(channelId, …)`, a per-channel promise chain, and device
- *    setup goes through its own.
+ *  - **One MLS operation at a time, device-wide.** MLS state is a ratchet, and
+ *    the device is one handle holding every group, which `persist` and
+ *    `rollback` read and replace whole. Per-group serialization would let a
+ *    rollback in one conversation discard a ratchet advance another had
+ *    already sent ciphertext for, so `runOn` is a single chain (see its own
+ *    note). `start()` stays off it deliberately, because its callers hold it.
  *  - **Persist after every mutation.** The exported map is the device; a
  *    change that is not written is a change a reload loses, which for a
  *    ratchet means a conversation this device can no longer read.
