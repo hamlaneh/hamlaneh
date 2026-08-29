@@ -20,6 +20,7 @@ function channel(overrides: Partial<Channel> = {}): Channel {
   return {
     id: CHANNEL_ID,
     kind: "public",
+    e2ee: false,
     slug: "deploys",
     topic: "",
     member_count: 3,
