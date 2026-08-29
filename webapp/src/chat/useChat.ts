@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { api } from "../api/client";
 import type { MlsController } from "../mls/useMls";
-import { RealtimeClient, realtimeUrl } from "./realtime";
+import { fullJitterDelay, RealtimeClient, realtimeUrl } from "./realtime";
 import type { RealtimeOptions, ServerFrame } from "./realtime";
 import { chatReducer, emptyView, initialChatState } from "./store";
 import type { ChannelView, ChatState, SearchKind } from "./store";
@@ -17,8 +17,8 @@ export type RealtimeOverrides = Partial<
 const HISTORY_PAGE_SIZE = 50;
 
 /**
- * How often an encrypted channel that could not finish its group setup asks
- * again.
+ * How soon an encrypted channel that could not finish its group setup asks
+ * again, and how far apart those asks are allowed to drift.
  *
  * There is no event for the thing it is waiting on. A member who has never
  * opened the app has published no key packages, so the client bootstrapping
@@ -26,10 +26,19 @@ const HISTORY_PAGE_SIZE = 50;
  * later that a device has appeared. Without this, the first person into a
  * channel creates a group of one and everybody invited before their first
  * sign-in stays outside it forever, which is exactly what the real stack did.
- * Five seconds is a conversation someone is looking at; it stops the moment
- * the group is whole.
+ * Five seconds is a conversation someone is looking at.
+ *
+ * The cap is what keeps that first number honest at the other end of the
+ * scale. The wait has no deadline — one invited person who never signs in
+ * holds a channel `incomplete` until they do, which can be weeks — and each
+ * ask costs every online member's client a paged member-device read plus a
+ * key-package claim per missing user. At five seconds flat that is a fixed
+ * per-member load a single unanswered invitation can impose indefinitely, so
+ * the interval doubles into a ceiling of a few minutes rather than staying
+ * where a human's attention span put it.
  */
 const MLS_RETRY_MS = 5_000;
+const MLS_RETRY_CAP_MS = 180_000;
 const SEARCH_PAGE_SIZE = 20;
 
 export interface ChatController {
@@ -251,6 +260,28 @@ export function useChat({
   const backfillRef = useLatest(backfill);
 
   const mlsRef = useLatest(mls);
+  const channelIdRef = useLatest(channelId);
+
+  /**
+   * Counts the arrivals that are a fresh reason to re-drive the open channel's
+   * group setup, rather than the retry timer merely expiring again. The retry
+   * effect keys on it, so a nudge sends the backoff back to its floor.
+   *
+   * Scoped to the open channel, which is the only one that effect watches: an
+   * unscoped counter would let a busy channel's commits reset a different
+   * channel's backoff, and a session with one chatty conversation would then
+   * poll every stuck one at the floor forever — the flat interval this
+   * replaced, reached by a longer road.
+   */
+  const [mlsRetryNudge, setMlsRetryNudge] = useState(0);
+  const nudgeMlsRetry = useCallback(
+    (target: string) => {
+      if (target === channelIdRef.current) {
+        setMlsRetryNudge((count) => count + 1);
+      }
+    },
+    [channelIdRef],
+  );
 
   /** True only for channels the server has told us are encrypted. */
   const isE2ee = useCallback(
@@ -308,8 +339,12 @@ export function useChat({
         case "mls_commit":
           // A nudge, not the truth: the commit itself comes over REST.
           mlsRef.current.syncChannel(frame.chan);
+          nudgeMlsRetry(frame.chan);
           break;
         case "mls_welcome":
+          // Deliberately not a retry nudge. This sync either moves the state —
+          // in which case the timer is torn down anyway — or the Welcome named
+          // some other device, which is not news about this one being stuck.
           mlsRef.current.syncWelcomes();
           break;
         case "member_added":
@@ -317,6 +352,7 @@ export function useChat({
           // races to add their devices, and all but one lose harmlessly.
           if (isE2ee(frame.chan)) {
             mlsRef.current.memberAdded(frame.chan);
+            nudgeMlsRetry(frame.chan);
           }
           break;
         case "member_removed":
@@ -324,6 +360,7 @@ export function useChat({
           // tree is the directory's answer, not this frame's claim (ADR 007).
           if (isE2ee(frame.chan)) {
             mlsRef.current.memberRemoved(frame.chan);
+            nudgeMlsRetry(frame.chan);
           }
           break;
         default:
@@ -333,7 +370,7 @@ export function useChat({
           break;
       }
     },
-    [currentUserId, isE2ee, mlsRef],
+    [currentUserId, isE2ee, mlsRef, nudgeMlsRetry],
   );
 
   const handleFrameRef = useLatest(handleFrame);
@@ -455,7 +492,7 @@ export function useChat({
   }, [activeChannelIsE2ee, channelId, mlsRef]);
 
   /*
-   * The two states that resolve themselves only if somebody asks again.
+   * The three states that resolve themselves only if somebody asks again.
    *
    * `incomplete` — this client is in the group and could not add everyone.
    * It re-reconciles, which claims key packages for whoever is still outside.
@@ -467,31 +504,69 @@ export function useChat({
    * group and learn nothing, which is a poll that cannot answer its own
    * question.
    *
-   * Neither is polled for its own sake: both stop as soon as the state moves.
+   * `failed` — the group could not be reached or advanced: a directory page
+   * that 5xx'd, a commit-retry budget spent against a member who kept winning
+   * the race. Nothing sends in this channel, so leaving it out meant a
+   * transient server hiccup was indistinguishable from a permanent one until
+   * a commit nudge, a member event, a reconnect or a reopen happened along.
+   *
+   * ponytail: `failed` is re-driven through syncChannel, which the service
+   * makes a no-op for a channel it holds no group for — so a failure during
+   * the very first group read is the one `failed` this does not reach, and
+   * still waits for a reopen. Upgrade path: openChannel for `failed` alone,
+   * safe there precisely because nothing sends in that state.
+   *
+   * The retry is a growing wait rather than a fixed one because none of the
+   * three has a deadline (see MLS_RETRY_CAP_MS), and it starts over — at the
+   * floor — whenever something happens that is a genuinely new reason to
+   * expect a different answer. That is what the dependency list is: the status
+   * moving, the socket changing state, or a nudge naming this channel. Backing
+   * off is for a condition that has not changed; a cause that just arrived
+   * deserves the first attempt, not the twelfth one's wait.
+   *
+   * None of the three is polled for its own sake: all stop as soon as the
+   * state leaves this set.
    */
   const channelMlsStatus =
     channelId === undefined ? undefined : mls.state.channels[channelId]?.status;
   useEffect(() => {
     if (
       channelId === undefined ||
-      (channelMlsStatus !== "incomplete" && channelMlsStatus !== "waiting")
+      (channelMlsStatus !== "incomplete" &&
+        channelMlsStatus !== "waiting" &&
+        channelMlsStatus !== "failed")
     ) {
       return undefined;
     }
-    const timer = setInterval(() => {
-      if (channelMlsStatus === "waiting") {
-        mlsRef.current.syncWelcomes();
-      } else {
-        // Not openChannel: that would go back through `opening`, and this
-        // client can already send — briefly disabling its composer every few
-        // seconds would be a worse bug than the one being fixed.
-        mlsRef.current.syncChannel(channelId);
-      }
-    }, MLS_RETRY_MS);
-    return () => {
-      clearInterval(timer);
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    // A self-rescheduling timeout, not an interval: the gap has to be read
+    // fresh each time for it to be able to grow.
+    const schedule = () => {
+      timer = setTimeout(
+        () => {
+          if (channelMlsStatus === "waiting") {
+            mlsRef.current.syncWelcomes();
+          } else {
+            // Not openChannel: that would go back through `opening`, and an
+            // `incomplete` client can already send — briefly disabling its
+            // composer every few seconds would be a worse bug than the one
+            // being fixed.
+            mlsRef.current.syncChannel(channelId);
+          }
+          attempt += 1;
+          schedule();
+        },
+        fullJitterDelay(attempt, Math.random, MLS_RETRY_MS, MLS_RETRY_CAP_MS),
+      );
     };
-  }, [channelId, channelMlsStatus, mlsRef]);
+    schedule();
+    return () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
+    };
+  }, [channelId, channelMlsStatus, connectionStatus, mlsRetryNudge, mlsRef]);
 
   /*
    * Decryption follows whatever is loaded, rather than being wired into every
