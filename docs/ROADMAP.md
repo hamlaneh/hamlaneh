@@ -533,13 +533,20 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       half — two tabs both minting a wrapping key and silently stranding each other's state —
       but a lock cannot make two devices into one. That needs a SharedWorker owning the device
       with the tabs as clients, which is a slice, not a patch
-- [ ] Multi-device: per-device keys, device verification, key sync. The verification half now
-      has a concrete job, named by the slice-3.1 security review: an MLS leaf's credential
-      identity is client-asserted, and removal-on-membership-change evicts by identity — so a
-      leaf credentialed under someone else's id survives cryptographic eviction. The server's
-      membership gate stops ciphertext delivery today, but the E2EE threat model assumes a
-      hostile server, and under that assumption the guarantee "a removed member cannot decrypt
-      what follows" rests on credential↔account binding this slice must supply
+- [ ] **Slice 3.2 — eviction by leaf signature key** ([ADR 007](adr/007-device-identity-and-verification.md)).
+      A leaf's credential identity is a string the enrolling client chose, and removal filters on
+      it, so a leaf credentialed under a *staying* member's id is never stale and never removed:
+      it survives every eviction and reads every epoch after. The fix is an allow-list sweep, not
+      a per-user lookup — evict every leaf whose signature key the directory does not map to a
+      current member — because a planted leaf's key is exactly one the directory never listed for
+      the removed user. Three touchpoints: a channel-scoped read of members' device signature
+      keys (new endpoint → authz matrix + `/security-review`), a wasm export of leaf keys plus
+      remove-by-key, and `reconcileMembers` switched to the key allow-list. Its regression test is
+      the attack: a leaf planted under a staying member's id, evicted by the first reconcile
+- [ ] Multi-device: per-device keys, device verification, key sync. Verification is where the
+      residue of ADR 007 goes: the sweep trusts the directory's key↔person mapping, and only two
+      humans comparing key material out of band can close that — no server signature can, because
+      under PLAN §6.1's adversary 3 the signer is the adversary
 - [ ] Key verification UX: safety numbers/QR (key transparency log = post-v1)
 - [ ] Encrypted backups + user-held recovery keys; org-level recovery policy; recovery UX drills
 - [ ] Media E2EE via LiveKit insertable streams

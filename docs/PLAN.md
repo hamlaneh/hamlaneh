@@ -282,6 +282,7 @@ Explicitly out of scope until after v1 ships — each is a scope trap:
 | Cloud: instance-per-customer | ✅ Decided | Installer = provisioner |
 | Payments: merchant of record first | ✅ Decided | Paddle / Lemon Squeezy |
 | **MLS library: OpenMLS**, exact-pinned, server MLS-blind, guests outside E2EE | ✅ Decided | Aug 2026, ADR 006. "OpenMLS vs libsignal" was a phantom choice — libsignal implements no MLS |
+| **Device identity: eviction by leaf signature key against the directory; out-of-band comparison is the only real binding** | ✅ Decided | Aug 2026, ADR 007. No server-signed credentials — under §6.1's adversary 3 the signer is the adversary |
 | **DCO** instead of CLA | 🟡 Leaning | Confirm before first external PR — this is the last easy moment to choose |
 | Cloud jurisdiction / data residency options | ⬜ Open | Decide before Phase 6 |
 | Pricing numbers | ⬜ Open | Validate via Managed pre-sales |
