@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 
 import { api } from "../api/client";
+import type { MlsController } from "../mls/useMls";
 import { RealtimeClient, realtimeUrl } from "./realtime";
 import type { RealtimeOptions, ServerFrame } from "./realtime";
 import { chatReducer, emptyView, initialChatState } from "./store";
@@ -32,7 +33,12 @@ export interface ChatController {
   closeSearch: () => void;
   /** Dismisses the "Back online" banner once its window has elapsed. */
   settleConnection: () => void;
-  createChannel: (slug: string, kind: "public" | "private") => Promise<Channel | null>;
+  /** `e2ee` is fixed at creation and never toggled (openapi.yaml). */
+  createChannel: (
+    slug: string,
+    kind: "public" | "private",
+    e2ee: boolean,
+  ) => Promise<Channel | null>;
   openDirectMessage: (userId: string) => Promise<Channel | null>;
   inviteMember: (userId: string) => Promise<boolean>;
   setTopic: (topic: string) => Promise<boolean>;
@@ -46,6 +52,11 @@ interface UseChatInput {
   focusMessageId: string | undefined;
   /** `instance.calls` — with no media server there is nothing to reconcile. */
   callsEnabled: boolean;
+  /**
+   * The encryption layer. Plaintext channels never touch it; an e2ee channel
+   * routes its send, its history and its membership events through it.
+   */
+  mls: MlsController;
   realtime?: RealtimeOverrides;
 }
 
@@ -73,6 +84,7 @@ export function useChat({
   channelId,
   focusMessageId,
   callsEnabled,
+  mls,
   realtime,
 }: UseChatInput): ChatController {
   const [state, dispatch] = useReducer(chatReducer, initialChatState);
@@ -219,6 +231,15 @@ export function useChat({
   const clientRef = useRef<RealtimeClient | null>(null);
   const backfillRef = useLatest(backfill);
 
+  const mlsRef = useLatest(mls);
+
+  /** True only for channels the server has told us are encrypted. */
+  const isE2ee = useCallback(
+    (target: string) =>
+      stateRef.current.channels.find((channel) => channel.id === target)?.e2ee === true,
+    [stateRef],
+  );
+
   const handleFrame = useCallback(
     (frame: ServerFrame) => {
       switch (frame.type) {
@@ -265,14 +286,33 @@ export function useChat({
           // fields are absent rather than stale.
           dispatch({ type: "call/state", channelId: frame.chan, call: { active: false } });
           break;
+        case "mls_commit":
+          // A nudge, not the truth: the commit itself comes over REST.
+          mlsRef.current.syncChannel(frame.chan);
+          break;
+        case "mls_welcome":
+          mlsRef.current.syncWelcomes();
+          break;
+        case "member_added":
+          // Somebody joined an encrypted conversation: every member's client
+          // races to add their devices, and all but one lose harmlessly.
+          if (isE2ee(frame.chan)) {
+            mlsRef.current.memberAdded(frame.chan);
+          }
+          break;
+        case "member_removed":
+          if (isE2ee(frame.chan)) {
+            mlsRef.current.memberRemoved(frame.chan, frame.user.id);
+          }
+          break;
         default:
-          // subscribed / unsubscribed / typing / member_added / error carry
-          // nothing this slice draws. Typing has a protocol but no designed
-          // UI yet (ws-protocol.md §4).
+          // subscribed / unsubscribed / typing / error carry nothing this
+          // slice draws. Typing has a protocol but no designed UI yet
+          // (ws-protocol.md §4).
           break;
       }
     },
-    [currentUserId],
+    [currentUserId, isE2ee, mlsRef],
   );
 
   const handleFrameRef = useLatest(handleFrame);
@@ -341,6 +381,11 @@ export function useChat({
     }
     const client = clientRef.current;
     client?.subscribe(channelId);
+    if (isE2ee(channelId)) {
+      // Find or create the group, catch up on the log, add whoever is
+      // missing. Everything else about this channel behaves as usual.
+      mlsRef.current.openChannel(channelId);
+    }
 
     void (async () => {
       const existing = stateRef.current.views[channelId];
@@ -370,7 +415,35 @@ export function useChat({
       client?.unsubscribe(channelId);
       dispatch({ type: "channel/leave", channelId });
     };
-  }, [channelId, currentUserId, focusMessageId, loadHistory, markReadFor, stateRef]);
+  }, [channelId, currentUserId, focusMessageId, isE2ee, loadHistory, markReadFor, mlsRef, stateRef]);
+
+  /*
+   * Decryption follows whatever is loaded, rather than being wired into every
+   * path that loads something: history pages, live frames and the reconnect
+   * backfill all end up in `view.messages`, and asking for the same message
+   * twice is free (the service keeps what it has already opened).
+   */
+  useEffect(() => {
+    if (channelId === undefined) {
+      return;
+    }
+    mls.decryptAll(channelId, view.messages);
+  }, [channelId, mls, view.messages]);
+
+  /*
+   * Reconnect: the Welcome list and the commit log are both durable where the
+   * replay buffer is not, so a client that was away refetches both rather
+   * than trusting that it heard every nudge.
+   */
+  useEffect(() => {
+    if (connectionStatus !== "online") {
+      return;
+    }
+    mls.syncWelcomes();
+    if (channelId !== undefined && isE2ee(channelId)) {
+      mls.syncChannel(channelId);
+    }
+  }, [channelId, connectionStatus, isE2ee, mls]);
 
   /* ── sending ────────────────────────────────────────────────────── */
 
@@ -383,6 +456,17 @@ export function useChat({
     ) => {
       dispatch({ type: "pending/sending", channelId: target, clientMsgId });
       try {
+        // Encrypted inside the chain, not before it: the ratchet advances per
+        // message, so the order messages are sealed in has to be the order
+        // they are sent in.
+        const encrypted = isE2ee(target) ? await mlsRef.current.encrypt(target, content) : null;
+        if (isE2ee(target) && encrypted === null) {
+          // No ciphertext, no send. Falling back to plaintext in a channel
+          // the user was told is encrypted is the one thing this path must
+          // never do; the message stays queued instead.
+          dispatch({ type: "pending/queue", channelId: target, clientMsgId });
+          return;
+        }
         const { data } = await api.POST("/api/v1/channels/{channelId}/messages", {
           params: { path: { channelId: target } },
           // The idempotency key is reused verbatim on every retry: a resend
@@ -391,7 +475,10 @@ export function useChat({
           // its files can never half-exist.
           body: {
             client_msg_id: clientMsgId,
-            content,
+            // Empty exactly when the ciphertext is present, so the server
+            // stores nothing it can read (openapi.yaml -> SendMessageRequest).
+            content: encrypted === null ? content : "",
+            ...(encrypted === null ? {} : { mls: encrypted }),
             ...(attachments.length === 0
               ? {}
               : { attachment_ids: attachments.map((entry) => entry.id) }),
@@ -400,6 +487,14 @@ export function useChat({
         if (data === undefined) {
           dispatch({ type: "pending/queue", channelId: target, clientMsgId });
           return;
+        }
+        if (encrypted !== null) {
+          // MLS gives a sender no way to open its own application message —
+          // the ratchet is per-sender — so the plaintext is kept here as the
+          // message lands. It lives for this session only: after a reload
+          // this device's own history reads as undecryptable, which is
+          // honest but not final. A local plaintext store is its own slice.
+          mlsRef.current.rememberSent(data.id, content);
         }
         dispatch({
           type: "message/upsert",
@@ -415,7 +510,7 @@ export function useChat({
         dispatch({ type: "pending/queue", channelId: target, clientMsgId });
       }
     },
-    [currentUserId, markReadFor],
+    [currentUserId, isE2ee, markReadFor, mlsRef],
   );
 
   /**
@@ -509,12 +604,22 @@ export function useChat({
         return false;
       }
       try {
+        const encrypted = isE2ee(target) ? await mlsRef.current.encrypt(target, trimmed) : null;
+        if (isE2ee(target) && encrypted === null) {
+          return false;
+        }
         const { data } = await api.PATCH("/api/v1/channels/{channelId}/messages/{messageId}", {
           params: { path: { channelId: target, messageId } },
-          body: { content: trimmed },
+          body: {
+            content: encrypted === null ? trimmed : "",
+            ...(encrypted === null ? {} : { mls: encrypted }),
+          },
         });
         if (data === undefined) {
           return false;
+        }
+        if (encrypted !== null) {
+          mlsRef.current.rememberSent(data.id, trimmed);
         }
         dispatch({
           type: "message/upsert",
@@ -529,7 +634,7 @@ export function useChat({
         return false;
       }
     },
-    [channelId, currentUserId],
+    [channelId, currentUserId, isE2ee, mlsRef],
   );
 
   const deleteMessage = useCallback(
@@ -634,19 +739,22 @@ export function useChat({
 
   /* ── channel management ─────────────────────────────────────────── */
 
-  const createChannel = useCallback(async (slug: string, kind: "public" | "private") => {
-    try {
-      const { data } = await api.POST("/api/v1/channels", { body: { slug, kind } });
-      if (data === undefined) {
+  const createChannel = useCallback(
+    async (slug: string, kind: "public" | "private", e2ee: boolean) => {
+      try {
+        const { data } = await api.POST("/api/v1/channels", { body: { slug, kind, e2ee } });
+        if (data === undefined) {
+          return null;
+        }
+        dispatch({ type: "channel/upsert", channel: data });
+        return data;
+      } catch (error) {
+        console.warn("Could not create the channel:", error);
         return null;
       }
-      dispatch({ type: "channel/upsert", channel: data });
-      return data;
-    } catch (error) {
-      console.warn("Could not create the channel:", error);
-      return null;
-    }
-  }, []);
+    },
+    [],
+  );
 
   const openDirectMessage = useCallback(async (userId: string) => {
     try {

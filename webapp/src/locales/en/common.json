@@ -777,7 +777,9 @@
       "private": "Private",
       "visibilityNote": "Both kinds are visible only to their members. Nobody can find or read a channel they were not invited to.",
       "submit": "Create channel",
-      "failed": "The channel could not be created."
+      "failed": "The channel could not be created.",
+      "e2eeLabel": "End-to-end encrypt this channel",
+      "e2eeNote": "Cannot be changed later. Encrypted channels have no server-side search, no link previews and no mention badges, and files cannot be attached yet."
     },
     "channelMenu": {
       "topicLabel": "Topic",
@@ -789,6 +791,19 @@
       "invite": "Invite",
       "message": "Message",
       "failed": "That did not work. Try again."
+    },
+    "e2ee": {
+      "regionLabel": "Encryption",
+      "indicator": "This conversation is end-to-end encrypted. Messages are encrypted on your device and the server stores only ciphertext.",
+      "preparing": "Setting up encryption for this conversation…",
+      "waitingToJoin": "Waiting to be added to this conversation's encryption group. Messages sent before you are added will not be readable here.",
+      "cannotAddYet": "Not everyone can read this conversation yet: {{names}} have no device set up for encryption. They will be added once they sign in.",
+      "nameSeparator": ", ",
+      "channelFailed": "This conversation's encryption could not be set up. Nothing can be sent here until it is.",
+      "unavailable": "Encryption is unavailable in this browser, so encrypted conversations cannot be read or written here.",
+      "composerNotReady": "You cannot send here until this conversation's encryption is ready.",
+      "decrypting": "Decrypting…",
+      "cannotDecrypt": "This message cannot be decrypted on this device."
     }
   },
   "calls": {
