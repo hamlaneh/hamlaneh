@@ -356,8 +356,11 @@ type Channel struct {
 	CreatedBy *openapi_types.UUID `json:"created_by,omitempty"`
 
 	// DmPeer The other person. Present only when kind is dm.
-	DmPeer *UserSummary       `json:"dm_peer,omitempty"`
-	Id     openapi_types.UUID `json:"id"`
+	DmPeer *UserSummary `json:"dm_peer,omitempty"`
+
+	// E2ee Fixed at creation, never toggled — flipping it either way on a live conversation is exactly the silent mode-switch the downgrade test forbids. In an e2ee channel every message carries the mls envelope and empty content, so the server holds nothing it can read. Three consequences a client renders honestly rather than papering over: no mention badges (mentions are parsed from content the server no longer sees), no link previews, and no server-side search — unread counts are row counts and survive. Attachments are refused in this slice (400 e2ee_attachments_unsupported) until encrypted attachments land; an unencrypted file in an encrypted conversation would be a lie.
+	E2ee bool               `json:"e2ee"`
+	Id   openapi_types.UUID `json:"id"`
 
 	// Kind Flat channel kinds (ADR 001 — no org or team layer). In Phase 1.2 visibility is membership for all three; `kind` is stored so a channel directory and join flow can arrive without a schema change.
 	Kind ChannelKind `json:"kind"`
@@ -413,6 +416,12 @@ type ChannelRef struct {
 	Slug *string     `json:"slug,omitempty"`
 }
 
+// ClaimMlsKeyPackagesRequest defines model for ClaimMlsKeyPackagesRequest.
+type ClaimMlsKeyPackagesRequest struct {
+	// UserId The member whose devices are being added. May be the caller — that is how a person's own second device gets added.
+	UserId openapi_types.UUID `json:"user_id"`
+}
+
 // Conference A conference as its owner or an administrator sees it. Never the link.
 type Conference struct {
 	// Active Whether anybody is in the room right now.
@@ -443,6 +452,9 @@ type ConferencePreview struct {
 
 // CreateChannelRequest defines model for CreateChannelRequest.
 type CreateChannelRequest struct {
+	// E2ee Opt-in per channel until the per-org mode slice lands, which will set the default and, in strict mode, forbid creating it false. Immutable after creation.
+	E2ee *bool `json:"e2ee,omitempty"`
+
 	// Kind Direct messages are opened through /api/v1/dms, not here.
 	Kind  CreateChannelRequestKind `json:"kind"`
 	Slug  string                   `json:"slug"`
@@ -467,6 +479,12 @@ type CreateInviteRequest struct {
 
 	// Note What this link is for; shown in the table, never to the invitee.
 	Note *string `json:"note,omitempty"`
+}
+
+// CreateMlsGroupRequest defines model for CreateMlsGroupRequest.
+type CreateMlsGroupRequest struct {
+	// GroupId Base64, at most 64 raw bytes, chosen by the creating client — the MLS GroupId. Opaque to the server; unique across the instance.
+	GroupId string `json:"group_id"`
 }
 
 // CreateScimTokenRequest defines model for CreateScimTokenRequest.
@@ -505,7 +523,11 @@ type CreatedScimToken struct {
 
 // EditMessageRequest defines model for EditMessageRequest.
 type EditMessageRequest struct {
+	// Content Non-empty on a plaintext channel. On an e2ee channel it must be the empty string, with the new ciphertext in mls — same rule as send.
 	Content string `json:"content"`
+
+	// Mls The replacement ciphertext. Required on an e2ee channel, refused elsewhere — the same boundary as send, at the same choke point.
+	Mls *MlsMessageEnvelope `json:"mls,omitempty"`
 }
 
 // Error defines model for Error.
@@ -617,6 +639,9 @@ type Message struct {
 
 	// LinkPreview Absent until the Phase 1.3 preview proxy lands.
 	LinkPreview *LinkPreview `json:"link_preview,omitempty"`
+
+	// Mls Present on every message of an e2ee channel (until deletion erases it), absent everywhere else — content is empty exactly when this is present.
+	Mls *MlsMessageEnvelope `json:"mls,omitempty"`
 }
 
 // MessagePage One page of history, always ordered ascending by (created_at, id). The two cursors are the handles for the next scrollback and the next forward fetch; each is absent when there is nothing more in that direction.
@@ -629,6 +654,102 @@ type MessagePage struct {
 	Messages     []Message `json:"messages"`
 }
 
+// MlsCommit defines model for MlsCommit.
+type MlsCommit struct {
+	CreatedAt time.Time `json:"created_at"`
+	Epoch     int64     `json:"epoch"`
+
+	// Message Base64, as submitted.
+	Message string `json:"message"`
+}
+
+// MlsCommitPage defines model for MlsCommitPage.
+type MlsCommitPage struct {
+	// Commits Ascending by epoch. The last epoch received is the next after_epoch; an empty page means caught up — epochs are the cursor, so there is no separate one.
+	Commits []MlsCommit `json:"commits"`
+}
+
+// MlsDevice defines model for MlsDevice.
+type MlsDevice struct {
+	CreatedAt time.Time          `json:"created_at"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// SignaturePublicKey Base64, echoed as registered.
+	SignaturePublicKey string `json:"signature_public_key"`
+}
+
+// MlsGroup defines model for MlsGroup.
+type MlsGroup struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Epoch The server's sequencing claim — how many commits the log holds — not cryptographic truth. Clients trust their own group state and use this to see how far behind they are.
+	Epoch int64 `json:"epoch"`
+
+	// GroupId Base64, as registered at creation.
+	GroupId string `json:"group_id"`
+}
+
+// MlsKeyPackageClaim defines model for MlsKeyPackageClaim.
+type MlsKeyPackageClaim struct {
+	DeviceId openapi_types.UUID `json:"device_id"`
+
+	// KeyPackage Base64. Consumed — this package will never be handed out again.
+	KeyPackage string `json:"key_package"`
+}
+
+// MlsKeyPackageClaims defines model for MlsKeyPackageClaims.
+type MlsKeyPackageClaims struct {
+	Claims []MlsKeyPackageClaim `json:"claims"`
+
+	// MissingDeviceIds The target's devices whose pool was empty — they cannot be added until they replenish. Both lists empty means the target has no MLS devices at all; the client says "cannot add yet" rather than pretending.
+	MissingDeviceIds []openapi_types.UUID `json:"missing_device_ids"`
+}
+
+// MlsKeyPackagePool defines model for MlsKeyPackagePool.
+type MlsKeyPackagePool struct {
+	// UnclaimedCount Unclaimed packages now stored for this device — what the client checks on connect to decide whether to replenish.
+	UnclaimedCount int `json:"unclaimed_count"`
+}
+
+// MlsMessageEnvelope The encrypted half of a message in an e2ee channel. The server stores and echoes it without parsing; content is the empty string wherever this is present, so nothing the server can read ever carries the words. Deleting the message erases the ciphertext exactly as it erases content; editing replaces it and stamps edited_at as for any edit.
+type MlsMessageEnvelope struct {
+	// Ciphertext Base64 MLSMessage (application message). Cap ~32 KiB raw: a 4000-character message plus MLS framing fits with room, and the resulting message_created frame stays far under the 64 KiB WebSocket cap.
+	Ciphertext string `json:"ciphertext"`
+
+	// Epoch The group epoch the sender encrypted at — a routing hint for receivers holding older state, never a server-verified claim.
+	Epoch int64 `json:"epoch"`
+}
+
+// MlsWelcome defines model for MlsWelcome.
+type MlsWelcome struct {
+	ChannelId openapi_types.UUID `json:"channel_id"`
+	CreatedAt time.Time          `json:"created_at"`
+
+	// DeviceId Which of the caller's devices this Welcome is encrypted to. The others hold bytes they cannot open.
+	DeviceId openapi_types.UUID `json:"device_id"`
+
+	// GroupId Base64.
+	GroupId string             `json:"group_id"`
+	Id      openapi_types.UUID `json:"id"`
+
+	// Welcome Base64.
+	Welcome string `json:"welcome"`
+}
+
+// MlsWelcomeDelivery defines model for MlsWelcomeDelivery.
+type MlsWelcomeDelivery struct {
+	DeviceId openapi_types.UUID `json:"device_id"`
+
+	// Welcome Base64 Welcome, encrypted to that device's claimed key package.
+	Welcome string `json:"welcome"`
+}
+
+// MlsWelcomeList defines model for MlsWelcomeList.
+type MlsWelcomeList struct {
+	// Welcomes Oldest first.
+	Welcomes []MlsWelcome `json:"welcomes"`
+}
+
 // OidcRedirect defines model for OidcRedirect.
 type OidcRedirect struct {
 	// RedirectUrl The provider authorization URL to send the browser to.
@@ -637,6 +758,9 @@ type OidcRedirect struct {
 
 // OpenDirectMessageRequest defines model for OpenDirectMessageRequest.
 type OpenDirectMessageRequest struct {
+	// E2ee Applies only when this call creates the DM; reopening an existing one returns it as it is, whatever this says — get-or- create is idempotent and a flag cannot re-decide a conversation that already exists. Whoever opens the DM first fixes it; the per-org mode slice will make the default uniform and remove the ambiguity.
+	E2ee *bool `json:"e2ee,omitempty"`
+
 	// UserId The other person. Must not be the caller.
 	UserId openapi_types.UUID `json:"user_id"`
 }
@@ -704,8 +828,20 @@ type RedeemInviteRequest struct {
 	Username string `json:"username"`
 }
 
+// RegisterMlsDeviceRequest defines model for RegisterMlsDeviceRequest.
+type RegisterMlsDeviceRequest struct {
+	// SignaturePublicKey Base64. The device's MLS signature public key — an opaque identifier to the server, the idempotency key of registration, and the handle other members' clients verify against. Sized for Ed25519 today with headroom for post-quantum suites.
+	SignaturePublicKey string `json:"signature_public_key"`
+}
+
 // RegistrationMode How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
 type RegistrationMode string
+
+// ReplaceMlsKeyPackagesRequest defines model for ReplaceMlsKeyPackagesRequest.
+type ReplaceMlsKeyPackagesRequest struct {
+	// KeyPackages Base64 key packages, each single-use. The measured size today is ~275 bytes raw; the cap leaves room for post-quantum suites without renegotiating the contract.
+	KeyPackages []string `json:"key_packages"`
+}
 
 // ScimToken A provisioning token as the table lists it. Never the token.
 type ScimToken struct {
@@ -783,6 +919,9 @@ type SendMessageRequest struct {
 
 	// Content Markdown as authored. May be empty only when attachment_ids is non-empty — an image with no caption is an ordinary message, a message with neither text nor files is nothing (400). One extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name.
 	Content string `json:"content"`
+
+	// Mls Required on an e2ee channel, refused elsewhere — the write path enforces the boundary in both directions rather than trusting clients to keep it. On an e2ee channel content must be the empty string and attachment_ids must be absent (400 e2ee_required / e2ee_attachments_unsupported); on a plaintext channel this field is a 400 e2ee_not_enabled. Idempotency by client_msg_id is unchanged.
+	Mls *MlsMessageEnvelope `json:"mls,omitempty"`
 }
 
 // SessionFamily One signed-in device — a refresh-token family. Every field is one a settings-sessions row draws.
@@ -822,6 +961,18 @@ type SsoStatus struct {
 
 	// ProviderName What to call the provider on the button. Present whenever enabled is true, and absent otherwise - a configured provider always has a name, defaulting to a generic one, so a client never has to render a button it cannot label.
 	ProviderName *string `json:"provider_name,omitempty"`
+}
+
+// SubmitMlsCommitRequest defines model for SubmitMlsCommitRequest.
+type SubmitMlsCommitRequest struct {
+	// Epoch The epoch this commit was built at. Accepted only while it is still current — the compare-and-swap that makes one commit win each epoch.
+	Epoch int64 `json:"epoch"`
+
+	// Message Base64 MLSMessage carrying the commit. The cap (~256 KiB raw) bounds a commit for a large tree; measured today a two-member commit is under 1 KiB.
+	Message string `json:"message"`
+
+	// Welcomes Welcomes for the devices this commit adds, stored atomically with the commit — a committed add whose Welcome was lost is a forked group.
+	Welcomes *[]MlsWelcomeDelivery `json:"welcomes,omitempty"`
 }
 
 // TemporaryCredentials Shown once and never again — the password is stored only as an argon2id hash, so there is nothing to redisplay.
@@ -961,6 +1112,12 @@ type InviteId = openapi_types.UUID
 // MessageId defines model for MessageId.
 type MessageId = openapi_types.UUID
 
+// MlsDeviceId defines model for MlsDeviceId.
+type MlsDeviceId = openapi_types.UUID
+
+// MlsWelcomeId defines model for MlsWelcomeId.
+type MlsWelcomeId = openapi_types.UUID
+
 // UserId defines model for UserId.
 type UserId = openapi_types.UUID
 
@@ -1050,6 +1207,12 @@ type ListMessagesParams struct {
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// ListMlsCommitsParams defines parameters for ListMlsCommits.
+type ListMlsCommitsParams struct {
+	AfterEpoch int64 `form:"after_epoch" json:"after_epoch"`
+	Limit      *int  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // SearchParams defines parameters for Search.
 type SearchParams struct {
 	Q     string      `form:"q" json:"q"`
@@ -1118,6 +1281,15 @@ type SendMessageJSONRequestBody = SendMessageRequest
 // EditMessageJSONRequestBody defines body for EditMessage for application/json ContentType.
 type EditMessageJSONRequestBody = EditMessageRequest
 
+// SubmitMlsCommitJSONRequestBody defines body for SubmitMlsCommit for application/json ContentType.
+type SubmitMlsCommitJSONRequestBody = SubmitMlsCommitRequest
+
+// CreateMlsGroupJSONRequestBody defines body for CreateMlsGroup for application/json ContentType.
+type CreateMlsGroupJSONRequestBody = CreateMlsGroupRequest
+
+// ClaimMlsKeyPackagesJSONRequestBody defines body for ClaimMlsKeyPackages for application/json ContentType.
+type ClaimMlsKeyPackagesJSONRequestBody = ClaimMlsKeyPackagesRequest
+
 // SetReadPositionJSONRequestBody defines body for SetReadPosition for application/json ContentType.
 type SetReadPositionJSONRequestBody = SetReadPositionRequest
 
@@ -1135,6 +1307,12 @@ type JoinConferenceJSONRequestBody = JoinConferenceRequest
 
 // UpdateCurrentUserJSONRequestBody defines body for UpdateCurrentUser for application/json ContentType.
 type UpdateCurrentUserJSONRequestBody = UpdateCurrentUserRequest
+
+// RegisterMlsDeviceJSONRequestBody defines body for RegisterMlsDevice for application/json ContentType.
+type RegisterMlsDeviceJSONRequestBody = RegisterMlsDeviceRequest
+
+// ReplaceMlsKeyPackagesJSONRequestBody defines body for ReplaceMlsKeyPackages for application/json ContentType.
+type ReplaceMlsKeyPackagesJSONRequestBody = ReplaceMlsKeyPackagesRequest
 
 // DisableTotpJSONRequestBody defines body for DisableTotp for application/json ContentType.
 type DisableTotpJSONRequestBody = PasswordConfirmRequest
@@ -1255,6 +1433,21 @@ type ServerInterface interface {
 	// EditMessage Edit your own message.
 	// (PATCH /api/v1/channels/{channelId}/messages/{messageId})
 	EditMessage(w http.ResponseWriter, r *http.Request, channelId ChannelId, messageId MessageId)
+	// ListMlsCommits The commit log after a given epoch, ascending.
+	// (GET /api/v1/channels/{channelId}/mls/commits)
+	ListMlsCommits(w http.ResponseWriter, r *http.Request, channelId ChannelId, params ListMlsCommitsParams)
+	// SubmitMlsCommit Submit a commit — first-wins per epoch.
+	// (POST /api/v1/channels/{channelId}/mls/commits)
+	SubmitMlsCommit(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// GetMlsGroup The channel's MLS group, if one exists.
+	// (GET /api/v1/channels/{channelId}/mls/group)
+	GetMlsGroup(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// CreateMlsGroup Create the channel's MLS group.
+	// (POST /api/v1/channels/{channelId}/mls/group)
+	CreateMlsGroup(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// ClaimMlsKeyPackages Claim one key package per device of a member, to add them.
+	// (POST /api/v1/channels/{channelId}/mls/key-package-claims)
+	ClaimMlsKeyPackages(w http.ResponseWriter, r *http.Request, channelId ChannelId)
 	// SetReadPosition Move the caller's read position in a channel.
 	// (PUT /api/v1/channels/{channelId}/read)
 	SetReadPosition(w http.ResponseWriter, r *http.Request, channelId ChannelId)
@@ -1297,6 +1490,18 @@ type ServerInterface interface {
 	// UpdateCurrentUser Change your own account settings.
 	// (PATCH /api/v1/users/me)
 	UpdateCurrentUser(w http.ResponseWriter, r *http.Request)
+	// RegisterMlsDevice Register this client instance as an MLS device.
+	// (POST /api/v1/users/me/mls/device)
+	RegisterMlsDevice(w http.ResponseWriter, r *http.Request)
+	// ReplaceMlsKeyPackages Replace this device's pool of unclaimed key packages.
+	// (PUT /api/v1/users/me/mls/devices/{deviceId}/key-packages)
+	ReplaceMlsKeyPackages(w http.ResponseWriter, r *http.Request, deviceId MlsDeviceId)
+	// ListMlsWelcomes Welcomes waiting for any of the caller's devices.
+	// (GET /api/v1/users/me/mls/welcomes)
+	ListMlsWelcomes(w http.ResponseWriter, r *http.Request)
+	// AcknowledgeMlsWelcome Acknowledge a Welcome after successfully joining.
+	// (DELETE /api/v1/users/me/mls/welcomes/{welcomeId})
+	AcknowledgeMlsWelcome(w http.ResponseWriter, r *http.Request, welcomeId MlsWelcomeId)
 	// UnlinkOidcIdentity Disconnect single sign-on from this account.
 	// (DELETE /api/v1/users/me/oidc)
 	UnlinkOidcIdentity(w http.ResponseWriter, r *http.Request)
@@ -2356,6 +2561,165 @@ func (siw *ServerInterfaceWrapper) EditMessage(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ListMlsCommits operation middleware
+func (siw *ServerInterfaceWrapper) ListMlsCommits(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListMlsCommitsParams
+
+	// ------------- Required query parameter "after_epoch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "after_epoch", r.URL.Query(), &params.AfterEpoch, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "after_epoch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "after_epoch", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMlsCommits(w, r, channelId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SubmitMlsCommit operation middleware
+func (siw *ServerInterfaceWrapper) SubmitMlsCommit(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SubmitMlsCommit(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMlsGroup operation middleware
+func (siw *ServerInterfaceWrapper) GetMlsGroup(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMlsGroup(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateMlsGroup operation middleware
+func (siw *ServerInterfaceWrapper) CreateMlsGroup(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateMlsGroup(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClaimMlsKeyPackages operation middleware
+func (siw *ServerInterfaceWrapper) ClaimMlsKeyPackages(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClaimMlsKeyPackages(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SetReadPosition operation middleware
 func (siw *ServerInterfaceWrapper) SetReadPosition(w http.ResponseWriter, r *http.Request) {
 
@@ -2718,6 +3082,86 @@ func (siw *ServerInterfaceWrapper) UpdateCurrentUser(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateCurrentUser(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RegisterMlsDevice operation middleware
+func (siw *ServerInterfaceWrapper) RegisterMlsDevice(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RegisterMlsDevice(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ReplaceMlsKeyPackages operation middleware
+func (siw *ServerInterfaceWrapper) ReplaceMlsKeyPackages(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "deviceId" -------------
+	var deviceId MlsDeviceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deviceId", r.PathValue("deviceId"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deviceId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ReplaceMlsKeyPackages(w, r, deviceId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListMlsWelcomes operation middleware
+func (siw *ServerInterfaceWrapper) ListMlsWelcomes(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMlsWelcomes(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AcknowledgeMlsWelcome operation middleware
+func (siw *ServerInterfaceWrapper) AcknowledgeMlsWelcome(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "welcomeId" -------------
+	var welcomeId MlsWelcomeId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "welcomeId", r.PathValue("welcomeId"), &welcomeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "welcomeId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AcknowledgeMlsWelcome(w, r, welcomeId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3117,6 +3561,15 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages/{messageId}", wrapper.EditMessage)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/files", wrapper.UploadFile)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/channels/{channelId}/read", wrapper.SetReadPosition)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/mls/device", wrapper.RegisterMlsDevice)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/users/me/mls/devices/{deviceId}/key-packages", wrapper.ReplaceMlsKeyPackages)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/group", wrapper.GetMlsGroup)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/group", wrapper.CreateMlsGroup)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/key-package-claims", wrapper.ClaimMlsKeyPackages)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/commits", wrapper.ListMlsCommits)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/commits", wrapper.SubmitMlsCommit)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me/mls/welcomes", wrapper.ListMlsWelcomes)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/users/me/mls/welcomes/{welcomeId}", wrapper.AcknowledgeMlsWelcome)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/search", wrapper.Search)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/ws", wrapper.ConnectWebSocket)
 

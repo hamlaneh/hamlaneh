@@ -46,8 +46,11 @@ info:
     and soft delete, per-user read positions, message search, and the
     WebSocket upgrade that carries realtime delivery. Phase 1.1b completes the
     identity surface: email password reset, TOTP two-step verification with
-    recovery codes, and self-service session management.
-  version: 0.6.0
+    recovery codes, and self-service session management. Phase 3 adds the
+    E2EE transport: MLS device registration, key-package publish and claim,
+    per-channel groups with a first-wins commit log, Welcome delivery, and
+    the encrypted-message envelope — all opaque to the server by design.
+  version: 0.7.0
   license:
     name: AGPL-3.0
     url: https://www.gnu.org/licenses/agpl-3.0.html
@@ -73,6 +76,10 @@ tags:
     description: Search across the conversations the caller is a member of.
   - name: realtime
     description: WebSocket upgrade — frames are specified in docs/api/ws-protocol.md.
+  - name: mls
+    description: >
+      E2EE transport (ADR 006) — opaque MLS blobs the server stores,
+      sequences and delivers without ever parsing them.
 
 paths:
   /healthz:
@@ -2237,6 +2244,342 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  # ─── E2EE transport (Phase 3 slice 1, ADR 006) ────────────────────────
+  # The server's entire MLS vocabulary lives in these paths, and it is
+  # deliberately illiterate: every MLS payload below is an opaque base64
+  # blob the server stores, sequences and delivers without parsing
+  # (ADR 006, decision 2). The one structured claim a client makes — the
+  # epoch on a commit — is used for first-wins conflict rejection only,
+  # and is safe to leave unverified because it is not load-bearing: a
+  # client that lies about its epoch gets its commit refused by its own
+  # group members, who verify cryptographically. Garbage in any blob
+  # harms only the client that uploaded it.
+
+  /api/v1/users/me/mls/device:
+    post:
+      tags: [mls]
+      operationId: registerMlsDevice
+      summary: Register this client instance as an MLS device.
+      description: >
+        An MLS leaf is a device, not a user, from the first group ever
+        created — one signature key per browser profile, because sharing a
+        signature key across devices means exporting private key material
+        between browsers, and retrofitting device-ness later is a group-state
+        migration inside every user's storage. Idempotent on
+        (user, signature_public_key): re-registering the same key returns 200
+        with the existing device, so a client can call this on every startup
+        without bookkeeping. The server stores the key as an opaque
+        identifier; it never verifies a signature with it.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterMlsDeviceRequest"
+      responses:
+        "200":
+          description: This signature key is already registered; the existing device.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MlsDevice"
+        "201":
+          description: Device registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MlsDevice"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/users/me/mls/devices/{deviceId}/key-packages:
+    parameters:
+      - $ref: "#/components/parameters/MlsDeviceId"
+    put:
+      tags: [mls]
+      operationId: replaceMlsKeyPackages
+      summary: Replace this device's pool of unclaimed key packages.
+      description: >
+        Replace-all semantics, deliberately: a key package embeds its own
+        expiry, which the server cannot read, so instead of the server
+        guessing at staleness the client publishes a fresh batch on every
+        connect and the previous unclaimed pool is deleted in the same
+        transaction. Claimed packages are already gone (claims are consuming).
+        A device may only publish to itself — another user's device id, or
+        your own other device, answers 404. The server never validates that a
+        package matches the device's signature key: a client uploading
+        garbage only makes itself unaddable.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplaceMlsKeyPackagesRequest"
+      responses:
+        "200":
+          description: Pool replaced.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MlsKeyPackagePool"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/channels/{channelId}/mls/group:
+    parameters:
+      - $ref: "#/components/parameters/ChannelId"
+    get:
+      tags: [mls]
+      operationId: getMlsGroup
+      summary: The channel's MLS group, if one exists.
+      description: >
+        Members only — a non-member gets the same channel_not_found 404 as on
+        every channel-scoped path. A member of an e2ee channel with no group
+        yet gets 404 mls_group_not_found, which is the signal to create one.
+        The epoch is the server's sequencing claim, not cryptographic truth —
+        clients trust their own group state and use this value to know how
+        far behind the commit log they are.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: The group.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MlsGroup"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [mls]
+      operationId: createMlsGroup
+      summary: Create the channel's MLS group.
+      description: >
+        Called by the first member whose client finds an e2ee channel with no
+        group. The creator creates the group locally containing only itself,
+        registers it here, then adds the other members by claiming their key
+        packages and committing. Exactly one group per channel, enforced
+        structurally — a concurrent second create answers 409
+        mls_group_exists, and that loser's client waits to be added instead.
+        Refused on a channel without e2ee (400 e2ee_not_enabled).
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMlsGroupRequest"
+      responses:
+        "201":
+          description: Group registered at epoch 0.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MlsGroup"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: A group already exists for this channel (code mls_group_exists).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/channels/{channelId}/mls/key-package-claims:
+    parameters:
+      - $ref: "#/components/parameters/ChannelId"
+    post:
+      tags: [mls]
+      operationId: claimMlsKeyPackages
+      summary: Claim one key package per device of a member, to add them.
+      description: >
+        Consuming read — each returned package is deleted in the same
+        transaction and can never be handed out twice, because a key package
+        is single-use by protocol and reusing one across groups is the bug
+        this endpoint exists to make impossible. Deliberately channel-scoped
+        rather than a public directory: the caller must be a member and the
+        target must be a member of this channel, which kills the
+        enumerate-and-exhaust surface a Signal-style open fetch would carry —
+        on a closed instance nobody needs to claim packages of a person they
+        share no conversation with. A target device whose pool is empty
+        appears in missing_device_ids; a target with no devices at all
+        returns both lists empty, and the client renders "cannot add yet"
+        rather than pretending. The target being a non-member answers 404
+        member_not_found.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClaimMlsKeyPackagesRequest"
+      responses:
+        "200":
+          description: The claimed packages, one per addressable device.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MlsKeyPackageClaims"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/channels/{channelId}/mls/commits:
+    parameters:
+      - $ref: "#/components/parameters/ChannelId"
+    get:
+      tags: [mls]
+      operationId: listMlsCommits
+      summary: The commit log after a given epoch, ascending.
+      description: >
+        How a client catches up: it holds group state at epoch N and fetches
+        every commit after N, in order, applying each. A brand-new joiner
+        needs nothing here — its Welcome is self-contained. Pages by epoch:
+        the last epoch received is the next after_epoch, and an empty page
+        means caught up. The log is durable, unlike the WS replay buffer,
+        because a device offline for a week must still be able to advance.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: after_epoch
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+      responses:
+        "200":
+          description: Commits after the given epoch, ascending.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MlsCommitPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [mls]
+      operationId: submitMlsCommit
+      summary: Submit a commit — first-wins per epoch.
+      description: >
+        The sequencing point of the whole design (ADR 006). The client names
+        the epoch its commit was built at; the server accepts it only if that
+        is still the group's current epoch, advancing the group by exactly
+        one — a compare-and-swap, so of two concurrent committers exactly one
+        wins and the other gets 409 mls_epoch_conflict, refetches the log,
+        merges and retries. Welcomes for members this commit adds ride in the
+        same request and are stored in the same transaction, because a
+        committed add whose Welcome was lost is a forked group — atomicity
+        here is group-integrity, not tidiness. Membership is checked but the
+        blob is not parsed: the server cannot tell a real commit from noise,
+        and does not need to — a garbage commit that wins an epoch is
+        rejected by every member's own MLS validation, and the group repairs
+        by committing past it.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitMlsCommitRequest"
+      responses:
+        "201":
+          description: Commit accepted; the group advanced one epoch.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: >
+            The named epoch is no longer current (code mls_epoch_conflict).
+            Fetch the commits you are missing and rebuild the commit.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/v1/users/me/mls/welcomes:
+    get:
+      tags: [mls]
+      operationId: listMlsWelcomes
+      summary: Welcomes waiting for any of the caller's devices.
+      description: >
+        Fetched on every connect and on the mls_welcome nudge. A Welcome is
+        encrypted to one device's key package, so listing all of a user's
+        pending Welcomes on any of their sockets reveals nothing — a sibling
+        device holds bytes it cannot open. Explicit acknowledgement
+        (the DELETE below) rather than delete-on-read, because a client that
+        fetches and crashes before joining must find the Welcome still there.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Pending welcomes, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MlsWelcomeList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/users/me/mls/welcomes/{welcomeId}:
+    parameters:
+      - $ref: "#/components/parameters/MlsWelcomeId"
+    delete:
+      tags: [mls]
+      operationId: acknowledgeMlsWelcome
+      summary: Acknowledge a Welcome after successfully joining.
+      description: >
+        Idempotent — deleting an already-acknowledged Welcome is still 204.
+        Another user's Welcome answers 404, so a guessed id confirms nothing.
+      security:
+        - sessionCookie: []
+      responses:
+        "204":
+          description: Acknowledged (now, or already was).
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/v1/search:
     get:
       tags: [search]
@@ -2355,6 +2698,22 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    MlsDeviceId:
+      name: deviceId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    MlsWelcomeId:
+      name: welcomeId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
     InviteId:
       name: inviteId
       in: path
@@ -2999,13 +3358,27 @@ components:
         One conversation. Only members ever receive a Channel — every
         channel-scoped path answers 404 to everyone else.
       required:
-        [id, kind, topic, member_count, unread_count, mention_count, created_at]
+        [id, kind, e2ee, topic, member_count, unread_count, mention_count, created_at]
       properties:
         id:
           type: string
           format: uuid
         kind:
           $ref: "#/components/schemas/ChannelKind"
+        e2ee:
+          type: boolean
+          description: >
+            Fixed at creation, never toggled — flipping it either way on a
+            live conversation is exactly the silent mode-switch the
+            downgrade test forbids. In an e2ee channel every message carries
+            the mls envelope and empty content, so the server holds nothing
+            it can read. Three consequences a client renders honestly rather
+            than papering over: no mention badges (mentions are parsed from
+            content the server no longer sees), no link previews, and no
+            server-side search — unread counts are row counts and survive.
+            Attachments are refused in this slice (400
+            e2ee_attachments_unsupported) until encrypted attachments land;
+            an unencrypted file in an encrypted conversation would be a lie.
         slug:
           type: string
           nullable: true
@@ -3111,6 +3484,13 @@ components:
           type: string
           maxLength: 250
           default: ""
+        e2ee:
+          type: boolean
+          default: false
+          description: >
+            Opt-in per channel until the per-org mode slice lands, which
+            will set the default and, in strict mode, forbid creating it
+            false. Immutable after creation.
 
     UpdateChannelRequest:
       type: object
@@ -3129,6 +3509,16 @@ components:
           type: string
           format: uuid
           description: The other person. Must not be the caller.
+        e2ee:
+          type: boolean
+          default: false
+          description: >
+            Applies only when this call creates the DM; reopening an
+            existing one returns it as it is, whatever this says — get-or-
+            create is idempotent and a flag cannot re-decide a conversation
+            that already exists. Whoever opens the DM first fixes it; the
+            per-org mode slice will make the default uniform and remove the
+            ambiguity.
 
     AddChannelMemberRequest:
       type: object
@@ -3591,6 +3981,13 @@ components:
           allOf:
             - $ref: "#/components/schemas/LinkPreview"
           description: Absent until the Phase 1.3 preview proxy lands.
+        mls:
+          allOf:
+            - $ref: "#/components/schemas/MlsMessageEnvelope"
+          description: >
+            Present on every message of an e2ee channel (until deletion
+            erases it), absent everywhere else — content is empty exactly
+            when this is present.
 
     MessagePage:
       type: object
@@ -3651,6 +4048,17 @@ components:
             not unique, are not stable, and in Persian cannot match the username
             pattern at all — so the wire format carries the id and the rendering
             carries the name.
+        mls:
+          allOf:
+            - $ref: "#/components/schemas/MlsMessageEnvelope"
+          description: >
+            Required on an e2ee channel, refused elsewhere — the write path
+            enforces the boundary in both directions rather than trusting
+            clients to keep it. On an e2ee channel content must be the empty
+            string and attachment_ids must be absent (400 e2ee_required /
+            e2ee_attachments_unsupported); on a plaintext channel this field
+            is a 400 e2ee_not_enabled. Idempotency by client_msg_id is
+            unchanged.
 
     EditMessageRequest:
       type: object
@@ -3658,8 +4066,18 @@ components:
       properties:
         content:
           type: string
-          minLength: 1
+          minLength: 0
           maxLength: 4000
+          description: >
+            Non-empty on a plaintext channel. On an e2ee channel it must be
+            the empty string, with the new ciphertext in mls — same rule as
+            send.
+        mls:
+          allOf:
+            - $ref: "#/components/schemas/MlsMessageEnvelope"
+          description: >
+            The replacement ciphertext. Required on an e2ee channel, refused
+            elsewhere — the same boundary as send, at the same choke point.
 
     SetReadPositionRequest:
       type: object
@@ -3670,6 +4088,273 @@ components:
           format: uuid
           description: >
             The newest message the caller has seen. Must belong to this channel.
+
+    # ─── E2EE transport schemas (ADR 006) ────────────────────────────
+    # Every *_b64 payload here is opaque to the server: stored, sequenced
+    # and delivered, never parsed. Caps are transport hygiene, not
+    # validation — they bound storage and frame sizes, nothing more.
+
+    RegisterMlsDeviceRequest:
+      type: object
+      required: [signature_public_key]
+      properties:
+        signature_public_key:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >
+            Base64. The device's MLS signature public key — an opaque
+            identifier to the server, the idempotency key of registration,
+            and the handle other members' clients verify against. Sized for
+            Ed25519 today with headroom for post-quantum suites.
+
+    MlsDevice:
+      type: object
+      required: [id, signature_public_key, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        signature_public_key:
+          type: string
+          description: Base64, echoed as registered.
+        created_at:
+          type: string
+          format: date-time
+
+    ReplaceMlsKeyPackagesRequest:
+      type: object
+      required: [key_packages]
+      properties:
+        key_packages:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: string
+            maxLength: 8192
+          description: >
+            Base64 key packages, each single-use. The measured size today is
+            ~275 bytes raw; the cap leaves room for post-quantum suites
+            without renegotiating the contract.
+
+    MlsKeyPackagePool:
+      type: object
+      required: [unclaimed_count]
+      properties:
+        unclaimed_count:
+          type: integer
+          minimum: 0
+          description: >
+            Unclaimed packages now stored for this device — what the client
+            checks on connect to decide whether to replenish.
+
+    CreateMlsGroupRequest:
+      type: object
+      required: [group_id]
+      properties:
+        group_id:
+          type: string
+          minLength: 1
+          maxLength: 96
+          description: >
+            Base64, at most 64 raw bytes, chosen by the creating client —
+            the MLS GroupId. Opaque to the server; unique across the
+            instance.
+
+    MlsGroup:
+      type: object
+      required: [group_id, epoch, created_at]
+      properties:
+        group_id:
+          type: string
+          description: Base64, as registered at creation.
+        epoch:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            The server's sequencing claim — how many commits the log holds —
+            not cryptographic truth. Clients trust their own group state and
+            use this to see how far behind they are.
+        created_at:
+          type: string
+          format: date-time
+
+    ClaimMlsKeyPackagesRequest:
+      type: object
+      required: [user_id]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+          description: >
+            The member whose devices are being added. May be the caller —
+            that is how a person's own second device gets added.
+
+    MlsKeyPackageClaim:
+      type: object
+      required: [device_id, key_package]
+      properties:
+        device_id:
+          type: string
+          format: uuid
+        key_package:
+          type: string
+          description: Base64. Consumed — this package will never be handed out again.
+
+    MlsKeyPackageClaims:
+      type: object
+      required: [claims, missing_device_ids]
+      properties:
+        claims:
+          type: array
+          items:
+            $ref: "#/components/schemas/MlsKeyPackageClaim"
+        missing_device_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: >
+            The target's devices whose pool was empty — they cannot be added
+            until they replenish. Both lists empty means the target has no
+            MLS devices at all; the client says "cannot add yet" rather than
+            pretending.
+
+    SubmitMlsCommitRequest:
+      type: object
+      required: [epoch, message]
+      properties:
+        epoch:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            The epoch this commit was built at. Accepted only while it is
+            still current — the compare-and-swap that makes one commit win
+            each epoch.
+        message:
+          type: string
+          minLength: 1
+          maxLength: 350000
+          description: >
+            Base64 MLSMessage carrying the commit. The cap (~256 KiB raw)
+            bounds a commit for a large tree; measured today a two-member
+            commit is under 1 KiB.
+        welcomes:
+          type: array
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/MlsWelcomeDelivery"
+          description: >
+            Welcomes for the devices this commit adds, stored atomically
+            with the commit — a committed add whose Welcome was lost is a
+            forked group.
+
+    MlsWelcomeDelivery:
+      type: object
+      required: [device_id, welcome]
+      properties:
+        device_id:
+          type: string
+          format: uuid
+        welcome:
+          type: string
+          minLength: 1
+          maxLength: 350000
+          description: Base64 Welcome, encrypted to that device's claimed key package.
+
+    MlsCommit:
+      type: object
+      required: [epoch, message, created_at]
+      properties:
+        epoch:
+          type: integer
+          format: int64
+        message:
+          type: string
+          description: Base64, as submitted.
+        created_at:
+          type: string
+          format: date-time
+
+    MlsCommitPage:
+      type: object
+      required: [commits]
+      properties:
+        commits:
+          type: array
+          description: >
+            Ascending by epoch. The last epoch received is the next
+            after_epoch; an empty page means caught up — epochs are the
+            cursor, so there is no separate one.
+          items:
+            $ref: "#/components/schemas/MlsCommit"
+
+    MlsWelcome:
+      type: object
+      required: [id, channel_id, group_id, device_id, welcome, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        channel_id:
+          type: string
+          format: uuid
+        group_id:
+          type: string
+          description: Base64.
+        device_id:
+          type: string
+          format: uuid
+          description: >
+            Which of the caller's devices this Welcome is encrypted to. The
+            others hold bytes they cannot open.
+        welcome:
+          type: string
+          description: Base64.
+        created_at:
+          type: string
+          format: date-time
+
+    MlsWelcomeList:
+      type: object
+      required: [welcomes]
+      properties:
+        welcomes:
+          type: array
+          description: Oldest first.
+          items:
+            $ref: "#/components/schemas/MlsWelcome"
+
+    MlsMessageEnvelope:
+      type: object
+      description: >
+        The encrypted half of a message in an e2ee channel. The server
+        stores and echoes it without parsing; content is the empty string
+        wherever this is present, so nothing the server can read ever
+        carries the words. Deleting the message erases the ciphertext
+        exactly as it erases content; editing replaces it and stamps
+        edited_at as for any edit.
+      required: [epoch, ciphertext]
+      properties:
+        epoch:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            The group epoch the sender encrypted at — a routing hint for
+            receivers holding older state, never a server-verified claim.
+        ciphertext:
+          type: string
+          minLength: 1
+          maxLength: 45000
+          description: >
+            Base64 MLSMessage (application message). Cap ~32 KiB raw: a
+            4000-character message plus MLS framing fits with room, and the
+            resulting message_created frame stays far under the 64 KiB
+            WebSocket cap.
 
     SearchKind:
       type: string
