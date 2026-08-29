@@ -325,18 +325,31 @@ was not entitled to read the message it points at.
   disconnected once, reconnected, rebuilt the room and stayed. The server is now the only thing
   that can create a room, so a join for one that is gone is refused.
 
+- **End-to-end encrypted conversations (Phase 3, slice 1).** A channel or DM created with the
+  contract's `e2ee` flag carries MLS-encrypted messages: the browser runs OpenMLS compiled to
+  WebAssembly (`webapp/src-mls`, ~480 KB gzipped, loaded only when an encrypted conversation
+  exists), and the server stores, sequences and delivers blobs it cannot parse — device
+  registration, consuming channel-scoped key-package claims, one group per channel, a durable
+  first-wins commit log with Welcomes riding the commit transaction, and a message envelope
+  whose rule is enforced on the write path in both directions: content is empty exactly when
+  ciphertext is present, so nothing the server can read ever carries the words. Group state
+  persists in IndexedDB wrapped by AES-GCM under a non-extractable WebCrypto key, with the
+  honest statement of what that resists written where the code is. Named costs, recorded when
+  they were chosen: no mention badges, link previews, server-side search or attachments in an
+  encrypted conversation yet — and no history after a reload (forward secrecy deletes used
+  message keys; the local plaintext store is its own slice). Conference guests are outside
+  E2EE by decision, not omission (ADR 006).
+
 ## What's next
 
-**Phase 3 — end-to-end encryption with MLS.** The library decision is made:
-[ADR 006](adr/006-mls-library-and-boundaries.md), fed by [`spikes/mls-library.md`](spikes/mls-library.md) —
-**OpenMLS**, exact-pinned, compiled to WASM for the browser client, with two boundaries fixed
-alongside it: the Go server never learns MLS (it delivers ciphertext it cannot read and
-sequences commits on an unverified envelope claim), and conference guests are outside E2EE,
-with the room kind — fixed at birth — as the encryption boundary. Next comes the integration
-spike (wrapper on `wasm32`, measured bundle cost), then the key-package contract, then the
-implementation slices: group state, multi-device keys, key verification, encrypted backups and
-the recovery path, media E2EE through LiveKit insertable streams, and the per-org
-Strict/Compliance mode choice.
+**Phase 3 — end-to-end encryption with MLS.** The foundations are decided and the transport is
+built: [ADR 006](adr/006-mls-library-and-boundaries.md) fixed the library (OpenMLS,
+exact-pinned, WASM in the browser), the MLS-blind server, and guests-outside-E2EE; slice 1
+shipped the transport end to end (see "Current state"). What remains is the rest of the phase:
+own-message and received history across reloads (the local plaintext store), multi-device keys
+and device verification, key verification UX (safety numbers/QR), encrypted backups and the
+recovery path, media E2EE through LiveKit insertable streams, the per-org Strict/Compliance
+mode choice with the compliance half actually built, and the mobile-push research spike.
 
 **Everything through Phase 2 is code-complete**, each proven by a Playwright suite against the
 real stack rather than against mocks — two browsers, two accounts, a message crossing live; and
@@ -363,11 +376,12 @@ which cannot know what was delivered after it was written.
 |---|---|---|
 | `server/` | Go (stdlib-first, pgx, golang-migrate) | Single static binary: API, WebSockets, auth, and the embedded web UI |
 | `webapp/` | React + TypeScript + Vite + Tailwind + i18next | Web UI, bilingual en/fa with RTL; built into the server binary at image build |
+| `webapp/src-mls/` | Rust → WebAssembly (OpenMLS, ADR 006) | The MLS core the browser runs; Rust exists only in this client build stage — the server stays a single Go binary |
 | `desktop/` | Tauri v2 (planned, Phase 4) | Native desktop wrapper around the web UI |
 | `deploy/` | Docker Compose + Caddy + install.sh | The one-command install; Caddy owns TLS and HSTS only |
 | Database | PostgreSQL (server) / SQLite (home mode, Phase 4) | One storage interface, two drivers |
 | Calls | LiveKit SFU + TURN (Phase 2) | Voice/video/screen share |
-| E2EE | MLS via OpenMLS → WASM in the browser client (Phase 3, ADR 006) | Compromised server sees only ciphertext |
+| E2EE | MLS via OpenMLS → WASM in the browser client (ADR 006; transport shipped, phase in progress) | Compromised server sees only ciphertext |
 
 Request flow: browser → Caddy (TLS, HSTS) → Go server (:8080 — web UI, API, security
 headers) → Postgres (internal network).

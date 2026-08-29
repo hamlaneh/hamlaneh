@@ -510,7 +510,15 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       implements the `openmls_traits` storage trait itself (the spike's write-through-public-field
       restore path is nobody's stability promise), bridging the sync trait to async IndexedDB
       with flush-at-commit-points
-- [ ] MLS for messages; group state management; member add/remove flows
+- [x] MLS for messages; group state management; member add/remove flows — slice 3.1,
+      *2026-08-29*: contract v0.7.0 + migration 0017 (opaque-blob transport, ADR 006), the
+      `webapp/src-mls` wasm core with its own storage-trait implementation and AES-GCM-wrapped
+      IndexedDB keystore, group bootstrap/claim/commit/welcome flows, add-on-invite and
+      remove-on-removal, and the e2ee write-path boundary enforced in both directions. Proven
+      by a two-browser e2e whose canary crosses encrypted while a `pg_dump` from inside the
+      db container carries a plaintext control and no canary. History across reloads is the
+      next item's local store; the first implementation's seven contract findings were
+      adjudicated back into the contract in the same slice
 - [ ] **Own-message history after a reload** (found by the first client implementation): MLS
       gives a sender no way to decrypt its own application messages, so without a local
       plaintext store your own words render as undecryptable after a reload — honest, but
