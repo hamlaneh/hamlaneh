@@ -118,16 +118,36 @@ export function useMls(currentUserId: string): MlsController {
     [decrypted],
   );
 
-  return {
-    state,
-    openChannel,
-    syncChannel,
-    syncWelcomes,
-    memberAdded,
-    memberRemoved,
-    encrypt,
-    rememberSent,
-    decryptAll,
-    bodyOf,
-  };
+  /*
+   * Memoized, and that is load-bearing rather than tidy: every callback below
+   * is already stable, so a fresh object literal here would change identity on
+   * every render and re-fire each effect that depends on the controller. It
+   * did — the reconnect effect refetched the Welcome list once per render.
+   */
+  return useMemo(
+    () => ({
+      state,
+      openChannel,
+      syncChannel,
+      syncWelcomes,
+      memberAdded,
+      memberRemoved,
+      encrypt,
+      rememberSent,
+      decryptAll,
+      bodyOf,
+    }),
+    [
+      state,
+      openChannel,
+      syncChannel,
+      syncWelcomes,
+      memberAdded,
+      memberRemoved,
+      encrypt,
+      rememberSent,
+      decryptAll,
+      bodyOf,
+    ],
+  );
 }

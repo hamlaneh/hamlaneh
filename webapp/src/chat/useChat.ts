@@ -385,11 +385,6 @@ export function useChat({
     }
     const client = clientRef.current;
     client?.subscribe(channelId);
-    if (isE2ee(channelId)) {
-      // Find or create the group, catch up on the log, add whoever is
-      // missing. Everything else about this channel behaves as usual.
-      mlsRef.current.openChannel(channelId);
-    }
 
     void (async () => {
       const existing = stateRef.current.views[channelId];
@@ -419,7 +414,28 @@ export function useChat({
       client?.unsubscribe(channelId);
       dispatch({ type: "channel/leave", channelId });
     };
-  }, [channelId, currentUserId, focusMessageId, isE2ee, loadHistory, markReadFor, mlsRef, stateRef]);
+  }, [channelId, currentUserId, focusMessageId, loadHistory, markReadFor, stateRef]);
+
+  /*
+   * Bootstrapping the channel's group: find or create it, catch up on the
+   * commit log, add whoever is missing.
+   *
+   * Keyed on whether the open channel *is* encrypted, as a value read during
+   * render — not on a callback that reads the channel list through a ref. The
+   * ref version was a real bug: on a cold load the route names a channel
+   * before `GET /channels` has answered, so the check ran against an empty
+   * list, said "not encrypted", and never ran again — the callback is stable,
+   * so the arrival of the list re-rendered but re-triggered nothing. The
+   * screen sat on "setting up encryption" forever with not one MLS request
+   * for the channel. As a value, the list arriving is the trigger.
+   */
+  const activeChannelIsE2ee = activeChannel?.e2ee === true;
+  useEffect(() => {
+    if (channelId === undefined || !activeChannelIsE2ee) {
+      return;
+    }
+    mlsRef.current.openChannel(channelId);
+  }, [activeChannelIsE2ee, channelId, mlsRef]);
 
   /*
    * Decryption follows whatever is loaded, rather than being wired into every
@@ -431,8 +447,8 @@ export function useChat({
     if (channelId === undefined) {
       return;
     }
-    mls.decryptAll(channelId, view.messages);
-  }, [channelId, mls, view.messages]);
+    mlsRef.current.decryptAll(channelId, view.messages);
+  }, [channelId, mlsRef, view.messages]);
 
   /*
    * Reconnect: the Welcome list and the commit log are both durable where the
@@ -451,11 +467,11 @@ export function useChat({
     if (connectionStatus !== "online" || !hasEncryptedChannel) {
       return;
     }
-    mls.syncWelcomes();
-    if (channelId !== undefined && isE2ee(channelId)) {
-      mls.syncChannel(channelId);
+    mlsRef.current.syncWelcomes();
+    if (channelId !== undefined && activeChannelIsE2ee) {
+      mlsRef.current.syncChannel(channelId);
     }
-  }, [channelId, connectionStatus, hasEncryptedChannel, isE2ee, mls]);
+  }, [activeChannelIsE2ee, channelId, connectionStatus, hasEncryptedChannel, mlsRef]);
 
   /* ── sending ────────────────────────────────────────────────────── */
 
