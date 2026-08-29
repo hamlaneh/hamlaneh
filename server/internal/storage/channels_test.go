@@ -40,7 +40,7 @@ func mustCreateChannel(ctx context.Context, t *testing.T, store *storage.Store, 
 func mustOpenDM(ctx context.Context, t *testing.T, store *storage.Store, caller, peer uuid.UUID) storage.Channel {
 	t.Helper()
 
-	ch, _, err := store.OpenDirectMessage(ctx, caller, peer)
+	ch, _, err := store.OpenDirectMessage(ctx, caller, peer, false)
 	if err != nil {
 		t.Fatalf("OpenDirectMessage(%s, %s): %v", caller, peer, err)
 	}
@@ -661,7 +661,7 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 	bob := mustCreateUser(ctx, t, store, newUser("bob"))
 
 	t.Run("the first open creates the channel", func(t *testing.T) {
-		dm, created, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID)
+		dm, created, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage: %v", err)
 		}
@@ -694,12 +694,12 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 	})
 
 	t.Run("opening it again from either side returns the same channel", func(t *testing.T) {
-		first, _, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID)
+		first, _, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage(alice, bob): %v", err)
 		}
 
-		again, created, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID)
+		again, created, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage(alice, bob) again: %v", err)
 		}
@@ -710,7 +710,7 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 			t.Errorf("repeat open returned %s, want %s", again.ID, first.ID)
 		}
 
-		reversed, created, err := store.OpenDirectMessage(ctx, bob.ID, alice.ID)
+		reversed, created, err := store.OpenDirectMessage(ctx, bob.ID, alice.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage(bob, alice): %v", err)
 		}
@@ -723,14 +723,14 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 	})
 
 	t.Run("a direct message with yourself is refused", func(t *testing.T) {
-		_, _, err := store.OpenDirectMessage(ctx, alice.ID, alice.ID)
+		_, _, err := store.OpenDirectMessage(ctx, alice.ID, alice.ID, false)
 		if !errors.Is(err, storage.ErrDMWithSelf) {
 			t.Errorf("got %v, want ErrDMWithSelf", err)
 		}
 	})
 
 	t.Run("an unknown peer is ErrNotFound", func(t *testing.T) {
-		_, _, err := store.OpenDirectMessage(ctx, alice.ID, uuid.New())
+		_, _, err := store.OpenDirectMessage(ctx, alice.ID, uuid.New(), false)
 		if !errors.Is(err, storage.ErrNotFound) {
 			t.Errorf("got %v, want ErrNotFound", err)
 		}
@@ -807,7 +807,7 @@ func TestChannelDMPeerIntegration(t *testing.T) {
 	})
 
 	t.Run("opening the direct message names the peer straight away", func(t *testing.T) {
-		opened, _, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID)
+		opened, _, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage: %v", err)
 		}
@@ -890,7 +890,7 @@ func TestOpenDirectMessageConcurrentIntegration(t *testing.T) {
 				caller, peer = bob.ID, alice.ID
 			}
 			<-start
-			ch, created, err := store.OpenDirectMessage(ctx, caller, peer)
+			ch, created, err := store.OpenDirectMessage(ctx, caller, peer, false)
 			outcomes[i] = outcome{channelID: ch.ID, created: created, err: err}
 		}()
 	}

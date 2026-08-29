@@ -40,7 +40,7 @@ const maxContentLen = 4000
 // the fail-closed path in resolveMessage.
 type messageWriter interface {
 	MessageByID(ctx context.Context, channelID, messageID uuid.UUID) (storage.Message, error)
-	UpdateMessageContent(ctx context.Context, channelID, messageID uuid.UUID, content string) (storage.Message, error)
+	UpdateMessageContent(ctx context.Context, channelID, messageID uuid.UUID, content string, mls *storage.MessageMls) (storage.Message, error)
 	SoftDeleteMessage(ctx context.Context, channelID, messageID, deletedBy uuid.UUID) (storage.Message, error)
 }
 
@@ -174,6 +174,14 @@ func (s *apiServer) SendMessage(w http.ResponseWriter, r *http.Request, channelI
 	if !ok {
 		return
 	}
+	mls, ok := s.e2eeBody(w, r, sc.channel.E2EE, messageBody{
+		content:        req.Content,
+		mls:            req.Mls,
+		hasAttachments: len(attachmentIDs) > 0,
+	})
+	if !ok {
+		return
+	}
 
 	// The author is the session's user. Nothing in the request selects one,
 	// so no caller can post as somebody else.
@@ -183,6 +191,7 @@ func (s *apiServer) SendMessage(w http.ResponseWriter, r *http.Request, channelI
 		ClientMsgID:   req.ClientMsgId,
 		Content:       req.Content,
 		AttachmentIDs: attachmentIDs,
+		Mls:           mls,
 	})
 	if errors.Is(err, storage.ErrEmptyMessage) {
 		// A message with neither text nor files is nothing. The rule is
@@ -217,7 +226,14 @@ func (s *apiServer) SendMessage(w http.ResponseWriter, r *http.Request, channelI
 		return
 	}
 	s.realtime.MessageCreated(channelID, msg)
-	s.enrichPreview(channelID, msg)
+	// No link previews in an encrypted conversation, and the guard is
+	// explicit rather than resting on the enricher finding no URL in an
+	// empty string: the Channel schema promises a client there are none, and
+	// a promise that depends on another package's parser is one an
+	// unrelated change can break.
+	if mls == nil {
+		s.enrichPreview(channelID, msg)
+	}
 	writeJSONValue(w, r, http.StatusCreated, s.apiMessage(msg))
 }
 
@@ -296,13 +312,24 @@ func (s *apiServer) EditMessage(w http.ResponseWriter, r *http.Request, channelI
 			"content must be text that can be stored and returned unchanged")
 		return
 	}
-	if n := utf8.RuneCountInString(req.Content); n < 1 || n > maxContentLen {
-		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
-			fmt.Sprintf("content must be 1 to %d characters", maxContentLen))
+	// The boundary runs before the length rule, because on an e2ee channel
+	// the two disagree: the contract requires empty content there, and the
+	// plaintext minimum of one character would refuse every encrypted edit.
+	// Asking the mode first is what makes the minimum a plaintext rule
+	// rather than a rule with an exception somebody has to remember.
+	mls, ok := s.e2eeBody(w, r, sc.channel.E2EE, messageBody{content: req.Content, mls: req.Mls})
+	if !ok {
 		return
 	}
+	if mls == nil {
+		if n := utf8.RuneCountInString(req.Content); n < 1 || n > maxContentLen {
+			writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+				fmt.Sprintf("content must be 1 to %d characters", maxContentLen))
+			return
+		}
+	}
 
-	edited, err := writer.UpdateMessageContent(r.Context(), channelID, messageID, req.Content)
+	edited, err := writer.UpdateMessageContent(r.Context(), channelID, messageID, req.Content, mls)
 	if errors.Is(err, storage.ErrNotFound) {
 		// The message was deleted between the read above and this update.
 		// The answer is the one a read a moment later would have given.
@@ -316,8 +343,11 @@ func (s *apiServer) EditMessage(w http.ResponseWriter, r *http.Request, channelI
 
 	s.realtime.MessageUpdated(channelID, edited)
 	// An edit is also how a card is removed: content that no longer
-	// holds a URL must not keep a preview of one.
-	s.enrichPreview(channelID, edited)
+	// holds a URL must not keep a preview of one. Skipped on an encrypted
+	// channel for the reason the send path skips it.
+	if mls == nil {
+		s.enrichPreview(channelID, edited)
+	}
 	writeJSONValue(w, r, http.StatusOK, s.apiMessage(edited))
 }
 

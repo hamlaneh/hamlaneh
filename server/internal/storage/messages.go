@@ -53,6 +53,25 @@ type Message struct {
 	// this struct, so a preview missing here would make message_updated
 	// erase the very card it exists to deliver.
 	Preview *LinkPreview
+	// Mls is the encrypted body of a message in an e2ee channel, nil
+	// everywhere else. Content is '' wherever it is present, which is what
+	// keeps the searchable column free of anything the server could read;
+	// soft delete clears it exactly as it clears content.
+	Mls *MessageMls
+}
+
+// MessageMls is a message's ciphertext and the epoch its sender encrypted at.
+//
+// It is one struct rather than two nullable fields because the two columns
+// are present together or not at all (messages_mls_both_or_neither, migration
+// 0017): a shape the database refuses should not be a shape Go code can hold,
+// or every reader has to test one field and hope for the other.
+//
+// Ciphertext is opaque. Nothing in this package reads a byte of it, and the
+// epoch is a routing hint the sender stated — never a server-verified claim.
+type MessageMls struct {
+	Epoch      int64
+	Ciphertext []byte
 }
 
 // NewMessage carries the fields for sending a message. ClientMsgID is the
@@ -70,6 +89,11 @@ type NewMessage struct {
 	// no message. Duplicates are the caller's to refuse; here they would
 	// simply fail the count.
 	AttachmentIDs []uuid.UUID
+	// Mls carries the encrypted body on an e2ee channel and is nil
+	// elsewhere. Which of the two a channel demands is the handler's
+	// decision, made against the channel's own e2ee flag; storage stores
+	// what it is given.
+	Mls *MessageMls
 }
 
 // MessageCursor is a keyset-pagination position in a channel's history: the
@@ -121,7 +145,14 @@ type MessagePage struct {
 // messageColumns is the canonical column list every message query selects,
 // in the order scanMessage expects. It is written against the aliases m
 // (the message) and u (its author).
-const messageColumns = `m.id, m.channel_id, m.client_msg_id, m.content, m.created_at, m.edited_at, m.deleted_at, u.id, u.username, u.display_name`
+const messageColumns = `m.id, m.channel_id, m.client_msg_id, m.content, m.created_at, m.edited_at, m.deleted_at, u.id, u.username, u.display_name, m.mls_epoch, m.mls_ciphertext`
+
+// messageReturning is what every data-modifying CTE below has to hand its
+// SELECT. It exists so the RETURNING lists cannot drift from messageColumns:
+// a column added to one and forgotten in the others is a compile-time error
+// nowhere and a scan failure at runtime, which is exactly the shape the
+// mls columns would have arrived in.
+const messageReturning = `id, channel_id, author_id, client_msg_id, content, created_at, edited_at, deleted_at, mls_epoch, mls_ciphertext`
 
 // insertMessageQuery stores a message unless its idempotency key is already
 // taken, in which case it stores nothing and returns no row. The author is
@@ -134,10 +165,10 @@ const messageColumns = `m.id, m.channel_id, m.client_msg_id, m.content, m.create
 // row (see CreateMessage). $5 is the parsed ids, and repeats among them
 // collapse against the channel_members primary key.
 const insertMessageQuery = `WITH inserted AS (
-	    INSERT INTO messages (channel_id, author_id, client_msg_id, content)
-	    VALUES ($1, $2, $3, $4)
+	    INSERT INTO messages (channel_id, author_id, client_msg_id, content, mls_epoch, mls_ciphertext)
+	    VALUES ($1, $2, $3, $4, $6, $7)
 	    ON CONFLICT (channel_id, author_id, client_msg_id) DO NOTHING
-	    RETURNING id, channel_id, author_id, client_msg_id, content, created_at, edited_at, deleted_at
+	    RETURNING ` + messageReturning + `
 	), mentioned AS (
 	    INSERT INTO message_mentions (message_id, mentioned_user_id)
 	    SELECT i.id, cm.user_id
@@ -181,9 +212,9 @@ const messageByIDQuery = `SELECT ` + messageColumns + `
 // nothing.
 const updateMessageQuery = `WITH updated AS (
 	    UPDATE messages
-	    SET content = $3, edited_at = now()
+	    SET content = $3, mls_epoch = $5, mls_ciphertext = $6, edited_at = now()
 	    WHERE channel_id = $1 AND id = $2 AND deleted_at IS NULL
-	    RETURNING id, channel_id, author_id, client_msg_id, content, created_at, edited_at, deleted_at
+	    RETURNING ` + messageReturning + `
 	), dropped AS (
 	    DELETE FROM message_mentions
 	    WHERE message_id IN (SELECT id FROM updated)
@@ -199,7 +230,15 @@ const updateMessageQuery = `WITH updated AS (
 	SELECT ` + messageColumns + `
 	FROM updated m JOIN users u ON u.id = m.author_id`
 
-// softDeleteMessageQuery erases a message's content in place.
+// softDeleteMessageQuery erases a message's content in place — the plaintext
+// column and the ciphertext alike.
+//
+// The two are erased by one statement rather than by two rules that have to
+// agree: a deleted message keeps its place and loses its words in both
+// worlds, and there is no path here that clears one and leaves the other.
+// Clearing mls_epoch with mls_ciphertext is also what keeps
+// messages_mls_both_or_neither satisfied, so the constraint would refuse a
+// half-erase rather than store one.
 //
 // An empty content together with a non-null deleted_at is the only shape
 // the messages_content_shape constraint accepts for a deleted row (migration
@@ -209,9 +248,10 @@ const updateMessageQuery = `WITH updated AS (
 // of a re-stamp, so the first deleter stays the one on record.
 const softDeleteMessageQuery = `WITH deleted AS (
 	    UPDATE messages
-	    SET content = '', deleted_at = now(), deleted_by = $3
+	    SET content = '', mls_epoch = NULL, mls_ciphertext = NULL,
+	        deleted_at = now(), deleted_by = $3
 	    WHERE channel_id = $1 AND id = $2 AND deleted_at IS NULL
-	    RETURNING id, channel_id, author_id, client_msg_id, content, created_at, edited_at, deleted_at
+	    RETURNING ` + messageReturning + `
 	)
 	SELECT ` + messageColumns + `
 	FROM deleted m JOIN users u ON u.id = m.author_id`
@@ -319,7 +359,10 @@ const sendAttempts = 3
 // that already holds them. The stored message's own attachments come back
 // with it either way.
 func (s *Store) CreateMessage(ctx context.Context, nm NewMessage) (Message, bool, error) {
-	if nm.Content == "" && len(nm.AttachmentIDs) == 0 {
+	// Ciphertext counts as content for this rule. On an e2ee channel the
+	// content column is '' by contract, so testing it alone would refuse
+	// every encrypted message ever sent.
+	if nm.Content == "" && len(nm.AttachmentIDs) == 0 && nm.Mls == nil {
 		return Message{}, false, ErrEmptyMessage
 	}
 	mentioned := parseMentions(nm.Content)
@@ -361,7 +404,8 @@ func (s *Store) CreateMessage(ctx context.Context, nm NewMessage) (Message, bool
 func (s *Store) insertMessage(ctx context.Context, nm NewMessage, mentioned []uuid.UUID) (Message, error) {
 	if len(nm.AttachmentIDs) == 0 {
 		return scanMessage(s.pool.QueryRow(ctx, insertMessageQuery,
-			nm.ChannelID, nm.AuthorID, nm.ClientMsgID, nm.Content, mentioned))
+			nm.ChannelID, nm.AuthorID, nm.ClientMsgID, nm.Content, mentioned,
+			mlsEpochArg(nm.Mls), mlsCiphertextArg(nm.Mls)))
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -376,7 +420,8 @@ func (s *Store) insertMessage(ctx context.Context, nm NewMessage, mentioned []uu
 	}()
 
 	msg, err := scanMessage(tx.QueryRow(ctx, insertMessageQuery,
-		nm.ChannelID, nm.AuthorID, nm.ClientMsgID, nm.Content, mentioned))
+		nm.ChannelID, nm.AuthorID, nm.ClientMsgID, nm.Content, mentioned,
+		mlsEpochArg(nm.Mls), mlsCiphertextArg(nm.Mls)))
 	if err != nil {
 		return Message{}, err
 	}
@@ -477,6 +522,11 @@ func (s *Store) MessageByID(ctx context.Context, channelID, messageID uuid.UUID)
 // history: an edit is not a resend. Mentions are re-derived from the new
 // content by the same statement (see updateMessageQuery).
 //
+// mls replaces the ciphertext, and a nil one clears it. Both columns move
+// together on every edit, so an edit can neither leave stale ciphertext under
+// new plaintext nor the reverse — which is the whole reason it is a parameter
+// rather than something the statement leaves alone.
+//
 // ErrNotFound means the edit changed nothing, which is either of two
 // things: no such message in this channel, or a message that is deleted. The
 // caller has already read the row it is editing — that is where its
@@ -484,8 +534,9 @@ func (s *Store) MessageByID(ctx context.Context, channelID, messageID uuid.UUID)
 // landed in between is simply the answer a moment later. Content bounds are
 // the caller's to enforce; the messages_content_shape constraint is the
 // backstop.
-func (s *Store) UpdateMessageContent(ctx context.Context, channelID, messageID uuid.UUID, content string) (Message, error) {
-	row := s.pool.QueryRow(ctx, updateMessageQuery, channelID, messageID, content, parseMentions(content))
+func (s *Store) UpdateMessageContent(ctx context.Context, channelID, messageID uuid.UUID, content string, mls *MessageMls) (Message, error) {
+	row := s.pool.QueryRow(ctx, updateMessageQuery, channelID, messageID, content, parseMentions(content),
+		mlsEpochArg(mls), mlsCiphertextArg(mls))
 	msg, err := scanMessage(row)
 	if err != nil {
 		return Message{}, fmt.Errorf("update message: %w", err)
@@ -727,10 +778,15 @@ func (s *Store) hasMessageBeyond(ctx context.Context, query string, channelID uu
 // scanMessage scans one messageColumns row. pgx.ErrNoRows becomes
 // ErrNotFound.
 func scanMessage(row pgx.Row) (Message, error) {
-	var m Message
+	var (
+		m          Message
+		mlsEpoch   *int64
+		ciphertext []byte
+	)
 	err := row.Scan(
 		&m.ID, &m.ChannelID, &m.ClientMsgID, &m.Content, &m.CreatedAt, &m.EditedAt, &m.DeletedAt,
 		&m.Author.ID, &m.Author.Username, &m.Author.DisplayName,
+		&mlsEpoch, &ciphertext,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Message{}, ErrNotFound
@@ -738,7 +794,32 @@ func scanMessage(row pgx.Row) (Message, error) {
 	if err != nil {
 		return Message{}, err
 	}
+	// Both columns or neither: messages_mls_both_or_neither refuses any other
+	// shape, so a half-filled pair here would mean the constraint was
+	// dropped. Requiring both is what stops that turning into a message
+	// serialized with an epoch and no ciphertext.
+	if mlsEpoch != nil && ciphertext != nil {
+		m.Mls = &MessageMls{Epoch: *mlsEpoch, Ciphertext: ciphertext}
+	}
 	return m, nil
+}
+
+// mlsEpochArg and mlsCiphertextArg bind the two nullable columns from one
+// optional struct. They exist so no call site can bind an epoch without its
+// ciphertext: there is one source for both, and it is the same pointer.
+func mlsEpochArg(mls *MessageMls) *int64 {
+	if mls == nil {
+		return nil
+	}
+	epoch := mls.Epoch
+	return &epoch
+}
+
+func mlsCiphertextArg(mls *MessageMls) []byte {
+	if mls == nil {
+		return nil
+	}
+	return mls.Ciphertext
 }
 
 // mapMissingReference translates the foreign-key violations of the messages

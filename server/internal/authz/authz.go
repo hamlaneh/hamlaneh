@@ -86,6 +86,7 @@ func Can(_ context.Context, user *storage.User, action Action, resource any) boo
 		return user.IsAdmin
 	case ChannelRead, ChannelUpdate, ChannelMemberAdd, ChannelMemberRemove,
 		MessageSend, MessageEdit, MessageDelete, ReadPositionSet, FileUpload, CallJoin,
+		MlsRead, MlsWrite,
 		ConferenceRevoke:
 		// Reached only when the caller passed no resource, or one of the
 		// wrong type. Every channel-scoped action is decided against a channel

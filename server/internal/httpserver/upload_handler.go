@@ -61,6 +61,16 @@ func (s *apiServer) UploadFile(w http.ResponseWriter, r *http.Request, channelID
 		sc.deny(w, r)
 		return
 	}
+	// Refused before a byte of the body is read, which is the same reasoning
+	// the membership check above is placed for: an upload that the send path
+	// would refuse anyway must not first cost the server twenty-five
+	// megabytes of disk and CPU. It is also the only refusal that can happen
+	// here — the channel's mode is fixed at creation, so a file accepted now
+	// cannot become unattachable later.
+	if sc.channel.E2EE {
+		writeE2EEAttachmentsUnsupported(w, r)
+		return
+	}
 	if s.blobs == nil {
 		internalError(w, r, errors.New("upload reached a server with no blob store"))
 		return

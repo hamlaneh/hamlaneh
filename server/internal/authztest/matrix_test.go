@@ -194,7 +194,7 @@ func provisionChannel(ctx context.Context, t *testing.T, store *storage.Store,
 			peer = newFixtureUser(ctx, t, store, fmt.Sprintf("mx%dp", seq), false, false)
 		}
 		var err error
-		channel, _, err = store.OpenDirectMessage(ctx, creator.ID, peer.ID)
+		channel, _, err = store.OpenDirectMessage(ctx, creator.ID, peer.ID, false)
 		if err != nil {
 			t.Fatalf("open fixture dm: %v", err)
 		}
