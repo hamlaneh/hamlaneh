@@ -527,7 +527,13 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
 - [ ] Key-package pool management beyond replace-on-connect: a read for `unclaimed_count`
       (today only the PUT returns it) and a low-water replenishment policy — with the
       multi-device slice, which owns the device lifecycle this feeds
-- [ ] Multi-device: per-device keys, device verification, key sync
+- [ ] Multi-device: per-device keys, device verification, key sync. The verification half now
+      has a concrete job, named by the slice-3.1 security review: an MLS leaf's credential
+      identity is client-asserted, and removal-on-membership-change evicts by identity — so a
+      leaf credentialed under someone else's id survives cryptographic eviction. The server's
+      membership gate stops ciphertext delivery today, but the E2EE threat model assumes a
+      hostile server, and under that assumption the guarantee "a removed member cannot decrypt
+      what follows" rests on credential↔account binding this slice must supply
 - [ ] Key verification UX: safety numbers/QR (key transparency log = post-v1)
 - [ ] Encrypted backups + user-held recovery keys; org-level recovery policy; recovery UX drills
 - [ ] Media E2EE via LiveKit insertable streams
