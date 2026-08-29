@@ -3,8 +3,8 @@
 //!
 //! `count: u32be, (len: u32be, bytes)*`. The alternative was `js_sys::Array`,
 //! which would pull a crate in for something twenty lines cover, and JSON,
-//! which would mean base64-ing every payload. `webapp/src/mls/frames.ts` is
-//! the other half; the two files must stay in step.
+//! which would mean base64-ing every payload. `webapp/src/mls/bytes.ts` is the
+//! other half — `packFrames`/`unpackFrames` — and the two must stay in step.
 
 /// Packs a list of byte strings into one blob.
 pub fn pack(items: &[Vec<u8>]) -> Vec<u8> {
