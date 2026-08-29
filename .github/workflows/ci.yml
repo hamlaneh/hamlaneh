@@ -162,7 +162,8 @@ jobs:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.webapp == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30, not 20: the MLS wasm toolchain image costs ~5-6 minutes cold.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: webapp
@@ -191,6 +192,24 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Build the MLS wasm wrapper
+        # The same script a dev machine runs, so CI can never pass on a
+        # toolchain nobody else has. This makes the wasm round-trip tests
+        # run rather than skip, and `npm run build` below resolve the
+        # `hamlaneh-mls` alias. Cold cost is dominated by compiling
+        # wasm-bindgen-cli inside the toolchain image (~5 min); when that
+        # hurts enough, the fix is publishing the toolchain image to GHCR
+        # from a scheduled job, not a second build definition.
+        run: bash src-mls/build.sh
+
+      - name: MLS crate advisory scan (cargo audit)
+        # ADR 006: the critical hpke-rs advisories sat one layer below the
+        # audited library, which is the whole argument for this gate.
+        run: |
+          MSYS_NO_PATHCONV=1 docker run --rm \
+            -v "$PWD/src-mls:/crate" -w /crate \
+            hamlaneh-mls-build cargo audit
 
       - name: Test
         run: npm test
