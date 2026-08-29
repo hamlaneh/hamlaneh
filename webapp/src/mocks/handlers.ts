@@ -2,6 +2,7 @@ import { http, HttpResponse } from "msw";
 
 import type { components } from "../api/schema";
 import { chatHandlers, resetMockChat } from "./chat";
+import { mlsHandlers, resetMockMls } from "./mls";
 import { realtimeHandler } from "./ws";
 
 type HealthStatus = components["schemas"]["HealthStatus"];
@@ -326,6 +327,7 @@ export function resetMockAuth(): void {
   auth = freshAuthState();
   clearDomCookies();
   resetMockChat();
+  resetMockMls();
 }
 
 /**
@@ -923,6 +925,7 @@ export const handlers = [
   ),
 
   ...chatHandlers,
+  ...mlsHandlers,
   realtimeHandler,
 
   http.post<never, AdminCreateUserRequest, User>(
