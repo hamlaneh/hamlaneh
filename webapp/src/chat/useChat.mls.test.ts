@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { delay, http, HttpResponse } from "msw";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetMockAuth } from "../mocks/handlers";
 import { server } from "../mocks/node";
@@ -48,6 +48,13 @@ class SelfAnsweringSocket {
   static readonly OPEN = 1;
   readyState = 0;
   private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
+  /**
+   * The server half of the heartbeat, which is not optional here. The client
+   * drops a socket that has been silent for two and a half intervals — 75 s —
+   * so without this every test that advances further than that would be
+   * measuring a reconnect loop rather than whatever it set out to measure.
+   */
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     queueMicrotask(() => {
@@ -87,11 +94,23 @@ class SelfAnsweringSocket {
           },
         }),
       });
+      this.heartbeat = setInterval(() => {
+        this.emit("message", { data: JSON.stringify({ type: "ping" }) });
+      }, 30_000);
     });
   }
 
   close(): void {
     this.readyState = 3;
+    if (this.heartbeat !== null) {
+      clearInterval(this.heartbeat);
+      this.heartbeat = null;
+    }
+  }
+
+  /** Pushes one server frame at the client, exactly as the wire would. */
+  deliver(frame: unknown): void {
+    this.emit("message", { data: JSON.stringify(frame) });
   }
 
   private emit(type: string, event: unknown): void {
@@ -136,6 +155,9 @@ function slowChannelList(channels: Channel[], ms = 40) {
   );
 }
 
+/** The socket the hook is currently holding, for tests that push a frame. */
+let liveSocket: SelfAnsweringSocket | null = null;
+
 /**
  * Hoisted, and it has to be: the realtime overrides are effect dependencies,
  * so a fresh object per render tears the socket down and rebuilds it, which
@@ -144,21 +166,36 @@ function slowChannelList(channels: Channel[], ms = 40) {
  */
 const REALTIME = {
   url: "ws://localhost/api/v1/ws",
-  socketFactory: () => new SelfAnsweringSocket() as unknown as WebSocket,
+  socketFactory: () => {
+    liveSocket = new SelfAnsweringSocket();
+    return liveSocket as unknown as WebSocket;
+  },
   retryDelayMs: () => 10_000,
 };
 
+/**
+ * Renders through a props object so a test can hand the hook a new MLS state
+ * mid-flight. The spies are shared across controllers on purpose: a status
+ * change must be visible as continuing counts, not as a fresh set of mocks.
+ */
 function renderChat(mls: MlsController) {
-  return renderHook(() =>
-    useChat({
-      currentUser: ME,
-      channelId: CHANNEL_ID,
-      focusMessageId: undefined,
-      callsEnabled: false,
-      mls,
-      realtime: REALTIME,
-    }),
+  return renderHook(
+    ({ controller }: { controller: MlsController }) =>
+      useChat({
+        currentUser: ME,
+        channelId: CHANNEL_ID,
+        focusMessageId: undefined,
+        callsEnabled: false,
+        mls: controller,
+        realtime: REALTIME,
+      }),
+    { initialProps: { controller: mls } },
   );
+}
+
+/** The same spies, reporting a different channel state. */
+function withStatus(mls: MlsController, channels: MlsState["channels"]): MlsController {
+  return { ...mls, state: { ...mls.state, channels } };
 }
 
 beforeAll(() => {
@@ -218,10 +255,11 @@ describe("opening an encrypted channel on a cold load", () => {
     // Renders the hook cannot control: the list, the socket, the history page,
     // a parent re-rendering for its own reasons. None of them is a reason to
     // refetch — the trace that found this showed four fetches for one page
-    // load, one per render.
-    rerender();
-    rerender();
-    rerender();
+    // load, one per render. The same controller each time, so what is being
+    // re-rendered is genuinely nothing.
+    rerender({ controller: mls });
+    rerender({ controller: mls });
+    rerender({ controller: mls });
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(mls.syncWelcomes).toHaveBeenCalledTimes(1);
     unmount();
@@ -257,7 +295,38 @@ describe("a group that could not be finished in one go", () => {
       });
       // syncChannel, not openChannel: this client can already send, and
       // going back through "opening" would disable its composer on a timer.
+      // Five seconds is the *ceiling* of the first wait rather than its
+      // length — full jitter rolls somewhere inside it — so this window
+      // always contains the first ask and may contain the second.
       expect(mls.syncChannel).toHaveBeenCalledWith(CHANNEL_ID);
+      expect(calls(mls.syncChannel)).toBeGreaterThan(before);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * The third state, and the one that had no way out at all. `failed` is what
+   * a directory page that 5xx'd or a spent commit-retry budget leaves behind —
+   * transient causes with permanent-looking consequences, because until this
+   * only a commit nudge, a member event, a reconnect or a reopen re-drove it.
+   */
+  it("re-drives a channel whose setup failed outright", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const mls = spyController({ [CHANNEL_ID]: { status: "failed" } });
+      slowChannelList([ENCRYPTED_CHANNEL]);
+
+      const { unmount } = renderChat(mls);
+      await waitFor(() => {
+        expect(mls.openChannel).toHaveBeenCalledWith(CHANNEL_ID);
+      });
+      const before = calls(mls.syncChannel);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
       expect(calls(mls.syncChannel)).toBeGreaterThan(before);
       unmount();
     } finally {
@@ -290,7 +359,7 @@ describe("a group that could not be finished in one go", () => {
     }
   });
 
-  it("stops asking once the group is whole", async () => {
+  it("never starts asking about a group that is already whole", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const mls = spyController({ [CHANNEL_ID]: { status: "ready" } });
@@ -311,6 +380,125 @@ describe("a group that could not be finished in one go", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * The wait between asks, which is the whole cost of the retry.
+ *
+ * Every test here rolls the jitter at 1 so each wait is exactly its ceiling.
+ * That makes the growth readable as a count of asks in a window; the jitter
+ * itself is `fullJitterDelay`'s to prove, and realtime.test.ts does.
+ */
+describe("the retry's backoff", () => {
+  const INCOMPLETE: MlsState["channels"] = {
+    [CHANNEL_ID]: { status: "incomplete", unreachableUserIds: ["u-newcomer"] },
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(Math, "random").mockReturnValue(1);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  /** Renders, and waits until the channel's group setup has been driven once. */
+  async function renderStuck(channels: MlsState["channels"]) {
+    const mls = spyController(channels);
+    slowChannelList([ENCRYPTED_CHANNEL]);
+    const rendered = renderChat(mls);
+    await waitFor(() => {
+      expect(mls.openChannel).toHaveBeenCalledWith(CHANNEL_ID);
+    });
+    return { mls, ...rendered };
+  }
+
+  it("widens the wait instead of asking every five seconds for weeks", async () => {
+    const { mls, unmount } = await renderStuck(INCOMPLETE);
+
+    const before = calls(mls.syncChannel);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(155_000);
+    });
+    // 5 + 10 + 20 + 40 + 80 s. The flat interval this replaced asked
+    // thirty-one times in the same window — and kept that rate up for as long
+    // as the condition lasted, which for one invited person who never signs in
+    // is weeks, across every online member's client.
+    expect(calls(mls.syncChannel) - before).toBe(5);
+
+    // Half an hour more, with the doubling now into its ceiling: ten asks at
+    // three minutes each. Uncapped, the same window holds three.
+    const atCeiling = calls(mls.syncChannel);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_800_000);
+    });
+    expect(calls(mls.syncChannel) - atCeiling).toBeGreaterThanOrEqual(9);
+    unmount();
+  });
+
+  it("starts the wait over when the state actually moves", async () => {
+    const { mls, rerender, unmount } = await renderStuck({
+      [CHANNEL_ID]: { status: "failed" },
+    });
+
+    // 5 + 10 + 20 s of asking: the next one would be 40 s out.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(35_000);
+    });
+    rerender({ controller: withStatus(mls, INCOMPLETE) });
+
+    const before = calls(mls.syncChannel);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    // A different condition is a different question, so it is asked at the
+    // floor. Carrying the old attempt count over — by holding it outside the
+    // effect — would leave this window silent.
+    expect(calls(mls.syncChannel)).toBeGreaterThan(before);
+    unmount();
+  });
+
+  it("starts the wait over when a commit says something has changed", async () => {
+    const { mls, unmount } = await renderStuck(INCOMPLETE);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(35_000);
+    });
+    expect(liveSocket).not.toBeNull();
+    await act(async () => {
+      liveSocket?.deliver({ type: "mls_commit", chan: CHANNEL_ID, data: { epoch: 2 } });
+      await Promise.resolve();
+    });
+
+    // Counted after the nudge's own immediate sync, so what is measured is the
+    // timer and not the frame.
+    const before = calls(mls.syncChannel);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    // Backing off is for a cause that has not changed. This one just did.
+    expect(calls(mls.syncChannel)).toBeGreaterThan(before);
+    unmount();
+  });
+
+  it("stops asking the moment the state leaves the retried set", async () => {
+    const { mls, rerender, unmount } = await renderStuck(INCOMPLETE);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(calls(mls.syncChannel)).toBeGreaterThan(0);
+    rerender({ controller: withStatus(mls, { [CHANNEL_ID]: { status: "ready" } }) });
+
+    const before = calls(mls.syncChannel);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600_000);
+    });
+    expect(calls(mls.syncChannel)).toBe(before);
+    unmount();
   });
 });
 

@@ -262,9 +262,22 @@ export function parseServerFrame(raw: string): ServerFrame | null {
   }
 }
 
-/** Exponential backoff with full jitter: 1 s base, 30 s cap (ws-protocol.md §8). */
-export function fullJitterDelay(attempt: number, random: () => number = Math.random): number {
-  const ceiling = Math.min(30_000, 1000 * 2 ** Math.max(0, attempt));
+/**
+ * Exponential backoff with full jitter. The socket's own reconnect is the
+ * default shape — 1 s base, 30 s cap (ws-protocol.md §8) — and the MLS retry
+ * in useChat passes a slower pair of its own.
+ *
+ * The jitter is not decoration: every client stuck on one cause (a server that
+ * is down, a member who has not signed in) would otherwise wake in lockstep
+ * and retry as a thundering herd.
+ */
+export function fullJitterDelay(
+  attempt: number,
+  random: () => number = Math.random,
+  baseMs = 1000,
+  capMs = 30_000,
+): number {
+  const ceiling = Math.min(capMs, baseMs * 2 ** Math.max(0, attempt));
   return Math.round(random() * ceiling);
 }
 
