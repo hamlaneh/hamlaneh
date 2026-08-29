@@ -232,8 +232,10 @@ keeps its place with its content erased, which is what the design's "Message rem
 placeholder renders, and a permalink resolves through a cursor that centres the page on the
 message it names.
 
-**Not yet built:** E2EE — the whole of Phase 3, and the only phase before Phase 4 with no code
-behind it. Everything else this file describes exists and is under test.
+**Not yet built:** the rest of Phase 3 — multi-device and device verification, key verification
+UX, encrypted backups and recovery, media E2EE, and the per-org Strict/Compliance mode. Its
+first slice has shipped; the section on encrypted conversations below says what that covers and,
+more usefully, what it does not.
 
 A DM now carries its peer, resolved by a join in the same query that draws the sidebar rather
 than a lookup per row; mentions are parsed from the contract's `<@{id}>` token when a message is

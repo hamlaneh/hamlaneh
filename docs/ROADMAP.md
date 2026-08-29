@@ -527,6 +527,12 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
 - [ ] Key-package pool management beyond replace-on-connect: a read for `unclaimed_count`
       (today only the PUT returns it) and a low-water replenishment policy — with the
       multi-device slice, which owns the device lifecycle this feeds
+- [ ] **One MLS device per browser profile, shared across tabs.** Each tab builds its own
+      device in wasm memory and they write to one stored slot, so the last tab to save wins and
+      the other's ratchet advances are lost on the next reload. A Web Lock now stops the worse
+      half — two tabs both minting a wrapping key and silently stranding each other's state —
+      but a lock cannot make two devices into one. That needs a SharedWorker owning the device
+      with the tabs as clients, which is a slice, not a patch
 - [ ] Multi-device: per-device keys, device verification, key sync. The verification half now
       has a concrete job, named by the slice-3.1 security review: an MLS leaf's credential
       identity is client-asserted, and removal-on-membership-change evicts by identity — so a
