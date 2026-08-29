@@ -264,7 +264,7 @@ describe("welcomes", () => {
         message: toBase64(new TextEncoder().encode(`commit:7:${ME}`)),
         welcomes: [
           {
-            device_id: ourDevice?.id ?? "",
+            device_ids: [ourDevice?.id ?? ""],
             welcome: toBase64(new TextEncoder().encode(`welcome:7:${ME}`)),
           },
         ],
@@ -295,7 +295,10 @@ describe("welcomes", () => {
         epoch: 0,
         message: toBase64(new TextEncoder().encode("commit:9:x")),
         welcomes: [
-          { device_id: sibling.id, welcome: toBase64(new TextEncoder().encode("welcome:9:x")) },
+          {
+            device_ids: [sibling.id],
+            welcome: toBase64(new TextEncoder().encode("welcome:9:x")),
+          },
         ],
       },
     });
@@ -395,7 +398,7 @@ async function passThroughCommit(request: Request, channelId: string) {
   const body = (await request.json()) as {
     epoch: number;
     message: string;
-    welcomes?: { device_id: string; welcome: string }[];
+    welcomes?: { device_ids: string[]; welcome: string }[];
   };
   const group = mockMlsGroup(channelId);
   if (group === undefined) {

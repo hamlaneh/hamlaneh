@@ -154,7 +154,7 @@ export const mlsHandlers = [
         (entry) => entry.id === params.deviceId && entry.userId === ME,
       );
       if (device === undefined) {
-        return errorResponse(404, "device_not_found", "No such device.");
+        return errorResponse(404, "mls_device_not_found", "No such device.");
       }
       const body = await request.json();
       // Replace-all: the previous unclaimed pool goes in the same breath.
@@ -213,8 +213,12 @@ export const mlsHandlers = [
   http.post<{ channelId: string }, ClaimMlsKeyPackagesRequest, MlsKeyPackageClaims | ApiError>(
     "/api/v1/channels/:channelId/mls/key-package-claims",
     async ({ params, request }) => {
-      if (mockChannel(params.channelId) === undefined) {
+      const channel = mockChannel(params.channelId);
+      if (channel === undefined) {
         return channelNotFound();
+      }
+      if (!channel.e2ee) {
+        return errorResponse(400, "e2ee_not_enabled", "This channel is not encrypted.");
       }
       const body = await request.json();
       const devices = mls.devices.filter((device) => device.userId === body.user_id);
@@ -273,16 +277,20 @@ export const mlsHandlers = [
         created_at: new Date().toISOString(),
       });
       // Stored in the same breath as the commit: a committed add whose
-      // Welcome was lost is a forked group.
+      // Welcome was lost is a forked group. One delivery names many devices —
+      // the blob is the same for all of them, the row is per device, which is
+      // what lets each device fetch and acknowledge its own.
       for (const delivery of body.welcomes ?? []) {
-        mls.welcomes.push({
-          id: uuid("we"),
-          channel_id: params.channelId,
-          group_id: group.groupId,
-          device_id: delivery.device_id,
-          welcome: delivery.welcome,
-          created_at: new Date().toISOString(),
-        });
+        for (const deviceId of delivery.device_ids) {
+          mls.welcomes.push({
+            id: uuid("we"),
+            channel_id: params.channelId,
+            group_id: group.groupId,
+            device_id: deviceId,
+            welcome: delivery.welcome,
+            created_at: new Date().toISOString(),
+          });
+        }
       }
       return new HttpResponse(null, { status: 201 });
     },
@@ -300,7 +308,8 @@ export const mlsHandlers = [
   http.delete<{ welcomeId: string }, never, ApiError | null>(
     "/api/v1/users/me/mls/welcomes/:welcomeId",
     ({ params }) => {
-      // Idempotent: deleting an already-acknowledged Welcome is still 204.
+      // Always 204: an already-acknowledged, unknown or foreign id is a
+      // silent no-op, so a guessed id confirms nothing.
       mls.welcomes = mls.welcomes.filter((welcome) => welcome.id !== params.welcomeId);
       return new HttpResponse(null, { status: 204 });
     },

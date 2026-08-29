@@ -459,10 +459,11 @@ export class MlsService {
         body: {
           epoch: Number(device.epoch(groupId)),
           message: toBase64(commit),
-          welcomes: claims.map((claim) => ({
-            device_id: claim.device_id,
-            welcome: toBase64(welcome),
-          })),
+          // One entry, not one per device: OpenMLS puts an encrypted
+          // group-secrets entry per new leaf inside a single Welcome, so the
+          // same blob is addressed to every device the commit added and each
+          // finds its own entry.
+          welcomes: [{ device_ids: claims.map((claim) => claim.device_id), welcome: toBase64(welcome) }],
         },
       });
       if (response.status === 201) {
@@ -549,7 +550,8 @@ export class MlsService {
             params: { path: { welcomeId: welcome.id } },
           })
           .catch((error: unknown) => {
-            // Idempotent by contract, so an unacknowledged Welcome only means
+            // Always 204 by contract — an unknown or foreign id is a silent
+            // no-op — so only a transport failure lands here, and it costs
             // one wasted join attempt next time.
             console.warn("Could not acknowledge a welcome:", error);
           });
