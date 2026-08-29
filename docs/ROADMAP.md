@@ -487,8 +487,17 @@ Goal: 1:1 and group calls that survive real-world NATs.
 
 Goal: a compromised server yields only ciphertext. Assemble, never invent.
 
-- [ ] Library pick finalized (OpenMLS vs libsignal): short spike comparing maturity, audit
-      status, multi-device story → ADR
+- [x] Library pick finalized: spike (`docs/spikes/mls-library.md`) →
+      [ADR 006](adr/006-mls-library-and-boundaries.md) — **OpenMLS**, exact-pinned, on the
+      `openmls_rust_crypto` provider, compiled to WASM for the browser client. The line used to
+      say "OpenMLS vs libsignal"; the spike's first finding is that libsignal implements no MLS,
+      so the real field was OpenMLS / mls-rs / ts-mls and the audit requirement decided it.
+      The ADR also fixes two boundaries: the Go server stays MLS-blind (delivery + key-package
+      directory, epoch sequencing on an unverified envelope claim), and conference guests are
+      outside E2EE — the encryption boundary is the room kind, fixed at birth — *2026-08-29*
+- [ ] Integration spike **before the first contract freeze**: wrapper skeleton on `wasm32`
+      against the pinned version, two-client group round-trip, measured gzipped bundle delta.
+      Feeds the key-package contract; can trigger the ADR's stated 0.8.1 fallback
 - [ ] MLS for messages; group state management; member add/remove flows
 - [ ] Multi-device: per-device keys, device verification, key sync
 - [ ] Key verification UX: safety numbers/QR (key transparency log = post-v1)

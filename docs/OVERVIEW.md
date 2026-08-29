@@ -327,13 +327,16 @@ was not entitled to read the message it points at.
 
 ## What's next
 
-**Phase 3 — end-to-end encryption with MLS.** It starts with a decision rather than code: the
-library pick, written up in an ADR. The spike behind that decision is
-[`spikes/mls-library.md`](spikes/mls-library.md), and its first finding is that the roadmap's
-framing — "OpenMLS vs libsignal" — names one MLS library and one non-MLS library, so the real
-comparison is OpenMLS against mls-rs and ts-mls, where the audit requirement is what decides.
-Then group state, multi-device keys, key verification, encrypted backups and the recovery path,
-media E2EE through LiveKit insertable streams, and the per-org Strict/Compliance mode choice.
+**Phase 3 — end-to-end encryption with MLS.** The library decision is made:
+[ADR 006](adr/006-mls-library-and-boundaries.md), fed by [`spikes/mls-library.md`](spikes/mls-library.md) —
+**OpenMLS**, exact-pinned, compiled to WASM for the browser client, with two boundaries fixed
+alongside it: the Go server never learns MLS (it delivers ciphertext it cannot read and
+sequences commits on an unverified envelope claim), and conference guests are outside E2EE,
+with the room kind — fixed at birth — as the encryption boundary. Next comes the integration
+spike (wrapper on `wasm32`, measured bundle cost), then the key-package contract, then the
+implementation slices: group state, multi-device keys, key verification, encrypted backups and
+the recovery path, media E2EE through LiveKit insertable streams, and the per-org
+Strict/Compliance mode choice.
 
 **Everything through Phase 2 is code-complete**, each proven by a Playwright suite against the
 real stack rather than against mocks — two browsers, two accounts, a message crossing live; and
@@ -364,7 +367,7 @@ which cannot know what was delivered after it was written.
 | `deploy/` | Docker Compose + Caddy + install.sh | The one-command install; Caddy owns TLS and HSTS only |
 | Database | PostgreSQL (server) / SQLite (home mode, Phase 4) | One storage interface, two drivers |
 | Calls | LiveKit SFU + TURN (Phase 2) | Voice/video/screen share |
-| E2EE | MLS via audited library (Phase 3) | Compromised server sees only ciphertext |
+| E2EE | MLS via OpenMLS → WASM in the browser client (Phase 3, ADR 006) | Compromised server sees only ciphertext |
 
 Request flow: browser → Caddy (TLS, HSTS) → Go server (:8080 — web UI, API, security
 headers) → Postgres (internal network).

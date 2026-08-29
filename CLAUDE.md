@@ -25,7 +25,7 @@ and Phase 1's two weeks of daily-driving.
 | Database | PostgreSQL (server mode) + SQLite (home mode) — one storage interface, two drivers |
 | Real-time | WebSockets |
 | Calls/video | LiveKit (SFU) + TURN (coturn / LiveKit embedded) |
-| E2EE | MLS (RFC 9420) via audited library (OpenMLS or libsignal — final pick at Phase 3 start; **never hand-rolled crypto**) |
+| E2EE | MLS (RFC 9420) via OpenMLS, exact-pinned, `openmls_rust_crypto` provider, compiled to WASM for the browser client — the server stays MLS-blind (ADR 006; **never hand-rolled crypto**) |
 | Web frontend | React + TypeScript + Vite + Tailwind |
 | Desktop | Tauri v2 wrapping the web UI |
 | TLS/proxy | Caddy (automatic HTTPS) |

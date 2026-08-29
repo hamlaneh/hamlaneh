@@ -57,7 +57,7 @@ The defining promise is the **install experience**. The self-hosted communicatio
 | Database | **PostgreSQL** (server mode), **SQLite** (single-machine/home mode) | Postgres for real deployments; SQLite makes "one binary + one data file" possible. |
 | Real-time messaging | **WebSockets** | Chat, presence, typing, notifications. |
 | Calls / video / conferencing | **LiveKit** (open-source SFU, Go) + TURN (**coturn** or LiveKit's embedded TURN) | 1:1 → large conferences, screen share, E2EE-capable media. TURN makes calls survive corporate NAT/firewalls. |
-| E2EE — messages | **MLS (RFC 9420)** via an audited library (OpenMLS / libsignal) | Group E2EE with forward secrecy and post-compromise security. **Never hand-rolled.** |
+| E2EE — messages | **MLS (RFC 9420)** via **OpenMLS** (the audited implementation — ADR 006; libsignal was never a candidate, it implements no MLS) | Group E2EE with forward secrecy and post-compromise security. **Never hand-rolled.** |
 | E2EE — media | LiveKit insertable streams | SFU routes packets it cannot read. |
 | Web frontend | **React + TypeScript** | Ecosystem, hiring, component reuse into desktop. |
 | Desktop apps | **Tauri** wrapping the web UI | Small native .exe/.dmg/.AppImage; far lighter than Electron. |
@@ -281,6 +281,7 @@ Explicitly out of scope until after v1 ships — each is a scope trap:
 | Stack: Go / Postgres+SQLite / LiveKit / MLS / React+TS / Tauri / Caddy | ✅ Decided | §4 |
 | Cloud: instance-per-customer | ✅ Decided | Installer = provisioner |
 | Payments: merchant of record first | ✅ Decided | Paddle / Lemon Squeezy |
+| **MLS library: OpenMLS**, exact-pinned, server MLS-blind, guests outside E2EE | ✅ Decided | Aug 2026, ADR 006. "OpenMLS vs libsignal" was a phantom choice — libsignal implements no MLS |
 | **DCO** instead of CLA | 🟡 Leaning | Confirm before first external PR — this is the last easy moment to choose |
 | Cloud jurisdiction / data residency options | ⬜ Open | Decide before Phase 6 |
 | Pricing numbers | ⬜ Open | Validate via Managed pre-sales |
