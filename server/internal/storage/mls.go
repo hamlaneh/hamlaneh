@@ -547,8 +547,8 @@ func (s *Store) SubmitMlsCommit(ctx context.Context, nc NewMlsCommit) (MlsCommit
 		// commit's own transaction, so a refused Welcome leaves neither a row
 		// nor an advanced epoch behind.
 		var outsiders int
-		if err := tx.QueryRow(ctx, welcomeOutsidersQuery, nc.ChannelID, recipients).Scan(&outsiders); err != nil {
-			return fmt.Errorf("check welcome recipients: %w", err)
+		if checkErr := tx.QueryRow(ctx, welcomeOutsidersQuery, nc.ChannelID, recipients).Scan(&outsiders); checkErr != nil {
+			return fmt.Errorf("check welcome recipients: %w", checkErr)
 		}
 		if outsiders > 0 {
 			return ErrMlsWelcomeOutsider
