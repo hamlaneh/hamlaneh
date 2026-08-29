@@ -511,6 +511,14 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       restore path is nobody's stability promise), bridging the sync trait to async IndexedDB
       with flush-at-commit-points
 - [ ] MLS for messages; group state management; member add/remove flows
+- [ ] **Own-message history after a reload** (found by the first client implementation): MLS
+      gives a sender no way to decrypt its own application messages, so without a local
+      plaintext store your own words render as undecryptable after a reload — honest, but
+      visible. Its own slice, because the store needs the same at-rest design as the keystore:
+      what you said is as sensitive as what you received
+- [ ] Key-package pool management beyond replace-on-connect: a read for `unclaimed_count`
+      (today only the PUT returns it) and a low-water replenishment policy — with the
+      multi-device slice, which owns the device lifecycle this feeds
 - [ ] Multi-device: per-device keys, device verification, key sync
 - [ ] Key verification UX: safety numbers/QR (key transparency log = post-v1)
 - [ ] Encrypted backups + user-held recovery keys; org-level recovery policy; recovery UX drills
