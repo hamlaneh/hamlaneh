@@ -657,7 +657,9 @@ type MessagePage struct {
 // MlsCommit defines model for MlsCommit.
 type MlsCommit struct {
 	CreatedAt time.Time `json:"created_at"`
-	Epoch     int64     `json:"epoch"`
+
+	// Epoch The epoch the group REACHED by this commit — the submitted epoch plus one. This is the only numbering under which after_epoch=<your epoch> returns exactly the commits you have not applied, and under which a fresh group at epoch 0 has an empty log.
+	Epoch int64 `json:"epoch"`
 
 	// Message Base64, as submitted.
 	Message string `json:"message"`
@@ -738,9 +740,10 @@ type MlsWelcome struct {
 
 // MlsWelcomeDelivery defines model for MlsWelcomeDelivery.
 type MlsWelcomeDelivery struct {
-	DeviceId openapi_types.UUID `json:"device_id"`
+	// DeviceIds Every claimed device this Welcome covers. The server stores one pending-Welcome row per device; each recipient extracts its own secrets from the shared blob.
+	DeviceIds []openapi_types.UUID `json:"device_ids"`
 
-	// Welcome Base64 Welcome, encrypted to that device's claimed key package.
+	// Welcome Base64 Welcome, encrypted to the claimed key packages of every device it names.
 	Welcome string `json:"welcome"`
 }
 
@@ -971,7 +974,7 @@ type SubmitMlsCommitRequest struct {
 	// Message Base64 MLSMessage carrying the commit. The cap (~256 KiB raw) bounds a commit for a large tree; measured today a two-member commit is under 1 KiB.
 	Message string `json:"message"`
 
-	// Welcomes Welcomes for the devices this commit adds, stored atomically with the commit — a committed add whose Welcome was lost is a forked group.
+	// Welcomes Welcomes for the devices this commit adds, stored atomically with the commit — a committed add whose Welcome was lost is a forked group. MLS produces ONE Welcome covering every member a commit adds, so a delivery names many devices and carries the blob once; a shape that repeated the blob per device would multiply a tree-sized payload by the member count, which is the 70 MB request the first implementation caught. The whole request is additionally bounded by an 8 MiB body cap on this endpoint, stated here so the per-item caps cannot be read as multiplying past it.
 	Welcomes *[]MlsWelcomeDelivery `json:"welcomes,omitempty"`
 }
 
