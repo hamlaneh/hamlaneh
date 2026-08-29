@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/base64"
+
 	"github.com/google/uuid"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
@@ -45,6 +47,25 @@ func MessageOf(m storage.Message, signer FileURLSigner) Message {
 		DeletedAt:   m.DeletedAt,
 		Attachments: AttachmentsOf(m.Attachments, signer),
 		LinkPreview: LinkPreviewOf(m.Preview, signer),
+		Mls:         MlsEnvelopeOf(m.Mls),
+	}
+}
+
+// MlsEnvelopeOf maps a message's ciphertext onto the contract's envelope, or
+// nil when the message carries none.
+//
+// The envelope is present exactly when the stored columns are, and there is
+// only this one mapping: a message of an e2ee channel therefore cannot be
+// serialized without it, and a deleted one — whose columns the soft delete
+// cleared — cannot be serialized with it. Base64 in JSON, bytea in storage,
+// converted here and nowhere else.
+func MlsEnvelopeOf(mls *storage.MessageMls) *MlsMessageEnvelope {
+	if mls == nil {
+		return nil
+	}
+	return &MlsMessageEnvelope{
+		Epoch:      mls.Epoch,
+		Ciphertext: base64.StdEncoding.EncodeToString(mls.Ciphertext),
 	}
 }
 

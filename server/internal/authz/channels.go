@@ -40,6 +40,20 @@ const (
 	// day a channel role model exists, "may join the call" is one of the
 	// first things it will want to say (ADR 005).
 	CallJoin Action = "channel:call:join"
+	// MlsRead is reading this channel's MLS group state — the group row and
+	// the commit log. MlsWrite is moving it: registering the group, claiming
+	// a member's key packages, and submitting a commit.
+	//
+	// They are their own actions rather than a reuse of ChannelRead for the
+	// same reason CallJoin is: what they govern is the transport half of
+	// ADR 006's split authority, and the day a channel role model exists,
+	// "may move this group's epoch" is a different sentence from "may read
+	// this channel". Both are any-member today, which is the ADR's rule and
+	// not an oversight — the confidentiality half is the group's own
+	// business, and this server cannot enforce it without reading group
+	// state it is designed to be unable to read.
+	MlsRead  Action = "channel:mls:read"
+	MlsWrite Action = "channel:mls:write"
 )
 
 // Channel is the resource for channel-scoped actions: the channel plus the
@@ -88,7 +102,7 @@ func canChannel(user *storage.User, action Action, res Channel) bool {
 	}
 	switch action {
 	case ChannelRead, ChannelUpdate, ChannelMemberAdd, MessageSend, ReadPositionSet,
-		FileUpload, CallJoin:
+		FileUpload, CallJoin, MlsRead, MlsWrite:
 		// Any member. A direct message's fixed pair and its lack of a topic
 		// are refused by the handler as 400s: they are statements about the
 		// channel's shape, not about who is asking, and answering 403 would
@@ -130,7 +144,7 @@ func canMessage(user *storage.User, action Action, res Message) bool {
 		// removes words; it does not put new ones in somebody's mouth.
 		return res.Author || user.IsAdmin
 	case ChannelRead, ChannelUpdate, ChannelMemberAdd, ChannelMemberRemove,
-		MessageSend, ReadPositionSet, FileUpload, CallJoin:
+		MessageSend, ReadPositionSet, FileUpload, CallJoin, MlsRead, MlsWrite:
 		// Channel actions need a Channel resource; see canChannel.
 		return false
 	case AdminUsersList, AdminUsersCreate, AdminUsersUpdate, AdminUsersResetPassword,

@@ -154,6 +154,26 @@ var routePolicies = map[string]routePolicy{
 	"GET /api/v1/meet/{token}":                  {class: classPublic},
 	"POST /api/v1/meet/{token}/join":            {class: classPublic},
 
+	// Phase 3 slice 1: the E2EE transport (ADR 006). Every one of the eight
+	// is ordinary session work, and neither gate lets a flagged account past:
+	// somebody who owes a password change or an enrolment fixes that before
+	// registering a device or moving a group's epoch.
+	//
+	// The class carries no resource-level meaning here either. The five
+	// channel-scoped ones are membership decisions made by an explicit
+	// authz.Can call inside the handler (mls_handlers.go), and the four under
+	// /users/me are decided by the session alone — their subject IS the
+	// session's user, and no request on them names another.
+	"POST /api/v1/users/me/mls/device":                         {class: classSession},
+	"PUT /api/v1/users/me/mls/devices/{deviceId}/key-packages": {class: classSession},
+	"GET /api/v1/users/me/mls/welcomes":                        {class: classSession},
+	"DELETE /api/v1/users/me/mls/welcomes/{welcomeId}":         {class: classSession},
+	"GET /api/v1/channels/{channelId}/mls/group":               {class: classSession},
+	"POST /api/v1/channels/{channelId}/mls/group":              {class: classSession},
+	"POST /api/v1/channels/{channelId}/mls/key-package-claims": {class: classSession},
+	"GET /api/v1/channels/{channelId}/mls/commits":             {class: classSession},
+	"POST /api/v1/channels/{channelId}/mls/commits":            {class: classSession},
+
 	// Phase 1.1b self-service security. All session-gated; none joins the
 	// must-change trio, because a user who owes a password change fixes that
 	// before touching their second factor or their device list.

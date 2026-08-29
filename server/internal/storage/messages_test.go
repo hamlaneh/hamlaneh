@@ -878,7 +878,7 @@ func TestUpdateMessageContentIntegration(t *testing.T) {
 	t.Run("content is replaced and edited_at is stamped", func(t *testing.T) {
 		sent := send(t, "frist post")
 
-		edited, err := store.UpdateMessageContent(ctx, channelID, sent.ID, "first post")
+		edited, err := store.UpdateMessageContent(ctx, channelID, sent.ID, "first post", nil)
 		if err != nil {
 			t.Fatalf("UpdateMessageContent: %v", err)
 		}
@@ -909,7 +909,7 @@ func TestUpdateMessageContentIntegration(t *testing.T) {
 			t.Fatalf("SoftDeleteMessage: %v", err)
 		}
 
-		_, err := store.UpdateMessageContent(ctx, channelID, sent.ID, "back from the dead")
+		_, err := store.UpdateMessageContent(ctx, channelID, sent.ID, "back from the dead", nil)
 		if !errors.Is(err, storage.ErrNotFound) {
 			t.Fatalf("editing a deleted message: %v, want ErrNotFound", err)
 		}
@@ -928,7 +928,7 @@ func TestUpdateMessageContentIntegration(t *testing.T) {
 		elsewhere := seedMessagesChannel(ctx, t, conn, "editingelsewhere")
 		sent := send(t, "not yours to edit")
 
-		if _, err := store.UpdateMessageContent(ctx, elsewhere, sent.ID, "rewritten"); !errors.Is(err, storage.ErrNotFound) {
+		if _, err := store.UpdateMessageContent(ctx, elsewhere, sent.ID, "rewritten", nil); !errors.Is(err, storage.ErrNotFound) {
 			t.Fatalf("editing through another channel: %v, want ErrNotFound", err)
 		}
 		after, err := store.MessageByID(ctx, channelID, sent.ID)
@@ -954,7 +954,7 @@ func TestUpdateMessageContentIntegration(t *testing.T) {
 		// stranger to the channel — who must not become a row, exactly as on
 		// a send.
 		_, err := store.UpdateMessageContent(ctx, channelID, sent.ID,
-			"hello "+mentionTokenFor(named.ID)+" and "+mentionTokenFor(stranger.ID))
+			"hello "+mentionTokenFor(named.ID)+" and "+mentionTokenFor(stranger.ID), nil)
 		if err != nil {
 			t.Fatalf("UpdateMessageContent: %v", err)
 		}
@@ -962,13 +962,13 @@ func TestUpdateMessageContentIntegration(t *testing.T) {
 
 		// An edit that keeps a mention keeps its row rather than churning it.
 		if _, err := store.UpdateMessageContent(ctx, channelID, sent.ID,
-			"still "+mentionTokenFor(named.ID)); err != nil {
+			"still "+mentionTokenFor(named.ID), nil); err != nil {
 			t.Fatalf("UpdateMessageContent: %v", err)
 		}
 		assertMentionRows(t, mentionedIDs(ctx, t, conn, sent.ID), []uuid.UUID{named.ID})
 
 		// And an edit that names nobody leaves none.
-		if _, err := store.UpdateMessageContent(ctx, channelID, sent.ID, "quiet now"); err != nil {
+		if _, err := store.UpdateMessageContent(ctx, channelID, sent.ID, "quiet now", nil); err != nil {
 			t.Fatalf("UpdateMessageContent: %v", err)
 		}
 		assertMentionRows(t, mentionedIDs(ctx, t, conn, sent.ID), nil)

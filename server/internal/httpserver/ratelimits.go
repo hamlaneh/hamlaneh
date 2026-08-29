@@ -139,6 +139,8 @@ const (
 	budgetCallToken         budgetName = "call-token"
 	budgetConferenceCreate  budgetName = "conference-create"
 	budgetConferenceGuest   budgetName = "conference-guest"
+	budgetMlsDirectory      budgetName = "mls-directory"
+	budgetMlsGroupWork      budgetName = "mls-group-work"
 )
 
 // budgetSpec is one budget: how many requests fit its sliding window, how
@@ -317,6 +319,43 @@ var budgetSpecs = map[budgetName]budgetSpec{
 	// (each arrival is two requests) and is far below a useful loop.
 	budgetConferenceGuest: {limit: 30, window: time.Minute, perIP: true},
 
+	// The E2EE key-package directory: registering a device and republishing
+	// its pool. One window per account across both, because they are the
+	// same startup handshake seen twice and an attacker would otherwise pick
+	// whichever is cheaper.
+	//
+	// What is bounded is standing storage. A device row is permanent, and a
+	// republish writes up to 50 packages of 8 KiB each — 400 KiB per call
+	// that the previous pool's deletion only reclaims for THAT device, so a
+	// loop registering fresh devices leaves both behind.
+	//
+	// 30 a minute is far above the real flow, which is one register and one
+	// republish per client startup, and clears a reconnect storm: a client
+	// republishes on every connect, and an exponential backoff on a flapping
+	// network fits roughly a dozen connects into the first minute. A loop
+	// filling the tables wants thousands.
+	budgetMlsDirectory: {limit: 30, window: time.Minute},
+
+	// Group work: creating a group, claiming key packages, and submitting
+	// commits. One window per account across the three, for the reason the
+	// conversation-write budget shares one across its three — they are the
+	// steps of a single flow, and per-endpoint budgets would only multiply
+	// the total an attacker gets.
+	//
+	// The number is set by the real burst rather than by a round figure.
+	// Bootstrapping a 50-member channel is one create, 50 claims and up to
+	// 50 commits — 101 calls in the seconds after the first member's client
+	// finds an e2ee channel with no group. On top of that, every commit that
+	// loses its epoch race retries, and during a bootstrap several clients
+	// may be committing at once, so the budget has to clear 101 with room or
+	// it would refuse the one flow it exists to permit. 180 a minute does,
+	// and is still far below what filling the commit log needs.
+	//
+	// The commit body is the expensive half (up to 8 MiB, mls_handlers.go),
+	// which is the other reason this is not simply folded into
+	// conversation-write: those are one small row each.
+	budgetMlsGroupWork: {limit: 180, window: time.Minute},
+
 	// Redeeming an invitation is a public route keyed on the client
 	// address (like the SSO flow above). It hashes the chosen
 	// password with argon2id before the token is known to be good — the same
@@ -465,6 +504,21 @@ var endpointBudgets = map[string]budgetName{
 	"POST /api/v1/meet/{token}/join":            budgetConferenceGuest,
 	"GET /api/v1/conferences":                   budgetNone,
 	"DELETE /api/v1/conferences/{conferenceId}": budgetNone,
+
+	// Phase 3 slice 1: the E2EE transport (ADR 006). Exactly the five routes
+	// the contract reserves a 429 on are budgeted, and the four it does not
+	// are declared unbudgeted rather than left out — the reads are what a
+	// client does on connect and on channel open, and acknowledging a
+	// Welcome is one indexed delete of a row the caller already holds.
+	"POST /api/v1/users/me/mls/device":                         budgetMlsDirectory,
+	"PUT /api/v1/users/me/mls/devices/{deviceId}/key-packages": budgetMlsDirectory,
+	"POST /api/v1/channels/{channelId}/mls/group":              budgetMlsGroupWork,
+	"POST /api/v1/channels/{channelId}/mls/key-package-claims": budgetMlsGroupWork,
+	"POST /api/v1/channels/{channelId}/mls/commits":            budgetMlsGroupWork,
+	"GET /api/v1/users/me/mls/welcomes":                        budgetNone,
+	"DELETE /api/v1/users/me/mls/welcomes/{welcomeId}":         budgetNone,
+	"GET /api/v1/channels/{channelId}/mls/group":               budgetNone,
+	"GET /api/v1/channels/{channelId}/mls/commits":             budgetNone,
 
 	// Reads and edits the contract reserves no 429 on. Listing messages is
 	// the read a client repeats most — a budget nobody declared must not

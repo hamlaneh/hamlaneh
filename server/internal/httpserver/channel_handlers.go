@@ -255,7 +255,14 @@ func validateCreateChannel(w http.ResponseWriter, r *http.Request, req api.Creat
 		return fail("kind must be one of: public, private")
 	}
 
+	// Decided here and never again: there is no update path for e2ee in the
+	// contract or in storage, so this line is the only moment a channel's
+	// mode is chosen. An absent flag is false, which is what an
+	// unencrypted-by-default instance is until the per-org mode slice lands.
 	nc := storage.NewChannel{Kind: kind, Slug: req.Slug, CreatedBy: creator}
+	if req.E2ee != nil {
+		nc.E2EE = *req.E2ee
+	}
 	if req.Topic != nil {
 		if !storableText(*req.Topic) {
 			return fail("topic must be text that can be stored and returned unchanged")
@@ -295,7 +302,13 @@ func (s *apiServer) OpenDirectMessage(w http.ResponseWriter, r *http.Request) {
 	// The caller comes from the session, never from the body: a DM is opened
 	// between whoever is asking and whoever they named, and no request can
 	// select a pair it is not part of.
-	ch, created, err := store.OpenDirectMessage(r.Context(), prin.user.ID, req.UserId)
+	//
+	// e2ee applies only when this call creates the conversation. Storage
+	// enforces that rather than this handler — the flag is bound into the
+	// INSERT and the reopen path is a plain SELECT — so a second caller
+	// cannot re-decide a DM by asking for the opposite mode.
+	e2ee := req.E2ee != nil && *req.E2ee
+	ch, created, err := store.OpenDirectMessage(r.Context(), prin.user.ID, req.UserId, e2ee)
 	switch {
 	case errors.Is(err, storage.ErrDMWithSelf):
 		writeError(w, r, http.StatusBadRequest, codeInvalidRequest, "a direct message needs two different users")
@@ -651,6 +664,7 @@ func apiChannel(ch storage.Channel) api.Channel {
 	out := api.Channel{
 		Id:                ch.ID,
 		Kind:              api.ChannelKind(ch.Kind),
+		E2ee:              ch.E2EE,
 		Slug:              ch.Slug,
 		Topic:             ch.Topic,
 		MemberCount:       ch.MemberCount,

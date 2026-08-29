@@ -114,6 +114,37 @@ const (
 	// why it does not; a caller who may not revoke learns nothing about
 	// whether there was anything to revoke.
 	codeConferenceNotFound errorCode = "conference_not_found"
+	// Phase 3 slice 1: the E2EE transport (ADR 006).
+	//
+	// The first three are the anti-downgrade boundary, and they are three
+	// codes rather than one because they ask for three different things from
+	// a client: encrypt this, stop encrypting this, and this cannot be
+	// encrypted yet. Collapsing them would leave a client unable to tell a
+	// mode mismatch from a feature that does not exist, which is precisely
+	// the confusion a downgrade attempt would hide in.
+	codeE2EERequired               errorCode = "e2ee_required"
+	codeE2EENotEnabled             errorCode = "e2ee_not_enabled"
+	codeE2EEAttachmentsUnsupported errorCode = "e2ee_attachments_unsupported"
+	// The group lifecycle: no group yet (create one), a group already there
+	// (you lost the create race), and an epoch that has moved on (refetch the
+	// log and rebuild).
+	codeMlsGroupNotFound errorCode = "mls_group_not_found"
+	codeMlsGroupExists   errorCode = "mls_group_exists"
+	codeMlsEpochConflict errorCode = "mls_epoch_conflict"
+	// codeMemberNotFound answers a claim whose target is not a member of this
+	// channel. It is distinct from channel_not_found because the caller can
+	// already see the channel; what they got wrong is who they named.
+	codeMemberNotFound errorCode = "member_not_found"
+	// codeMlsDeviceNotFound answers a key-package publish under a device id
+	// that is not the caller's own, and one that names nothing at all, with
+	// one answer — so a guess confirms nothing about anybody else's devices.
+	//
+	// It is the only not-found code on this surface. Acknowledging a Welcome
+	// deliberately has none: that endpoint is a uniform 204, because a 404
+	// for foreign ids would itself be the distinguisher it looks like it
+	// prevents (openapi.yaml, acknowledgeMlsWelcome).
+	codeMlsDeviceNotFound errorCode = "mls_device_not_found"
+
 	// codeNotFound answers a path under /api that no contract route claims.
 	// It is the router's answer, not a resource's: the contract's
 	// resource-level 404s carry their own codes (session_not_found,
@@ -212,13 +243,23 @@ func writeJSONValue(w http.ResponseWriter, r *http.Request, status int, v any) {
 	writeBody(w, r, data)
 }
 
+// maxJSONBody bounds an ordinary JSON request: far above any valid one, and
+// small enough that an authenticated caller cannot buy memory with it.
+const maxJSONBody = 64 << 10
+
 // decodeJSON reads a bounded JSON request body into dst. On any failure —
 // oversized body, malformed JSON, wrong field types, trailing content — it
 // answers 400 invalid_request and reports false.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	const maxJSONBody = 64 << 10 // far above any valid request; bounds DoS
+	return decodeJSONLimit(w, r, dst, maxJSONBody)
+}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBody)
+// decodeJSONLimit is decodeJSON with an explicit ceiling, for the two MLS
+// endpoints whose contract bounds do not fit under the ordinary one: a batch
+// of key packages and a commit carrying its Welcomes. Every use states its
+// own number and why (mls_handlers.go).
+func decodeJSONLimit(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(dst); err != nil {
 		writeError(w, r, http.StatusBadRequest, codeInvalidRequest, "malformed request body")

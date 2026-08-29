@@ -113,7 +113,7 @@ type Store interface {
 	ChannelForUser(ctx context.Context, channelID, userID uuid.UUID) (storage.Channel, error)
 	UpdateChannelTopic(ctx context.Context, id uuid.UUID, topic string) (storage.Channel, error)
 	ListChannelsForUser(ctx context.Context, userID uuid.UUID, params storage.ListChannelsParams) ([]storage.Channel, error)
-	OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID) (storage.Channel, bool, error)
+	OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID, e2ee bool) (storage.Channel, bool, error)
 	AddChannelMember(ctx context.Context, channelID, userID, addedBy uuid.UUID) error
 	RemoveChannelMember(ctx context.Context, channelID, userID uuid.UUID) error
 	ListChannelMembers(ctx context.Context, channelID uuid.UUID, params storage.ListChannelMembersParams) ([]storage.User, error)
@@ -174,6 +174,26 @@ type Store interface {
 	ConferenceByID(ctx context.Context, id uuid.UUID) (storage.Conference, error)
 	RevokeConference(ctx context.Context, id uuid.UUID) error
 	LiveConferenceByTokenHash(ctx context.Context, tokenHash []byte) (storage.Conference, error)
+
+	// The E2EE transport (ADR 006, migration 0017). Every blob crossing this
+	// boundary is opaque: the store sequences and delivers MLS artifacts it
+	// never parses, and nothing on this interface hands one to anything that
+	// could.
+	//
+	// The two that answer a race are the ones worth naming. ClaimMlsKeyPackages
+	// is a CONSUMING read — the packages it returns are deleted in the
+	// transaction that returned them, so no package can be handed out twice —
+	// and SubmitMlsCommit is a compare-and-swap that stores the commit and all
+	// its Welcomes in the same transaction as the epoch it advances.
+	RegisterMlsDevice(ctx context.Context, userID uuid.UUID, signatureKey []byte) (storage.MlsDevice, bool, error)
+	ReplaceMlsKeyPackages(ctx context.Context, userID, deviceID uuid.UUID, packages [][]byte) (int, error)
+	MlsGroupByChannel(ctx context.Context, channelID uuid.UUID) (storage.MlsGroup, error)
+	CreateMlsGroup(ctx context.Context, channelID uuid.UUID, groupID []byte) (storage.MlsGroup, error)
+	ClaimMlsKeyPackages(ctx context.Context, channelID, targetUserID uuid.UUID) ([]storage.MlsKeyPackageClaim, []uuid.UUID, error)
+	SubmitMlsCommit(ctx context.Context, nc storage.NewMlsCommit) (storage.MlsCommitOutcome, error)
+	ListMlsCommits(ctx context.Context, channelID uuid.UUID, afterEpoch int64, limit int) ([]storage.MlsCommit, error)
+	ListMlsWelcomes(ctx context.Context, userID uuid.UUID) ([]storage.MlsWelcome, error)
+	DeleteMlsWelcome(ctx context.Context, userID, welcomeID uuid.UUID) error
 
 	// Instance settings, including the derived accounts-without-two-step
 	// count the enforcement switch is read beside.

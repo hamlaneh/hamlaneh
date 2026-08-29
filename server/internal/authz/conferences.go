@@ -53,6 +53,7 @@ func canConference(user *storage.User, action Action, res Conference) bool {
 	case ConferenceListAll,
 		ChannelRead, ChannelUpdate, ChannelMemberAdd, ChannelMemberRemove,
 		MessageSend, MessageEdit, MessageDelete, ReadPositionSet, FileUpload, CallJoin,
+		MlsRead, MlsWrite,
 		AdminUsersList, AdminUsersCreate, AdminUsersUpdate, AdminUsersResetPassword,
 		AdminInvitesList, AdminInvitesCreate, AdminInvitesRevoke,
 		AdminOrgRead, AdminOrgUpdate, AdminAuditList,
