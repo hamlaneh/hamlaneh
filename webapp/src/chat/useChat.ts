@@ -434,16 +434,24 @@ export function useChat({
    * Reconnect: the Welcome list and the commit log are both durable where the
    * replay buffer is not, so a client that was away refetches both rather
    * than trusting that it heard every nudge.
+   *
+   * Gated on the session having an encrypted conversation at all. A Welcome
+   * can only ever name a channel this person is a member of, so the channel
+   * list is a complete answer — and without the gate every plaintext-only
+   * session would open a keystore and fetch a 480 KB wasm chunk to learn that
+   * it had nothing to decrypt. A channel created encrypted while the socket is
+   * up arrives as `channel_created` and re-runs this.
    */
+  const hasEncryptedChannel = state.channels.some((channel) => channel.e2ee);
   useEffect(() => {
-    if (connectionStatus !== "online") {
+    if (connectionStatus !== "online" || !hasEncryptedChannel) {
       return;
     }
     mls.syncWelcomes();
     if (channelId !== undefined && isE2ee(channelId)) {
       mls.syncChannel(channelId);
     }
-  }, [channelId, connectionStatus, isE2ee, mls]);
+  }, [channelId, connectionStatus, hasEncryptedChannel, isE2ee, mls]);
 
   /* ── sending ────────────────────────────────────────────────────── */
 
