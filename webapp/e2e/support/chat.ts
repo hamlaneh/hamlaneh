@@ -36,9 +36,10 @@ export async function createChannelApi(
   session: ApiSession,
   slug: string,
   kind: "public" | "private" = "public",
+  options: { e2ee?: boolean } = {},
 ): Promise<string> {
   const response = await expectOk(
-    await post(session, "/api/v1/channels", { slug, kind }),
+    await post(session, "/api/v1/channels", { slug, kind, ...options }),
     `channel creation (${slug})`,
   );
   const { id } = (await response.json()) as { id: string };

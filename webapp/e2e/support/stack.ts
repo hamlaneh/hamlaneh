@@ -305,6 +305,17 @@ export function collectLogs(): string {
   return compose(["logs", "--no-color", "--tail", "400"], { check: false });
 }
 
+/**
+ * Runs a command inside one of the stack's containers. Exists for the specs
+ * that assert what the SERVER holds rather than what the browser shows — the
+ * e2ee spec dumps the database from inside the db container to prove a
+ * plaintext canary never reached disk. `-T` because there is no TTY in a
+ * test run.
+ */
+export function composeExec(service: string, command: string[]): string {
+  return compose(["exec", "-T", service, ...command]);
+}
+
 export function stopStack(): void {
   if (process.env.HAMLANEH_E2E_REUSE_STACK === "1") {
     return;
