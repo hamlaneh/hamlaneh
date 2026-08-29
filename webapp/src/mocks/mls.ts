@@ -12,6 +12,7 @@ type MlsGroup = components["schemas"]["MlsGroup"];
 type CreateMlsGroupRequest = components["schemas"]["CreateMlsGroupRequest"];
 type ClaimMlsKeyPackagesRequest = components["schemas"]["ClaimMlsKeyPackagesRequest"];
 type MlsKeyPackageClaims = components["schemas"]["MlsKeyPackageClaims"];
+type MlsMemberDevicePage = components["schemas"]["MlsMemberDevicePage"];
 type MlsCommitPage = components["schemas"]["MlsCommitPage"];
 type MlsCommit = components["schemas"]["MlsCommit"];
 type SubmitMlsCommitRequest = components["schemas"]["SubmitMlsCommitRequest"];
@@ -66,12 +67,23 @@ export function resetMockMls(): void {
 /**
  * Registers a device for somebody who is not the signed-in user, so a test can
  * exercise the add-a-member path without a second browser.
+ *
+ * `signaturePublicKey` is what the member-devices directory will attribute to
+ * this person, so a test that also puts a leaf in the tree for them has to
+ * pass the key that leaf carries. The default is deliberately a key no leaf
+ * ever holds: a seeded device that is never added to a group has nothing to
+ * agree with, and one that is added and left on this default would be
+ * evicted — visibly, rather than by accident.
  */
-export function seedMockMlsDevice(userId: string, keyPackages: readonly string[]): MockDevice {
+export function seedMockMlsDevice(
+  userId: string,
+  keyPackages: readonly string[],
+  signaturePublicKey = `fixture-signature-key-${userId}`,
+): MockDevice {
   const device: MockDevice = {
     id: uuid("de"),
     userId,
-    signaturePublicKey: `fixture-signature-key-${userId}`,
+    signaturePublicKey,
     keyPackages: [...keyPackages],
   };
   mls.devices.push(device);
@@ -207,6 +219,34 @@ export const mlsHandlers = [
         { group_id: group.groupId, epoch: 0, created_at: group.createdAt },
         { status: 201 },
       );
+    },
+  ),
+
+  http.get<{ channelId: string }, never, MlsMemberDevicePage | ApiError>(
+    "/api/v1/channels/:channelId/mls/member-devices",
+    ({ params }) => {
+      const channel = mockChannel(params.channelId);
+      if (channel === undefined) {
+        return channelNotFound();
+      }
+      if (!channel.e2ee) {
+        return errorResponse(400, "e2ee_not_enabled", "This channel is not encrypted.");
+      }
+      // The fixture roster, exactly as the members endpoint answers it: every
+      // user is in every channel. A test that needs a smaller roster — which
+      // is all a removal looks like from here — overrides this handler.
+      // One page: paging is the client's problem to get right, and the case
+      // where it gets it wrong is written as an override too.
+      return HttpResponse.json({
+        members: Object.values(CHAT_USERS).map((user) => ({
+          user_id: user.id,
+          // Empty for somebody who has registered nothing, never omitted:
+          // the contract's way to tell "has no device" from "not a member".
+          signature_public_keys: mls.devices
+            .filter((device) => device.userId === user.id)
+            .map((device) => device.signaturePublicKey),
+        })),
+      });
     },
   ),
 

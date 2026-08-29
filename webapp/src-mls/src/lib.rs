@@ -11,11 +11,14 @@
 //! Two shapes are worth stating up front because the whole API rests on them:
 //!
 //! - **A device, not a user, is an MLS leaf.** One signature keypair per
-//!   browser profile. The credential identity is the *user* id, which is how
-//!   a client answers "which leaves belong to the person who just left the
-//!   channel" without the server ever listing anyone's devices.
+//!   browser profile. The credential identity is the *user* id — but it is a
+//!   string the enrolling client chose, so nothing here may treat it as a
+//!   fact about who owns a leaf. Eviction selects by signature key against an
+//!   allow-list the caller reads from the directory (ADR 007, decision 2);
+//!   the identity is a display hint and `member_identities` is the only thing
+//!   that reads it.
 //! - **A commit is not merged when it is created.** `add_members` and
-//!   `remove_user` leave the group holding a pending commit; the caller
+//!   `retain_leaves` leave the group holding a pending commit; the caller
 //!   submits the blob and then calls `commit_accepted` (the server took it)
 //!   or `commit_rejected` (409 — somebody else won the epoch). Merging early
 //!   would fork the group off the server's log.
@@ -324,9 +327,12 @@ impl MlsDevice {
 
     /// The credential identity of every member leaf, packed as UTF-8.
     ///
-    /// This is how a client reconciles the group against the channel's member
-    /// list without the server ever being asked who is in the group — the
-    /// confidentiality authority reading itself (ADR 006, decision 2).
+    /// A **display hint only** — names for leaves in the UI and in
+    /// diagnostics. Each string was written by whoever enrolled that leaf and
+    /// was never checked against anything, so a leaf can carry any member's
+    /// id; no caller may derive a membership or eviction decision from these
+    /// (ADR 007, decision 2). [`MlsDevice::member_signature_keys`] is what a
+    /// decision selects on.
     pub fn member_identities(&self, group_id: &[u8]) -> Result<Vec<u8>, JsError> {
         let group = self.require_group(group_id)?;
         let identities: Vec<Vec<u8>> = group
@@ -334,6 +340,23 @@ impl MlsDevice {
             .map(|member| member.credential.serialized_content().to_vec())
             .collect();
         Ok(frames::pack(&identities))
+    }
+
+    /// The signature public key of every member leaf, packed — in the same
+    /// order as [`MlsDevice::member_identities`], so index *i* of one names
+    /// index *i* of the other.
+    ///
+    /// This is the identifier a leaf cannot lie about: the key is what signs
+    /// the leaf, so a leaf carrying somebody else's key fails MLS validation
+    /// rather than being believed. It is also what the directory publishes
+    /// per device, which is what lets a caller match the two.
+    pub fn member_signature_keys(&self, group_id: &[u8]) -> Result<Vec<u8>, JsError> {
+        let group = self.require_group(group_id)?;
+        let keys: Vec<Vec<u8>> = group
+            .members()
+            .map(|member| member.signature_key.to_vec())
+            .collect();
+        Ok(frames::pack(&keys))
     }
 
     /// Adds every device whose key package is in `packed_key_packages` and is
@@ -388,19 +411,34 @@ impl MlsDevice {
         })
     }
 
-    /// Removes every leaf whose credential identity is `identity` — that is,
-    /// all of one person's devices, in one commit.
+    /// Evicts every leaf whose signature key is not in `packed_allowed_keys`,
+    /// in one commit — the allow-list sweep of ADR 007, decision 2.
     ///
-    /// Nobody matching is a no-op with no commit: another member removing
-    /// them first is the expected race, not a failure.
-    pub fn remove_user(&mut self, group_id: &[u8], identity: &str) -> Result<CommitBundle, JsError> {
+    /// The allow-list shape carries the security, so it is the signature and
+    /// not a convenience: the leaf this exists to evict is one credentialed
+    /// under a *current* member's id, and its key is therefore precisely a
+    /// key no "remove these" list could ever be asked to name. An API that
+    /// took leaves to remove could express the hole again; this one cannot.
+    ///
+    /// Own leaf is never a target whatever the allow-list says — a group
+    /// cannot evict itself, and a device the directory has dropped learns
+    /// that by being evicted by somebody else. Nobody matching is a no-op
+    /// with no commit: another member sweeping first is the expected race.
+    pub fn retain_leaves(
+        &mut self,
+        group_id: &[u8],
+        packed_allowed_keys: &[u8],
+    ) -> Result<CommitBundle, JsError> {
+        let allowed: HashSet<Vec<u8>> = frames::unpack(packed_allowed_keys)
+            .map_err(invalid)?
+            .into_iter()
+            .collect();
         let mut group = self.require_group(group_id)?;
         let own_leaf = group.own_leaf_index();
         let targets: Vec<LeafNodeIndex> = group
             .members()
             .filter(|member| {
-                member.index != own_leaf
-                    && member.credential.serialized_content() == identity.as_bytes()
+                member.index != own_leaf && !allowed.contains(member.signature_key.as_slice())
             })
             .map(|member| member.index)
             .collect();

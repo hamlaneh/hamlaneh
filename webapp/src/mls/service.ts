@@ -9,6 +9,7 @@ import { loadMlsModule } from "./wasm";
 
 type MlsWelcome = components["schemas"]["MlsWelcome"];
 type MlsKeyPackageClaim = components["schemas"]["MlsKeyPackageClaim"];
+type MlsMemberDevice = components["schemas"]["MlsMemberDevice"];
 
 /**
  * Everything the client does with MLS, in one object.
@@ -40,6 +41,16 @@ const COMMIT_ATTEMPTS = 4;
 
 /** Bound on commit-log paging, for the same reason. */
 const CATCH_UP_PAGES = 50;
+
+/** The contract's page cap on the member-device directory. */
+const MEMBER_DEVICE_PAGE_SIZE = 200;
+
+/**
+ * Bound on member-device paging. Exhausting it throws rather than sweeping
+ * with what has been read, which is why it is generous: 20 pages is 4000
+ * members, and a channel past that has a bigger problem than this loop.
+ */
+const MEMBER_DEVICE_PAGES = 20;
 
 /** The single chain every MLS operation runs on — see {@link MlsService.runOn}. */
 const DEVICE_CHAIN = "device";
@@ -422,37 +433,54 @@ export class MlsService {
    * confidentiality authority; the server cannot check that they agree
    * (ADR 006), so this is the client doing it.
    *
-   * Removing is not optional and not merely tidy. `member_removed` is a live
-   * frame over a replay buffer bounded at 256 events and five minutes, so a
-   * removal that happened while nobody was connected reaches nobody, and no
-   * other path recovers it: a resync backfills messages only. A leaf left in
-   * the tree is a leaf that was never cryptographically evicted — and on a
-   * later re-add this reconcile would see that identity already present, add
-   * nothing, and let a device that kept its old state read the whole commit
-   * log for the period it was supposed to be outside the conversation. That
-   * is exactly the promise Phase 3 is gated on.
+   * Eviction is an allow-list sweep over the whole tree, keyed on leaf
+   * signature keys, and both halves of that carry weight (ADR 007,
+   * decision 2). Keyed on signature keys because the credential identity is a
+   * string the enrolling client chose, so a leaf can claim to be anyone. An
+   * allow-list rather than "look up the removed person's keys and evict
+   * those" because the leaf this defends against carries a key the directory
+   * never listed under the removed user at all — a per-user question cannot
+   * name it, and a sweep does not have to.
+   *
+   * Sweeping is also not optional and not merely tidy. `member_removed` is a
+   * live frame over a replay buffer bounded at 256 events and five minutes,
+   * so a removal that happened while nobody was connected reaches nobody, and
+   * no other path recovers it: a resync backfills messages only. A leaf left
+   * in the tree is a leaf that was never cryptographically evicted, and it
+   * reads every epoch that follows.
    */
   private async reconcileMembers(channelId: string): Promise<void> {
-    const device = this.requireDevice();
-    const groupId = this.requireGroup(channelId);
-    const inGroup = unpackStrings(device.member_identities(groupId));
+    // The whole roster before the tree is touched. A page that failed is not
+    // a shorter allow-list, it is a wrong one — every key it would have
+    // carried belongs to a member the sweep would then evict — so this
+    // throws rather than sweeping on a partial answer, and the caller renders
+    // the channel as failed.
+    const members = await this.listMemberDevices(channelId);
 
-    const members = await this.listMembers(channelId);
-    const memberIds = new Set(members);
-
-    // Removals first: adding somebody while a stale leaf is still in the tree
-    // would hand the new epoch's secrets to the leaf that should be gone.
-    // Never this device — a group cannot evict itself, and a client that
-    // cannot see its own membership has a transport problem, not a group one.
-    const stale = inGroup.filter(
-      (userId) => !memberIds.has(userId) && userId !== this.options.currentUserId,
+    // Before the adds: handing a new epoch's secrets to a leaf that should be
+    // gone is the one ordering mistake this whole reconcile can make.
+    await this.sweepLeaves(
+      channelId,
+      members.flatMap((member) => member.signature_public_keys),
     );
-    for (const userId of stale) {
-      await this.removeUser(channelId, userId);
-    }
 
-    const groupIds = new Set(inGroup);
-    const missing = members.filter((userId) => !groupIds.has(userId));
+    // Read after the sweep, not before. A member whose only leaf the sweep
+    // evicted — because the directory had dropped that device — is absent
+    // now, and this is what re-adds them on the same pass.
+    //
+    // Identities and not keys, and only here: an add is not a security
+    // decision (`add_members` validates key-package cryptography and skips
+    // keys already in the tree, and a leaf the directory does not vouch for
+    // is swept out on the next pass regardless), so this asks the cheaper
+    // question. Its known ceiling is that a second device of somebody
+    // already present is not noticed — the multi-device slice's problem, not
+    // one the sweep introduces.
+    const inGroup = new Set(
+      unpackStrings(this.requireDevice().member_identities(this.requireGroup(channelId))),
+    );
+    const missing = members
+      .map((member) => member.user_id)
+      .filter((userId) => !inGroup.has(userId));
     if (missing.length === 0) {
       this.setChannel(channelId, { status: "ready" });
       return;
@@ -460,28 +488,40 @@ export class MlsService {
     await this.addUsers(channelId, missing);
   }
 
-  private async listMembers(channelId: string): Promise<string[]> {
-    const ids: string[] = [];
+  /**
+   * Every current member of the channel and the signature keys of their
+   * registered devices — the allow-list, read whole or not at all.
+   *
+   * Any failure throws, including running out of pages: the caller sweeps
+   * with what this returns, so returning less than the roster would evict
+   * real members. That is why there is no partial-result path here even
+   * though a partial one would be easy to write.
+   */
+  private async listMemberDevices(channelId: string): Promise<MlsMemberDevice[]> {
+    const members: MlsMemberDevice[] = [];
     let cursor: string | undefined;
-    // Bounded: a channel larger than this is beyond what one commit can add
-    // anyway, and an endless cursor must not become an endless loop.
-    for (let page = 0; page < 20; page += 1) {
-      const { data } = await api.GET("/api/v1/channels/{channelId}/members", {
-        params: {
-          path: { channelId },
-          query: { limit: 100, ...(cursor === undefined ? {} : { cursor }) },
+    for (let page = 0; page < MEMBER_DEVICE_PAGES; page += 1) {
+      const { data, error } = await api.GET(
+        "/api/v1/channels/{channelId}/mls/member-devices",
+        {
+          params: {
+            path: { channelId },
+            query: { limit: MEMBER_DEVICE_PAGE_SIZE, ...(cursor === undefined ? {} : { cursor }) },
+          },
         },
-      });
+      );
       if (data === undefined) {
-        break;
+        throw new Error(
+          `the channel's member devices could not be read (${errorCode(error) ?? "unknown"})`,
+        );
       }
-      ids.push(...data.members.map((member) => member.id));
-      if (data.next_cursor === undefined || data.next_cursor === cursor) {
-        break;
+      members.push(...data.members);
+      if (data.next_cursor === undefined) {
+        return members;
       }
       cursor = data.next_cursor;
     }
-    return ids;
+    throw new Error("the channel's member devices did not end");
   }
 
   /**
@@ -650,42 +690,42 @@ export class MlsService {
   }
 
   /**
-   * `member_removed`: commit the removal of that person's devices.
+   * `member_removed`: reconcile, which is what evicts them.
    *
-   * Every remaining member's client does this, and all but one lose the race
-   * — which is why a no-op and a 409 are both ordinary outcomes here.
+   * Takes no user id, and that is the point rather than an omission. What
+   * leaves the tree is decided by the directory's roster and not by the id on
+   * the frame, so this cannot be walked around by a leaf that credentialed
+   * itself as somebody who is staying (ADR 007). Every remaining member's
+   * client does this and all but one lose the race, which is why a no-op and
+   * a 409 are both ordinary outcomes underneath.
    */
-  memberRemoved(channelId: string, userId: string): Promise<void> {
-    return this.runOn(channelId, async () => {
-      if (this.device === null || !this.groups.has(channelId)) {
-        return;
-      }
-      try {
-        await this.removeUser(channelId, userId);
-      } catch (error) {
-        console.warn(`Could not remove ${userId} from the group:`, error);
-        this.setChannel(channelId, { status: "failed" });
-      }
-    });
+  memberRemoved(channelId: string): Promise<void> {
+    return this.syncChannel(channelId);
   }
 
   /**
-   * Commits the removal of one person's devices. Caller holds the chain.
+   * Commits the eviction of every leaf outside `allowedKeys`. Caller holds
+   * the chain.
    *
-   * Shared by the live `member_removed` frame and by `reconcileMembers`,
-   * which is what makes a removal nobody witnessed recoverable. The device
-   * handle is read fresh from `this` at each step rather than captured, so a
-   * rollback elsewhere cannot leave this loop accepting a commit on one
-   * handle while `persist` writes another.
+   * The device handle is read fresh from `this` at each step rather than
+   * captured, so a rollback elsewhere cannot leave this loop accepting a
+   * commit on one handle while `persist` writes another.
    */
-  private async removeUser(channelId: string, userId: string): Promise<void> {
+  private async sweepLeaves(channelId: string, allowedKeys: readonly string[]): Promise<void> {
+    // Decoded once, before anything is committed: a key the directory sent as
+    // malformed base64 must stop the sweep rather than shrink the allow-list
+    // it is part of.
+    const allowed = packFrames(allowedKeys.map(fromBase64));
+
     for (let attempt = 0; attempt < COMMIT_ATTEMPTS; attempt += 1) {
       await this.catchUp(channelId);
       const groupId = this.requireGroup(channelId);
-      const bundle = this.requireDevice().remove_user(groupId, userId);
+      const bundle = this.requireDevice().retain_leaves(groupId, allowed);
       const commit = bundle.commit;
       if (commit === undefined) {
-        return; // already gone: somebody else's commit removed them
+        // Every leaf is allowed — the ordinary case — or somebody else's
+        // commit swept first, which is the ordinary race.
+        return;
       }
       // Written before the POST, for the reason addUsers states.
       await this.persist();
@@ -704,10 +744,10 @@ export class MlsService {
       this.requireDevice().commit_rejected(groupId);
       await this.persist();
       if (errorCode(error) !== "mls_epoch_conflict") {
-        throw new Error(`the removal was refused (${errorCode(error) ?? "unknown"})`);
+        throw new Error(`the eviction was refused (${errorCode(error) ?? "unknown"})`);
       }
     }
-    throw new Error("the group's epoch kept moving; giving up on this removal");
+    throw new Error("the group's epoch kept moving; giving up on this sweep");
   }
 
   /* ── messages ──────────────────────────────────────────────────────── */

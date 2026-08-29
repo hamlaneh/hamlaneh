@@ -320,8 +320,10 @@ export function useChat({
           }
           break;
         case "member_removed":
+          // The id on the frame is deliberately not passed on: who leaves the
+          // tree is the directory's answer, not this frame's claim (ADR 007).
           if (isE2ee(frame.chan)) {
-            mlsRef.current.memberRemoved(frame.chan, frame.user.id);
+            mlsRef.current.memberRemoved(frame.chan);
           }
           break;
         default:
