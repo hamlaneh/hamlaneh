@@ -15,7 +15,7 @@ import { useTranslation } from "react-i18next";
  */
 
 interface CreateChannelDialogProps {
-  onCreate: (slug: string, kind: "public" | "private") => Promise<boolean>;
+  onCreate: (slug: string, kind: "public" | "private", e2ee: boolean) => Promise<boolean>;
   onClose: () => void;
 }
 
@@ -23,8 +23,10 @@ export function CreateChannelDialog({ onCreate, onClose }: CreateChannelDialogPr
   const { t } = useTranslation();
   const [slug, setSlug] = useState("");
   const [kind, setKind] = useState<"public" | "private">("public");
+  const [e2ee, setE2ee] = useState(false);
   const [failed, setFailed] = useState(false);
   const slugId = useId();
+  const e2eeId = useId();
 
   return (
     <section
@@ -42,7 +44,7 @@ export function CreateChannelDialog({ onCreate, onClose }: CreateChannelDialogPr
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          void onCreate(slug.trim(), kind).then((ok) => {
+          void onCreate(slug.trim(), kind, e2ee).then((ok) => {
             if (ok) {
               onClose();
             } else {
@@ -95,6 +97,23 @@ export function CreateChannelDialog({ onCreate, onClose }: CreateChannelDialogPr
           </p>
           <p>{t("chat.createChannel.visibilityNote")}</p>
         </fieldset>
+        <p>
+          {/* Fixed at creation and never toggled afterwards, so the choice is
+              made here or not at all (openapi.yaml -> Channel.e2ee). */}
+          <label htmlFor={e2eeId}>
+            <input
+              id={e2eeId}
+              type="checkbox"
+              name="e2ee"
+              checked={e2ee}
+              onChange={(event) => {
+                setE2ee(event.target.checked);
+              }}
+            />
+            {t("chat.createChannel.e2eeLabel")}
+          </label>
+        </p>
+        <p>{t("chat.createChannel.e2eeNote")}</p>
         {failed ? <p role="alert">{t("chat.createChannel.failed")}</p> : null}
         <p>
           <button type="submit">{t("chat.createChannel.submit")}</button>

@@ -56,7 +56,15 @@ export type ServerFrame =
   | { type: "subscribed" | "unsubscribed"; chan: string }
   | { type: "message_created" | "message_updated" | "message_deleted"; chan: string; seq?: number; message: Message }
   | { type: "channel_created" | "channel_updated"; chan?: string; seq?: number; channel: Channel }
-  | { type: "member_added"; chan: string; seq?: number; user: UserSummary }
+  | { type: "member_added" | "member_removed"; chan: string; seq?: number; user: UserSummary }
+  /**
+   * The two MLS nudges (ws-protocol.md §4). Notifications only: a commit blob
+   * can approach 256 KiB, which no frame under the cap can carry, so the
+   * event says something changed and REST says what is true. Missing one
+   * costs latency and nothing else — clients refetch on connect and on open.
+   */
+  | { type: "mls_commit"; chan: string; epoch: number }
+  | { type: "mls_welcome" }
   | { type: "read_position"; chan: string; messageId: string }
   | { type: "typing"; chan: string; userId: string }
   | { type: "presence"; chan: string; userId: string; state: Presence }
@@ -179,13 +187,22 @@ export function parseServerFrame(raw: string): ServerFrame | null {
         channel: channel as unknown as Channel,
       };
     }
-    case "member_added": {
+    case "member_added":
+    case "member_removed": {
       const user = data.user;
       if (chan === null || !isRecord(user) || typeof user.id !== "string") {
         return null;
       }
       return { type, chan, ...(seq === undefined ? {} : { seq }), user: user as unknown as UserSummary };
     }
+    case "mls_commit": {
+      const epoch = data.epoch;
+      return chan === null || typeof epoch !== "number" ? null : { type, chan, epoch };
+    }
+    case "mls_welcome":
+      // No payload by design: which of the caller's devices a Welcome is for
+      // is answered by the fetch, not by a frame every socket receives.
+      return { type };
     case "read_position": {
       const target = chan ?? readString(data, "chan");
       const messageId = readString(data, "message_id");

@@ -53,6 +53,12 @@ webapp/e2e/.stack/
 
 # Tauri / Rust
 desktop/src-tauri/target/
+# MLS wrapper: compiled wasm and its generated JS glue. Build output, not
+# source — `webapp/src-mls/build.sh` regenerates both. Cargo.lock IS
+# committed: cargo audit runs over it (ADR 006).
+webapp/src-mls/target/
+webapp/src-mls/pkg/
+webapp/src-mls/pkg-node/
 
 # IDE / OS
 .idea/

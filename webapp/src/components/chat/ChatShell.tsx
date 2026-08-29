@@ -12,6 +12,8 @@ import { useChat } from "../../chat/useChat";
 import type { RealtimeOverrides } from "../../chat/useChat";
 import { isUuid } from "../../chat/uuid";
 import { useInstance } from "../../instance/instanceInfo";
+import { MessageBodyProvider } from "../../mls/MessageBodyContext";
+import { useMls } from "../../mls/useMls";
 import { CallRing } from "../calls/CallRing";
 import type { AwayCall } from "../calls/CallStrip";
 import { CallStrip } from "../calls/CallStrip";
@@ -19,6 +21,7 @@ import { CallView } from "../calls/CallView";
 import { ChatHeader } from "./ChatHeader";
 import { Composer } from "./Composer";
 import { ConnectionBanner } from "./ConnectionBanner";
+import { E2eeNotice } from "./E2eeNotice";
 import { EmptyChannel } from "./EmptyChannel";
 import { MessageList } from "./MessageList";
 import { SearchResultsPanel } from "./SearchResultsPanel";
@@ -101,11 +104,16 @@ export function ChatShell({
   const focusMessageId =
     params.messageId !== undefined && isUuid(params.messageId) ? params.messageId : undefined;
 
+  // Constructed for every session, but inert until an encrypted conversation
+  // is opened: no wasm is fetched and no keystore is touched before then.
+  const mls = useMls(currentUser.id);
+
   const chat = useChat({
     currentUser: me,
     channelId: params.channelId,
     focusMessageId,
     callsEnabled,
+    mls,
     ...(realtime === undefined ? {} : { realtime }),
   });
 
@@ -196,16 +204,37 @@ export function ChatShell({
   const ringCaller =
     ring?.from?.display_name ?? ringChannel?.dm_peer?.display_name ?? t("calls.ring.unknown");
 
+  /* The DM picker's encryption choice. It lives here rather than inside the
+   * picker so closing and reopening starts from the default rather than from
+   * whatever the last attempt left behind. */
+  const [newDmEncrypted, setNewDmEncrypted] = useState(false);
+
   const closeOverlay = () => {
     setOverlay("none");
+    setNewDmEncrypted(false);
   };
 
   const runSearch = (kind: SearchKind) => {
     chat.runSearch(query, kind);
   };
 
+  /*
+   * An encrypted channel whose group is not usable yet must not accept a
+   * message: the composer would take text the send path then refuses to put
+   * anywhere, and a queued message nobody can read is worse than a disabled
+   * field that says why.
+   */
+  const channelMls = activeChannel === undefined ? undefined : mls.state.channels[activeChannel.id];
+  const encryptionNotReady =
+    activeChannel?.e2ee === true &&
+    (mls.state.device.status === "unavailable" ||
+      channelMls === undefined ||
+      channelMls.status === "opening" ||
+      channelMls.status === "waiting" ||
+      channelMls.status === "failed");
+
   return (
-    <>
+    <MessageBodyProvider resolve={mls.bodyOf}>
       {/* The chat behind the panel is inert, not merely dimmed — the settings
           handoff's accessibility note. */}
       <div className="hm-chat" inert={settingsOpen}>
@@ -328,6 +357,15 @@ export function ChatShell({
           />
         ) : null}
 
+        {activeChannel === undefined ? null : (
+          <E2eeNotice
+            channel={activeChannel}
+            device={mls.state.device}
+            channelState={channelMls}
+            resolveName={chat.resolveMention}
+          />
+        )}
+
         {activeChannel === undefined ? (
           <div className="hm-messages">
             {/* Four states, four sentences. Each of the last three used to
@@ -396,13 +434,15 @@ export function ChatShell({
           <Composer
             channelId={activeChannel.id}
             target={composerTarget}
-            disabled={disconnected}
+            disabled={disconnected || encryptionNotReady}
             disabledReason={
               givenUp
                 ? t("chat.composer.closed")
                 : disconnected
                   ? t("chat.composer.disconnected")
-                  : null
+                  : encryptionNotReady
+                    ? t("chat.e2ee.composerNotReady")
+                    : null
             }
             onSend={chat.sendMessage}
           />
@@ -420,8 +460,8 @@ export function ChatShell({
 
       {overlay === "createChannel" ? (
         <CreateChannelDialog
-          onCreate={async (slug, kind) => {
-            const channel = await chat.createChannel(slug, kind);
+          onCreate={async (slug, kind, e2ee) => {
+            const channel = await chat.createChannel(slug, kind, e2ee);
             if (channel === null) {
               return false;
             }
@@ -445,8 +485,9 @@ export function ChatShell({
         <PeoplePicker
           title={t("chat.sidebar.newDirectMessage")}
           actionLabel={t("chat.people.message")}
+          encryption={{ checked: newDmEncrypted, onChange: setNewDmEncrypted }}
           onPick={async (user) => {
-            const channel = await chat.openDirectMessage(user.id);
+            const channel = await chat.openDirectMessage(user.id, newDmEncrypted);
             if (channel === null) {
               return false;
             }
@@ -480,6 +521,6 @@ export function ChatShell({
           }}
         />
       ) : null}
-    </>
+    </MessageBodyProvider>
   );
 }

@@ -22,6 +22,7 @@ const OTHER: UserSummary = { id: "u-other", username: "nasrin", display_name: "N
 const CHANNEL: Channel = {
   id: "c-general",
   kind: "public",
+  e2ee: false,
   slug: "general",
   topic: "",
   member_count: 4,

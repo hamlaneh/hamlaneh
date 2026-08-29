@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { messageLink } from "../../chat/links";
 import type { MentionResolver } from "../../chat/mentions";
 import type { Message, PendingMessage } from "../../chat/types";
+import { useMessageBody } from "../../mls/MessageBodyContext";
 import { LinkIcon, PencilIcon, TrashIcon } from "../icons";
 import { AttachmentCards, AttachmentList } from "./AttachmentCards";
 import { MessageContent } from "./MessageContent";
@@ -37,8 +38,12 @@ export const MessageBubble = memo(function MessageBubble({
   onDelete,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
+  const body = useMessageBody(message);
+  // What the composer starts from, and what an edit replaces. Empty for a
+  // body this device cannot read — which is also why editing is hidden below.
+  const readableText = body.kind === "plaintext" || body.kind === "decrypted" ? body.text : "";
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(message.content);
+  const [draft, setDraft] = useState(readableText);
   const editRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
@@ -77,7 +82,7 @@ export const MessageBubble = memo(function MessageBubble({
             onKeyDown={(event) => {
               if (event.key === "Escape") {
                 setEditing(false);
-                setDraft(message.content);
+                setDraft(readableText);
               }
             }}
           />
@@ -90,7 +95,7 @@ export const MessageBubble = memo(function MessageBubble({
               className="hm-compact-button"
               onClick={() => {
                 setEditing(false);
-                setDraft(message.content);
+                setDraft(readableText);
               }}
             >
               {t("chat.messages.cancelEdit")}
@@ -106,9 +111,19 @@ export const MessageBubble = memo(function MessageBubble({
       <div className="hm-msg__bubble" data-removed={removed}>
         {removed ? (
           <span className="hm-msg__removed">{t("chat.messages.removed")}</span>
+        ) : body.kind === "pending" ? (
+          <span className="hm-msg__decrypting">{t("chat.e2ee.decrypting")}</span>
+        ) : body.kind === "undecryptable" ? (
+          // A real MLS condition, not a failure to report: a message sent
+          // before this device joined the group cannot be opened by it, and
+          // never will be. Saying so is the honest rendering.
+          <span className="hm-msg__undecryptable">{t("chat.e2ee.cannotDecrypt")}</span>
         ) : (
           <>
-            <MessageContent content={message.content} resolveMention={resolveMention} />
+            {/* Decrypted text goes through the same sanitizing markdown path
+                as any other message body — decryption is not a reason to
+                trust the author. */}
+            <MessageContent content={body.text} resolveMention={resolveMention} />
             {edited ? (
               <span className="hm-msg__edited">{t("chat.messages.edited")}</span>
             ) : null}
@@ -119,13 +134,13 @@ export const MessageBubble = memo(function MessageBubble({
 
       {removed ? null : (
         <div className="hm-msg__actions">
-          {own ? (
+          {own && (body.kind === "plaintext" || body.kind === "decrypted") ? (
             <button
               type="button"
               className="hm-msg__action"
               aria-label={t("chat.messages.actions.edit")}
               onClick={() => {
-                setDraft(message.content);
+                setDraft(readableText);
                 setEditing(true);
               }}
             >

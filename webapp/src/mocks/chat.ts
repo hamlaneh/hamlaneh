@@ -150,6 +150,7 @@ function seedState(): ChatState {
     {
       id: CHAT_CHANNELS.general,
       kind: "public",
+      e2ee: false,
       slug: "general",
       topic: "Everything that does not have a home yet",
       member_count: 22,
@@ -161,6 +162,7 @@ function seedState(): ChatState {
     {
       id: CHAT_CHANNELS.deploys,
       kind: "public",
+      e2ee: false,
       slug: "deploys",
       topic: "Release coordination and rollout notes",
       member_count: 14,
@@ -172,6 +174,7 @@ function seedState(): ChatState {
     {
       id: CHAT_CHANNELS.designReview,
       kind: "public",
+      e2ee: false,
       slug: "design-review",
       topic: "",
       member_count: 9,
@@ -183,6 +186,7 @@ function seedState(): ChatState {
     {
       id: CHAT_CHANNELS.leads,
       kind: "private",
+      e2ee: false,
       slug: "leads",
       topic: "",
       member_count: 4,
@@ -194,6 +198,7 @@ function seedState(): ChatState {
     {
       id: CHAT_CHANNELS.designTokens,
       kind: "public",
+      e2ee: false,
       slug: "design-tokens",
       topic: "",
       member_count: 1,
@@ -205,6 +210,7 @@ function seedState(): ChatState {
     {
       id: CHAT_CHANNELS.dmParisa,
       kind: "dm",
+      e2ee: false,
       slug: null,
       topic: "",
       member_count: 2,
@@ -427,6 +433,9 @@ export const chatHandlers = [
       const created: Channel = {
         id: `00000000-0000-4000-8000-${String(chat.channels.length).padStart(12, "9")}`,
         kind: body.kind,
+        // Immutable from here (openapi.yaml -> Channel.e2ee): the mock records
+        // what the request asked for and never lets anything toggle it later.
+        e2ee: body.e2ee ?? false,
         slug: body.slug,
         topic: body.topic ?? "",
         member_count: 1,
@@ -458,6 +467,10 @@ export const chatHandlers = [
       const created: Channel = {
         id: `00000000-0000-4000-8000-${String(chat.channels.length).padStart(12, "8")}`,
         kind: "dm",
+        // Only this branch reads it: the flag applies when the call *creates*
+        // the DM, and the get-or-create above returns an existing one as it
+        // is, whatever the request says (openapi.yaml).
+        e2ee: body.e2ee ?? false,
         slug: null,
         topic: "",
         member_count: 2,
