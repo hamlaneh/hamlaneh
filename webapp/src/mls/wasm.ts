@@ -25,8 +25,9 @@ export interface MlsDeviceHandle {
   has_group: (groupId: Uint8Array) => boolean;
   epoch: (groupId: Uint8Array) => bigint;
   member_identities: (groupId: Uint8Array) => Uint8Array;
+  member_signature_keys: (groupId: Uint8Array) => Uint8Array;
   add_members: (groupId: Uint8Array, packedKeyPackages: Uint8Array) => CommitBundleHandle;
-  remove_user: (groupId: Uint8Array, identity: string) => CommitBundleHandle;
+  retain_leaves: (groupId: Uint8Array, packedAllowedKeys: Uint8Array) => CommitBundleHandle;
   commit_accepted: (groupId: Uint8Array) => void;
   commit_rejected: (groupId: Uint8Array) => void;
   apply_commit: (groupId: Uint8Array, message: Uint8Array) => void;

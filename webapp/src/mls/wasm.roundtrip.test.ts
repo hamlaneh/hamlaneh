@@ -185,7 +185,7 @@ describe.skipIf(!built)("the OpenMLS wrapper", () => {
     expect(carol.decrypt(GROUP_ID, message.ciphertext)).toBe("everyone can read this");
   });
 
-  it("removes every device of one person by their credential identity", () => {
+  it("evicts every leaf outside the allow-list, in one commit", () => {
     const { MlsDevice } = loadModule();
     const alice = MlsDevice.create("user-alice");
     const bobPhone = MlsDevice.create("user-bob");
@@ -201,15 +201,111 @@ describe.skipIf(!built)("the OpenMLS wrapper", () => {
     );
     alice.commit_accepted(GROUP_ID);
     expect(unpackStrings(alice.member_identities(GROUP_ID))).toHaveLength(3);
+    expect(unpackFrames(alice.member_signature_keys(GROUP_ID))).toHaveLength(3);
 
-    const removal = alice.remove_user(GROUP_ID, "user-bob");
-    expect(removal.commit).toBeDefined();
+    // Nobody's key is missing from this list, so there is nothing to evict —
+    // including Alice's own, which the sweep must not treat as a target.
+    expect(
+      alice.retain_leaves(
+        GROUP_ID,
+        packFrames([
+          bobPhone.signature_public_key(),
+          bobLaptop.signature_public_key(),
+        ]),
+      ).commit,
+    ).toBeUndefined();
+
+    const sweep = alice.retain_leaves(GROUP_ID, packFrames([alice.signature_public_key()]));
+    expect(sweep.commit).toBeDefined();
     alice.commit_accepted(GROUP_ID);
-    // Both of Bob's leaves, in one commit — which is what the client can do
-    // without the server ever listing anybody's devices.
+    // Both of Bob's leaves went in one commit, selected by key rather than by
+    // the name they happened to carry.
     expect(unpackStrings(alice.member_identities(GROUP_ID))).toEqual(["user-alice"]);
 
-    expect(alice.remove_user(GROUP_ID, "user-bob").commit).toBeUndefined();
+    expect(
+      alice.retain_leaves(GROUP_ID, packFrames([alice.signature_public_key()])).commit,
+    ).toBeUndefined();
+  });
+
+  it("evicts a leaf credentialed under a staying member's id", () => {
+    // The regression this slice exists for (ADR 007). Mallory enrols a device
+    // whose credential says "user-bob" — a member who is staying — so no
+    // removal that selects on the credential identity can ever name it: it is
+    // not the departing user's, and it is never stale.
+    const { MlsDevice } = loadModule();
+    const alice = MlsDevice.create("user-alice");
+    const bob = MlsDevice.create("user-bob");
+    const mallory = MlsDevice.create("user-bob");
+    alice.create_group(GROUP_ID);
+
+    alice.add_members(
+      GROUP_ID,
+      packFrames([
+        ...unpackFrames(bob.generate_key_packages(1)),
+        ...unpackFrames(mallory.generate_key_packages(1)),
+      ]),
+    );
+    alice.commit_accepted(GROUP_ID);
+
+    // Three leaves, two of them claiming to be Bob, and no way to tell them
+    // apart by name — which is the whole problem.
+    expect(unpackStrings(alice.member_identities(GROUP_ID))).toEqual([
+      "user-alice",
+      "user-bob",
+      "user-bob",
+    ]);
+
+    // The directory maps Bob to Bob's key and knows nothing of Mallory's, so
+    // the allow-list is those two keys. Nothing here consults a credential.
+    const allowed = packFrames([alice.signature_public_key(), bob.signature_public_key()]);
+    const sweep = alice.retain_leaves(GROUP_ID, allowed);
+    expect(sweep.commit).toBeDefined();
+    alice.commit_accepted(GROUP_ID);
+
+    const keys = unpackFrames(alice.member_signature_keys(GROUP_ID));
+    expect(keys).toHaveLength(2);
+    expect(keys.map(String)).not.toContain(String(mallory.signature_public_key()));
+    expect(unpackStrings(alice.member_identities(GROUP_ID))).toEqual([
+      "user-alice",
+      "user-bob",
+    ]);
+  });
+
+  it("shuts a planted leaf out of the epochs after the sweep", () => {
+    // The same plant, carried through to the property that matters: not that
+    // the leaf is absent from a list, but that the device behind it cannot
+    // read what is said next.
+    const { MlsDevice } = loadModule();
+    const alice = MlsDevice.create("user-alice");
+    const bob = MlsDevice.create("user-bob");
+    const mallory = MlsDevice.create("user-bob");
+    alice.create_group(GROUP_ID);
+
+    const added = alice.add_members(
+      GROUP_ID,
+      packFrames([
+        ...unpackFrames(bob.generate_key_packages(1)),
+        ...unpackFrames(mallory.generate_key_packages(1)),
+      ]),
+    );
+    alice.commit_accepted(GROUP_ID);
+    bob.join_from_welcome(added.welcome ?? new Uint8Array());
+    mallory.join_from_welcome(added.welcome ?? new Uint8Array());
+
+    // Before the sweep the plant works: this is the hole, demonstrated.
+    const before = alice.encrypt(GROUP_ID, "while the plant is still in");
+    expect(mallory.decrypt(GROUP_ID, before.ciphertext)).toBe("while the plant is still in");
+
+    const sweep = alice.retain_leaves(
+      GROUP_ID,
+      packFrames([alice.signature_public_key(), bob.signature_public_key()]),
+    );
+    alice.commit_accepted(GROUP_ID);
+    bob.apply_commit(GROUP_ID, sweep.commit ?? new Uint8Array());
+
+    const after = alice.encrypt(GROUP_ID, "after the sweep");
+    expect(bob.decrypt(GROUP_ID, after.ciphertext)).toBe("after the sweep");
+    expect(() => mallory.decrypt(GROUP_ID, after.ciphertext)).toThrow();
   });
 
   it("refuses a message from before this device joined", () => {

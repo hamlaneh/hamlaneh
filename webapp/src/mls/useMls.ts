@@ -14,7 +14,8 @@ export interface MlsController {
   /** `mls_welcome`, and every reconnect. */
   syncWelcomes: () => void;
   memberAdded: (channelId: string) => void;
-  memberRemoved: (channelId: string, userId: string) => void;
+  /** Takes no user id: the directory's roster decides who leaves the tree. */
+  memberRemoved: (channelId: string) => void;
   /** Null when nothing can be sent — the caller must not fall back to text. */
   encrypt: (
     channelId: string,
@@ -74,8 +75,8 @@ export function useMls(currentUserId: string): MlsController {
   );
 
   const memberRemoved = useCallback(
-    (channelId: string, userId: string) => {
-      void service.memberRemoved(channelId, userId);
+    (channelId: string) => {
+      void service.memberRemoved(channelId);
     },
     [service],
   );

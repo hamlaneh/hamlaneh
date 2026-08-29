@@ -6,8 +6,8 @@ import { CHAT_USERS } from "../mocks/chat";
 import { resetMockAuth } from "../mocks/handlers";
 import { mockMlsDevices, mockMlsGroup, mockMlsWelcomes, seedMockMlsDevice } from "../mocks/mls";
 import { server } from "../mocks/node";
-import { fromBase64, toBase64 } from "./bytes";
-import { fakeMlsModule, fakeWorld } from "./fakeModule";
+import { fromBase64, toBase64, unpackStrings } from "./bytes";
+import { fakeKeyPackage, fakeMlsModule, fakeSignatureKey, fakeWorld } from "./fakeModule";
 import { memoryStore, Keystore } from "./keystore";
 import { MlsService } from "./service";
 import type { MlsState } from "./types";
@@ -23,9 +23,52 @@ import { setMlsModule } from "./wasm";
 const ME = CHAT_USERS.me.id;
 const OTHERS = [CHAT_USERS.nasrin.id, CHAT_USERS.omid.id, CHAT_USERS.parisa.id];
 
-/** A key package as the fake wrapper mints them, base64 for the directory. */
-function fakeKeyPackage(userId: string): string {
-  return toBase64(new TextEncoder().encode(`kp:${userId}`));
+const encoder = new TextEncoder();
+
+/** The devices of one test, all in one world so their leaves can meet. */
+let world = fakeWorld();
+
+/** A signature key as the member-device directory carries it: base64. */
+function directoryKey(identity: string): string {
+  return toBase64(encoder.encode(fakeSignatureKey(identity)));
+}
+
+/**
+ * A peer with `packages` key packages published, registered under the very
+ * key the leaf they join with will carry — the honest case, and the one every
+ * test that is not about a planted leaf wants. A fixture whose directory
+ * entry disagreed with its leaf would be swept out on the next reconcile.
+ */
+function seedDevice(userId: string, packages = 1) {
+  return seedMockMlsDevice(
+    userId,
+    Array.from({ length: packages }, () => toBase64(fakeKeyPackage(userId))),
+    directoryKey(userId),
+  );
+}
+
+/** One page of the directory, as the roster this test wants it read. */
+function directoryPage(userIds: readonly string[]) {
+  return HttpResponse.json({
+    members: userIds.map((userId) => ({
+      user_id: userId,
+      signature_public_keys: mockMlsDevices()
+        .filter((device) => device.userId === userId)
+        .map((device) => device.signaturePublicKey),
+    })),
+  });
+}
+
+/** Every leaf this device holds for the channel, as `identity|key`. */
+function leavesOf(channelId: string): string[] {
+  const device = world.devices.get(ME);
+  if (device === undefined) {
+    throw new Error("this world holds no device for the signed-in user");
+  }
+  const groupId = fromBase64(mockMlsGroup(channelId)?.groupId ?? "");
+  const identities = unpackStrings(device.member_identities(groupId));
+  const keys = unpackStrings(device.member_signature_keys(groupId));
+  return identities.map((identity, index) => `${identity}|${keys[index] ?? ""}`);
 }
 
 beforeAll(() => {
@@ -73,8 +116,6 @@ async function createE2eeChannel(slug: string): Promise<string> {
   }
   return data.id;
 }
-
-let world = fakeWorld();
 
 beforeEach(() => {
   world = fakeWorld();
@@ -148,7 +189,7 @@ describe("start", () => {
 describe("opening a channel", () => {
   it("creates the group and adds every member who has a device", async () => {
     for (const userId of OTHERS) {
-      seedMockMlsDevice(userId, [fakeKeyPackage(userId)]);
+      seedDevice(userId);
     }
     const channelId = await createE2eeChannel("secrets");
 
@@ -165,7 +206,7 @@ describe("opening a channel", () => {
 
   it("says who cannot be added yet rather than pretending", async () => {
     // A device with an empty pool, and two people with no device at all.
-    seedMockMlsDevice(CHAT_USERS.nasrin.id, []);
+    seedDevice(CHAT_USERS.nasrin.id, 0);
     const channelId = await createE2eeChannel("half-reachable");
 
     const service = newService();
@@ -210,10 +251,7 @@ describe("opening a channel", () => {
   });
 
   it("retries once the epoch moves under it", async () => {
-    seedMockMlsDevice(CHAT_USERS.nasrin.id, [
-      fakeKeyPackage(CHAT_USERS.nasrin.id),
-      fakeKeyPackage(CHAT_USERS.nasrin.id),
-    ]);
+    seedDevice(CHAT_USERS.nasrin.id, 2);
     const channelId = await createE2eeChannel("racy");
 
     let refusals = 0;
@@ -273,11 +311,11 @@ describe("welcomes", () => {
       params: { path: { channelId } },
       body: {
         epoch: 0,
-        message: toBase64(new TextEncoder().encode(`commit:7:${ME}`)),
+        message: toBase64(encoder.encode(`commit:7:${ME}|${fakeSignatureKey(ME)}`)),
         welcomes: [
           {
             device_ids: [ourDevice?.id ?? ""],
-            welcome: toBase64(new TextEncoder().encode(`welcome:7:${ME}`)),
+            welcome: toBase64(encoder.encode(`welcome:7:${ME}|${fakeSignatureKey(ME)}`)),
           },
         ],
       },
@@ -292,7 +330,11 @@ describe("welcomes", () => {
 
   it("leaves a welcome for a sibling device alone", async () => {
     const channelId = await createE2eeChannel("sibling");
-    const sibling = seedMockMlsDevice(ME, [fakeKeyPackage(ME)]);
+    // Left on the default directory key on purpose: a sibling is a *second*
+    // device, so it must not collide with the key this session registers —
+    // the directory is idempotent on it, and a collision would hand us the
+    // sibling's id as our own.
+    const sibling = seedMockMlsDevice(ME, [toBase64(fakeKeyPackage(ME))]);
     const service = newService();
     await service.start();
 
@@ -324,7 +366,7 @@ describe("welcomes", () => {
 
 describe("messages", () => {
   it("encrypts and decrypts, and reports the epoch it sealed at", async () => {
-    seedMockMlsDevice(CHAT_USERS.nasrin.id, [fakeKeyPackage(CHAT_USERS.nasrin.id)]);
+    seedDevice(CHAT_USERS.nasrin.id);
     const channelId = await createE2eeChannel("chatty");
     const service = newService();
     await service.openChannel(channelId);
@@ -344,7 +386,7 @@ describe("messages", () => {
   });
 
   it("records null for a message it cannot open, and never throws", async () => {
-    seedMockMlsDevice(CHAT_USERS.nasrin.id, [fakeKeyPackage(CHAT_USERS.nasrin.id)]);
+    seedDevice(CHAT_USERS.nasrin.id);
     const channelId = await createE2eeChannel("older");
     const service = newService();
     await service.openChannel(channelId);
@@ -354,7 +396,7 @@ describe("messages", () => {
   });
 
   it("keeps the plaintext of what this device sent", async () => {
-    seedMockMlsDevice(CHAT_USERS.nasrin.id, [fakeKeyPackage(CHAT_USERS.nasrin.id)]);
+    seedDevice(CHAT_USERS.nasrin.id);
     const channelId = await createE2eeChannel("mine");
     const service = newService();
     await service.openChannel(channelId);
@@ -379,7 +421,7 @@ describe("a direct message", () => {
     // The peer's own device, in the same world, with a key package in the
     // directory for us to claim.
     const peer = fakeMlsModule(world).create(peerId);
-    seedMockMlsDevice(peerId, [fakeKeyPackage(peerId)]);
+    seedDevice(peerId);
 
     const channelId = await openE2eeDm(peerId);
     const service = newService();
@@ -421,24 +463,118 @@ describe("a direct message", () => {
 });
 
 describe("membership events", () => {
-  it("commits the removal of a departing member's devices", async () => {
-    seedMockMlsDevice(CHAT_USERS.nasrin.id, [fakeKeyPackage(CHAT_USERS.nasrin.id)]);
+  const STAYS = [ME, CHAT_USERS.omid.id, CHAT_USERS.parisa.id];
+
+  it("evicts the leaves of a member the directory no longer lists", async () => {
+    seedDevice(CHAT_USERS.nasrin.id);
     const channelId = await createE2eeChannel("leavers");
     const service = newService();
     await service.openChannel(channelId);
     expect(mockMlsGroup(channelId)?.epoch).toBe(1);
+    expect(leavesOf(channelId)).toHaveLength(2);
 
-    await service.memberRemoved(channelId, CHAT_USERS.nasrin.id);
+    // What a removal looks like from here: the roster answer stops carrying
+    // her, and her key stops being allowed.
+    server.use(
+      http.get("/api/v1/channels/:channelId/mls/member-devices", () => directoryPage(STAYS)),
+    );
+    await service.memberRemoved(channelId);
+
     expect(mockMlsGroup(channelId)?.epoch).toBe(2);
+    expect(leavesOf(channelId)).toEqual([`${ME}|${fakeSignatureKey(ME)}`]);
   });
 
-  it("does nothing when somebody else already removed them", async () => {
+  it("evicts a leaf credentialed under a member who is staying", async () => {
+    // The regression this slice exists for (ADR 007). Omid publishes a key
+    // package whose credential says "Nasrin" — a member who is staying — so
+    // no removal that selects on the credential can ever name it: it is not
+    // the departing user's, and it is never stale. Its key is Omid's, and
+    // once he is off the roster the directory lists it for nobody.
+    seedDevice(CHAT_USERS.nasrin.id);
+    seedMockMlsDevice(
+      CHAT_USERS.omid.id,
+      [toBase64(fakeKeyPackage(CHAT_USERS.nasrin.id, fakeSignatureKey(CHAT_USERS.omid.id)))],
+      directoryKey(CHAT_USERS.omid.id),
+    );
+    const channelId = await createE2eeChannel("planted");
+    const service = newService();
+    await service.openChannel(channelId);
+
+    // Three leaves, two of them claiming to be Nasrin.
+    expect(leavesOf(channelId)).toEqual([
+      `${ME}|${fakeSignatureKey(ME)}`,
+      `${CHAT_USERS.nasrin.id}|${fakeSignatureKey(CHAT_USERS.nasrin.id)}`,
+      `${CHAT_USERS.nasrin.id}|${fakeSignatureKey(CHAT_USERS.omid.id)}`,
+    ]);
+
+    server.use(
+      http.get("/api/v1/channels/:channelId/mls/member-devices", () =>
+        directoryPage([ME, CHAT_USERS.nasrin.id, CHAT_USERS.parisa.id]),
+      ),
+    );
+    await service.memberRemoved(channelId);
+
+    // The plant is gone and Nasrin's real leaf stayed: the sweep read the
+    // key, not the name they share.
+    expect(leavesOf(channelId)).toEqual([
+      `${ME}|${fakeSignatureKey(ME)}`,
+      `${CHAT_USERS.nasrin.id}|${fakeSignatureKey(CHAT_USERS.nasrin.id)}`,
+    ]);
+  });
+
+  it("sweeps nothing when the roster could not be read whole", async () => {
+    seedDevice(CHAT_USERS.nasrin.id);
+    const channelId = await createE2eeChannel("half-read");
+    const service = newService();
+    await service.openChannel(channelId);
+    const before = leavesOf(channelId);
+    expect(before).toHaveLength(2);
+
+    // A first page without Nasrin and a second page that never arrives. A
+    // client that swept on what it had would evict her — she is a member,
+    // her key is simply on the page it never read.
+    server.use(
+      http.get("/api/v1/channels/:channelId/mls/member-devices", ({ request }) => {
+        if (new URL(request.url).searchParams.get("cursor") === null) {
+          return HttpResponse.json({ members: [], next_cursor: "page-2" });
+        }
+        return HttpResponse.json(
+          { error: { code: "internal_error", message: "no." } },
+          { status: 500 },
+        );
+      }),
+    );
+    await service.syncChannel(channelId);
+
+    expect(latest().channels[channelId]).toEqual({ status: "failed" });
+    expect(mockMlsGroup(channelId)?.epoch).toBe(1);
+    expect(leavesOf(channelId)).toEqual(before);
+  });
+
+  it("does not evict a member's peers because that member has no devices", async () => {
+    // Omid and Parisa are members with nothing registered, so they arrive as
+    // entries with an empty key list. An implementation that treated "no
+    // keys" as anything other than "contributes nothing to the allow-list"
+    // would take Nasrin's leaf with them.
+    seedDevice(CHAT_USERS.nasrin.id);
+    const channelId = await createE2eeChannel("device-less");
+    const service = newService();
+    await service.openChannel(channelId);
+    const before = leavesOf(channelId);
+
+    await service.syncChannel(channelId);
+
+    expect(mockMlsGroup(channelId)?.epoch).toBe(1);
+    expect(leavesOf(channelId)).toEqual(before);
+  });
+
+  it("does nothing when somebody else already swept", async () => {
     const channelId = await createE2eeChannel("already-gone");
     const service = newService();
     await service.openChannel(channelId);
     const before = mockMlsGroup(channelId)?.epoch;
 
-    await service.memberRemoved(channelId, CHAT_USERS.parisa.id);
+    await service.memberRemoved(channelId);
     expect(mockMlsGroup(channelId)?.epoch).toBe(before);
   });
 });
