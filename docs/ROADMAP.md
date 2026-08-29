@@ -495,9 +495,21 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       The ADR also fixes two boundaries: the Go server stays MLS-blind (delivery + key-package
       directory, epoch sequencing on an unverified envelope claim), and conference guests are
       outside E2EE — the encryption boundary is the room kind, fixed at birth — *2026-08-29*
-- [ ] Integration spike **before the first contract freeze**: wrapper skeleton on `wasm32`
-      against the pinned version, two-client group round-trip, measured gzipped bundle delta.
-      Feeds the key-package contract; can trigger the ADR's stated 0.8.1 fallback
+- [x] Integration spike **before the first contract freeze**
+      ([`docs/spikes/mls-wasm-integration.md`](spikes/mls-wasm-integration.md)): 0.9.0 builds on
+      `wasm32` (the 0.8.1 fallback is dead), two-client round-trip green **including a
+      restore-from-serialized-state restart**, best bundle cost **489 KB gzipped** (`opt-level=z`
+      + LTO, no `wasm-opt` — the post-pass shrinks raw bytes but *grows* gzipped), a Welcome is
+      self-contained via `RatchetTreeExtension` so no tree-transfer endpoint is needed —
+      *2026-08-29*
+- [ ] **Device-local keystore at rest** (falls out of the spike, owned by the group-state
+      slice): OpenMLS provider storage holds raw secrets as plaintext JSON, so persisting it to
+      IndexedDB unwrapped persists key material in the clear. Needs a wrapping-key design plus
+      honest labeling of what it does and does not resist — a browser cannot fully protect keys
+      from its own profile, and pretending otherwise is the §6.9 violation. The wrapper
+      implements the `openmls_traits` storage trait itself (the spike's write-through-public-field
+      restore path is nobody's stability promise), bridging the sync trait to async IndexedDB
+      with flush-at-commit-points
 - [ ] MLS for messages; group state management; member add/remove flows
 - [ ] Multi-device: per-device keys, device verification, key sync
 - [ ] Key verification UX: safety numbers/QR (key transparency log = post-v1)
