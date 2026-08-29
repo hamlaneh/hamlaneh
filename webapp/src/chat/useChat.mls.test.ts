@@ -322,12 +322,18 @@ describe("a group that could not be finished in one go", () => {
       await waitFor(() => {
         expect(mls.openChannel).toHaveBeenCalledWith(CHANNEL_ID);
       });
-      const before = calls(mls.syncChannel);
+      // openChannel, and specifically not syncChannel: the service makes
+      // syncChannel a no-op for a channel it holds no group for, which is the
+      // exact shape of a first-open failure — so a retry through it would be
+      // a timer that runs forever and changes nothing.
+      const beforeOpen = calls(mls.openChannel);
+      const beforeSync = calls(mls.syncChannel);
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5_000);
       });
-      expect(calls(mls.syncChannel)).toBeGreaterThan(before);
+      expect(calls(mls.openChannel)).toBeGreaterThan(beforeOpen);
+      expect(calls(mls.syncChannel)).toBe(beforeSync);
       unmount();
     } finally {
       vi.useRealTimers();

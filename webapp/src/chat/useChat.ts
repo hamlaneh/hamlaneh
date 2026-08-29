@@ -510,11 +510,11 @@ export function useChat({
    * transient server hiccup was indistinguishable from a permanent one until
    * a commit nudge, a member event, a reconnect or a reopen happened along.
    *
-   * ponytail: `failed` is re-driven through syncChannel, which the service
-   * makes a no-op for a channel it holds no group for — so a failure during
-   * the very first group read is the one `failed` this does not reach, and
-   * still waits for a reopen. Upgrade path: openChannel for `failed` alone,
-   * safe there precisely because nothing sends in that state.
+   * `failed` alone is re-driven through openChannel rather than syncChannel,
+   * because syncChannel is a no-op for a channel no group is known for — and
+   * a directory read that threw before the group was ever read is precisely
+   * the failure most worth retrying. Sending is already blocked in this
+   * state, so the `opening` it passes through costs nothing.
    *
    * The retry is a growing wait rather than a fixed one because none of the
    * three has a deadline (see MLS_RETRY_CAP_MS), and it starts over — at the
@@ -547,6 +547,14 @@ export function useChat({
         () => {
           if (channelMlsStatus === "waiting") {
             mlsRef.current.syncWelcomes();
+          } else if (channelMlsStatus === "failed") {
+            // openChannel, not syncChannel: syncChannel is a no-op for a
+            // channel the service holds no group for, and the failure that
+            // most needs re-driving is exactly that one — a directory read
+            // that threw before any group was known. The usual objection to
+            // openChannel does not apply here, because it is the composer it
+            // would disable and `failed` has already disabled it.
+            mlsRef.current.openChannel(channelId);
           } else {
             // Not openChannel: that would go back through `opening`, and an
             // `incomplete` client can already send — briefly disabling its
