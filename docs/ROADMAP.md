@@ -502,7 +502,7 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       + LTO, no `wasm-opt` — the post-pass shrinks raw bytes but *grows* gzipped), a Welcome is
       self-contained via `RatchetTreeExtension` so no tree-transfer endpoint is needed —
       *2026-08-29*
-- [ ] **Device-local keystore at rest** (falls out of the spike, owned by the group-state
+- [x] **Device-local keystore at rest** — *shipped with slice 3.1*. (Falls out of the spike, owned by the group-state
       slice): OpenMLS provider storage holds raw secrets as plaintext JSON, so persisting it to
       IndexedDB unwrapped persists key material in the clear. Needs a wrapping-key design plus
       honest labeling of what it does and does not resist — a browser cannot fully protect keys
@@ -545,7 +545,7 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       the attack: a leaf planted under a staying member's id, evicted by the first reconcile.
       Adversarial review found the property holds and fails closed — a directory page that
       errors aborts the whole reconcile rather than sweeping against a short allow-list
-- [ ] **`failed` should self-retry the way `waiting` and `incomplete` do.** From slice 3.2's
+- [x] **`failed` self-retries the way `waiting` and `incomplete` do** — *2026-08-30*, with the backoff bundle. From slice 3.2's
       adversarial review: exhausting the commit-retry budget leaves a channel `failed`, and only
       a commit nudge, a member event, a reconnect or a reopen re-drives it. Deliberately not
       fixed in 3.2: the fix is one more entry in the same five-second timer, and that timer is
