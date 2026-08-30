@@ -361,6 +361,30 @@ was not entitled to read the message it points at.
   server-signed credential cannot, because under the threat model's compromised server the
   signer is the adversary.
 
+- **Key verification (Phase 3, slice 3, [ADR 008](adr/008-key-verification.md)).** The residue
+  above, closed as far as anything can close it. Each conversation offers a safety number —
+  sixty digits, identical on both screens — computed over a person's whole set of device keys,
+  and the rule that makes the ceremony worth running is that **your own half never comes from
+  the server**: it is derived from the key your browser generated. Were both halves read from
+  the directory, a planted key would appear identically to both people, the numbers would match,
+  and comparing them would bless the attack instead of catching it.
+
+  Records of what you accepted live only in this browser, wrapped with the device state, and the
+  server never sees them — a verified flag the server could write would be one it could forge
+  about its own planted key. Keys are recorded on first sight, so a *change* is a visible event
+  even for people who never ran a ceremony; when one happens, the conversation keeps receiving
+  and decrypting normally and **stops being able to send**, because that is the only step MLS
+  leaves entirely to this client (a commit cannot be refused without forking off the log). There
+  are exactly two ways out — compare and match, or say you checked, which records the keys and
+  is shown as weaker than a comparison — and each decision covers only the keys it named, so one
+  acceptance never blesses the next change. Every legitimate new device also changes the number
+  and re-asks: from outside, a colleague's reinstall and a swapped key are the same observation,
+  and pretending otherwise would be the lie.
+
+  Not built yet: the QR for same-room comparison (the digits ship; the payload is computable),
+  and both surfaces are unstyled plumbing until their artboards land — `docs/design/STATUS.md`
+  carries what each one must answer.
+
 ## What's next
 
 **Phase 3 — end-to-end encryption with MLS.** The foundations are decided and the transport is

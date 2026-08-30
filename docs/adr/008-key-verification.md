@@ -159,7 +159,14 @@ ADR 007's "compromised later" sub-case, which is also the exact case the key-swa
 ## Decision 4 — sixty decimal digits, and a QR that compares the real bytes
 
 Per person: `half = SHA-256("hamlaneh-safety-number-v1" ‖ user id ‖ key count ‖ the signature
-public keys, sorted bytewise)`. Display: each half rendered as 30 decimal digits (the hash taken
+public keys, sorted bytewise)`, where **`‖` is the repo's length-prefixed framing (`packFrames`
+in `webapp/src/mls/bytes.ts`), not plain concatenation.** That was left unstated in the first
+draft and the implementation had to choose; it is written down here because the choice is
+load-bearing rather than stylistic. Plain concatenation lets a different (user id, key set) pair
+produce identical input bytes by moving a field boundary, and a safety number whose inputs can
+collide is a safety number that can be made to match. The committed test vector pins this: if
+somebody reimplements from the prose with plain concatenation, every number differs and the
+vector fails, which is the intended way to find out. Display: each half rendered as 30 decimal digits (the hash taken
 as a big-endian integer mod 10^30, zero-padded — deriving digits from a hash is encoding, not
 cryptography), the pair shown as 60 digits in twelve five-digit groups, halves ordered by their
 own bytes so both screens print the identical line. Digits rather than words or emoji: the
@@ -168,6 +175,16 @@ language, and numeral rendering is the i18n layer's existing concern. Same-room 
 QR carrying the version, both user ids and both full 32-byte halves, compared exactly on scan —
 truncation is for eyes, not machines. The version label is what lets a future ciphersuite or a
 cross-signing design change the derivation without pretending old numbers are comparable.
+
+Two rules the implementation had to settle and this record now carries, both found by a test
+rather than by argument:
+
+- **A person with no registered device is not pinned as an empty set.** Pinning "nothing" made a
+  colleague's very first sign-in — the commonest ordinary event there is — arrive as a
+  changed-keys warning. They are pinned on the first reconcile that shows them a device.
+- **A changed set on your own account blocks sending in that conversation**, following from "any
+  changed member puts the conversation in needs-attention". The peer list filters you out, so the
+  own-account prompt is what speaks for that block rather than a warning about a stranger.
 
 ## Deliberately not decided
 
