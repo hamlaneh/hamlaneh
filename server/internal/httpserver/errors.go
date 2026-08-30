@@ -145,6 +145,23 @@ const (
 	// prevents (openapi.yaml, acknowledgeMlsWelcome).
 	codeMlsDeviceNotFound errorCode = "mls_device_not_found"
 
+	// Phase 3 slice 5: encrypted backups (ADR 010).
+	//
+	// codeMlsBackupNotFound answers a fetch by an account that has stored no
+	// envelope. It is a state a person can genuinely be in — never enrolled,
+	// or turned it off — so it is a distinct code rather than the router's
+	// generic 404: the restore screen has to be able to say "the server says
+	// there is nothing here" instead of implying the recovery key was wrong.
+	//
+	// codeMlsBackupStale answers an upload whose counter does not move past
+	// the stored one. It is honestly a convenience: what it catches is two of
+	// the owner's own devices writing out of order, and it is worth nothing
+	// against a server that wants to serve an old blob — the control for that
+	// is the client's own floor against the counter sealed inside the
+	// envelope, which no answer this server gives can affect.
+	codeMlsBackupNotFound errorCode = "mls_backup_not_found"
+	codeMlsBackupStale    errorCode = "mls_backup_stale"
+
 	// Phase 3: the organisation encryption mode (ADR 011).
 	//
 	// The first two are the creation rule's two refusals, one per mode. They

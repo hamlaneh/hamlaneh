@@ -196,6 +196,22 @@ type Store interface {
 	ListMlsWelcomes(ctx context.Context, userID uuid.UUID) ([]storage.MlsWelcome, error)
 	DeleteMlsWelcome(ctx context.Context, userID, welcomeID uuid.UUID) error
 
+	// The recovery surface (ADR 010, migration 0019). The envelope is the one
+	// blob on this interface that is not merely unparsed but sealed: the key
+	// that opens it is derived from a recovery key generated on the device and
+	// never sent here, so there is no method that could be added later to read
+	// it. PutMlsBackup refuses a counter that does not advance — a rail
+	// against the owner's own two devices writing out of order, never the
+	// anti-rollback control, which is client-side by necessity.
+	//
+	// DeregisterMlsDevice is the directory write ADR 007's sweep needs in
+	// order to act, and is deliberately not coupled to session revocation:
+	// un-listing a key and signing a device out answer different questions.
+	PutMlsBackup(ctx context.Context, userID uuid.UUID, envelope []byte, counter int64) error
+	MlsBackupByUser(ctx context.Context, userID uuid.UUID) (storage.MlsBackup, error)
+	DeleteMlsBackup(ctx context.Context, userID uuid.UUID) error
+	DeregisterMlsDevice(ctx context.Context, userID, deviceID uuid.UUID) error
+
 	// Instance settings, including the derived accounts-without-two-step
 	// count the enforcement switch is read beside.
 	OrgSettings(ctx context.Context) (storage.OrgSettings, error)
