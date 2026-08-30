@@ -120,18 +120,21 @@ export const connectLiveKit: MediaConnect = async (url, token, key) => {
   }
 
   const keyProvider = key === undefined ? null : new MlsKeyProvider();
-  const room =
+  // Held so `disconnect` can end it. `E2EEManager` never terminates the worker
+  // it was handed — verified in the pinned 2.22.1 — so without this each
+  // encrypted join would leave one behind for the life of the page, holding
+  // that call's media keys in its memory long after the call ended. ADR 009
+  // says the provider is created at join and discarded at leave, and the
+  // worker is the half of it that does not go on its own.
+  const worker =
     keyProvider === null
+      ? null
+      : // Bundled same-origin by Vite, so no CSP change and no CDN.
+        new Worker(new URL("livekit-client/e2ee-worker", import.meta.url), { type: "module" });
+  const room =
+    keyProvider === null || worker === null
       ? new Room()
-      : new Room({
-          e2ee: {
-            keyProvider,
-            // Bundled same-origin by Vite, so no CSP change and no CDN.
-            worker: new Worker(new URL("livekit-client/e2ee-worker", import.meta.url), {
-              type: "module",
-            }),
-          },
-        });
+      : new Room({ e2ee: { keyProvider, worker } });
 
   // Keyed before connecting, so this room has never existed unencrypted.
   if (keyProvider !== null && key !== undefined) {
@@ -199,6 +202,9 @@ export const connectLiveKit: MediaConnect = async (url, token, key) => {
       listeners.clear();
       await room.disconnect();
       room.removeAllListeners();
+      // After the disconnect, so nothing is torn down mid-teardown. This is
+      // where the epoch keys this call collected stop existing.
+      worker?.terminate();
     },
   };
 };
