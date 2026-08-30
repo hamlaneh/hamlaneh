@@ -565,7 +565,17 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       **Its gate is the roadmap's own key-swap test**, which this design exists to make
       implementable as written
 - [ ] Encrypted backups + user-held recovery keys; org-level recovery policy; recovery UX drills
-- [ ] Media E2EE via LiveKit insertable streams
+- [ ] **Slice 3.4 — media E2EE** ([ADR 009](adr/009-media-e2ee.md)) via LiveKit insertable
+      streams. The key is MLS exporter output at the current epoch, so nothing distributes it and
+      every member derives the same bytes independently; it rotates when the epoch does, into
+      keyring slot `epoch % 16`, which needs no signalling at all. A fixed per-call key was
+      refused because it would let a member removed mid-call keep listening — exactly the
+      property ADR 007 spent a slice restoring for messages. `chan-` rooms only: a conference
+      guest has no leaf to derive with, so conferences stay plainly labelled as not
+      end-to-end encrypted rather than quietly weaker. LiveKit's stack is used whole except its
+      key provider, which is wrapped because the stock one's `setKey` takes no key index and so
+      cannot rotate (verified against the pinned 2.22.1 types); its own ratchet stays unused,
+      since MLS is the only ratchet
 - [ ] Per-org mode choice at setup: **Strict E2EE** vs **Compliance mode** — clearly labeled,
       documented bluntly (search/export/retention impossible in Strict, by design)
 - [ ] Compliance-mode server-side half actually built: encryption at rest, retention policy,
@@ -583,8 +593,20 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
 
 1. **Compromised-server drill**, scripted in `docs/drills/e2ee-drill.md`: (a) send a known
    canary message; full DB + disk dump is scanned — the canary appears only as ciphertext;
-   (b) media: packet capture at the SFU during a live call — RTP payloads fail to decode
-   without the E2EE key.
+   (b) media: **a no-key subscriber at the server's own position cannot decode a `chan-` call**
+   — mint a token server-side, join the live room as a bare subscriber holding no MLS state,
+   and assert the tracks produce decrypt failures and no renderable frames, with the same probe
+   against a `conf-` room decoding fine as the control.
+
+   *This item used to say "packet capture at the SFU — RTP payloads fail to decode without the
+   E2EE key", and that wording was vacuous* (found while designing
+   [ADR 009](adr/009-media-e2ee.md)): SRTP already encrypts every hop, so a captured payload is
+   unreadable whether or not media E2EE exists, and the drill would have passed identically
+   against a build with no E2EE in it at all. The replacement puts the adversary where it
+   actually sits — after SRTP terminates, holding the token-minting power the operator always
+   has — and the `conf-` control is what keeps a clean result from being vacuous a second time,
+   the same role the plaintext control plays in the message drill and the synthetic secret plays
+   in the key-leak scan. The intent is unchanged and now measurable.
 2. **Key-loss drill**: honest user loses device → recovers with recovery key; user without a
    recovery key hits the documented, non-lying failure path.
 3. Mode choice is irreversible-safe: switching modes can't silently decrypt or expose history.
@@ -596,7 +618,7 @@ distinction worth being able to see at a glance:
 | Gate item | Status |
 |---|---|
 | 1(a) message canary → ciphertext only | **met**, automated rather than drilled — `webapp/e2e/specs/e2ee-messaging.e2e.ts` asserts the row shape and scans a real `pg_dump` from inside the database container, with a plaintext control so a clean scan cannot be vacuous |
-| 1(b) media packets undecodable at the SFU | **not met** — slice 3.4 |
+| 1(b) a no-key subscriber cannot decode a `chan-` call | **not met** — slice 3.4. The item was reworded because its old form was unmeasurable; see the note under the gate |
 | 2 key-loss / recovery drill | **not met** — needs encrypted backups and a recovery key, neither built |
 | 3 mode choice irreversible-safe | **not met** — no Strict/Compliance mode exists yet |
 

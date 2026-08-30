@@ -309,6 +309,33 @@ normally in this state, so the warning belongs where the composer was, not over 
 The prompt about **your own account** (a device was registered to you; is it yours?) is the same
 component pointed at the reader, and it is the loudest one in the slice.
 
+## Media E2EE (Phase 3, slice 3.4 — [ADR 009](../adr/009-media-e2ee.md))
+
+Three surfaces, and all three exist to make a claim precise rather than to decorate a call.
+
+### `call-encrypted-indicator`
+
+On a DM or channel call: the media is end-to-end encrypted and the server relays what it cannot
+read. What it must **not** imply is metadata protection — the SFU still sees who is in the call,
+when, and who is speaking. The design problem is that a true claim about content sitting beside
+an absent claim about metadata reads, to most people, as a claim about both.
+
+### `conference-plain-label`
+
+A conference is not end-to-end encrypted, in either mode, because a guest has no key of their
+own. The join surface has to say the server can access audio and video, and the unqualified word
+"encrypted" may not appear on it — the call still uses TLS and SRTP, and saying "encrypted"
+without saying which kind is the overclaim §2.4 forbids. The design problem is stating that
+plainly without making a working, deliberate feature look broken or second-rate.
+
+### `call-publish-blocked`
+
+The mid-call form of slice 3.3's warning: somebody's device keys changed, so this device stops
+publishing until the person decides. Its two exits are the verification ceremony's, unchanged.
+The design problem is specific to a call: the user's own camera and microphone have just stopped
+for a reason that is not an error and not a network failure, and the screen has to say so fast
+enough that they do not start debugging their hardware.
+
 ---
 
 *Maintained alongside the product: when a screen's scope changes in ROADMAP.md, its brief

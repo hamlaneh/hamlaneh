@@ -284,6 +284,7 @@ Explicitly out of scope until after v1 ships — each is a scope trap:
 | **MLS library: OpenMLS**, exact-pinned, server MLS-blind, guests outside E2EE | ✅ Decided | Aug 2026, ADR 006. "OpenMLS vs libsignal" was a phantom choice — libsignal implements no MLS |
 | **Device identity: eviction by leaf signature key against the directory; out-of-band comparison is the only real binding** | ✅ Decided | Aug 2026, ADR 007. No server-signed credentials — under §6.1's adversary 3 the signer is the adversary |
 | **Key verification: client-local records, set-based safety numbers, refusal on the send path, TOFU pinning on** | ✅ Decided | Aug 2026, ADR 008. Your own half of the number never comes from the directory, or the ceremony would bless the attack |
+| **Media E2EE: the key is MLS exporter output, rotating with the epoch; conferences stay outside** | ✅ Decided | Aug 2026, ADR 009. Nothing distributes the key — every member derives it. A fixed per-call key would let a removed member keep listening, which is ADR 007's property surrendered |
 | **DCO** instead of CLA | 🟡 Leaning | Confirm before first external PR — this is the last easy moment to choose |
 | Cloud jurisdiction / data residency options | ⬜ Open | Decide before Phase 6 |
 | Pricing numbers | ⬜ Open | Validate via Managed pre-sales |
