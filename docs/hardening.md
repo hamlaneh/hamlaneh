@@ -178,6 +178,47 @@ fixes.
 
 ---
 
+## Home mode beyond the machine it runs on
+
+`hamlaneh-server home` is the single-binary install: SQLite, no Docker, no Caddy, and therefore
+no TLS. It binds `127.0.0.1:8080` for that reason — `localhost` is a secure context, so the
+session cookies (`Secure`, `HttpOnly`, `SameSite=Strict`) and every header the Go server sets
+hold exactly as they do in the compose stack. The two absences are deliberate and complete:
+HSTS, which only a TLS terminator can set meaningfully, and TLS itself.
+
+`HAMLANEH_HOME_ADDR` moves that bind, and **plain HTTP beyond loopback does not work** — it
+fails closed rather than degrading. A browser will not send a `Secure` cookie over `http://` to
+anything but localhost, so a home instance published to a LAN over plain HTTP visibly refuses to
+sign anyone in. That is the intended outcome, not a bug to route around, and there is no setting
+that turns the `Secure` attribute off.
+
+The supported way to reach a home instance from another machine is the same as everywhere else:
+put something in front of it that has TLS.
+
+- A reverse proxy you already run — see the requirements above; forward all of `/`, preserve
+  `Host`, send HSTS from the proxy and no other security header. Set `HAMLANEH_PUBLIC_URL` to
+  the https origin, because the WebSocket handshake's `Origin` check compares against it and a
+  mismatch refuses every socket.
+- Or a private network that provides the TLS name itself (Tailscale and similar). Same
+  requirement: the origin the browser uses is the origin `HAMLANEH_PUBLIC_URL` must name.
+
+A self-signed certificate is **not** on this list. It trains a household to click through
+browser warnings, which costs more than it buys.
+
+Everything home mode has lives in one directory — `%AppData%\hamlaneh` on Windows,
+`~/Library/Application Support/hamlaneh` on macOS, `~/.config/hamlaneh` on Linux, or wherever
+`HAMLANEH_DATA_DIR` points. It holds the database, the uploaded bytes, and the two instance
+secrets, which home mode generates on first run because there is no installer to generate them.
+That directory is the backup unit; see the custody rules below, which apply to those two files
+exactly as they apply to the compose stack's `.env`.
+
+**Protects against:** a home instance silently serving sessions over plaintext to a network.
+
+**Does not protect against:** anything reaching the machine itself. Home mode has no media
+server, so calls are off and the instance says so.
+
+---
+
 ## Backup key custody
 
 Two different secrets, two different owners, and confusing them is the expensive mistake.
