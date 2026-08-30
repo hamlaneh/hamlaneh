@@ -143,6 +143,13 @@ function spyController(channels: MlsState["channels"] = {}): MlsController {
     verifyPeer: vi.fn(() => Promise.resolve()),
     acceptPeer: vi.fn(() => Promise.resolve()),
     acceptOwnDevices: vi.fn(() => Promise.resolve()),
+    enableBackup: vi.fn(() => Promise.resolve(null)),
+    declineBackup: vi.fn(() => Promise.resolve()),
+    openBackup: vi.fn(() =>
+      Promise.resolve({ status: "refused", reason: "noBackup" } as const),
+    ),
+    applyRestore: vi.fn(() => Promise.resolve(false)),
+    discardRestore: vi.fn(),
   };
 }
 

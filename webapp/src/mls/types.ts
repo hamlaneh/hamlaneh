@@ -150,6 +150,77 @@ export interface OwnDevicePrompt {
   keys: string[];
 }
 
+/* ── encrypted backups (ADR 010) ─────────────────────────────────────── */
+
+/**
+ * What an opened envelope is offering to restore, before anything local
+ * changes.
+ *
+ * Two dates, deliberately. `createdAt` is sealed inside the envelope and is
+ * the one a person confirms — "this backup is from March 3" — because it is
+ * the only thing a server cannot forge forward, and a fresh device holding
+ * only a recovery key has exactly two channels to freshness: the server, which
+ * is the party under test, and the human. `serverUpdatedAt` is the server's
+ * own claim beside it, shown as such and never as corroboration.
+ */
+export interface PendingRestore {
+  createdAt: string;
+  serverUpdatedAt: string;
+  /** How many people's trust decisions it carries. */
+  records: number;
+}
+
+/**
+ * The backup's state on this device.
+ *
+ * `status` is what the surfaces render, and "offer" is the only one that
+ * appears on its own: a backup sealed under a key the user never saw is
+ * unrestorable by construction, so it can never be on by default and the offer
+ * is the ceremony (ADR 010, decision 4). "declined" is recorded and respected
+ * — re-surfaced passively, never as a nag.
+ */
+export interface MlsBackupState {
+  status: "unknown" | "offer" | "on" | "declined";
+  /**
+   * The highest counter this device has written or accepted. Any envelope
+   * sealed below it is a rollback and is refused — the security control of
+   * this slice, and the one a hostile server cannot answer its way past.
+   */
+  floor: number;
+  /** The last write-behind upload did not land. The next change retries. */
+  writeFailed: boolean;
+  /** Non-null while an opened envelope is waiting for the person's yes. */
+  pending: PendingRestore | null;
+}
+
+export const initialBackupState: MlsBackupState = {
+  status: "unknown",
+  floor: 0,
+  writeFailed: false,
+  pending: null,
+};
+
+/** Why a restore did not happen. Each is a different sentence on the screen. */
+export type RestoreFailure =
+  /** The typed key failed its own checksum. No request was made. */
+  | "badKey"
+  /** The server says this account has no backup — which can be the truth. */
+  | "noBackup"
+  /** The envelope would not open: wrong key, or bytes that are not ours. */
+  | "wrongKey"
+  /** The envelope is sealed below this device's floor. */
+  | "rolledBack"
+  /** It was sealed for a different account. */
+  | "wrongAccount"
+  /** This device already holds records; v1 does not merge, it refuses. */
+  | "notEmpty"
+  /** The request itself failed. */
+  | "failed";
+
+export type OpenBackupOutcome =
+  | { status: "opened"; restore: PendingRestore }
+  | { status: "refused"; reason: RestoreFailure };
+
 export interface MlsState {
   device: MlsDeviceState;
   channels: Record<string, ChannelMlsState>;
@@ -175,6 +246,8 @@ export interface MlsState {
   records: VerificationRecords;
   /** Null unless this account's own directory set holds an unaccepted key. */
   ownDevices: OwnDevicePrompt | null;
+  /** The encrypted backup: whether it is on, the floor, and any open restore. */
+  backup: MlsBackupState;
 }
 
 export const initialMlsState: MlsState = {
@@ -185,6 +258,7 @@ export const initialMlsState: MlsState = {
   verification: {},
   records: {},
   ownDevices: null,
+  backup: initialBackupState,
 };
 
 /* ── media (ADR 009) ─────────────────────────────────────────────────── */

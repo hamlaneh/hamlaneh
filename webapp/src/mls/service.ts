@@ -1,5 +1,13 @@
 import { api } from "../api/client";
 import type { components } from "../api/schema";
+import type { OpenedBackup } from "./backup";
+import {
+  deriveBackupKey,
+  generateRecoveryKey,
+  parseRecoveryKey,
+  sealBackup,
+  unsealBackup,
+} from "./backup";
 import { fromBase64, packFrames, toBase64, unpackFrames, unpackStrings } from "./bytes";
 import { Keystore, openKeystore } from "./keystore";
 import { safetyNumber } from "./safetyNumber";
@@ -7,13 +15,22 @@ import type {
   ChannelMlsState,
   ChannelVerification,
   MediaKey,
+  MlsBackupState,
   MlsState,
   MlsUnavailableReason,
+  OpenBackupOutcome,
+  PendingRestore,
+  RestoreFailure,
   SentMessage,
   VerificationLevel,
   VerificationRecords,
 } from "./types";
-import { clearVerification, initialMlsState, needsAttention } from "./types";
+import {
+  clearVerification,
+  initialBackupState,
+  initialMlsState,
+  needsAttention,
+} from "./types";
 import { acceptedKeys, inspect } from "./verification";
 import type { MlsDeviceHandle, MlsModule } from "./wasm";
 import { loadMlsModule } from "./wasm";
@@ -226,6 +243,35 @@ export class MlsService {
    */
   private readonly directory = new Map<string, Map<string, string[]>>();
 
+  /**
+   * The backup's own state (ADR 010). Mirrored here as well as published,
+   * because the write-behind path has to read the floor without going through
+   * React.
+   */
+  private backup: MlsBackupState = initialBackupState;
+
+  /**
+   * The non-extractable AES-GCM handle every ongoing backup is sealed with.
+   * The recovery key it came from is shown once and discarded; this is what
+   * survives, and only a restore on a fresh device ever asks for the string
+   * again.
+   */
+  private backupKey: CryptoKey | null = null;
+
+  /**
+   * An envelope that opened and is waiting for the person to confirm its date,
+   * with the key it opened under — kept so a confirmed restore leaves the
+   * device backing up under the recovery key the person already holds.
+   */
+  private openedBackup: { opened: OpenedBackup; key: CryptoKey } | null = null;
+
+  /**
+   * Uploads run one at a time on their own chain, separate from the device
+   * chain: a backup upload holds no MLS state, and putting it behind the
+   * ratchet would make a slow network delay message decryption.
+   */
+  private backupChain: Promise<void> = Promise.resolve();
+
   private readonly chains = new Map<string, Promise<unknown>>();
   private starting: Promise<boolean> | null = null;
 
@@ -371,6 +417,7 @@ export class MlsService {
     this.records = (await this.keystore?.loadRecords()) ?? {};
     this.keyPackages = (await this.keystore?.loadKeyPackageCount()) ?? null;
     await this.restoreSent();
+    await this.restoreBackupState();
 
     const registered = await this.registerAndPublish(device);
     if (!registered) {
@@ -381,6 +428,10 @@ export class MlsService {
     this.publish({
       device: { status: "ready" },
       records: this.records,
+      // The offer appears exactly here — first MLS use on the account — which
+      // is the one moment a person is thinking about encryption for a reason
+      // that is not a problem (ADR 010, decision 4).
+      backup: this.backup,
       // Merged OVER what is already there rather than under it. Nothing waits
       // for the device before rendering, so a bubble the list already gave up
       // on and recorded as null is one of ours, and the restored plaintext is
@@ -856,6 +907,11 @@ export class MlsService {
   private async saveRecords(): Promise<void> {
     await this.keystore?.saveRecords(this.records);
     this.publish({ records: this.records });
+    // The one hook the write-behind hangs on, and it is here rather than in
+    // each of `absorbDirectory`, `record` and `applyRestore` because this is
+    // what all three already share. A fourth writer added later inherits the
+    // upload instead of silently leaving the backup a month behind.
+    this.scheduleBackupUpload();
   }
 
   /**
@@ -961,6 +1017,282 @@ export class MlsService {
    */
   acceptOwnDevices(): Promise<void> {
     return this.record(this.options.currentUserId, "pinned");
+  }
+
+  /* ── encrypted backups (ADR 010) ─────────────────────────────────────── */
+
+  /**
+   * Turns backup on and returns the recovery key to show **once**.
+   *
+   * The string is returned rather than stored, and this is the only moment it
+   * exists: the ceremony derives the backup key from it, keeps that handle
+   * non-extractable in the keystore, and discards the string. There is no
+   * reset, because a server that could reset it could read the blob, and there
+   * is no second showing, because a copy kept anywhere to show again is a copy
+   * that can be taken.
+   *
+   * Null when the device could not keep the handle. That is deliberately
+   * treated as "backup is not on" rather than "backup is on and broken": a
+   * device that lost the handle cannot re-seal, and the recovery key it would
+   * need is already gone.
+   */
+  async enableBackup(): Promise<string | null> {
+    if (this.keystore === null) {
+      return null;
+    }
+    const { text, key } = await generateRecoveryKey();
+    const backupKey = await deriveBackupKey(key);
+    if (!(await this.keystore.saveBackupKey(backupKey))) {
+      return null;
+    }
+    this.backupKey = backupKey;
+    await this.setBackup({ status: "on", writeFailed: false });
+    // The first upload rides the same write-behind path every later one does,
+    // so there is exactly one place that seals and counts.
+    this.scheduleBackupUpload();
+    await this.whenBackupSettled();
+    return text;
+  }
+
+  /**
+   * The offer's no. Recorded and respected — the surfaces re-surface it
+   * passively in settings and never as a nag (ADR 010, decision 4).
+   */
+  async declineBackup(): Promise<void> {
+    await this.setBackup({ status: "declined", declined: true });
+  }
+
+  /**
+   * Turns backup off: the server blob is deleted and the local handle goes
+   * with it, so nothing can be sealed under a key nobody will be shown again.
+   *
+   * The floor deliberately survives. It records the highest counter this
+   * device ever wrote, and resetting it because somebody turned a feature off
+   * would re-open the rollback window it exists to close.
+   */
+  async disableBackup(): Promise<void> {
+    await api.DELETE("/api/v1/users/me/mls/backup", {});
+    await this.keystore?.deleteBackupKey();
+    this.backupKey = null;
+    await this.setBackup({ status: "offer", writeFailed: false });
+  }
+
+  /**
+   * Step one of a restore: open the stored envelope with a typed recovery key.
+   *
+   * Nothing local changes here. What comes back is the sealed creation date
+   * for a human to confirm — the only freshness check available to a device
+   * that holds no floor, because the device that would have held one is the
+   * one that was lost (ADR 010, decision 3).
+   *
+   * The order of the refusals is the design. The checksum runs first, so a
+   * typo never becomes a request and never comes back as an ambiguous "no
+   * backup". The floor runs before the has-records check, so a rolled-back
+   * envelope is refused loudly whatever else is true of this device.
+   */
+  async openBackup(recoveryKeyText: string): Promise<OpenBackupOutcome> {
+    const recoveryKey = await parseRecoveryKey(recoveryKeyText);
+    if (recoveryKey === null) {
+      return { status: "refused", reason: "badKey" };
+    }
+
+    const { data, error, response } = await api.GET("/api/v1/users/me/mls/backup", {});
+    if (data === undefined) {
+      const reason: RestoreFailure =
+        response.status === 404 || errorCode(error) === "mls_backup_not_found"
+          ? "noBackup"
+          : "failed";
+      return { status: "refused", reason };
+    }
+
+    const backupKey = await deriveBackupKey(recoveryKey);
+    let opened: OpenedBackup;
+    try {
+      opened = await unsealBackup(backupKey, fromBase64(data.envelope));
+    } catch {
+      // One answer for a wrong key, a truncated blob and a tampered header —
+      // the GCM tag is the only check there is, deliberately, and inventing
+      // finer reasons would mean storing something for a server to probe.
+      return { status: "refused", reason: "wrongKey" };
+    }
+
+    // The SEALED counter, never `data.counter`. The mirrored copy beside the
+    // envelope is the server's convenience and the server writes it; this one
+    // is covered by the tag. A response pairing a high JSON counter with a low
+    // sealed one is exactly the rollback this refuses.
+    if (opened.counter < this.backup.floor) {
+      return { status: "refused", reason: "rolledBack" };
+    }
+    if (opened.userId !== this.options.currentUserId) {
+      return { status: "refused", reason: "wrongAccount" };
+    }
+    // v1 restores into an empty record set rather than inventing merge
+    // semantics: a device that already holds decisions refuses to be written
+    // over by an older picture of them.
+    if (Object.keys(this.records).length > 0) {
+      return { status: "refused", reason: "notEmpty" };
+    }
+
+    this.openedBackup = { opened, key: backupKey };
+    const restore: PendingRestore = {
+      createdAt: opened.payload.createdAt,
+      serverUpdatedAt: data.updated_at,
+      records: Object.keys(opened.payload.verificationRecords).length,
+    };
+    this.publishBackup({ pending: restore });
+    return { status: "opened", restore };
+  }
+
+  /**
+   * Step two: the person confirmed the sealed date, so the records land.
+   *
+   * The own row is dropped rather than restored, and that is the security
+   * content of the restore (ADR 010, decision 1): this device's accepted
+   * own-set starts as exactly its own fresh key, so every other key the
+   * directory still lists under this account — the lost device's included —
+   * raises the own-account prompt, where the answer is revocation. Restoring
+   * the old row instead would silently re-accept the key that was lost.
+   *
+   * Everything else follows from the records themselves: a peer whose set is
+   * unchanged comes back verified, and one whose set changed during the
+   * absence raises "changed" rather than being re-pinned as first sight.
+   *
+   * The recovered device keeps the key it just used, so backup stays on under
+   * the recovery key the person is already holding. Making them run the
+   * ceremony again would print a second key to write down and quietly retire
+   * the one they had just proved they still have.
+   */
+  async applyRestore(): Promise<boolean> {
+    const pending = this.openedBackup;
+    if (pending === null) {
+      return false;
+    }
+    this.openedBackup = null;
+    const { opened, key } = pending;
+
+    this.records = Object.fromEntries(
+      Object.entries(opened.payload.verificationRecords).filter(
+        ([userId]) => userId !== this.options.currentUserId,
+      ),
+    );
+
+    const kept = (await this.keystore?.saveBackupKey(key)) ?? false;
+    if (kept) {
+      this.backupKey = key;
+    }
+    // The floor moves to what was just accepted BEFORE the records are saved,
+    // so the write-behind that `saveRecords` schedules seals at the counter
+    // after this envelope rather than replaying its number.
+    await this.setBackup({
+      floor: opened.counter,
+      pending: null,
+      ...(kept ? { status: "on" as const, writeFailed: false } : {}),
+    });
+    await this.saveRecords();
+    for (const channelId of this.directory.keys()) {
+      this.publishVerification(channelId);
+    }
+    return true;
+  }
+
+  /** The person said the date is wrong, or backed out. Nothing changed. */
+  discardRestore(): void {
+    this.openedBackup = null;
+    this.publishBackup({ pending: null });
+  }
+
+  /** Resolves once every queued write-behind upload has been attempted. */
+  whenBackupSettled(): Promise<void> {
+    return this.backupChain.then(
+      () => undefined,
+      () => undefined,
+    );
+  }
+
+  /**
+   * Queues a re-seal and upload. Called after every records change.
+   *
+   * Write-behind rather than awaited by the caller: a trust decision must land
+   * on the screen at the speed of a click, not at the speed of the network,
+   * and the record is already durable in the keystore by the time this runs.
+   * Serialized on one chain, because two uploads in flight would race the
+   * counter against each other and one would come back stale.
+   */
+  private scheduleBackupUpload(): void {
+    if (this.backup.status !== "on" || this.backupKey === null) {
+      return;
+    }
+    this.backupChain = this.backupChain
+      .catch(() => undefined)
+      .then(() => this.uploadBackup());
+  }
+
+  private async uploadBackup(): Promise<void> {
+    const key = this.backupKey;
+    if (key === null) {
+      return;
+    }
+    const counter = this.backup.floor + 1;
+    const envelope = await sealBackup(key, this.options.currentUserId, counter, {
+      v: 1,
+      createdAt: new Date().toISOString(),
+      verificationRecords: this.records,
+    });
+
+    const { response } = await api.PUT("/api/v1/users/me/mls/backup", {
+      body: { envelope: toBase64(envelope), counter },
+    });
+    if (!response.ok) {
+      // Including the 409: another of this account's own profiles moved the
+      // counter, and ADR 010 decision 3 wants that visible rather than
+      // silently interleaved. The floor does not move, so the next records
+      // change retries at the same number and the person sees a backup that
+      // is not keeping up.
+      this.publishBackup({ writeFailed: true });
+      return;
+    }
+    await this.setBackup({ floor: counter, writeFailed: false });
+  }
+
+  /**
+   * Brings the backup state up at start: the floor, the decision, and whether
+   * this device still holds a key handle.
+   *
+   * A device that has the handle is on; one that declined is declined; anybody
+   * else is offered. The offer therefore comes back for somebody who turned
+   * backup off, which is right — they made no standing decision to be left
+   * without one.
+   */
+  private async restoreBackupState(): Promise<void> {
+    const stored = (await this.keystore?.loadBackupState()) ?? { floor: 0, declined: false };
+    this.backupKey = (await this.keystore?.loadBackupKey()) ?? null;
+    const status: MlsBackupState["status"] =
+      this.backupKey !== null ? "on" : stored.declined ? "declined" : "offer";
+    this.backup = { ...this.backup, ...stored, status };
+  }
+
+  /** Writes the durable half of the backup state and publishes all of it. */
+  private async setBackup(
+    next: Partial<MlsBackupState> & { declined?: boolean },
+  ): Promise<void> {
+    const declined = next.declined ?? this.backup.status === "declined";
+    this.backup = { ...this.backup, ...next };
+    const written =
+      (await this.keystore?.saveBackupState({ floor: this.backup.floor, declined })) ?? true;
+    if (!written) {
+      // The floor is only as good as the write behind it: keeping a higher
+      // number in memory than the one on disk would make this session refuse
+      // envelopes the next session accepts, and the disagreement would look
+      // like a rollback that is not there.
+      this.backup = { ...this.backup, floor: (await this.keystore?.loadBackupState())?.floor ?? 0 };
+    }
+    this.publish({ backup: this.backup });
+  }
+
+  /** Publishes the volatile half — nothing here is worth a keystore write. */
+  private publishBackup(next: Partial<MlsBackupState>): void {
+    this.backup = { ...this.backup, ...next };
+    this.publish({ backup: this.backup });
   }
 
   /**
