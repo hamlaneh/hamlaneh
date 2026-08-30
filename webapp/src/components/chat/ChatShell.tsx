@@ -12,7 +12,7 @@ import type { Channel, Presence, User, UserSummary } from "../../chat/types";
 import { useChat } from "../../chat/useChat";
 import type { RealtimeOverrides } from "../../chat/useChat";
 import { isUuid } from "../../chat/uuid";
-import { ORG_ENCRYPTION_MODE, bornEncrypted } from "../../instance/encryptionMode";
+import { bornEncrypted } from "../../instance/encryptionMode";
 import { useInstance } from "../../instance/instanceInfo";
 import { MessageBodyProvider } from "../../mls/MessageBodyContext";
 import { needsAttention } from "../../mls/types";
@@ -555,7 +555,7 @@ export function ChatShell({
 
       {overlay === "createChannel" ? (
         <CreateChannelDialog
-          mode={ORG_ENCRYPTION_MODE}
+          mode={info.encryption_mode}
           onCreate={async (slug, kind, e2ee) => {
             const result = await chat.createChannel(slug, kind, e2ee);
             if ("error" in result) {
@@ -581,14 +581,14 @@ export function ChatShell({
         <PeoplePicker
           title={t("chat.sidebar.newDirectMessage")}
           actionLabel={t("chat.people.message")}
-          encryptionMode={ORG_ENCRYPTION_MODE}
+          encryptionMode={info.encryption_mode}
           onPick={async (user) => {
             // The mode's value, asserted rather than omitted, so a stale view
             // of it is refused by name instead of silently creating a DM whose
             // encryption is the opposite of what the picker just promised.
             const result = await chat.openDirectMessage(
               user.id,
-              bornEncrypted(ORG_ENCRYPTION_MODE),
+              bornEncrypted(info.encryption_mode),
             );
             if ("error" in result) {
               return result.error;
