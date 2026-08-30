@@ -251,7 +251,10 @@ jobs:
         run: |
           set -euo pipefail
           image="ghcr.io/${GITHUB_REPOSITORY}/server"
-          docker build -f deploy/Dockerfile -t "${image}:${VERSION}" .
+          # --build-arg VERSION: the image's binary reports the tag too, which
+          # is what deploy/hamlaneh-update.sh asks the running server for
+          # before it will apply anything (see deploy/Dockerfile).
+          docker build -f deploy/Dockerfile --build-arg "VERSION=${VERSION}" -t "${image}:${VERSION}" .
           docker push "${image}:${VERSION}"
           # The registry digest, read back from the registry rather than from
           # the local image id: signing and attesting go against the digest, so
