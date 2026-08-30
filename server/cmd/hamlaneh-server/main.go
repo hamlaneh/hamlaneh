@@ -244,9 +244,23 @@ func start(ctx context.Context, m mode) error {
 	}
 	defer db.Close()
 
-	adminCfg, present := bootstrap.AdminFromEnv()
-	if err = bootstrap.EnsureAdmin(ctx, db, adminCfg, present); err != nil {
+	// The first administrator. Server mode reads the pair install.sh set;
+	// home mode, which has no installer, generates the password when nobody
+	// supplied one (home.go).
+	admin, err := m.firstAdmin()
+	if err != nil {
 		return err
+	}
+	created, err := bootstrap.EnsureAdmin(ctx, db, admin.cfg, admin.present)
+	if err != nil {
+		return err
+	}
+	// Both conditions, and this is the whole idempotence: minted says the
+	// password exists nowhere but this process, created says the account was
+	// made by THIS start. A restart fails the second, so the console never
+	// shows a credential twice and the account is never made twice.
+	if created && admin.minted {
+		m.announceFirstAdmin(admin.cfg)
 	}
 
 	// A half-configured mail transport, or one with no public URL to build
