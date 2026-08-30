@@ -622,10 +622,10 @@ distinction worth being able to see at a glance:
 | 2 key-loss / recovery drill | **not met** — needs encrypted backups and a recovery key, neither built |
 | 3 mode choice irreversible-safe | **not met** — no Strict/Compliance mode exists yet |
 
-`docs/drills/e2ee-drill.md` does not exist. Item 1(a) is covered by a test rather than a written
-drill, which is stronger for CI and weaker for the audit trail the other drills are written for;
-the file is owed and should say which parts are automated and which a human runs, as
-`nat-drill.md` does.
+[`docs/drills/e2ee-drill.md`](drills/e2ee-drill.md) now exists and covers both halves: the
+message half as the automated test that meets 1(a), the media half as the manual procedure that
+will meet 1(b) once slice 3.4 lands. It also records why the packet-capture form was rejected, so
+the shorter version is not reinvented by somebody who never saw this note.
 
 ---
 
