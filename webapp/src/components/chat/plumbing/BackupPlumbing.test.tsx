@@ -76,7 +76,7 @@ describe("the show-once ceremony", () => {
     // Typed back character for character on another device, so it has to read
     // in the same order in both locales.
     expect(key).toHaveAttribute("dir", "ltr");
-    expect(key.textContent?.replace(/[⁦-⁩]/gu, "")).toBe("ABCD-EFGH-JKMN");
+    expect(key.textContent.replace(/[⁦-⁩]/gu, "")).toBe("ABCD-EFGH-JKMN");
     expect(screen.getByText(copy.ceremonyOnce)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: copy.ceremonyDone }));
@@ -200,7 +200,7 @@ describe("the no-key failure path", () => {
     expect(screen.getByText(copy.noKeyByDesign)).toBeInTheDocument();
 
     // Nothing on this screen may read as "someone can get it back for you".
-    const text = screen.getByRole("region", { hidden: true }).textContent ?? "";
+    const text = screen.getByRole("region", { hidden: true }).textContent;
     for (const forbidden of ["contact support", "recover it for you", "reset"]) {
       expect(text.toLowerCase()).not.toContain(forbidden);
     }
