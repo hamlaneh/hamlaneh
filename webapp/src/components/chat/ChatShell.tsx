@@ -325,6 +325,15 @@ export function ChatShell({
                   setOverlay("invite");
                 }}
                 onSetTopic={chat.setTopic}
+                onVerify={
+                  activeChannel.e2ee && activeChannel.dm_peer !== undefined
+                    ? () => {
+                        const peerId = activeChannel.dm_peer?.id;
+                        closeOverlay();
+                        setVerifyFor(peerId ?? null);
+                      }
+                    : undefined
+                }
                 onClose={closeOverlay}
               />
             ) : null

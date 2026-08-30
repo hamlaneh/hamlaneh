@@ -807,6 +807,7 @@
       "decrypting": "Decrypting…",
       "cannotDecrypt": "This message cannot be decrypted on this device.",
       "verification": {
+        "openSheet": "Safety number",
         "sheetTitle": "Safety number with {{name}}",
         "level": {
           "unverified": "You have not compared a safety number with this person on this device.",
