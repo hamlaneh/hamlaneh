@@ -41,6 +41,7 @@ jobs:
       webapp: ${{ steps.filter.outputs.webapp }}
       deploy: ${{ steps.filter.outputs.deploy }}
       e2e: ${{ steps.filter.outputs.e2e }}
+      release: ${{ steps.filter.outputs.release }}
     steps:
       - name: Filter changed paths
         id: filter
@@ -73,6 +74,14 @@ jobs:
               - 'webapp/**'
               - 'deploy/**'
               - 'docs/api/**'
+              - '.github/workflows/ci.yml'
+            # The shell scripts an operator runs, and the release pipeline that
+            # feeds them. Narrower than `deploy` on purpose: this job does not
+            # need the stack, so it should not wait for a server change to be
+            # the reason it runs.
+            release:
+              - 'deploy/*.sh'
+              - '.github/workflows/release.yml'
               - '.github/workflows/ci.yml'
 
   server:
@@ -290,6 +299,43 @@ jobs:
             webapp/test-results/
           retention-days: 7
           if-no-files-found: ignore
+
+  # ROADMAP.md Phase 4 test gate item 2, made runnable per pull request rather
+  # than only when a tag is cut. The three negatives it proves — a tampered
+  # release rejected, an unsigned one rejected, an older validly-signed one
+  # refused without --force — are exactly the controls that would otherwise be
+  # discovered broken during a security release, which is the worst possible
+  # moment to discover it.
+  #
+  # The signatures here are made with a throwaway key pair, off the
+  # transparency log. That is real cosign doing real verification; it is NOT
+  # the keyless identity check, which needs a real tag. See the header of
+  # deploy/verify-release.test.sh and docs/releasing.md.
+  release-tooling:
+    name: Release verification (anti-rollback gate)
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # The version release.yml signs with. A gate that passes against a
+          # different cosign major than the one that signs releases proves
+          # nothing: v3 changed the default blob format to Sigstore bundles.
+          cosign-release: v3.0.6
+
+      - name: Lint the operator scripts (shellcheck)
+        # Preinstalled on the runner image. All of deploy/*.sh, not just the
+        # new ones: they were already clean, and this keeps them that way.
+        run: shellcheck deploy/*.sh
+
+      - name: Verify the release gate
+        run: bash deploy/verify-release.test.sh
 
   gitleaks:
     name: Secret scan (gitleaks)

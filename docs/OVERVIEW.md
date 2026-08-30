@@ -389,6 +389,22 @@ was not entitled to read the message it points at.
   and both surfaces are unstyled plumbing until their artboards land — `docs/design/STATUS.md`
   carries what each one must answer.
 
+- **The release pipeline (Phase 4, [releasing.md](releasing.md)).** A `v*` tag builds the
+  binaries and the server image, generates an SPDX SBOM, and signs one `SHA256SUMS` covering
+  every file with keyless Sigstore/cosign — the certificate identity is the release workflow at
+  that tag, so there is no signing key to steal. `deploy/verify-release.sh` is what an operator
+  or the updater runs against a download: signature, full checksum coverage, SBOM presence, and
+  then a **refusal to install a version older than the one running** unless `--force` is passed.
+  That last check is not paperwork — an old release of ours is already validly signed, so a
+  downgrade needs no forgery at all, and it is how a patched instance gets walked back onto a
+  fixed vulnerability.
+
+  Its three negatives run on every pull request against a real cosign binary with locally
+  generated keys. **What has never run is the keyless half** — Fulcio, Rekor, and the identity
+  matching — because no tag has ever been pushed. The workflow verifies its own output with the
+  same script, so the first real tag is where a wrong identity pattern fails. There is also no
+  auto-updater yet: this is the gate one will call, not the updater itself.
+
 ## What's next
 
 **Phase 3 — end-to-end encryption with MLS.** The foundations are decided and the transport is
@@ -485,6 +501,7 @@ is created at install time; everyone else comes from the dashboard or invite lin
 | [design/STATUS.md](design/STATUS.md) | Which screens have delivered designs |
 | [design/BRIEFS.md](design/BRIEFS.md) | Functional design requirements per screen |
 | [design/LOGIN_HANDOFF.md](design/LOGIN_HANDOFF.md) | The delivered auth design contract (mockup in `design/mockups/`) |
+| [releasing.md](releasing.md) | How a release is cut, verified, and coordinated with an advisory |
 | [../SECURITY.md](../SECURITY.md) | Threat model, non-goals, disclosure policy, response and patch targets |
 | [hardening.md](hardening.md) | Optional extras on top of the secure defaults — admin allow-listing, proxy variants, key custody, what to monitor |
 | [security.txt](security.txt) | RFC 9116 security contact. Draft: not served anywhere until the website exists |
