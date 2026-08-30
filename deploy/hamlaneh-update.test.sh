@@ -323,6 +323,14 @@ check "a new version that will not come up healthy is rolled back" 4 \
   home_update "$REL_141_SICK" v1.4.1
 assert_installed v1.4.0 "rollback restored the previous binary"
 
+# A restart command that fails must not abort the run before the health check
+# has had its say — that is precisely the case where the rollback is needed.
+install_home v1.4.0
+check "a failing restart still reaches the rollback" 4 \
+  "ROLLED BACK: v1.4.1 did not come up healthy" \
+  home_update "$REL_141_SICK" v1.4.1 --restart-command false
+assert_installed v1.4.0 "a failing restart rolled back like any other failure"
+
 # --- the channel, on by default ---------------------------------------------
 
 install_home v1.4.0

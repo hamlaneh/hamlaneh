@@ -452,8 +452,14 @@ restart_home() {
   log "restarting: ${restart_command}"
   # Word-split on purpose: --restart-command is a command line, and the
   # default is one.
+  #
+  # A non-zero exit is logged and not fatal, deliberately: the health check
+  # that follows is the arbiter of whether the new version is serving, and
+  # letting set -e kill the run here would skip the rollback in exactly the
+  # case that most needs it.
   # shellcheck disable=SC2086
-  $restart_command
+  $restart_command ||
+    log "the restart command exited non-zero — the health check decides what happens next"
 }
 
 apply_home() {
