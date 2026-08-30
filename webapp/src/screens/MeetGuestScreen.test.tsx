@@ -30,17 +30,20 @@ const ORG = "Sanjab Coop";
  * holds the grid to its own behaviour.
  */
 function fakeMedia(participants: MediaParticipant[]) {
-  const record = { connections: [] as { url: string; token: string }[] };
+  const record = {
+    connections: [] as { url: string; token: string; keyed: boolean }[],
+  };
   const session: MediaSession = {
     participants: () => participants,
     subscribe: () => () => undefined,
     setMicrophoneEnabled: () => Promise.resolve(),
     setCameraEnabled: () => Promise.resolve(),
     setScreenShareEnabled: () => Promise.resolve(),
+    setKey: () => Promise.reject(new Error("a conference is never keyed")),
     disconnect: () => Promise.resolve(),
   };
-  const connect: MediaConnect = (url, token) => {
-    record.connections.push({ url, token });
+  const connect: MediaConnect = (url, token, key) => {
+    record.connections.push({ url, token, keyed: key !== undefined });
     return Promise.resolve(session);
   };
   return { connect, record };
@@ -233,9 +236,15 @@ describe("joining as a guest", () => {
     // The ticket goes to the media client, and the signal address is derived
     // from this page's own origin — a guest is told no more about the media
     // plane than a member is (ADR 005).
+    //
+    // `keyed: false` is the room-kind boundary, asserted where it is decided
+    // (ADR 006 decision 3, ADR 009 decision 2): a conference admits guests, a
+    // guest holds no MLS leaf, and this screen passes no key resolver at all
+    // — so there is no runtime flag a hostile server could flip to key it, or
+    // to talk a member's channel call out of being keyed.
     await waitFor(() => {
       expect(media.record.connections).toEqual([
-        { url: `ws://${window.location.host}`, token: TICKET },
+        { url: `ws://${window.location.host}`, token: TICKET, keyed: false },
       ]);
     });
 

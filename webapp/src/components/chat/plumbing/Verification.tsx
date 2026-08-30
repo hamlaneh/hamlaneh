@@ -150,6 +150,18 @@ interface VerificationWarningProps {
   onCompare: (userId: string) => void;
   onAccept: (userId: string) => void;
   onAcceptOwn: () => void;
+  /**
+   * The first and last sentences, when this is a call rather than a composer
+   * (ADR 009, decision 3 — same records, same two exits, same state).
+   *
+   * Overridable because only these two differ: a call has to say that the
+   * microphone and camera stopped and that this is not a hardware fault,
+   * where the composer says sending is paused. Everything between them — who
+   * changed, which change it was, and the two exits — is identical, and
+   * copying the component to change two lines is how the two drift apart.
+   */
+  headline?: string;
+  continues?: string;
 }
 
 export function VerificationWarning({
@@ -160,12 +172,15 @@ export function VerificationWarning({
   onCompare,
   onAccept,
   onAcceptOwn,
+  headline,
+  continues,
 }: VerificationWarningProps) {
   const { t } = useTranslation();
+  const title = headline ?? t("chat.e2ee.verification.blockedTitle");
 
   return (
-    <section className="hm-plumbing" aria-label={t("chat.e2ee.verification.blockedTitle")}>
-      <p>{t("chat.e2ee.verification.blockedTitle")}</p>
+    <section className="hm-plumbing" aria-label={title}>
+      <p>{title}</p>
 
       {/* The reader's own account first: it is the loudest thing in the slice,
           because a device nobody here approved is reading everything sent
@@ -217,7 +232,7 @@ export function VerificationWarning({
           saying so is more useful than a button that cannot help. */}
       {uncoveredLeaves > 0 ? <p>{t("chat.e2ee.verification.uncovered")}</p> : null}
 
-      <p>{t("chat.e2ee.verification.readingContinues")}</p>
+      <p>{continues ?? t("chat.e2ee.verification.readingContinues")}</p>
     </section>
   );
 }

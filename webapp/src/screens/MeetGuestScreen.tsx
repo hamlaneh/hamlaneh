@@ -337,6 +337,23 @@ export function MeetGuestScreen({ token, media }: MeetGuestScreenProps) {
             <InfoIcon size={17} strokeWidth={1.85} className="hm-meet__note-icon" />
             <span>{t("meet.guestNote")}</span>
           </p>
+
+          {/* UNDESIGNED — `conference-plain-label` is PENDING in
+              docs/design/STATUS.md, so this is plain semantic HTML.
+
+              It is not optional and it is not a caveat to be tucked away: a
+              conference admits guests, a guest holds no credential and
+              therefore no MLS leaf, so there is nothing to derive a key with
+              (ADR 006, decision 3). The screen says the server can reach the
+              audio and video, and the unqualified word "encrypted" never
+              appears here — this meeting really does run over TLS and SRTP,
+              and saying "encrypted" without saying which kind is exactly the
+              overclaim PLAN §2.4 forbids. The second sentence exists so a
+              working, deliberate feature does not read as a broken one. */}
+          <div className="hm-plumbing">
+            <p>{t("meet.mediaLabel")}</p>
+            <p>{t("meet.mediaWhy")}</p>
+          </div>
         </div>
       </main>
     </div>
