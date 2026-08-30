@@ -1549,6 +1549,32 @@
   inset-block-end: var(--hm-footer-block-size);
 }
 
+/*
+ * Plumbing that is a NOTICE rather than a menu, and therefore belongs in the
+ * document flow.
+ *
+ * `.hm-plumbing` floats because most of its users are popovers — the account
+ * and channel menus, the create dialog, the people picker, the verification
+ * sheet — and those genuinely sit over the conversation. A banner is not one
+ * of those, and giving it the popover's treatment cost a working feature: the
+ * encryption notice, absolutely positioned at the top of the conversation
+ * column with a background and `z-index: 5`, covered the call strip, so the
+ * button that starts a call in an encrypted channel could not be clicked at
+ * all. Media E2EE was unreachable from the UI and no unit test could see it,
+ * because none of them lay anything out. The two-browser call e2e is what
+ * found it.
+ *
+ * This is a correction rather than a design decision: an undesigned surface
+ * is supposed to be "plain semantic HTML, no custom styling beyond structure"
+ * (CLAUDE.md, UI pipeline), and an absolutely positioned box with a
+ * background and a stacking order is none of those things. It stays visually
+ * plain and awaits its artboard.
+ */
+.hm-plumbing--inline {
+  position: static;
+  z-index: auto;
+}
+
 /* ── responsive ────────────────────────────────────────────────────── */
 
 /* Below 1280 the search results stop being a third column and float over the

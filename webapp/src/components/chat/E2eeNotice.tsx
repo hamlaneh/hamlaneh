@@ -34,7 +34,7 @@ export function E2eeNotice({ channel, device, channelState, resolveName }: E2eeN
   }
 
   return (
-    <section className="hm-plumbing" aria-label={t("chat.e2ee.regionLabel")}>
+    <section className="hm-plumbing hm-plumbing--inline" aria-label={t("chat.e2ee.regionLabel")}>
       {/* The indicator itself: this conversation is encrypted, stated plainly
           and without any of the words engineering principle 4 forbids. */}
       <p>{t("chat.e2ee.indicator")}</p>
