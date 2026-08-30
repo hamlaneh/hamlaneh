@@ -345,6 +345,14 @@ export function useCallSession(
   // Rotation: one `setKey` per epoch, filling the slot the epoch names. The
   // old slot keeps its key, so frames still in flight decode; the sender's
   // outbound slot switches here, at the moment its own merge landed.
+  //
+  // `status` is a dependency and not decoration. A commit can land in the
+  // seconds between the click and the connection, and an effect keyed on the
+  // epoch alone would have already fired — against a session that did not
+  // exist yet — and never fire again: the call would stay sealed under the
+  // epoch it was born at while everybody else moved on. Re-running when the
+  // session appears is what closes that, and `keyedAt` is what keeps it from
+  // re-setting the key `connect` already carried.
   useEffect(() => {
     const session = sessionRef.current;
     const key = latestKeys.current;
@@ -358,7 +366,7 @@ export function useCallSession(
       // left — which they will not decode. Silence, not plaintext.
       console.warn("Rotating the call's media key failed:", error);
     });
-  }, [epoch]);
+  }, [epoch, status]);
 
   // The publish gate, and the two exits out of it. There is no third: nothing
   // here clears on a timer, on a dismissal, or per track.
