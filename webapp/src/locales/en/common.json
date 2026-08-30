@@ -817,8 +817,11 @@
       "visibilityNote": "Both kinds are visible only to their members. Nobody can find or read a channel they were not invited to.",
       "submit": "Create channel",
       "failed": "The channel could not be created.",
-      "e2eeLabel": "End-to-end encrypt this channel",
-      "e2eeNote": "Cannot be changed later. Encrypted channels have no server-side search, no link previews and no mention badges, and files cannot be attached yet."
+      "e2eeByMode": {
+        "strict": "This channel will be end-to-end encrypted. Your organization encrypts every conversation created here, and a channel's encryption is fixed when it is created.",
+        "compliance": "This channel will not be end-to-end encrypted. Your organization stores conversations so the server can read them, which is what lets search, retention and export exist, and a channel's encryption is fixed when it is created."
+      },
+      "e2eeNote": "Encrypted channels have no server-side search, no link previews and no mention badges, and files cannot be attached yet."
     },
     "channelMenu": {
       "topicLabel": "Topic",
@@ -830,8 +833,15 @@
       "invite": "Invite",
       "message": "Message",
       "failed": "That did not work. Try again.",
-      "e2eeLabel": "End-to-end encrypt this conversation",
-      "e2eeNote": "Cannot be changed later, and only applies if this conversation does not exist yet — reopening one you already have keeps whatever it was opened as."
+      "e2eeByMode": {
+        "strict": "A new conversation started here will be end-to-end encrypted. Your organization encrypts every conversation created here.",
+        "compliance": "A new conversation started here will not be end-to-end encrypted. Your organization stores conversations so the server can read them, which is what lets search, retention and export exist."
+      },
+      "reopenNote": "This applies only if the conversation does not exist yet. Reopening one you already have keeps whatever it was opened as, whatever the mode is now."
+    },
+    "e2eeByOrg": {
+      "requiredError": "Your organization now encrypts every conversation created here, so this one was not created. Nothing was made — try again and it will be end-to-end encrypted.",
+      "forbiddenError": "Your organization now stores conversations so the server can read them, so this one was not created. Nothing was made — try again and it will not be end-to-end encrypted."
     },
     "e2ee": {
       "regionLabel": "Encryption",

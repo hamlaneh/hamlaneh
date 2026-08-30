@@ -2,7 +2,7 @@ import { http, HttpResponse } from "msw";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { api } from "../api/client";
-import { CHAT_USERS } from "../mocks/chat";
+import { CHAT_USERS, setMockEncryptionMode } from "../mocks/chat";
 import { resetMockAuth } from "../mocks/handlers";
 import { mockMlsDevices, mockMlsGroup, mockMlsWelcomes, seedMockMlsDevice } from "../mocks/mls";
 import { server } from "../mocks/node";
@@ -81,6 +81,9 @@ afterEach(() => {
   server.resetHandlers();
   resetMockAuth();
   setMlsModule(null);
+  // One case puts the mock instance in Compliance; every other case in this
+  // file assumes the mode every install actually has.
+  setMockEncryptionMode("strict");
 });
 
 afterAll(() => {
@@ -460,7 +463,23 @@ describe("a direct message", () => {
     expect(peer.decrypt(groupId, fromBase64(sealed?.ciphertext ?? ""))).toBe("just between us");
   });
 
-  it("opens as plaintext when the flag says so", async () => {
+  it("is refused, not quietly encrypted, when the flag fights a strict org", async () => {
+    // ADR 011 decision 1: the mode decides what a conversation is born as, and
+    // a request that disagrees is refused rather than coerced — silently
+    // handing back the opposite of what was asked for is how an immutable
+    // surprise is manufactured.
+    const { data, error } = await api.POST("/api/v1/dms", {
+      body: { user_id: CHAT_USERS.omid.id, e2ee: false },
+    });
+    expect(data).toBeUndefined();
+    expect(error?.error.code).toBe("e2ee_required_by_org");
+  });
+
+  it("opens as plaintext under a compliance org", async () => {
+    // The only way a plaintext conversation is born now. Not reachable through
+    // the API until Compliance unlocks, so it is set directly — the rule has
+    // to be right the day it can be.
+    setMockEncryptionMode("compliance");
     const { data } = await api.POST("/api/v1/dms", {
       body: { user_id: CHAT_USERS.omid.id, e2ee: false },
     });

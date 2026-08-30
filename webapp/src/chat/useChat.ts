@@ -41,6 +41,18 @@ const MLS_RETRY_MS = 5_000;
 const MLS_RETRY_CAP_MS = 180_000;
 const SEARCH_PAGE_SIZE = 20;
 
+/**
+ * A conversation, or the server's own refusal code for why there isn't one.
+ *
+ * The code is carried rather than flattened to a boolean because two of them
+ * have to be said out loud: `e2ee_required_by_org` and `e2ee_forbidden_by_org`
+ * mean the organisation's mode is not what this client displayed, which is the
+ * one failure the person in front of the screen can act on.
+ */
+export type ConversationResult =
+  | { readonly channel: Channel }
+  | { readonly error: string };
+
 export interface ChatController {
   state: ChatState;
   activeChannel: Channel | undefined;
@@ -57,17 +69,22 @@ export interface ChatController {
   closeSearch: () => void;
   /** Dismisses the "Back online" banner once its window has elapsed. */
   settleConnection: () => void;
-  /** `e2ee` is fixed at creation and never toggled (openapi.yaml). */
+  /**
+   * `e2ee` is fixed at creation and never toggled (openapi.yaml). It asserts
+   * what the surface promised the user rather than being left to the server,
+   * so an organisation mode this client has stale is refused by name instead
+   * of silently creating the opposite (ADR 011 decision 1).
+   */
   createChannel: (
     slug: string,
     kind: "public" | "private",
     e2ee: boolean,
-  ) => Promise<Channel | null>;
+  ) => Promise<ConversationResult>;
   /**
    * `e2ee` applies only when this opens a DM that did not exist; an existing
    * one comes back as it is, whatever is passed (openapi.yaml).
    */
-  openDirectMessage: (userId: string, e2ee: boolean) => Promise<Channel | null>;
+  openDirectMessage: (userId: string, e2ee: boolean) => Promise<ConversationResult>;
   inviteMember: (userId: string) => Promise<boolean>;
   setTopic: (topic: string) => Promise<boolean>;
   /** Closes the DM ring toast, and that is all it does (ADR 005). */
@@ -916,35 +933,41 @@ export function useChat({
   /* ── channel management ─────────────────────────────────────────── */
 
   const createChannel = useCallback(
-    async (slug: string, kind: "public" | "private", e2ee: boolean) => {
+    async (slug: string, kind: "public" | "private", e2ee: boolean): Promise<ConversationResult> => {
       try {
-        const { data } = await api.POST("/api/v1/channels", { body: { slug, kind, e2ee } });
+        const { data, error } = await api.POST("/api/v1/channels", { body: { slug, kind, e2ee } });
         if (data === undefined) {
-          return null;
+          // No data means the client's own union has `error`. A response that
+          // carries neither throws here and lands in the catch below, which is
+          // the same "unexpected" either way.
+          return { error: error.error.code };
         }
         dispatch({ type: "channel/upsert", channel: data });
-        return data;
+        return { channel: data };
       } catch (error) {
         console.warn("Could not create the channel:", error);
-        return null;
+        return { error: "unexpected" };
       }
     },
     [],
   );
 
-  const openDirectMessage = useCallback(async (userId: string, e2ee: boolean) => {
-    try {
-      const { data } = await api.POST("/api/v1/dms", { body: { user_id: userId, e2ee } });
-      if (data === undefined) {
-        return null;
+  const openDirectMessage = useCallback(
+    async (userId: string, e2ee: boolean): Promise<ConversationResult> => {
+      try {
+        const { data, error } = await api.POST("/api/v1/dms", { body: { user_id: userId, e2ee } });
+        if (data === undefined) {
+          return { error: error.error.code };
+        }
+        dispatch({ type: "channel/upsert", channel: data });
+        return { channel: data };
+      } catch (error) {
+        console.warn("Could not open the direct message:", error);
+        return { error: "unexpected" };
       }
-      dispatch({ type: "channel/upsert", channel: data });
-      return data;
-    } catch (error) {
-      console.warn("Could not open the direct message:", error);
-      return null;
-    }
-  }, []);
+    },
+    [],
+  );
 
   const inviteMember = useCallback(
     async (userId: string) => {
