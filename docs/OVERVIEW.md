@@ -486,3 +486,5 @@ is created at install time; everyone else comes from the dashboard or invite lin
 | [design/BRIEFS.md](design/BRIEFS.md) | Functional design requirements per screen |
 | [design/LOGIN_HANDOFF.md](design/LOGIN_HANDOFF.md) | The delivered auth design contract (mockup in `design/mockups/`) |
 | [../SECURITY.md](../SECURITY.md) | Threat model, non-goals, disclosure policy |
+| [hardening.md](hardening.md) | Optional extras on top of the secure defaults — admin allow-listing, proxy variants, key custody, what to monitor |
+| [security.txt](security.txt) | RFC 9116 security contact. Draft: not served anywhere until the website exists |
