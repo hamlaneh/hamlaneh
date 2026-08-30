@@ -58,7 +58,13 @@ const PERSIAN_SPECS = ["**/fa-smoke.e2e.ts", "**/fa-rtl-snapshots.e2e.ts"];
  * is in one readable place: a reader asking "what runs in Persian" gets an
  * answer from this file instead of from every spec's first three lines.
  */
-const LOCALE_AGNOSTIC_SPECS = ["**/calls-relay-only.e2e.ts", "**/livekit-key-leak.e2e.ts"];
+const LOCALE_AGNOSTIC_SPECS = [
+  "**/calls-relay-only.e2e.ts",
+  "**/livekit-key-leak.e2e.ts",
+  // Audio bytes, decoder energy and an MLS epoch. Nothing in what it measures
+  // has a language in it, and it is one of the most expensive specs there is.
+  "**/e2ee-call-rotation.e2e.ts",
+];
 
 /**
  * `.e2e.ts`, not `.spec.ts`: Vitest's default include is
