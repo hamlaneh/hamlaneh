@@ -570,6 +570,14 @@ export class MlsService {
       if (member.user_id === this.options.currentUserId) {
         continue;
       }
+      // Somebody who has registered nothing is not a first sight — there is no
+      // key set to have seen. Pinning their emptiness would make their first
+      // real device a "changed keys" warning, which is the commonest ordinary
+      // event there is: a colleague signing in after the channel was opened.
+      // They are pinned on the reconcile that first shows them a device.
+      if (member.signature_public_keys.length === 0) {
+        continue;
+      }
       if (this.records[member.user_id] === undefined) {
         this.records = {
           ...this.records,
