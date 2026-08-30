@@ -50,6 +50,16 @@ const HANDLE_SIGNATURE_PUBLIC_KEY: &str = "signature_public_key";
 const HANDLE_GROUP_IDS: &str = "group_ids";
 const HANDLE_KEY_PACKAGE_BATCHES: &str = "key_package_batches";
 
+/// The MLS-Exporter parameters that key call media (ADR 009, decision 1).
+///
+/// Fixed here so no caller chooses: the label is the domain separator, and any
+/// future exporter use takes a *new label* rather than a context convention —
+/// which is why the context is empty and stays that way. Thirty-two bytes is
+/// what LiveKit's key-material import takes.
+const MEDIA_EXPORTER_LABEL: &str = "hamlaneh media e2ee v1";
+const MEDIA_EXPORTER_CONTEXT: &[u8] = &[];
+const MEDIA_EXPORTER_LENGTH: usize = 32;
+
 /// How many published key-package batches keep their private init keys.
 ///
 /// Not one: the server's replace-all publish deletes the *unclaimed* pool,
@@ -323,6 +333,30 @@ impl MlsDevice {
     /// The group's current epoch — this device's own count, not the server's.
     pub fn epoch(&self, group_id: &[u8]) -> Result<u64, JsError> {
         Ok(self.require_group(group_id)?.epoch().as_u64())
+    }
+
+    /// The group's media-encryption secret for the epoch it is currently at —
+    /// RFC 9420's MLS-Exporter, with the parameters ADR 009 fixes.
+    ///
+    /// Every member derives these same bytes from the epoch's key schedule, so
+    /// nothing about the media key is ever distributed and no member is a
+    /// keying authority. It changes with the epoch by construction: a device
+    /// added at epoch N cannot derive anything before N, and a device the
+    /// removal commit evicted cannot derive anything after it.
+    ///
+    /// Glue, like everything else here: `export_secret` is OpenMLS's own, and
+    /// the three parameters are constants above rather than arguments — a
+    /// caller that could choose the label could collide two uses of the
+    /// exporter, which is the one mistake this signature cannot express.
+    pub fn exporter(&self, group_id: &[u8]) -> Result<Vec<u8>, JsError> {
+        self.require_group(group_id)?
+            .export_secret(
+                self.provider.crypto(),
+                MEDIA_EXPORTER_LABEL,
+                MEDIA_EXPORTER_CONTEXT,
+                MEDIA_EXPORTER_LENGTH,
+            )
+            .map_err(|error| fail("could not export the media secret", error))
     }
 
     /// The credential identity of every member leaf, packed as UTF-8.

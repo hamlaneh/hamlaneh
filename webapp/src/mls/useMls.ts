@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 
 import type { Message } from "../chat/types";
 import { MlsService } from "./service";
-import type { MessageBody, MlsState } from "./types";
+import type { MediaKey, MessageBody, MlsState } from "./types";
 import { initialMlsState } from "./types";
 
 export interface MlsController {
@@ -23,6 +23,8 @@ export interface MlsController {
   ) => Promise<{ epoch: number; ciphertext: string } | null>;
   /** Keeps the plaintext of a message this device sent (see the service). */
   rememberSent: (messageId: string, text: string) => void;
+  /** The exporter-derived key a call in this conversation uses (ADR 009). */
+  mediaKey: (channelId: string) => MediaKey | null;
   /** Queues the decryption of whatever in this page is still encrypted. */
   decryptAll: (channelId: string, messages: readonly Message[]) => void;
   /** What a bubble should draw for this message. */
@@ -101,6 +103,11 @@ export function useMls(currentUserId: string): MlsController {
     [service],
   );
 
+  const mediaKey = useCallback(
+    (channelId: string) => service.mediaKey(channelId),
+    [service],
+  );
+
   const decryptAll = useCallback(
     (channelId: string, messages: readonly Message[]) => {
       for (const message of messages) {
@@ -154,6 +161,7 @@ export function useMls(currentUserId: string): MlsController {
       memberRemoved,
       encrypt,
       rememberSent,
+      mediaKey,
       decryptAll,
       bodyOf,
       safetyNumberFor,
@@ -170,6 +178,7 @@ export function useMls(currentUserId: string): MlsController {
       memberRemoved,
       encrypt,
       rememberSent,
+      mediaKey,
       decryptAll,
       bodyOf,
       safetyNumberFor,
