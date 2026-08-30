@@ -72,11 +72,19 @@
 // visibly does not sign in until a reverse proxy terminates TLS in front of
 // it. HAMLANEH_COMPRESS_RESPONSES=0 turns compression back off.
 //
-// The origin the browser uses must be the one HAMLANEH_PUBLIC_URL names,
-// which defaults to http://<the bind address>: the WebSocket handshake's
-// Origin check compares against it, so opening the same instance as
-// http://localhost:8080 rather than http://127.0.0.1:8080 needs that variable
-// set to say so. Startup logs the URL it expects.
+// HAMLANEH_PUBLIC_URL names the origin the browser uses, and defaults to
+// http://<the bind address>. Both loopback spellings of it work: on a loopback
+// bind the WebSocket handshake accepts localhost, 127.0.0.1 and [::1] on that
+// port, because they are one machine and one trust boundary. Any other origin
+// is refused exactly as it is in server mode. Startup logs the URL to open.
+//
+// On a fresh install home mode also creates the first administrator, because
+// there is no installer here to set HAMLANEH_ADMIN_USERNAME and
+// HAMLANEH_ADMIN_PASSWORD: the account is "admin" with a password generated
+// from crypto/rand, printed to the console once and never stored anywhere in
+// readable form. Setting those two variables uses them instead. Either way it
+// happens only while the users table is empty, so a restart neither prints a
+// password again nor mints a second admin.
 //
 // Home mode has no media server, so the three HAMLANEH_LIVEKIT_* variables
 // must be unset; the instance document reports calls off and the UI omits the
@@ -236,9 +244,25 @@ func start(ctx context.Context, m mode) error {
 	}
 	defer db.Close()
 
-	adminCfg, present := bootstrap.AdminFromEnv()
-	if err = bootstrap.EnsureAdmin(ctx, db, adminCfg, present); err != nil {
+	// The first administrator. Server mode reads the pair install.sh set;
+	// home mode, which has no installer, generates the password when nobody
+	// supplied one (home.go).
+	admin, err := m.firstAdmin()
+	if err != nil {
 		return err
+	}
+	created, err := bootstrap.EnsureAdmin(ctx, db, admin.cfg, admin.present)
+	if err != nil {
+		return err
+	}
+	// Both conditions, and this is the whole idempotence: minted says the
+	// password exists nowhere but this process, created says the account was
+	// made by THIS start. A restart fails the second, so the console never
+	// shows a credential twice and the account is never made twice.
+	if created && admin.minted {
+		if err = m.announceFirstAdmin(admin.cfg); err != nil {
+			return err
+		}
 	}
 
 	// A half-configured mail transport, or one with no public URL to build
@@ -277,10 +301,10 @@ func start(ctx context.Context, m mode) error {
 	// in for the CSRF header a browser cannot send on a handshake, so it
 	// needs the instance's public origin; without one it allows nothing
 	// and every upgrade is refused, which is the right way to fail.
-	gateway := wsgateway.New(db, m.publicURL,
+	gateway := wsgateway.New(db, m.publicURL, append(m.gatewayOptions(),
 		// Its message frames carry attachments and preview cards, whose
 		// URLs are minted per serialization like every other one.
-		wsgateway.WithURLSigner(attachmentURLs{signer}))
+		wsgateway.WithURLSigner(attachmentURLs{signer}))...)
 	// Closed before serve returns, because http.Server.Shutdown does not
 	// wait for hijacked connections and a WebSocket is one. Without this,
 	// shutdown reports success while sockets are still being served.
@@ -301,12 +325,12 @@ func start(ctx context.Context, m mode) error {
 	defer previews.Close()
 
 	if m.home {
-		// The URL to open, said once and exactly: the WebSocket handshake
-		// compares the browser's Origin against this string, so reaching the
-		// same instance as http://localhost:8080 instead of the address
-		// below is a different origin and its sockets are refused. Whoever
-		// wants that sets HAMLANEH_PUBLIC_URL to it. The data directory is
-		// logged beside it because it is the whole backup unit.
+		// The URL to open, said once and exactly. Reaching the same instance
+		// by the other loopback spelling — localhost for 127.0.0.1, or the
+		// reverse — works too: the gateway accepts both on this port, because
+		// they are one machine and one trust boundary (m.gatewayOptions). The
+		// data directory is logged beside it because it is the whole backup
+		// unit.
 		slog.Info("home mode ready", "open", m.publicURL, "data_dir", m.dataDir)
 	}
 

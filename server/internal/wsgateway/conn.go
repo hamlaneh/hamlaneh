@@ -76,9 +76,9 @@ type socket struct {
 // serve upgrades the connection and runs the socket to completion.
 func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, user storage.User, familyID uuid.UUID) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// The caller already refused every Origin but this one; the library's
-		// own check is set to the same value so the two can never disagree.
-		OriginPatterns: []string{g.origin},
+		// The caller already refused every Origin but these; the library's own
+		// check is set to the same set so the two can never disagree.
+		OriginPatterns: g.origins,
 		// §1: no permessage-deflate. A shared compression context mixing one
 		// user's text with another's is a length side-channel this protocol
 		// refuses to have rather than reason about per frame. This is also
