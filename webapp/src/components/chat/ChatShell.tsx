@@ -33,6 +33,7 @@ import { AccountMenu } from "./plumbing/AccountMenu";
 import { ChannelMenu } from "./plumbing/ChannelMenu";
 import { CreateChannelDialog } from "./plumbing/CreateChannelDialog";
 import { PeoplePicker } from "./plumbing/PeoplePicker";
+import { BackupIndicator, BackupSurfaces } from "./plumbing/BackupPlumbing";
 import { VerificationSheet, VerificationWarning } from "./plumbing/Verification";
 import { SettingsPanel } from "../settings/SettingsPanel";
 
@@ -599,6 +600,23 @@ export function ChatShell({
           onClose={closeOverlay}
         />
       ) : null}
+
+      {/* The recovery surfaces (ADR 010). Outside the channel pane on
+          purpose: a backup is an account-level thing, and the offer arrives at
+          first MLS use rather than in whichever conversation happened to be
+          open. */}
+      <BackupSurfaces
+        backup={mls.state.backup}
+        deviceReady={mls.state.device.status === "ready"}
+        onEnable={mls.enableBackup}
+        onDecline={() => {
+          void mls.declineBackup();
+        }}
+        onOpen={mls.openBackup}
+        onApply={mls.applyRestore}
+        onDiscard={mls.discardRestore}
+      />
+      <BackupIndicator backup={mls.state.backup} />
 
       {verifyFor === null ? null : (
         <VerificationSheet
