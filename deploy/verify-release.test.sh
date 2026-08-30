@@ -241,6 +241,15 @@ check "release built without an SBOM is rejected" 1 \
   "does not name an SBOM" \
   verify "$NO_SBOM" v1.3.0
 
+# A directory holding only a valid signature and no artifacts at all. Every
+# per-file check has nothing to look at, so this is the case where a verifier
+# built out of --ignore-missing quietly reports success over an empty download.
+EMPTY="$(clone_release "$REL" empty)"
+rm -f "$EMPTY"/hamlaneh-*
+check "signature without any artifacts does not verify" 1 \
+  "does not match its signed checksum" \
+  verify "$EMPTY" v1.2.3
+
 SBOM_GONE="$(clone_release "$REL" sbom-gone)"
 rm -f "$SBOM_GONE/hamlaneh-v1.2.3.spdx.json"
 check "SBOM named by the signature but not downloaded is rejected" 1 \
