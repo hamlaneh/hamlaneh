@@ -128,7 +128,7 @@ describe("useCallSession and media encryption", () => {
     expect(result.current.encrypted).toBe(false);
   });
 
-  it("refuses an encrypted conversation it cannot key, without spending a ticket", async () => {
+  it("refuses an encrypted conversation it cannot key, without spending a ticket", () => {
     const media = fakeMedia();
     const mintTicket = vi.fn<MintTicket>(() => Promise.resolve({ token: TICKET, status: 200 }));
     const { result } = setup(media.connect, { kind: "refused" }, mintTicket);
@@ -199,7 +199,7 @@ describe("useCallSession and media encryption", () => {
     // called, and a commit can merge while it is in flight. Without a rotation
     // once the session exists, this call would stay sealed under an epoch
     // everybody else has left — publishing noise, for as long as it lasts.
-    let release = () => undefined as void;
+    let release = (): void => undefined;
     const opened = new Promise<void>((resolve) => {
       release = () => {
         resolve();
