@@ -121,6 +121,33 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database %q: %w", abs, err)
 	}
+
+	// One connection, which is what makes the single-writer story exact
+	// rather than approximate.
+	//
+	// The busy timeout in the DSN converts contention into a wait, but
+	// SQLite's busy handler is not fair: it backs off and retries, so under
+	// many simultaneous writers a particular one can lose every race and time
+	// out with SQLITE_BUSY while the database was never busy for long. That
+	// is not a hypothetical — it is what the authorization matrix produced,
+	// hundreds of parallel cases against one file, and it would reach a
+	// household as an occasional 500 with no cause a user could see.
+	//
+	// database/sql's own queue IS fair: with a single connection every
+	// statement waits its turn in order and no caller can be starved. The
+	// busy timeout stays as the backstop for the one writer this process does
+	// not own — a backup tool, or a second instance somebody started by
+	// mistake.
+	//
+	// ponytail: reads queue behind writes too. At household scale that is
+	// microseconds and buys the fairness above; if a home instance ever
+	// measures a read waiting on a write, the upgrade is the standard split —
+	// a read pool of several connections beside this one-connection write
+	// pool — which needs every method classified read or write first.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+
 	if err := db.PingContext(ctx); err != nil {
 		return nil, errors.Join(fmt.Errorf("open database %q: %w", abs, err), db.Close())
 	}

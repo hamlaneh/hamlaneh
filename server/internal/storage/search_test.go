@@ -52,22 +52,39 @@ const (
 // CreateMessage cannot produce, because the server always stamps now() — and
 // returns its id.
 func searchSeedMessage(
-	ctx context.Context, t *testing.T, conn *pgx.Conn,
+	ctx context.Context, t *testing.T, raw *testdb.Raw,
 	channelID, authorID uuid.UUID, content string, at time.Time,
 ) uuid.UUID {
 	t.Helper()
 
-	var id uuid.UUID
-	err := conn.QueryRow(ctx,
-		`INSERT INTO messages (channel_id, author_id, client_msg_id, content, created_at)
-		 VALUES ($1, $2, gen_random_uuid(), $3, $4)
-		 RETURNING id`,
-		channelID, authorID, content, at,
-	).Scan(&id)
-	if err != nil {
-		t.Fatalf("seed search message %q: %v", content, err)
-	}
+	id := uuid.New()
+	raw.Exec(ctx, t,
+		`INSERT INTO messages (id, channel_id, author_id, client_msg_id, content, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		id, channelID, authorID, uuid.New(), content, at)
 	return id
+}
+
+// explainConn is the pgx connection the two planner tests below need. EXPLAIN
+// is only meaningful next to the SET that precedes it, and testdb.Raw is a
+// pool that would be free to answer the two on different sessions — so these
+// tests, which are PostgreSQL-only anyway, drive pgx directly.
+func explainConn(ctx context.Context, t *testing.T, dsn string) *pgx.Conn {
+	t.Helper()
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect for EXPLAIN: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := conn.Close(context.Background()); closeErr != nil {
+			t.Errorf("close EXPLAIN connection: %v", closeErr)
+		}
+	})
+	if _, err := conn.Exec(ctx, "SET enable_seqscan = off"); err != nil {
+		t.Fatalf("disable sequential scans: %v", err)
+	}
+	return conn
 }
 
 // mustSearch runs one page of search for a caller.
@@ -129,9 +146,8 @@ func resultTexts(page storage.SearchPage) []string {
 func TestSearchScopeIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	mallory := mustCreateUser(ctx, t, store, newUser("mallory"))
@@ -188,9 +204,8 @@ func TestSearchScopeIntegration(t *testing.T) {
 func TestSearchMatchingIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	ch := mustCreateChannel(ctx, t, store, newChannel("mixed", storage.ChannelKindPrivate, alice.ID))
@@ -264,9 +279,8 @@ func TestSearchMatchingIntegration(t *testing.T) {
 func TestSearchSnippetIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	at := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
@@ -358,9 +372,8 @@ func TestSearchSnippetIntegration(t *testing.T) {
 func TestSearchTotalIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	ch := mustCreateChannel(ctx, t, store, newChannel("counted", storage.ChannelKindPrivate, alice.ID))
@@ -369,15 +382,11 @@ func TestSearchTotalIntegration(t *testing.T) {
 	for i := range 5 {
 		searchSeedMessage(ctx, t, conn, ch.ID, alice.ID, fmt.Sprintf("few-hit %d", i), at)
 	}
-	// One past the cap, in one statement: the point is the count, not the
-	// inserts. created_at strictly increases so paging below has an order.
-	_, err := conn.Exec(ctx,
-		`INSERT INTO messages (channel_id, author_id, client_msg_id, content, created_at)
-		 SELECT $1, $2, gen_random_uuid(), 'many-hit ' || i, $3::timestamptz + (i || ' ms')::interval
-		 FROM generate_series(1, $4) i`,
-		ch.ID, alice.ID, at, storage.SearchTotalCap+1)
-	if err != nil {
-		t.Fatalf("seed capped fixture: %v", err)
+	// One past the cap: the point is the count, not the inserts. created_at
+	// strictly increases so paging below has an order.
+	for i := range storage.SearchTotalCap + 1 {
+		searchSeedMessage(ctx, t, conn, ch.ID, alice.ID,
+			fmt.Sprintf("many-hit %d", i), at.Add(time.Duration(i+1)*time.Millisecond))
 	}
 
 	t.Run("exact below the cap", func(t *testing.T) {
@@ -420,9 +429,8 @@ func TestSearchTotalIntegration(t *testing.T) {
 func TestSearchSoftDeletedIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	ch := mustCreateChannel(ctx, t, store, newChannel("deletions", storage.ChannelKindPrivate, alice.ID))
@@ -436,11 +444,9 @@ func TestSearchSoftDeletedIntegration(t *testing.T) {
 	}
 
 	// What slice 1.2b's delete handler will write.
-	if _, err := conn.Exec(ctx,
-		`UPDATE messages SET content = '', deleted_at = now(), deleted_by = author_id WHERE id = $1`,
-		doomed); err != nil {
-		t.Fatalf("soft-delete message: %v", err)
-	}
+	conn.Exec(ctx, t,
+		`UPDATE messages SET content = '', deleted_at = ?, deleted_by = author_id WHERE id = ?`,
+		time.Now().UTC(), doomed)
 
 	page := mustSearch(ctx, t, store, alice.ID, "erasable", 50, nil)
 	if page.Total != 0 || len(page.Results) != 0 {
@@ -466,9 +472,8 @@ func TestSearchSoftDeletedIntegration(t *testing.T) {
 func TestSearchPagingIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	ch := mustCreateChannel(ctx, t, store, newChannel("paged", storage.ChannelKindPrivate, alice.ID))
@@ -510,11 +515,12 @@ func TestSearchPagingIntegration(t *testing.T) {
 // between them is silent: the row matches in SQL and its snippet comes back
 // with nothing highlighted. This is the test that would fail instead.
 func TestSearchFoldingMatchesSQLIntegration(t *testing.T) {
+	testdb.RequiresPostgres(t, "pins the Go fold to migration 0006's translate() index expression, which the SQLite tree has no counterpart for")
 	t.Parallel()
 
-	_, dsn := testdb.New(t)
+	_, raw := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
+	conn := explainConn(ctx, t, raw.DSN())
 
 	for _, in := range []string{
 		"Deploying THE release",
@@ -548,21 +554,18 @@ func TestSearchFoldingMatchesSQLIntegration(t *testing.T) {
 // the planner CAN use this index for this statement, not what it prefers on
 // three rows.
 func TestSearchUsesTrigramIndexIntegration(t *testing.T) {
+	testdb.RequiresPostgres(t, "EXPLAIN against migration 0006's GIN pg_trgm index, which the SQLite tree deliberately does not build")
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	ch := mustCreateChannel(ctx, t, store, newChannel("planned", storage.ChannelKindPrivate, alice.ID))
-	searchSeedMessage(ctx, t, conn, ch.ID, alice.ID, "deploying the release",
+	searchSeedMessage(ctx, t, raw, ch.ID, alice.ID, "deploying the release",
 		time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
 
-	if _, err := conn.Exec(ctx, "SET enable_seqscan = off"); err != nil {
-		t.Fatalf("disable sequential scans: %v", err)
-	}
-
+	conn := explainConn(ctx, t, raw.DSN())
 	rows, err := conn.Query(ctx, "EXPLAIN "+storage.SearchPageQuery, alice.ID, "%deploy%", 21)
 	if err != nil {
 		t.Fatalf("EXPLAIN the search statement: %v", err)

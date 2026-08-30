@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
@@ -85,33 +84,17 @@ func enableTotp(ctx context.Context, t *testing.T, store testdb.Store, userID uu
 
 // expireTotpSetup pushes a pending setup's deadline into the past, the one state
 // no public method can produce on demand.
-func expireTotpSetup(ctx context.Context, t *testing.T, dsn string, userID uuid.UUID) {
+func expireTotpSetup(ctx context.Context, t *testing.T, raw *testdb.Raw, userID uuid.UUID) {
 	t.Helper()
-	execTotpSQL(ctx, t, dsn, `UPDATE user_totp SET setup_expires_at = now() - interval '1 second' WHERE user_id = $1`, userID)
-}
-
-func execTotpSQL(ctx context.Context, t *testing.T, dsn, sql string, args ...any) {
-	t.Helper()
-
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect for raw SQL: %v", err)
-	}
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			t.Errorf("close raw SQL connection: %v", closeErr)
-		}
-	}()
-
-	if _, err := conn.Exec(ctx, sql, args...); err != nil {
-		t.Fatalf("raw SQL: %v", err)
-	}
+	raw.Exec(ctx, t,
+		`UPDATE user_totp SET setup_expires_at = ? WHERE user_id = ?`,
+		time.Now().UTC().Add(-time.Second), userID)
 }
 
 func TestTotpSetupLifecycleIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 
 	t.Run("start creates a pending setup", func(t *testing.T) {
@@ -336,7 +319,7 @@ func TestTotpSetupLifecycleIntegration(t *testing.T) {
 	t.Run("activate refuses an expired setup", func(t *testing.T) {
 		user := mustCreateUser(ctx, t, store, newUser("activateexpired"))
 		startVerifiedTotpSetup(ctx, t, store, user.ID, totpCodeHashes("exp", 10))
-		expireTotpSetup(ctx, t, dsn, user.ID)
+		expireTotpSetup(ctx, t, raw, user.ID)
 
 		if _, err := store.ActivateTotp(ctx, user.ID); !errors.Is(err, storage.ErrTotpSetupNotVerified) {
 			t.Fatalf("ActivateTotp: %v, want ErrTotpSetupNotVerified", err)
@@ -346,7 +329,7 @@ func TestTotpSetupLifecycleIntegration(t *testing.T) {
 	t.Run("activate refuses a verified setup with no recovery codes", func(t *testing.T) {
 		user := mustCreateUser(ctx, t, store, newUser("activatenocodes"))
 		startVerifiedTotpSetup(ctx, t, store, user.ID, totpCodeHashes("gone", 10))
-		execTotpSQL(ctx, t, dsn, `DELETE FROM user_recovery_codes WHERE user_id = $1`, user.ID)
+		raw.Exec(ctx, t, `DELETE FROM user_recovery_codes WHERE user_id = ?`, user.ID)
 
 		if _, err := store.ActivateTotp(ctx, user.ID); !errors.Is(err, storage.ErrTotpSetupNotVerified) {
 			t.Fatalf("ActivateTotp: %v, want ErrTotpSetupNotVerified", err)

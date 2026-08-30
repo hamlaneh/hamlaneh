@@ -144,9 +144,8 @@ func assertCounts(t *testing.T, ch storage.Channel, unread, mentions int, lastRe
 func TestChannelUnreadCountsIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("countalice"))
 	bob := mustCreateUser(ctx, t, store, newUser("countbob"))
@@ -282,9 +281,8 @@ func TestChannelUnreadCountsIntegration(t *testing.T) {
 func TestChannelUnreadCountsAfterReadPositionIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("readalice"))
 	bob := mustCreateUser(ctx, t, store, newUser("readbob"))
@@ -863,7 +861,7 @@ func TestChannelDMPeerIntegration(t *testing.T) {
 func TestOpenDirectMessageConcurrentIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	bob := mustCreateUser(ctx, t, store, newUser("bob"))
@@ -916,14 +914,18 @@ func TestOpenDirectMessageConcurrentIntegration(t *testing.T) {
 		t.Errorf("the openers landed on %d distinct channels, want 1", len(ids))
 	}
 
-	pool := assertPool(ctx, t, dsn)
+	// The pair is canonicalized here rather than by least()/greatest(), which
+	// SQLite spells min()/max(): both drivers order the pair by the uuid's own
+	// bytes, and the canonical text form compares the same way.
+	low, high := alice.ID, bob.ID
+	if high.String() < low.String() {
+		low, high = high, low
+	}
 	var rows int
-	err := pool.QueryRow(ctx,
-		`SELECT count(*)::int FROM channels
-		 WHERE kind = 'dm'
-		   AND dm_user_a = least($1::uuid, $2::uuid)
-		   AND dm_user_b = greatest($1::uuid, $2::uuid)`,
-		alice.ID, bob.ID,
+	err := raw.QueryRow(ctx,
+		`SELECT count(*) FROM channels
+		 WHERE kind = 'dm' AND dm_user_a = ? AND dm_user_b = ?`,
+		low, high,
 	).Scan(&rows)
 	if err != nil {
 		t.Fatalf("count dm rows: %v", err)
@@ -1232,9 +1234,13 @@ func TestRemoveChannelMemberConcurrentIntegration(t *testing.T) {
 // rather than merely unlikely. Under FOR UPDATE this test hangs until its
 // deadline.
 func TestRemoveChannelMemberDoesNotBlockOnAddIntegration(t *testing.T) {
+	// PostgreSQL lock STRENGTH, which is the one thing single-writer SQLite
+	// makes false by design: there the uncommitted insert below holds the only
+	// write lock, so the removal correctly waits it out (ADR 012, decision 3).
+	testdb.RequiresPostgres(t, "FOR NO KEY UPDATE does not conflict with KEY SHARE — a lock-strength property SQLite has no rows locks for")
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 	owner := mustCreateUser(ctx, t, store, newUser("owner"))
 	keeper := mustCreateUser(ctx, t, store, newUser("keeper"))
@@ -1248,7 +1254,7 @@ func TestRemoveChannelMemberDoesNotBlockOnAddIntegration(t *testing.T) {
 	// The add, mid-flight and uncommitted. It is spelled out rather than
 	// driven through AddChannelMember because the point is to hold the locks
 	// that method takes and then stop, which a method that commits cannot do.
-	pool := assertPool(ctx, t, dsn)
+	pool := assertPool(ctx, t, raw.DSN())
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin the in-flight add: %v", err)

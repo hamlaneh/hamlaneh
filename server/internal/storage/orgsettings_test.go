@@ -4,16 +4,35 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
 )
 
+// columnCount reports how many columns of one table carry a name. The
+// question is about the schema rather than about PostgreSQL, so each driver
+// answers it out of its own catalogue: information_schema on one side, the
+// table_info pragma on the other (ADR 012, decision 3).
+func columnCount(ctx context.Context, t *testing.T, raw *testdb.Raw, table, column string) int {
+	t.Helper()
+
+	query := `SELECT count(*) FROM information_schema.columns
+	          WHERE table_schema = 'public' AND table_name = ? AND column_name = ?`
+	if raw.Driver() == testdb.DriverSQLite {
+		query = `SELECT count(*) FROM sqlite_master m JOIN pragma_table_info(m.name) p
+		         WHERE m.type = 'table' AND m.name = ? AND p.name = ?`
+	}
+
+	var n int
+	if err := raw.QueryRow(ctx, query, table, column).Scan(&n); err != nil {
+		t.Fatalf("inspect %s.%s: %v", table, column, err)
+	}
+	return n
+}
+
 func TestOrgSettingsIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 
 	t.Run("a fresh instance is closed by default", func(t *testing.T) {
@@ -112,27 +131,10 @@ func TestOrgSettingsIntegration(t *testing.T) {
 	})
 
 	t.Run("accounts_without_totp is computed, not stored", func(t *testing.T) {
-		conn, err := pgx.Connect(ctx, dsn)
-		if err != nil {
-			t.Fatalf("connect: %v", err)
-		}
-		defer func() {
-			if closeErr := conn.Close(ctx); closeErr != nil {
-				t.Errorf("close: %v", closeErr)
-			}
-		}()
-
 		// No column holds it. If one ever appears, this test is the place
 		// the mistake shows: a stored count goes stale the moment somebody
 		// finishes their two-step setup.
-		var stored int
-		if scanErr := conn.QueryRow(ctx,
-			`SELECT count(*) FROM information_schema.columns
-			 WHERE table_name = 'org_settings' AND column_name = 'accounts_without_totp'`,
-		).Scan(&stored); scanErr != nil {
-			t.Fatalf("inspect columns: %v", scanErr)
-		}
-		if stored != 0 {
+		if columnCount(ctx, t, raw, "org_settings", "accounts_without_totp") != 0 {
 			t.Error("accounts_without_totp is a stored column; it must be derived on every read")
 		}
 

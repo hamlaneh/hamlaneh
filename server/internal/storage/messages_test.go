@@ -10,97 +10,72 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
 )
 
-// messagesRawConn opens a direct connection to the scratch database for the
-// fixtures storage has no function for (channels) and for the rows storage
+// The fixtures storage has no function for (channels) and the rows storage
 // deliberately cannot write: an explicit created_at, and a soft-deleted
-// message. It registers citext exactly like the pool's connections, because
-// channels.slug is a citext column.
-func messagesRawConn(ctx context.Context, t *testing.T, dsn string) *pgx.Conn {
-	t.Helper()
-
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect for fixtures: %v", err)
-	}
-	t.Cleanup(func() {
-		if closeErr := conn.Close(context.Background()); closeErr != nil {
-			t.Errorf("close fixture connection: %v", closeErr)
-		}
-	})
-	if err := storage.RegisterCitext(ctx, conn); err != nil {
-		t.Fatalf("register citext on fixture connection: %v", err)
-	}
-	return conn
-}
+// message. They go through testdb.Raw, so a test that needs one of them is
+// still a test of the contract on both drivers rather than a PostgreSQL test.
+//
+// Neither driver generates an identifier or stamps a fixture's timestamps for
+// us — the SQLite tree has no gen_random_uuid() and no now() defaults — so
+// every insert below names its own id and its own times, which the PostgreSQL
+// side accepts unchanged.
 
 // seedMessagesChannel inserts a public channel and returns its id.
-func seedMessagesChannel(ctx context.Context, t *testing.T, conn *pgx.Conn, slug string) uuid.UUID {
+func seedMessagesChannel(ctx context.Context, t *testing.T, raw *testdb.Raw, slug string) uuid.UUID {
 	t.Helper()
 
-	var id uuid.UUID
-	err := conn.QueryRow(ctx,
-		`INSERT INTO channels (kind, slug) VALUES ('public', $1) RETURNING id`, slug,
-	).Scan(&id)
-	if err != nil {
-		t.Fatalf("seed channel %s: %v", slug, err)
-	}
+	id := uuid.New()
+	now := time.Now().UTC()
+	raw.Exec(ctx, t,
+		`INSERT INTO channels (id, kind, slug, created_at, updated_at)
+		 VALUES (?, 'public', ?, ?, ?)`,
+		id, slug, now, now)
 	return id
 }
 
 // seedMessageAt inserts one message with an explicit created_at — the row
 // CreateMessage cannot produce, because the server always stamps now().
 func seedMessageAt(
-	ctx context.Context, t *testing.T, conn *pgx.Conn,
+	ctx context.Context, t *testing.T, raw *testdb.Raw,
 	channelID, authorID uuid.UUID, content string, createdAt time.Time,
 ) {
 	t.Helper()
 
-	_, err := conn.Exec(ctx,
-		`INSERT INTO messages (channel_id, author_id, client_msg_id, content, created_at)
-		 VALUES ($1, $2, gen_random_uuid(), $3, $4)`,
-		channelID, authorID, content, createdAt,
-	)
-	if err != nil {
-		t.Fatalf("seed message %q: %v", content, err)
-	}
+	raw.Exec(ctx, t,
+		`INSERT INTO messages (id, channel_id, author_id, client_msg_id, content, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		uuid.New(), channelID, authorID, uuid.New(), content, createdAt)
 }
 
 // seedDeletedMessageAt inserts a soft-deleted message: content erased,
 // deleted_at set. It stands in for what slice 1.2b will write, so history
 // can be pinned on it today.
 func seedDeletedMessageAt(
-	ctx context.Context, t *testing.T, conn *pgx.Conn,
+	ctx context.Context, t *testing.T, raw *testdb.Raw,
 	channelID, authorID uuid.UUID, createdAt time.Time,
 ) uuid.UUID {
 	t.Helper()
 
-	var id uuid.UUID
-	err := conn.QueryRow(ctx,
-		`INSERT INTO messages (channel_id, author_id, client_msg_id, content, created_at, deleted_at, deleted_by)
-		 VALUES ($1, $2, gen_random_uuid(), '', $3, $3, $2)
-		 RETURNING id`,
-		channelID, authorID, createdAt,
-	).Scan(&id)
-	if err != nil {
-		t.Fatalf("seed deleted message: %v", err)
-	}
+	id := uuid.New()
+	raw.Exec(ctx, t,
+		`INSERT INTO messages (id, channel_id, author_id, client_msg_id, content, created_at, deleted_at, deleted_by)
+		 VALUES (?, ?, ?, ?, '', ?, ?, ?)`,
+		id, channelID, authorID, uuid.New(), createdAt, createdAt, authorID)
 	return id
 }
 
 // countMessages counts the rows of one channel, straight from SQL, so the
 // idempotency tests assert on the table rather than on the API's own answer.
-func countMessages(ctx context.Context, t *testing.T, conn *pgx.Conn, channelID uuid.UUID) int {
+func countMessages(ctx context.Context, t *testing.T, raw *testdb.Raw, channelID uuid.UUID) int {
 	t.Helper()
 
 	var n int
-	err := conn.QueryRow(ctx, `SELECT count(*) FROM messages WHERE channel_id = $1`, channelID).Scan(&n)
-	if err != nil {
+	if err := raw.QueryRow(ctx, `SELECT count(*) FROM messages WHERE channel_id = ?`, channelID).Scan(&n); err != nil {
 		t.Fatalf("count messages: %v", err)
 	}
 	return n
@@ -109,15 +84,11 @@ func countMessages(ctx context.Context, t *testing.T, conn *pgx.Conn, channelID 
 // mentionedIDs reads the message_mentions rows of one message straight from
 // SQL, so the assertions below are about the table the sidebar's "@" badge
 // counts rather than about anything CreateMessage reports back.
-func mentionedIDs(ctx context.Context, t *testing.T, conn *pgx.Conn, messageID uuid.UUID) []uuid.UUID {
+func mentionedIDs(ctx context.Context, t *testing.T, raw *testdb.Raw, messageID uuid.UUID) []uuid.UUID {
 	t.Helper()
 
-	rows, err := conn.Query(ctx,
-		`SELECT mentioned_user_id FROM message_mentions WHERE message_id = $1`, messageID)
-	if err != nil {
-		t.Fatalf("read mentions: %v", err)
-	}
-	defer rows.Close()
+	rows := raw.Query(ctx, t,
+		`SELECT mentioned_user_id FROM message_mentions WHERE message_id = ?`, messageID)
 
 	ids := []uuid.UUID{}
 	for rows.Next() {
@@ -151,9 +122,8 @@ func assertMentionRows(t *testing.T, got, want []uuid.UUID) {
 func TestCreateMessageIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("sender"))
 	other := mustCreateUser(ctx, t, store, newUser("othersender"))
@@ -303,12 +273,9 @@ func TestCreateMessageIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("first send: %v", err)
 		}
-		if _, execErr := conn.Exec(ctx,
-			`UPDATE messages SET content = '', deleted_at = now(), deleted_by = author_id WHERE id = $1`,
-			stored.ID,
-		); execErr != nil {
-			t.Fatalf("soft delete: %v", execErr)
-		}
+		conn.Exec(ctx, t,
+			`UPDATE messages SET content = '', deleted_at = ?, deleted_by = author_id WHERE id = ?`,
+			time.Now().UTC(), stored.ID)
 
 		again, created, err := store.CreateMessage(ctx, nm)
 		if err != nil {
@@ -330,9 +297,8 @@ func TestCreateMessageIntegration(t *testing.T) {
 func TestCreateMessageConcurrentIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("racer"))
 	channelID := seedMessagesChannel(ctx, t, conn, "contended")
@@ -397,9 +363,8 @@ func TestCreateMessageConcurrentIntegration(t *testing.T) {
 func TestListMessagesIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("historian"))
 
@@ -519,9 +484,8 @@ func TestListMessagesIntegration(t *testing.T) {
 func TestListMessagesPagingIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("walker"))
 	channelID := seedMessagesChannel(ctx, t, conn, "walking")
@@ -675,15 +639,12 @@ func contentsOf(messages []storage.Message) []string {
 
 // seedMembership puts a user in a channel. Mentions are member-scoped, so
 // tests about them have to say who is actually in the conversation.
-func seedMembership(ctx context.Context, t *testing.T, conn *pgx.Conn, channelID, userID uuid.UUID) {
+func seedMembership(ctx context.Context, t *testing.T, raw *testdb.Raw, channelID, userID uuid.UUID) {
 	t.Helper()
 
-	_, err := conn.Exec(ctx,
-		`INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)
-		 ON CONFLICT DO NOTHING`, channelID, userID)
-	if err != nil {
-		t.Fatalf("seed membership: %v", err)
-	}
+	raw.Exec(ctx, t,
+		`INSERT INTO channel_members (channel_id, user_id, joined_at) VALUES (?, ?, ?)
+		 ON CONFLICT DO NOTHING`, channelID, userID, time.Now().UTC())
 }
 
 // mentionToken is the contract's literal wire form: <@{user_id}>.
@@ -699,9 +660,8 @@ func mentionTokenFor(id uuid.UUID) string { return "<@" + id.String() + ">" }
 func TestCreateMessageMentionsIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("mentionauthor"))
 	member := mustCreateUser(ctx, t, store, newUser("mentionmember"))
@@ -811,9 +771,8 @@ func TestCreateMessageMentionsIntegration(t *testing.T) {
 func TestMessageByIDIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("readback"))
 	channelID := seedMessagesChannel(ctx, t, conn, "readback")
@@ -855,9 +814,8 @@ func TestMessageByIDIntegration(t *testing.T) {
 func TestUpdateMessageContentIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("editor"))
 	channelID := seedMessagesChannel(ctx, t, conn, "editing")
@@ -981,9 +939,8 @@ func TestUpdateMessageContentIntegration(t *testing.T) {
 func TestSoftDeleteMessageIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("deleter"))
 	admin := mustCreateUser(ctx, t, store, newUser("deletemod"))
@@ -1074,9 +1031,8 @@ func TestSoftDeleteMessageIntegration(t *testing.T) {
 func TestDeletedRowsAgreeIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("agreeing"))
 	channelID := seedMessagesChannel(ctx, t, conn, "agreeing")
@@ -1135,11 +1091,11 @@ func TestDeletedRowsAgreeIntegration(t *testing.T) {
 // deletedByOf reads a message's deleted_by straight from SQL: the column is
 // deliberately not on storage.Message (nothing renders it before the Phase
 // 1.4 audit log), so this is the only way to assert it was recorded.
-func deletedByOf(ctx context.Context, t *testing.T, conn *pgx.Conn, messageID uuid.UUID) uuid.UUID {
+func deletedByOf(ctx context.Context, t *testing.T, raw *testdb.Raw, messageID uuid.UUID) uuid.UUID {
 	t.Helper()
 
 	var id *uuid.UUID
-	err := conn.QueryRow(ctx, `SELECT deleted_by FROM messages WHERE id = $1`, messageID).Scan(&id)
+	err := raw.QueryRow(ctx, `SELECT deleted_by FROM messages WHERE id = ?`, messageID).Scan(&id)
 	if err != nil {
 		t.Fatalf("read deleted_by: %v", err)
 	}
@@ -1155,9 +1111,8 @@ func deletedByOf(ctx context.Context, t *testing.T, conn *pgx.Conn, messageID uu
 func TestListMessagesAroundIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("permalinker"))
 	channelID := seedMessagesChannel(ctx, t, conn, "permalink")

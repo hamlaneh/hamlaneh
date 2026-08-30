@@ -42,8 +42,8 @@ func TestMlsBackupIntegration(t *testing.T) {
 
 	// One row per account, replaced in place — never a second row and never an
 	// appended history the server could choose between.
-	if err := fx.store.PutMlsBackup(ctx, fx.alice.ID, []byte("sealed-2"), 2); err != nil {
-		t.Fatalf("replacing the backup: %v", err)
+	if putErr := fx.store.PutMlsBackup(ctx, fx.alice.ID, []byte("sealed-2"), 2); putErr != nil {
+		t.Fatalf("replacing the backup: %v", putErr)
 	}
 	replaced, err := fx.store.MlsBackupByUser(ctx, fx.alice.ID)
 	if err != nil {
@@ -60,8 +60,8 @@ func TestMlsBackupIntegration(t *testing.T) {
 	// forward is refused, and — the half worth asserting — the stored envelope
 	// is untouched by the refusal.
 	for _, counter := range []int64{2, 1} {
-		if err := fx.store.PutMlsBackup(ctx, fx.alice.ID, []byte("stale"), counter); !errors.Is(err, storage.ErrMlsBackupStale) {
-			t.Errorf("uploading at counter %d: %v, want ErrMlsBackupStale", counter, err)
+		if staleErr := fx.store.PutMlsBackup(ctx, fx.alice.ID, []byte("stale"), counter); !errors.Is(staleErr, storage.ErrMlsBackupStale) {
+			t.Errorf("uploading at counter %d: %v, want ErrMlsBackupStale", counter, staleErr)
 		}
 	}
 	survived, err := fx.store.MlsBackupByUser(ctx, fx.alice.ID)

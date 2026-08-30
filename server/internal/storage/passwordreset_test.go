@@ -16,8 +16,10 @@ import (
 
 const resetTTL = 30 * time.Minute
 
-// assertPool opens a second pool for assertions and fixtures the Store
-// deliberately does not expose.
+// assertPool opens a second PostgreSQL pool. testdb.Raw covers everything a
+// portable test needs; this is only for the one PostgreSQL-only test that has
+// to hold an uncommitted transaction open (channels_test.go), which a pooled
+// database/sql handle cannot express.
 func assertPool(ctx context.Context, t *testing.T, dsn string) *pgxpool.Pool {
 	t.Helper()
 
@@ -75,9 +77,8 @@ func TestUserByEmailIntegration(t *testing.T) {
 func TestCreatePasswordResetTokenIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
-	pool := assertPool(ctx, t, dsn)
 	user := mustCreateUser(ctx, t, store, newUser("requester"))
 
 	if err := store.CreatePasswordResetToken(ctx, user.ID, hashOf("first"), resetTTL); err != nil {
@@ -86,8 +87,8 @@ func TestCreatePasswordResetTokenIntegration(t *testing.T) {
 
 	t.Run("the token lands hashed with the requested lifetime", func(t *testing.T) {
 		var expiresAt, createdAt time.Time
-		err := pool.QueryRow(ctx,
-			`SELECT expires_at, created_at FROM password_reset_tokens WHERE token_hash = $1`,
+		err := raw.QueryRow(ctx,
+			`SELECT expires_at, created_at FROM password_reset_tokens WHERE token_hash = ?`,
 			hashOf("first"),
 		).Scan(&expiresAt, &createdAt)
 		if err != nil {
@@ -104,8 +105,8 @@ func TestCreatePasswordResetTokenIntegration(t *testing.T) {
 		}
 
 		var live int
-		if err := pool.QueryRow(ctx,
-			`SELECT count(*) FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL`,
+		if err := raw.QueryRow(ctx,
+			`SELECT count(*) FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL`,
 			user.ID,
 		).Scan(&live); err != nil {
 			t.Fatalf("count live tokens: %v", err)
@@ -127,9 +128,8 @@ func TestCreatePasswordResetTokenIntegration(t *testing.T) {
 func TestConsumePasswordResetIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
-	pool := assertPool(ctx, t, dsn)
 
 	t.Run("unknown token", func(t *testing.T) {
 		_, outcome, err := store.ConsumePasswordReset(ctx, hashOf("never-issued"), "hash")
@@ -168,8 +168,8 @@ func TestConsumePasswordResetIntegration(t *testing.T) {
 		if err := store.CreatePasswordResetToken(ctx, user.ID, hashOf("live"), resetTTL); err != nil {
 			t.Fatalf("CreatePasswordResetToken: %v", err)
 		}
-		insertRawResetToken(ctx, t, pool, user.ID, hashOf("sibling"), resetTTL)
-		insertChallenge(ctx, t, pool, user.ID, hashOf("challenge"))
+		insertRawResetToken(ctx, t, raw, user.ID, hashOf("sibling"), resetTTL)
+		insertChallenge(ctx, t, raw, user.ID, hashOf("challenge"))
 
 		gotUser, outcome, err := store.ConsumePasswordReset(ctx, hashOf("live"), "new-argon2-hash")
 		if err != nil {
@@ -194,21 +194,26 @@ func TestConsumePasswordResetIntegration(t *testing.T) {
 		}
 
 		for _, sess := range []storage.Session{first, second} {
-			var revoked bool
-			if err := pool.QueryRow(ctx,
-				`SELECT bool_and(revoked_at IS NOT NULL) FROM sessions WHERE family_id = $1`,
+			// "every generation is revoked", counted rather than folded with
+			// bool_and(), which is PostgreSQL's alone. count(revoked_at)
+			// counts the non-null ones, and the total guards the vacuous pass
+			// an empty family would otherwise give.
+			var generations, revoked int
+			if err := raw.QueryRow(ctx,
+				`SELECT count(*), count(revoked_at) FROM sessions WHERE family_id = ?`,
 				sess.FamilyID,
-			).Scan(&revoked); err != nil {
+			).Scan(&generations, &revoked); err != nil {
 				t.Fatalf("read family state: %v", err)
 			}
-			if !revoked {
-				t.Errorf("family %s survived the reset", sess.FamilyID)
+			if generations == 0 || revoked != generations {
+				t.Errorf("family %s survived the reset: %d of %d generations revoked",
+					sess.FamilyID, revoked, generations)
 			}
 		}
 
 		var liveTokens int
-		if err := pool.QueryRow(ctx,
-			`SELECT count(*) FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL`,
+		if err := raw.QueryRow(ctx,
+			`SELECT count(*) FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL`,
 			user.ID,
 		).Scan(&liveTokens); err != nil {
 			t.Fatalf("count live tokens: %v", err)
@@ -218,8 +223,8 @@ func TestConsumePasswordResetIntegration(t *testing.T) {
 		}
 
 		var pendingChallenges int
-		if err := pool.QueryRow(ctx,
-			`SELECT count(*) FROM totp_challenges WHERE user_id = $1 AND consumed_at IS NULL`,
+		if err := raw.QueryRow(ctx,
+			`SELECT count(*) FROM totp_challenges WHERE user_id = ? AND consumed_at IS NULL`,
 			user.ID,
 		).Scan(&pendingChallenges); err != nil {
 			t.Fatalf("count pending challenges: %v", err)
@@ -248,7 +253,7 @@ func TestConsumePasswordResetIntegration(t *testing.T) {
 
 	t.Run("two-step verification survives the reset", func(t *testing.T) {
 		user := mustCreateUser(ctx, t, store, newUser("twofactor"))
-		insertActiveTOTP(ctx, t, pool, user.ID)
+		insertActiveTOTP(ctx, t, raw, user.ID)
 		if err := store.CreatePasswordResetToken(ctx, user.ID, hashOf("2fa-live"), resetTTL); err != nil {
 			t.Fatalf("CreatePasswordResetToken: %v", err)
 		}
@@ -260,8 +265,8 @@ func TestConsumePasswordResetIntegration(t *testing.T) {
 		}
 
 		var stillActive bool
-		if err := pool.QueryRow(ctx,
-			`SELECT activated_at IS NOT NULL FROM user_totp WHERE user_id = $1`, user.ID,
+		if err := raw.QueryRow(ctx,
+			`SELECT activated_at IS NOT NULL FROM user_totp WHERE user_id = ?`, user.ID,
 		).Scan(&stillActive); err != nil {
 			t.Fatalf("read TOTP state: %v", err)
 		}
@@ -337,42 +342,35 @@ func TestResetOutcomeString(t *testing.T) {
 
 // insertRawResetToken adds a second outstanding token without going through
 // CreatePasswordResetToken, which would supersede the first.
-func insertRawResetToken(ctx context.Context, t *testing.T, pool *pgxpool.Pool, userID uuid.UUID, hash []byte, ttl time.Duration) {
+func insertRawResetToken(ctx context.Context, t *testing.T, raw *testdb.Raw, userID uuid.UUID, hash []byte, ttl time.Duration) {
 	t.Helper()
 
-	_, err := pool.Exec(ctx,
-		`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
-		 VALUES ($1, $2, now() + make_interval(secs => $3))`,
-		userID, hash, ttl.Seconds())
-	if err != nil {
-		t.Fatalf("insert reset token fixture: %v", err)
-	}
+	now := time.Now().UTC()
+	raw.Exec(ctx, t,
+		`INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		uuid.New(), userID, hash, now.Add(ttl), now)
 }
 
 // insertChallenge adds a pending two-step challenge, the state a
 // half-finished sign-in leaves behind.
-func insertChallenge(ctx context.Context, t *testing.T, pool *pgxpool.Pool, userID uuid.UUID, hash []byte) {
+func insertChallenge(ctx context.Context, t *testing.T, raw *testdb.Raw, userID uuid.UUID, hash []byte) {
 	t.Helper()
 
-	_, err := pool.Exec(ctx,
-		`INSERT INTO totp_challenges (user_id, token_hash, expires_at)
-		 VALUES ($1, $2, now() + interval '5 minutes')`,
-		userID, hash)
-	if err != nil {
-		t.Fatalf("insert challenge fixture: %v", err)
-	}
+	now := time.Now().UTC()
+	raw.Exec(ctx, t,
+		`INSERT INTO totp_challenges (id, user_id, token_hash, expires_at, created_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		uuid.New(), userID, hash, now.Add(5*time.Minute), now)
 }
 
 // insertActiveTOTP switches two-step verification on for a user.
-func insertActiveTOTP(ctx context.Context, t *testing.T, pool *pgxpool.Pool, userID uuid.UUID) {
+func insertActiveTOTP(ctx context.Context, t *testing.T, raw *testdb.Raw, userID uuid.UUID) {
 	t.Helper()
 
-	secret := make([]byte, 20)
-	_, err := pool.Exec(ctx,
-		`INSERT INTO user_totp (user_id, secret, verified_at, activated_at, setup_expires_at)
-		 VALUES ($1, $2, now(), now(), now() + interval '10 minutes')`,
-		userID, secret)
-	if err != nil {
-		t.Fatalf("insert TOTP fixture: %v", err)
-	}
+	now := time.Now().UTC()
+	raw.Exec(ctx, t,
+		`INSERT INTO user_totp (user_id, secret, verified_at, activated_at, setup_expires_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		userID, make([]byte, 20), now, now, now.Add(10*time.Minute), now)
 }

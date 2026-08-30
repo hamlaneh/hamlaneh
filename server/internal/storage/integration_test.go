@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
+	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
 )
 
 // TestStorageIntegration exercises Open against a real PostgreSQL: connect,
@@ -20,7 +21,12 @@ import (
 //
 //	HAMLANEH_TEST_DSN='postgres://user:pass@127.0.0.1:5544/db?sslmode=disable' go test ./internal/storage/
 func TestStorageIntegration(t *testing.T) {
-	dsn := os.Getenv("HAMLANEH_TEST_DSN")
+	// PostgreSQL-only twice over: it drives storage.Open — the PostgreSQL
+	// driver's own constructor, which home mode does not use — against a DSN,
+	// and its assertions are information_schema column shapes.
+	testdb.RequiresPostgres(t, "storage.Open against a DSN, and information_schema column shapes")
+
+	dsn := os.Getenv(testdb.EnvDSN)
 	if dsn == "" {
 		t.Skip("SKIPPING storage integration test: set HAMLANEH_TEST_DSN to a disposable postgres:// DSN to run it")
 	}

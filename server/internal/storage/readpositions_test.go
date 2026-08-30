@@ -2,12 +2,12 @@ package storage_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
@@ -26,41 +26,32 @@ func seedAt(n int) time.Time {
 
 // seedMessageAtTime inserts one message with an explicit created_at and
 // returns its id — the row CreateMessage cannot produce, because the server
-// always stamps now(). It uses the raw fixture connection from
-// messages_test.go, which is this package's one connection for rows storage
-// deliberately cannot write.
+// always stamps now(). It uses the raw fixture handle from messages_test.go,
+// which is this package's one route to rows storage deliberately cannot
+// write, on either driver.
 func seedMessageAtTime(
-	ctx context.Context, t *testing.T, conn *pgx.Conn,
+	ctx context.Context, t *testing.T, raw *testdb.Raw,
 	channelID, authorID uuid.UUID, content string, createdAt time.Time,
 ) uuid.UUID {
 	t.Helper()
 
-	var id uuid.UUID
-	err := conn.QueryRow(ctx,
-		`INSERT INTO messages (channel_id, author_id, client_msg_id, content, created_at)
-		 VALUES ($1, $2, gen_random_uuid(), $3, $4)
-		 RETURNING id`,
-		channelID, authorID, content, createdAt,
-	).Scan(&id)
-	if err != nil {
-		t.Fatalf("seed message %q: %v", content, err)
-	}
+	id := uuid.New()
+	raw.Exec(ctx, t,
+		`INSERT INTO messages (id, channel_id, author_id, client_msg_id, content, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		id, channelID, authorID, uuid.New(), content, createdAt)
 	return id
 }
 
 // seedMention records that a message mentions a user. Nothing writes
 // message_mentions until the mention parser lands in slice 1.2b, so the
 // sidebar's "@" badge can only be pinned on rows seeded by hand.
-func seedMention(ctx context.Context, t *testing.T, conn *pgx.Conn, messageID, userID uuid.UUID) {
+func seedMention(ctx context.Context, t *testing.T, raw *testdb.Raw, messageID, userID uuid.UUID) {
 	t.Helper()
 
-	_, err := conn.Exec(ctx,
-		`INSERT INTO message_mentions (message_id, mentioned_user_id) VALUES ($1, $2)`,
-		messageID, userID,
-	)
-	if err != nil {
-		t.Fatalf("seed mention of %s in %s: %v", userID, messageID, err)
-	}
+	raw.Exec(ctx, t,
+		`INSERT INTO message_mentions (message_id, mentioned_user_id) VALUES (?, ?)`,
+		messageID, userID)
 }
 
 // readPosition is a channel_read_positions row as raw SQL sees it. The
@@ -75,17 +66,17 @@ type readPosition struct {
 // storedReadPosition reads one (channel, user) row, reporting whether there
 // is one at all.
 func storedReadPosition(
-	ctx context.Context, t *testing.T, conn *pgx.Conn, channelID, userID uuid.UUID,
+	ctx context.Context, t *testing.T, raw *testdb.Raw, channelID, userID uuid.UUID,
 ) (readPosition, bool) {
 	t.Helper()
 
 	var pos readPosition
-	err := conn.QueryRow(ctx,
+	err := raw.QueryRow(ctx,
 		`SELECT last_read_message_id, last_read_at, updated_at
-		 FROM channel_read_positions WHERE channel_id = $1 AND user_id = $2`,
+		 FROM channel_read_positions WHERE channel_id = ? AND user_id = ?`,
 		channelID, userID,
 	).Scan(&pos.MessageID, &pos.At, &pos.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return readPosition{}, false
 	}
 	if err != nil {
@@ -113,9 +104,8 @@ func mustSetReadPosition(
 func TestSetReadPositionIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("rpauthor"))
 	channel := mustCreateChannel(ctx, t, store, newChannel("rpchannel", storage.ChannelKindPublic, author.ID))
