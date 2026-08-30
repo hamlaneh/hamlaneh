@@ -69,6 +69,25 @@ export interface VerificationRecord {
 
 export type VerificationRecords = Record<string, VerificationRecord>;
 
+/* ── own-message history ─────────────────────────────────────────────── */
+
+/**
+ * The plaintext of one message this device sent, kept because MLS will never
+ * give it back.
+ *
+ * The sender ratchet only produces, so a sender cannot decrypt its own
+ * application message — without this the author's own bubbles read as
+ * undecryptable after every reload. It is stored beside the device state under
+ * the same wrapping key, and it is bounded: see `trimSent` in `service.ts` for
+ * the numbers and what they cost.
+ */
+export interface SentMessage {
+  id: string;
+  text: string;
+  /** When it was recorded, epoch milliseconds — what the age bound trims on. */
+  at: number;
+}
+
 /** What changed about a person since this device accepted their keys. */
 export type KeyChangeKind =
   /** Keys were added and none were withdrawn — a new device appeared. */

@@ -135,7 +135,7 @@ function spyController(channels: MlsState["channels"] = {}): MlsController {
     memberAdded: vi.fn(),
     memberRemoved: vi.fn(),
     encrypt: vi.fn(() => Promise.resolve(null)),
-    rememberSent: vi.fn(),
+    rememberSent: vi.fn(() => Promise.resolve()),
     mediaKey: vi.fn(() => null),
     decryptAll: vi.fn(),
     bodyOf: vi.fn(() => ({ kind: "plaintext", text: "" }) as const),

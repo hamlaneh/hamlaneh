@@ -658,10 +658,10 @@ export function useChat({
         if (encrypted !== null) {
           // MLS gives a sender no way to open its own application message —
           // the ratchet is per-sender — so the plaintext is kept here as the
-          // message lands. It lives for this session only: after a reload
-          // this device's own history reads as undecryptable, which is
-          // honest but not final. A local plaintext store is its own slice.
-          mlsRef.current.rememberSent(data.id, content);
+          // message lands, on the screen and in the wrapped keystore. Not
+          // awaited: the write is bounded local storage, and a send must not
+          // wait on it to dispatch the message it already has.
+          void mlsRef.current.rememberSent(data.id, content);
         }
         dispatch({
           type: "message/upsert",
@@ -795,7 +795,10 @@ export function useChat({
           return false;
         }
         if (encrypted !== null) {
-          mlsRef.current.rememberSent(data.id, trimmed);
+          // Same id, new text: the store replaces its own entry, so an edited
+          // message reads as edited after a reload rather than as its
+          // original.
+          void mlsRef.current.rememberSent(data.id, trimmed);
         }
         dispatch({
           type: "message/upsert",

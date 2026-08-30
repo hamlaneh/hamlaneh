@@ -30,7 +30,7 @@
  * crash and never a silent fallback to plaintext.
  */
 
-import type { VerificationRecord, VerificationRecords } from "./types";
+import type { SentMessage, VerificationRecord, VerificationRecords } from "./types";
 
 const DATABASE_NAME = "hamlaneh-mls";
 const DATABASE_VERSION = 1;
@@ -53,6 +53,23 @@ const STATE_ID = "state";
  * the UI then renders the attack as safety.
  */
 const RECORDS_ID = "verification";
+
+/**
+ * The plaintext of what this device sent, beside the state and under the same
+ * wrapping key.
+ *
+ * Here rather than in `localStorage` or a plain object store for one reason:
+ * what you said is as sensitive as what you received, and the state slot next
+ * to it holds the keys that opened the latter. It carries the module note's
+ * ceiling unchanged and gains no other — a copied database does not read it;
+ * an attacker running as this origin does.
+ *
+ * Bounded by the caller, which owns the retention policy: see `trimSent` in
+ * `service.ts`. Nothing here enforces a size, and nothing here needs to —
+ * `saveSent` writes exactly the list it is handed.
+ */
+const SENT_ID = "sent";
+
 const IV_BYTES = 12;
 
 /** What a stored state record looks like. `iv` is fresh for every write. */
@@ -222,6 +239,38 @@ function readRecords(json: string): VerificationRecords {
     records[userId] = { userId, keys: [...keys], level: record.level, at: record.at };
   }
   return records;
+}
+
+/**
+ * Parses a stored sent-message history, dropping anything malformed.
+ *
+ * Validated entry by entry for the same reason the records are, pointed at a
+ * different risk: a half-read entry here would put text on the screen inside
+ * the author's own bubble. An entry that fails any field is dropped, and the
+ * consequence is the honest one — that bubble renders undecryptable, which is
+ * exactly what it would have done before this store existed.
+ */
+function readSent(json: string): SentMessage[] {
+  const parsed: unknown = JSON.parse(json);
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  const sent: SentMessage[] = [];
+  for (const value of parsed as unknown[]) {
+    if (typeof value !== "object" || value === null) {
+      continue;
+    }
+    const entry = value as Partial<SentMessage>;
+    if (
+      typeof entry.id !== "string" ||
+      typeof entry.text !== "string" ||
+      typeof entry.at !== "number"
+    ) {
+      continue;
+    }
+    sent.push({ id: entry.id, text: entry.text, at: entry.at });
+  }
+  return sent;
 }
 
 function readStoredState(value: unknown): StoredState | null {
@@ -404,6 +453,38 @@ export class Keystore {
     }
   }
 
+  /** Stores the sent-message history. False when it could not be written. */
+  async saveSent(sent: readonly SentMessage[]): Promise<boolean> {
+    try {
+      await this.putWrapped(SENT_ID, encoder.encode(JSON.stringify(sent)));
+      return true;
+    } catch (error) {
+      // A lost write costs the author their own words on the next reload —
+      // the undecryptable state this store exists to replace, which is a
+      // visible disappointment rather than a broken session.
+      console.warn("Could not store the sent-message history:", error);
+      return false;
+    }
+  }
+
+  /**
+   * The sent-message history, or an empty list when there is none.
+   *
+   * Also empty when there is one that will not decrypt or will not parse: a
+   * history this profile can no longer open is indistinguishable from never
+   * having had one, and the degradation is honest either way — the author's
+   * own bubbles read as undecryptable, which is true of them.
+   */
+  async loadSent(): Promise<SentMessage[]> {
+    try {
+      const bytes = await this.getWrapped(SENT_ID);
+      return bytes === null ? [] : readSent(decoder.decode(bytes));
+    } catch (error) {
+      console.warn("Could not read the sent-message history:", error);
+      return [];
+    }
+  }
+
   /** Drops the stored state (a different user signing in on this profile). */
   async clear(): Promise<void> {
     try {
@@ -412,6 +493,10 @@ export class Keystore {
       // leaving them for whoever signs in next would show that person a
       // `verified` badge nobody on this device ever earned.
       await this.store.delete(RECORDS_ID);
+      // And the sent history, for a blunter reason than the records: it is
+      // one person's own words in plaintext, and leaving it behind would hand
+      // whoever signs in next the previous user's messages.
+      await this.store.delete(SENT_ID);
     } catch (error) {
       console.warn("Could not clear the stored MLS device state:", error);
     }

@@ -419,7 +419,7 @@ describe("messages", () => {
     const service = newService();
     await service.openChannel(channelId);
 
-    service.rememberSent("m-2", "what I said");
+    await service.rememberSent("m-2", "what I said");
     expect(latest().decrypted["m-2"]).toBe("what I said");
   });
 });
@@ -977,6 +977,97 @@ describe("records at rest", () => {
     await second.start();
 
     expect(latest().records[NASRIN]).toMatchObject({ level: "verified" });
+  });
+});
+
+describe("own-message history at rest", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it("shows the author their own words again after a reload", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    seedDevice(NASRIN);
+    const channelId = await createE2eeChannel("my-words");
+    const first = newService(keystore);
+    await first.openChannel(channelId);
+    await first.rememberSent("m-1", "what I said");
+
+    // The reload: a brand-new service over the same profile's keystore, which
+    // is exactly what a fresh tab is. MLS itself cannot help here — the sender
+    // ratchet only produces — so anything that comes back came from the store.
+    const second = newService(keystore);
+    expect(await second.start()).toBe(true);
+    expect(latest().decrypted["m-1"]).toBe("what I said");
+  });
+
+  it("replaces an edited message rather than keeping both versions", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    const service = newService(keystore);
+    await service.start();
+    await service.rememberSent("m-1", "first draft");
+    await service.rememberSent("m-1", "second draft");
+
+    expect(await keystore?.loadSent()).toEqual([
+      { id: "m-1", text: "second draft", at: expect.any(Number) as number },
+    ]);
+  });
+
+  it("keeps the newest 500 and drops the oldest first", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    const service = newService(keystore);
+    await service.start();
+    // One past the bound, so exactly one entry has to go and there is no
+    // ambiguity about which.
+    for (let index = 0; index <= 500; index += 1) {
+      await service.rememberSent(`m-${String(index)}`, `line ${String(index)}`);
+    }
+
+    const stored = (await keystore?.loadSent()) ?? [];
+    expect(stored).toHaveLength(500);
+    expect(stored[0]?.id).toBe("m-1");
+    expect(stored.at(-1)?.id).toBe("m-500");
+  });
+
+  it("drops what has aged out, and drops it from the store and not just the screen", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    const now = Date.now();
+    await keystore?.saveSent([
+      { id: "ancient", text: "said last month", at: now - 31 * DAY },
+      { id: "recent", text: "said yesterday", at: now - DAY },
+    ]);
+
+    const service = newService(keystore);
+    await service.start();
+    expect(latest().decrypted.recent).toBe("said yesterday");
+    expect(latest().decrypted.ancient).toBeUndefined();
+
+    // The bound is a statement about what exists at rest, so the expired entry
+    // is written out rather than merely filtered on the way to the screen: a
+    // profile that sits closed for two months must not still be holding
+    // two-month-old plaintext the moment it opens.
+    expect(await keystore?.loadSent()).toEqual([
+      { id: "recent", text: "said yesterday", at: now - DAY },
+    ]);
+  });
+
+  it("degrades to no history when the store will not open, and never throws", async () => {
+    const store = memoryStore();
+    const keystore = await Keystore.open(store);
+    await keystore?.saveSent([{ id: "m-1", text: "what I said", at: Date.now() }]);
+    // A history encrypted under a key this profile no longer has.
+    await store.put("sent", { iv: new Uint8Array(12), ciphertext: new Uint8Array(32) });
+
+    seedDevice(NASRIN);
+    const channelId = await createE2eeChannel("lost-words");
+    const service = newService(keystore);
+    expect(await service.start()).toBe(true);
+    expect(latest().decrypted["m-1"]).toBeUndefined();
+
+    // And the bubble then says the true thing rather than an empty one: MLS
+    // cannot open what this device sent, the store no longer can either, so
+    // undecryptable is the honest state and it is what renders.
+    await service.openChannel(channelId);
+    await service.decrypt(channelId, "m-1", toBase64(encoder.encode("unopenable")));
+    expect(latest().decrypted["m-1"]).toBeNull();
   });
 });
 

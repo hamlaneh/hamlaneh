@@ -9,6 +9,7 @@ import type {
   MediaKey,
   MlsState,
   MlsUnavailableReason,
+  SentMessage,
   VerificationLevel,
   VerificationRecords,
 } from "./types";
@@ -66,6 +67,48 @@ const MEMBER_DEVICE_PAGES = 20;
 /** The single chain every MLS operation runs on — see {@link MlsService.runOn}. */
 const DEVICE_CHAIN = "device";
 
+/**
+ * How much of this device's own outgoing plaintext survives a reload, and for
+ * how long.
+ *
+ * MLS gives a sender no way to decrypt its own application message, so without
+ * a local copy the author's own words render as undecryptable the moment the
+ * tab reloads. The store buys that back, and the price is exact and worth
+ * stating: for as long as an entry exists, this device holds plaintext that
+ * MLS's forward secrecy would otherwise have destroyed. An unbounded log of
+ * everything ever sent would surrender that property permanently and grow
+ * without limit, so both ends are closed.
+ *
+ * **Both axes, because each covers the other's blind spot.** A count alone
+ * keeps a light sender's messages for years; an age alone lets a heavy one
+ * accumulate without bound. Neither is sufficient and together they are.
+ *
+ * **500 messages.** `HISTORY_PAGE_SIZE` in `useChat.ts` is 50, so this is ten
+ * pages of the author's own scrollback across every conversation on this
+ * device — well past what a reload is expected to restore — and at a few
+ * hundred bytes an entry it stays comfortably under a megabyte wrapped.
+ *
+ * **30 days.** Long enough to answer "what did I say last month", short enough
+ * that a profile compromised today does not yield a year of what this user
+ * said. Nothing recovers an entry once either bound drops it; that is the
+ * design, not a limitation of it.
+ */
+const SENT_HISTORY_LIMIT = 500;
+const SENT_HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Applies both bounds, dropping oldest first.
+ *
+ * Deterministic by construction rather than by sorting: the list is held in
+ * send order, so the age filter runs first and the count then takes the newest
+ * entries **by position**. Two messages recorded in the same millisecond have
+ * an order here and a comparison sort would not preserve it.
+ */
+function trimSent(sent: readonly SentMessage[], now: number): SentMessage[] {
+  const fresh = sent.filter((entry) => now - entry.at < SENT_HISTORY_MAX_AGE_MS);
+  return fresh.slice(Math.max(0, fresh.length - SENT_HISTORY_LIMIT));
+}
+
 function errorCode(error: unknown): string | null {
   if (typeof error !== "object" || error === null) {
     return null;
@@ -120,6 +163,12 @@ export class MlsService {
 
   /** Accepted key sets per person, loaded once and written on every change. */
   private records: VerificationRecords = {};
+
+  /**
+   * The plaintext of what this device sent, newest last, bounded by
+   * {@link trimSent}. Restored at start and rewritten on every send.
+   */
+  private sent: SentMessage[] = [];
 
   /**
    * channel id → (user id → the keys the directory listed for them), cached at
@@ -275,6 +324,7 @@ export class MlsService {
     this.device = device;
     this.ownKey = toBase64(device.signature_public_key());
     this.records = (await this.keystore?.loadRecords()) ?? {};
+    await this.restoreSent();
 
     const registered = await this.registerAndPublish(device);
     if (!registered) {
@@ -282,8 +332,36 @@ export class MlsService {
       return this.unavailable("server");
     }
     await this.persist();
-    this.publish({ device: { status: "ready" }, records: this.records });
+    this.publish({
+      device: { status: "ready" },
+      records: this.records,
+      // Merged OVER what is already there rather than under it. Nothing waits
+      // for the device before rendering, so a bubble the list already gave up
+      // on and recorded as null is one of ours, and the restored plaintext is
+      // the truth about it.
+      decrypted: {
+        ...this.state.decrypted,
+        ...Object.fromEntries(this.sent.map((entry) => [entry.id, entry.text])),
+      },
+    });
     return true;
+  }
+
+  /**
+   * Brings back what this device said, and re-applies the bounds to it.
+   *
+   * The trim runs on the way in as well as on the way out, and writes back
+   * when it dropped anything, because the bound is a statement about what
+   * exists at rest and not about what a session chooses to show: a browser
+   * left closed for two months must not still be holding two-month-old
+   * plaintext the moment it opens.
+   */
+  private async restoreSent(): Promise<void> {
+    const stored = (await this.keystore?.loadSent()) ?? [];
+    this.sent = trimSent(stored, Date.now());
+    if (this.sent.length !== stored.length) {
+      await this.keystore?.saveSent(this.sent);
+    }
   }
 
   private async registerAndPublish(device: MlsDeviceHandle): Promise<boolean> {
@@ -1161,16 +1239,33 @@ export class MlsService {
   }
 
   /**
-   * Records the plaintext of a message this device just sent.
+   * Records the plaintext of a message this device just sent — on the screen
+   * now, and in the keystore for the next reload.
    *
    * MLS gives a sender no way to open its own application message — the
-   * sender ratchet only produces — so without this the author's own bubbles
-   * would render as undecryptable the moment they arrived. Session-scoped:
-   * after a reload this device's own history is genuinely unreadable to it,
-   * which a local plaintext store would fix and this slice does not build.
+   * sender ratchet only produces — so this is the only copy of the author's
+   * own words that will ever exist. It is wrapped at rest under the keystore's
+   * key in its own slot, carrying that module's ceiling unchanged and gaining
+   * no other: a copied database does not read it; an attacker running as this
+   * origin does.
+   *
+   * Bounded by {@link trimSent}, which is the whole reason this is not simply
+   * a map that grows.
+   *
+   * Awaitable rather than fire-and-forget because it now does I/O and saying
+   * otherwise in the signature would be a lie; callers that have nothing to do
+   * with the result still discard it explicitly.
    */
-  rememberSent(messageId: string, text: string): void {
+  async rememberSent(messageId: string, text: string): Promise<void> {
     this.setDecrypted(messageId, text);
+    const now = Date.now();
+    // Keyed on the id so an edit replaces its own entry rather than
+    // duplicating it, and re-appended rather than updated in place so the
+    // replacement counts as the newest thing said — which it is.
+    const sent = this.sent.filter((entry) => entry.id !== messageId);
+    sent.push({ id: messageId, text, at: now });
+    this.sent = trimSent(sent, now);
+    await this.keystore?.saveSent(this.sent);
   }
 
   /**
@@ -1234,10 +1329,10 @@ export class MlsService {
    *
    * Two ways to be done with a message: it was decrypted from these very
    * bytes, or its plaintext is known without ever having been decrypted —
-   * this device sent it, and `rememberSent` recorded it. The second needs its
-   * own arm because the sender genuinely cannot decrypt its own message, so
-   * without it every author's bubble would be retried on every render and
-   * fail every time.
+   * this device sent it, and `rememberSent` recorded it, in this session or in
+   * one before it. The second needs its own arm because the sender genuinely
+   * cannot decrypt its own message, so without it every author's bubble would
+   * be retried on every render and fail every time.
    */
   private alreadyOpen(messageId: string, ciphertext: string): boolean {
     if (this.opened.get(messageId) === ciphertext) {

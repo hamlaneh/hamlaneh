@@ -21,8 +21,12 @@ export interface MlsController {
     channelId: string,
     text: string,
   ) => Promise<{ epoch: number; ciphertext: string } | null>;
-  /** Keeps the plaintext of a message this device sent (see the service). */
-  rememberSent: (messageId: string, text: string) => void;
+  /**
+   * Keeps the plaintext of a message this device sent, on the screen and in
+   * the wrapped keystore, so a reload still shows the author their own words
+   * (see the service). Awaitable because it writes.
+   */
+  rememberSent: (messageId: string, text: string) => Promise<void>;
   /** The exporter-derived key a call in this conversation uses (ADR 009). */
   mediaKey: (channelId: string) => MediaKey | null;
   /** Queues the decryption of whatever in this page is still encrypted. */
@@ -97,9 +101,7 @@ export function useMls(currentUserId: string): MlsController {
   );
 
   const rememberSent = useCallback(
-    (messageId: string, text: string) => {
-      service.rememberSent(messageId, text);
-    },
+    (messageId: string, text: string) => service.rememberSent(messageId, text),
     [service],
   );
 
