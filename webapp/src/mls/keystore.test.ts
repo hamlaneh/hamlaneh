@@ -101,6 +101,65 @@ describe("Keystore", () => {
     expect(await store.get("wrapping-key")).toBeDefined();
   });
 
+  it("round-trips verification records, wrapped like the state", async () => {
+    const store = memoryStore();
+    const keystore = await Keystore.open(store);
+    const records = {
+      nasrin: { userId: "nasrin", keys: ["AQID"], level: "verified" as const, at: 1_700_000_000 },
+    };
+    expect(await keystore?.saveRecords(records)).toBe(true);
+    expect(await keystore?.loadRecords()).toEqual(records);
+
+    // Under the same non-extractable key, in its own slot: what is on disk
+    // must not spell out who this device trusts.
+    const stored = (await store.get("verification")) as { ciphertext: Uint8Array };
+    expect(new TextDecoder().decode(stored.ciphertext)).not.toContain("nasrin");
+  });
+
+  it("has no records before anything is written", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    expect(await keystore?.loadRecords()).toEqual({});
+  });
+
+  it("drops a malformed record rather than inventing a level for it", async () => {
+    const store = memoryStore();
+    const keystore = await Keystore.open(store);
+    await keystore?.saveRecords({
+      good: { userId: "good", keys: ["AQID"], level: "pinned", at: 1 },
+      // Every one of these decides a security badge, so a record that fails
+      // any of them is dropped: no record re-pins and warns, which is the safe
+      // direction. A half-read one would draw a level nobody recorded.
+      mismatched: { userId: "somebody-else", keys: [], level: "verified", at: 1 },
+      unleveled: { userId: "unleveled", keys: [], level: "trusted", at: 1 },
+      keyless: { userId: "keyless", level: "verified", at: 1 },
+    } as never);
+
+    expect(await keystore?.loadRecords()).toEqual({
+      good: { userId: "good", keys: ["AQID"], level: "pinned", at: 1 },
+    });
+  });
+
+  it("reports no records rather than throwing when they will not decrypt", async () => {
+    const store = memoryStore();
+    const keystore = await Keystore.open(store);
+    await keystore?.saveRecords({
+      nasrin: { userId: "nasrin", keys: [], level: "verified", at: 1 },
+    });
+    await store.put("verification", { iv: new Uint8Array(12), ciphertext: new Uint8Array(32) });
+    expect(await keystore?.loadRecords()).toEqual({});
+  });
+
+  it("clears the records with the state, so the next user inherits no trust", async () => {
+    const store = memoryStore();
+    const keystore = await Keystore.open(store);
+    await keystore?.save(STATE);
+    await keystore?.saveRecords({
+      nasrin: { userId: "nasrin", keys: ["AQID"], level: "verified", at: 1 },
+    });
+    await keystore?.clear();
+    expect(await keystore?.loadRecords()).toEqual({});
+  });
+
   it("is unavailable rather than unsafe when the store refuses", async () => {
     const broken = {
       get: () => Promise.reject(new Error("no storage here")),

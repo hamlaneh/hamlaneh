@@ -9,6 +9,7 @@ import { server } from "../mocks/node";
 import { fromBase64, toBase64, unpackStrings } from "./bytes";
 import { fakeKeyPackage, fakeMlsModule, fakeSignatureKey, fakeWorld } from "./fakeModule";
 import { memoryStore, Keystore } from "./keystore";
+import { safetyNumber } from "./safetyNumber";
 import { MlsService } from "./service";
 import type { MlsState } from "./types";
 import { setMlsModule } from "./wasm";
@@ -595,6 +596,330 @@ describe("membership events", () => {
   });
 });
 
+/* ── verification (ADR 008) ────────────────────────────────────────────── */
+
+const NASRIN = CHAT_USERS.nasrin.id;
+const OMID = CHAT_USERS.omid.id;
+
+/** A key the directory hands out that no honest device ever generated. */
+const PLANTED = toBase64(encoder.encode("sig:planted"));
+
+/** The directory's claim about somebody, as a second registered device. */
+function plantDirectoryKey(userId: string, key = PLANTED) {
+  return seedMockMlsDevice(userId, [], key);
+}
+
+/** Opens a channel with Nasrin in it and returns the settled service. */
+async function openWith(slug: string, users: readonly string[] = [NASRIN]) {
+  for (const userId of users) {
+    seedDevice(userId);
+  }
+  const channelId = await createE2eeChannel(slug);
+  const service = newService();
+  await service.openChannel(channelId);
+  return { service, channelId };
+}
+
+describe("pinning and the changed-key state", () => {
+  it("pins every member on first sight, silently", async () => {
+    const { channelId } = await openWith("first-sight");
+
+    // No question was asked and none should have been: first sight is the one
+    // moment with nothing to compare against, so a prompt would be noise.
+    expect(latest().records[NASRIN]).toMatchObject({
+      userId: NASRIN,
+      keys: [directoryKey(NASRIN)],
+      level: "pinned",
+    });
+    expect(latest().verification[channelId]).toEqual({ changed: [], uncoveredLeaves: 0 });
+  });
+
+  it("reports a changed member while the channel itself stays ready", async () => {
+    // Everybody has a device, so the channel reaches `ready` rather than
+    // `incomplete` — which is what makes the point here: `ready` and blocked
+    // are not the same axis.
+    const { service, channelId } = await openWith("swapped", OTHERS);
+    expect(latest().channels[channelId]).toEqual({ status: "ready" });
+    expect(await service.encrypt(channelId, "before")).not.toBeNull();
+
+    plantDirectoryKey(NASRIN);
+    await service.syncChannel(channelId);
+
+    // The two states are held alongside each other on purpose: availability
+    // says the group is usable, verification says it is not safe to add to.
+    expect(latest().channels[channelId]).toEqual({ status: "ready" });
+    expect(latest().verification[channelId]).toEqual({
+      changed: [{ userId: NASRIN, kind: "newDevice", added: [PLANTED], removed: [] }],
+      uncoveredLeaves: 0,
+    });
+  });
+
+  it("calls a withdrawn key a replaced key, not a new device", async () => {
+    const { service, channelId } = await openWith("replaced");
+    // The directory drops her real device and offers another in its place.
+    server.use(
+      http.get("/api/v1/channels/:channelId/mls/member-devices", () =>
+        HttpResponse.json({
+          members: [
+            { user_id: ME, signature_public_keys: [directoryKey(ME)] },
+            { user_id: NASRIN, signature_public_keys: [PLANTED] },
+          ],
+        }),
+      ),
+    );
+    await service.syncChannel(channelId);
+
+    expect(latest().verification[channelId]?.changed).toEqual([
+      { userId: NASRIN, kind: "replacedKey", added: [PLANTED], removed: [directoryKey(NASRIN)] },
+    ]);
+  });
+});
+
+describe("the send gate", () => {
+  it("refuses to encrypt while a member's keys are unaccepted", async () => {
+    const { service, channelId } = await openWith("blocked");
+    plantDirectoryKey(NASRIN);
+    await service.syncChannel(channelId);
+
+    expect(await service.encrypt(channelId, "to whoever that is")).toBeNull();
+  });
+
+  it("keeps reading and decrypting while sending is blocked", async () => {
+    const { service, channelId } = await openWith("read-on");
+    const sent = await service.encrypt(channelId, "still readable");
+    expect(sent).not.toBeNull();
+
+    plantDirectoryKey(NASRIN);
+    await service.syncChannel(channelId);
+    expect(await service.encrypt(channelId, "nope")).toBeNull();
+
+    // Blocking reads would protect nothing and would hide the context a human
+    // needs in order to judge the warning.
+    await service.decrypt(channelId, "m1", sent?.ciphertext ?? "");
+    expect(latest().decrypted.m1).toBe("still readable");
+  });
+
+  it("keeps sweeping while sending is blocked", async () => {
+    const { service, channelId } = await openWith("sweep-on", [NASRIN, OMID]);
+    expect(leavesOf(channelId)).toHaveLength(3);
+
+    plantDirectoryKey(NASRIN);
+    await service.syncChannel(channelId);
+    expect(await service.encrypt(channelId, "nope")).toBeNull();
+
+    // Omid leaves. The sweep is itself a defence and must not pause for a
+    // warning, so his leaf goes even though this channel is blocked.
+    server.use(
+      http.get("/api/v1/channels/:channelId/mls/member-devices", () =>
+        HttpResponse.json({
+          members: [
+            { user_id: ME, signature_public_keys: [directoryKey(ME)] },
+            { user_id: NASRIN, signature_public_keys: [directoryKey(NASRIN), PLANTED] },
+          ],
+        }),
+      ),
+    );
+    await service.memberRemoved(channelId);
+
+    expect(leavesOf(channelId)).toEqual([
+      `${ME}|${fakeSignatureKey(ME)}`,
+      `${NASRIN}|${fakeSignatureKey(NASRIN)}`,
+    ]);
+    expect(await service.encrypt(channelId, "still nope")).toBeNull();
+  });
+
+  it("blocks on a leaf the directory attributes to nobody, then heals when the sweep evicts it", async () => {
+    const { service, channelId } = await openWith("uncovered");
+
+    // Omid registers, so the next reconcile has an add to make — and `addUsers`
+    // catches up on the log AFTER the sweep has already run. That is the
+    // window ADR 007 names, and this is it being a non-sending window.
+    seedDevice(OMID);
+    // One catch-up for `syncChannel`, one inside the sweep, and a third
+    // inside `addUsers` — that third one is the only commit this pass applies
+    // after the sweep is already behind it.
+    let calls = 0;
+    server.use(
+      http.get("/api/v1/channels/:channelId/mls/commits", ({ params, request }) => {
+        calls += 1;
+        if (calls === 3) {
+          // Somebody else's commit lands between our sweep and our adds,
+          // carrying a leaf whose key the directory lists for no member.
+          injectCommit(params.channelId as string, [
+            `${ME}|${fakeSignatureKey(ME)}`,
+            `${NASRIN}|${fakeSignatureKey(NASRIN)}`,
+            "ghost|sig:ghost",
+          ]);
+        }
+        return passThroughCommitPage(params.channelId as string, request);
+      }),
+    );
+    await service.syncChannel(channelId);
+
+    expect(latest().verification[channelId]?.uncoveredLeaves).toBe(1);
+    expect(await service.encrypt(channelId, "not into that")).toBeNull();
+
+    // Nothing was asked of anybody: the next reconcile's allow-list sweep is
+    // what resolves this branch.
+    server.resetHandlers();
+    await service.syncChannel(channelId);
+
+    expect(latest().verification[channelId]?.uncoveredLeaves).toBe(0);
+    expect(await service.encrypt(channelId, "fine now")).not.toBeNull();
+  });
+});
+
+describe("the two exits", () => {
+  async function blocked(slug: string) {
+    const opened = await openWith(slug);
+    plantDirectoryKey(NASRIN);
+    await opened.service.syncChannel(opened.channelId);
+    expect(await opened.service.encrypt(opened.channelId, "blocked")).toBeNull();
+    return opened;
+  }
+
+  it("accepting re-pins the current set and unblocks sending", async () => {
+    const { service, channelId } = await blocked("accepted");
+
+    await service.acceptPeer(NASRIN);
+
+    expect(latest().records[NASRIN]).toMatchObject({
+      keys: [directoryKey(NASRIN), PLANTED],
+      level: "pinned",
+    });
+    expect(latest().verification[channelId]).toEqual({ changed: [], uncoveredLeaves: 0 });
+    expect(await service.encrypt(channelId, "on we go")).not.toBeNull();
+  });
+
+  it("verifying records the ceremony's verdict and unblocks sending", async () => {
+    const { service, channelId } = await blocked("verified");
+
+    await service.verifyPeer(NASRIN);
+
+    expect(latest().records[NASRIN]).toMatchObject({
+      keys: [directoryKey(NASRIN), PLANTED],
+      level: "verified",
+    });
+    expect(await service.encrypt(channelId, "compared out of band")).not.toBeNull();
+  });
+
+  it("downgrades a verified peer to pinned when accepted without a ceremony", async () => {
+    const { service } = await blocked("downgraded");
+    await service.verifyPeer(NASRIN);
+    expect(latest().records[NASRIN]?.level).toBe("verified");
+
+    await service.acceptPeer(NASRIN);
+
+    // An unceremonied acceptance is a pin, not a proof, and the badge has to
+    // say so rather than keeping a claim nobody re-earned.
+    expect(latest().records[NASRIN]?.level).toBe("pinned");
+  });
+
+  it("accepts only the set it was shown, so the next change warns again", async () => {
+    const { service, channelId } = await blocked("named-set");
+    await service.acceptPeer(NASRIN);
+
+    plantDirectoryKey(NASRIN, toBase64(encoder.encode("sig:planted-again")));
+    await service.syncChannel(channelId);
+
+    expect(latest().verification[channelId]?.changed).toHaveLength(1);
+    expect(await service.encrypt(channelId, "no")).toBeNull();
+  });
+});
+
+describe("the own-account prompt", () => {
+  it("raises the prompt rather than pinning a new key under this account", async () => {
+    const { service, channelId } = await openWith("my-devices");
+    expect(latest().ownDevices).toBeNull();
+
+    // Either my other browser profile or an attack. No software on this
+    // device can tell, so nothing here decides it quietly.
+    const mine = toBase64(encoder.encode("sig:my-other-browser"));
+    plantDirectoryKey(ME, mine);
+    await service.syncChannel(channelId);
+
+    expect(latest().ownDevices).toEqual({ keys: [mine] });
+    expect(latest().records[ME]).toBeUndefined();
+    expect(await service.encrypt(channelId, "who else is reading this")).toBeNull();
+
+    await service.acceptOwnDevices();
+
+    expect(latest().ownDevices).toBeNull();
+    expect(latest().records[ME]).toMatchObject({ keys: [directoryKey(ME), mine] });
+    expect(await service.encrypt(channelId, "mine after all")).not.toBeNull();
+  });
+});
+
+describe("safety numbers", () => {
+  it("is sixty digits and the same for a settled pair", async () => {
+    const { service } = await openWith("digits");
+    expect(await service.safetyNumberFor(NASRIN)).toMatch(/^(\d{5} ){11}\d{5}$/);
+  });
+
+  it("moves when the directory changes what it claims about the peer", async () => {
+    const { service, channelId } = await openWith("peer-half");
+    const before = await service.safetyNumberFor(NASRIN);
+
+    plantDirectoryKey(NASRIN);
+    await service.syncChannel(channelId);
+
+    expect(await service.safetyNumberFor(NASRIN)).not.toBe(before);
+  });
+
+  it("computes our own half from our own device key, never from the directory", async () => {
+    const { service, channelId } = await openWith("own-half");
+    const before = await service.safetyNumberFor(NASRIN);
+
+    // The hostile directory's best move, and the reason this test exists: it
+    // claims an extra device for US. Nasrin's screen reads us from the
+    // directory and so includes the plant. If this client did the same, both
+    // screens would print one identical number, the humans would say "they
+    // match", and the ceremony would bless the attack — with nothing thrown
+    // and no other test failing.
+    plantDirectoryKey(ME);
+    await service.syncChannel(channelId);
+
+    expect(await service.safetyNumberFor(NASRIN)).toBe(before);
+  });
+
+  it("mismatches exactly when a key is planted, where a circular one would match", async () => {
+    // The same argument as the test above, written as the two screens, so the
+    // property is legible without a service in the way.
+    const alice = { userId: "alice", keys: ["QUxJQ0U="] };
+    const bob = { userId: "bob", keys: ["Qk9C"] };
+    const bobAsClaimed = { userId: "bob", keys: [...bob.keys, PLANTED] };
+
+    // A circular implementation: every half from the directory. Both people
+    // see the same two sets, so both print the same line.
+    expect(await safetyNumber(alice, bobAsClaimed)).toBe(await safetyNumber(bobAsClaimed, alice));
+
+    // This one: each side's own half comes from its own device key. Alice
+    // sees Bob as the directory claims him; Bob sees himself as he is.
+    expect(await safetyNumber(alice, bobAsClaimed)).not.toBe(await safetyNumber(bob, alice));
+  });
+
+  it("has no number for somebody no reconcile has ever seen", async () => {
+    const { service } = await openWith("stranger");
+    expect(await service.safetyNumberFor("00000000-0000-4000-8000-000000000999")).toBeNull();
+  });
+});
+
+describe("records at rest", () => {
+  it("carries pins and verdicts across a restart", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    seedDevice(NASRIN);
+    const channelId = await createE2eeChannel("restart");
+    const first = newService(keystore);
+    await first.openChannel(channelId);
+    await first.verifyPeer(NASRIN);
+
+    const second = newService(keystore);
+    await second.start();
+
+    expect(latest().records[NASRIN]).toMatchObject({ level: "verified" });
+  });
+});
+
 /* ── helpers that re-enter the default handlers ─────────────────────────
  * `server.use` replaces a handler outright, so a case that only wants to
  * interfere once has to do the ordinary thing itself for the other calls.
@@ -612,6 +937,40 @@ async function passThroughDeviceRegistration(request: Request) {
     },
     { status: 201 },
   );
+}
+
+/**
+ * Appends a commit to the log as another member's client would have, replacing
+ * the group's leaves wholesale — the shape `fakeModule` writes and reads.
+ *
+ * The mock group's epoch moves with it, so the client that catches up on this
+ * commit stays in step with the server and its own next commit is not a
+ * conflict. A test that only stuffed bytes into the log would be testing the
+ * retry loop instead of what it meant to.
+ */
+function injectCommit(channelId: string, leaves: readonly string[]): void {
+  const group = mockMlsGroup(channelId);
+  if (group === undefined) {
+    throw new Error("no mock group to inject a commit into");
+  }
+  const groupId = Array.from(fromBase64(group.groupId)).join(",");
+  group.epoch += 1;
+  group.commits.push({
+    epoch: group.epoch,
+    message: toBase64(encoder.encode(`commit:${groupId}:${leaves.join(",")}`)),
+    created_at: new Date().toISOString(),
+  });
+}
+
+/** The commit page the default handler would have returned. */
+function passThroughCommitPage(channelId: string, request: Request) {
+  const group = mockMlsGroup(channelId);
+  const url = new URL(request.url);
+  const after = Number(url.searchParams.get("after_epoch") ?? "0");
+  const limit = Number(url.searchParams.get("limit") ?? "50");
+  return HttpResponse.json({
+    commits: (group?.commits ?? []).filter((commit) => commit.epoch > after).slice(0, limit),
+  });
 }
 
 async function passThroughCommit(request: Request, channelId: string) {

@@ -27,6 +27,14 @@ export interface MlsController {
   decryptAll: (channelId: string, messages: readonly Message[]) => void;
   /** What a bubble should draw for this message. */
   bodyOf: (message: Message) => MessageBody;
+  /** The sixty digits both people compare, or null before any reconcile. */
+  safetyNumberFor: (userId: string) => Promise<string | null>;
+  /** Exit 1: the humans compared out of band and the numbers matched. */
+  verifyPeer: (userId: string) => Promise<void>;
+  /** Exit 2: "I checked" — a pin, which downgrades a verified badge. */
+  acceptPeer: (userId: string) => Promise<void>;
+  /** The own-account prompt's yes: that new device under your id is yours. */
+  acceptOwnDevices: () => Promise<void>;
 }
 
 /**
@@ -104,6 +112,17 @@ export function useMls(currentUserId: string): MlsController {
     [service],
   );
 
+  const safetyNumberFor = useCallback(
+    (userId: string) => service.safetyNumberFor(userId),
+    [service],
+  );
+
+  const verifyPeer = useCallback((userId: string) => service.verifyPeer(userId), [service]);
+
+  const acceptPeer = useCallback((userId: string) => service.acceptPeer(userId), [service]);
+
+  const acceptOwnDevices = useCallback(() => service.acceptOwnDevices(), [service]);
+
   const decrypted = state.decrypted;
   const bodyOf = useCallback(
     (message: Message): MessageBody => {
@@ -137,6 +156,10 @@ export function useMls(currentUserId: string): MlsController {
       rememberSent,
       decryptAll,
       bodyOf,
+      safetyNumberFor,
+      verifyPeer,
+      acceptPeer,
+      acceptOwnDevices,
     }),
     [
       state,
@@ -149,6 +172,10 @@ export function useMls(currentUserId: string): MlsController {
       rememberSent,
       decryptAll,
       bodyOf,
+      safetyNumberFor,
+      verifyPeer,
+      acceptPeer,
+      acceptOwnDevices,
     ],
   );
 }

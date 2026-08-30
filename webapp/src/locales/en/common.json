@@ -805,7 +805,35 @@
       "unavailable": "Encryption could not be started in this session, so encrypted conversations cannot be read or written here.",
       "composerNotReady": "You cannot send here until this conversation's encryption is ready.",
       "decrypting": "Decrypting…",
-      "cannotDecrypt": "This message cannot be decrypted on this device."
+      "cannotDecrypt": "This message cannot be decrypted on this device.",
+      "verification": {
+        "openSheet": "Safety number",
+        "sheetTitle": "Safety number with {{name}}",
+        "level": {
+          "unverified": "You have not compared a safety number with this person on this device.",
+          "pinned": "This browser recorded these device keys without a comparison. That is real, and it is weaker than a check the two of you did together.",
+          "verified": "You compared this number with them and it matched."
+        },
+        "instructions": "Read these sixty digits to each other over something you already trust — in person, or a call where you recognise the voice. If they match, the device keys each of you holds for the other are the ones your devices are really using.",
+        "numberLabel": "Safety number",
+        "numberLoading": "Working out the number…",
+        "numberUnavailable": "This number cannot be worked out yet. It needs one successful read of this conversation's device list.",
+        "match": "We compared it and it matched",
+        "acceptWithoutComparing": "Accept without comparing",
+        "acceptIsAPin": "Accepting without a comparison records the keys but proves nothing about who holds them, so it is shown as recorded rather than compared.",
+        "blockedTitle": "Sending is paused until you decide about a device.",
+        "newDevice": "{{name}} has a device this browser has not seen before.",
+        "replacedKey": "A device key this browser had recorded for {{name}} has been replaced.",
+        "compare": "Compare safety number",
+        "accept": "I checked — accept",
+        "uncovered": "This conversation contains a device that nobody currently in it is listed as owning. Sending stays paused until it is removed, which the next update does on its own.",
+        "readingContinues": "Messages already here still open, and new ones still arrive.",
+        "ownTitle": "A device was added to your own account.",
+        "ownBody_one": "The server lists one device under your account that you have not confirmed here. If you signed in on another browser or another computer, that is probably it.",
+        "ownBody_other": "The server lists {{count}} devices under your account that you have not confirmed here. If you signed in elsewhere, those are probably them.",
+        "ownIfNotYours": "If you did not add it, do not confirm it. Leaving it unconfirmed is what stops this conversation encrypting anything to it.",
+        "ownAccept": "Yes, that device is mine"
+      }
     }
   },
   "calls": {
