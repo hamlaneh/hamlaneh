@@ -131,8 +131,13 @@ jobs:
             out="hamlaneh-server"
             if [ "$goos" = "windows" ]; then out="hamlaneh-server.exe"; fi
             echo "building $goos/$goarch"
+            # -X main.version: what `hamlaneh-server --version` prints, and
+            # therefore what an updater passes to verify-release.sh as
+            # --installed. An unstamped build says "dev" rather than claiming
+            # a version nobody can verify, so this flag and that default are
+            # the same decision.
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-              go build -trimpath -ldflags="-s -w" \
+              go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
               -o "$RUNNER_TEMP/$out" ./cmd/hamlaneh-server
             base="hamlaneh-${VERSION}-${goos}-${goarch}"
             if [ "$goos" = "windows" ]; then
