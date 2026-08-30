@@ -201,10 +201,12 @@ safe. A copy of the key stored beside the ciphertext it opens is not a backup.
 Restrict who can read it. Anyone who can read `deploy/.env` can read the database directly, mint
 join tokens for every room, and rewrite the audit log without the rewrite showing.
 
-**There is no automated backup yet.** Automated encrypted backups with a documented restore are
-Phase 4 installer work (`docs/ROADMAP.md`), and this guide deliberately does not paper over that
-with a cron recipe. Until it lands, whatever you do for the `db_data` and `file_data` volumes is
-your own arrangement — and the key custody above applies to it.
+**Automated encrypted backups now exist** — `deploy/hamlaneh-backup.sh`, documented in
+[`docs/backups.md`](backups.md), daily and on by default once it has run once. They cover the
+database and the uploaded files and **not** `deploy/.env`, deliberately: a key that travels with
+the ciphertext it opens is not a key. So the offline copy above is not optional once you have
+backups — it is the other half of them. The backup key is a third secret with the same rule, and
+`hamlaneh-backup.sh` will keep warning you until you have moved it off the machine.
 
 ### The users' recovery keys — deliberately not yours
 
@@ -226,7 +228,8 @@ trust decisions — so they are asked to verify people again.
 recovery keys, a compromised server yielding readable backups.
 
 **Does not protect against:** a backup that is never tested. An untested restore is a hope, not a
-backup — and Hamlaneh has no restore drill you can run yet.
+backup. The drill is written down in [`docs/backups.md`](backups.md) and is yours to actually run,
+on a machine that is not the live one.
 
 ---
 
