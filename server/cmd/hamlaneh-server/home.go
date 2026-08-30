@@ -377,8 +377,14 @@ func mintPassword() (string, error) {
 // output before signing in has no way back in, and recovers by moving the data
 // directory aside and starting again. That is the honest cost of not keeping a
 // live credential somewhere it could be read twice.
-func (m mode) announceFirstAdmin(cfg bootstrap.AdminConfig) {
-	fmt.Fprintf(stdout, `
+//
+// A write that fails is therefore fatal rather than ignorable, and the caller
+// stops startup on it. The account exists by this point and the password is
+// only here; a server that carried on would be one nobody can ever sign in to,
+// running silently and looking healthy. Stopping says what happened while the
+// remedy is still one deleted directory.
+func (m mode) announceFirstAdmin(cfg bootstrap.AdminConfig) error {
+	if _, err := fmt.Fprintf(stdout, `
 ==============================================================
  Hamlaneh created the first administrator account.
  This password is shown once and is not stored anywhere.
@@ -390,7 +396,13 @@ func (m mode) announceFirstAdmin(cfg bootstrap.AdminConfig) {
  You will be asked to choose a new password immediately.
 ==============================================================
 
-`, cfg.Username, cfg.Password, m.publicURL)
+`, cfg.Username, cfg.Password, m.publicURL); err != nil {
+		return fmt.Errorf(
+			"the first administrator was created but its generated password could not be shown: %w"+
+				"\n(nothing else has that password: delete %s and start again to get a new one)",
+			err, m.dataDir)
+	}
+	return nil
 }
 
 // keys returns the two secrets that must exist before anything else does: the

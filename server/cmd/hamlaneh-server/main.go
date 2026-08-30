@@ -260,7 +260,9 @@ func start(ctx context.Context, m mode) error {
 	// made by THIS start. A restart fails the second, so the console never
 	// shows a credential twice and the account is never made twice.
 	if created && admin.minted {
-		m.announceFirstAdmin(admin.cfg)
+		if err = m.announceFirstAdmin(admin.cfg); err != nil {
+			return err
+		}
 	}
 
 	// A half-configured mail transport, or one with no public URL to build

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -249,6 +250,41 @@ func TestHomeRunMintsOneAdminAndPrintsItOnce(t *testing.T) {
 	}
 }
 
+// failingWriter stands in for a console that cannot be written to.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("the console went away") }
+
+// TestAnnouncementFailureStopsStartup: if the password cannot be shown, the
+// account exists and nobody will ever know its password. Carrying on would
+// leave a healthy-looking server no one can sign in to, so the failure has to
+// propagate — and it has to say that deleting the data directory is the way
+// back, because a restart will not print anything.
+func TestAnnouncementFailureStopsStartup(t *testing.T) {
+	dir := homeTestEnv(t)
+
+	previous := stdout
+	stdout = failingWriter{}
+	t.Cleanup(func() { stdout = previous })
+
+	m, err := homeMode()
+	if err != nil {
+		t.Fatalf("homeMode() error = %v", err)
+	}
+	admin, err := m.firstAdmin()
+	if err != nil {
+		t.Fatalf("firstAdmin() error = %v", err)
+	}
+
+	err = m.announceFirstAdmin(admin.cfg)
+	if err == nil {
+		t.Fatal("a console write that failed was reported as a successful announcement")
+	}
+	if !strings.Contains(err.Error(), dir) {
+		t.Errorf("error %q does not name the data directory to delete, which is the only way back", err)
+	}
+}
+
 // passwordFrom pulls the generated password out of what the console showed,
 // the way an operator's eyes do: the line that labels it.
 func passwordFrom(t *testing.T, printed string) string {
@@ -283,7 +319,9 @@ func TestAnnouncementNeverReachesTheLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("firstAdmin() error = %v", err)
 	}
-	m.announceFirstAdmin(admin.cfg)
+	if err := m.announceFirstAdmin(admin.cfg); err != nil {
+		t.Fatalf("announceFirstAdmin: %v", err)
+	}
 
 	if !strings.Contains(out.String(), admin.cfg.Password) {
 		t.Error("the announcement did not show the password the operator needs")
