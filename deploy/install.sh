@@ -313,6 +313,119 @@ ensure_docker_daemon() {
   fail "the Docker daemon is not running and could not be started. Check 'systemctl status docker' and 'journalctl -u docker -n 50'. A host without systemd (some LXC/OpenVZ VPS products) must start dockerd by whatever supervisor it does have before this script can continue."
 }
 
+# cosign, pinned.
+#
+# deploy/verify-release.sh and deploy/hamlaneh-update.sh both shell out to
+# `cosign`, and this script enables the update timer that runs the second of
+# those daily. Without cosign on the host that timer fails on every single
+# fire, inside a systemd unit nobody reads — so "security patches install
+# themselves" would be false on every machine while looking true.
+#
+# The version is the one .github/workflows/release.yml and ci.yml pin, and it
+# is meant to stay in lockstep with them: the pipeline that SIGNS and the host
+# that VERIFIES disagreeing about cosign is the kind of drift that gets found
+# during an incident rather than before one.
+#
+# The download is checked against a SHA-256 pinned HERE, in the repository,
+# not one fetched next to the binary. A checksum served by the same host as
+# the file it describes proves only that the transfer was not corrupted;
+# pinning it in the source tree is what makes it an assertion about WHICH
+# binary. Cosign's own signature would be stronger and is not available at
+# this point: verifying it needs a working cosign, which is the thing being
+# installed.
+COSIGN_VERSION="v3.0.6"
+COSIGN_SHA256_AMD64="c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74"
+COSIGN_SHA256_ARM64="bedac92e8c3729864e13d4a17048007cfafa79d5deca993a43a90ffe018ef2b8"
+
+# Set by the three functions below so print_success can state what is actually
+# switched on, rather than what was intended to be.
+COSIGN_STATE="not installed"
+UPDATE_TIMER_STATE="not enabled"
+BACKUP_TIMER_STATE="not enabled"
+
+ensure_cosign() {
+  if command -v cosign >/dev/null 2>&1; then
+    # An operator's existing cosign is left exactly where it is: clobbering a
+    # binary this script did not install is not something a re-run may do.
+    COSIGN_STATE="already present ($(cosign version 2>/dev/null | sed -n 's/^ *GitVersion: *//p' | head -n 1 || true))"
+    log "cosign already installed — leaving it alone (${COSIGN_STATE})"
+    return 0
+  fi
+
+  local arch sha
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch="amd64"; sha="$COSIGN_SHA256_AMD64" ;;
+    aarch64|arm64) arch="arm64"; sha="$COSIGN_SHA256_ARM64" ;;
+    *)
+      warn "no pinned cosign build for this architecture (${arch}), so release-signature verification and automatic updates stay off. Install cosign ${COSIGN_VERSION} by hand from https://github.com/sigstore/cosign/releases and re-run this script."
+      return 0
+      ;;
+  esac
+
+  local url tmp
+  url="https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${arch}"
+  log "installing cosign ${COSIGN_VERSION} (verifies the signature on every update)"
+  tmp="$(mktemp)"
+  if ! curl -fsSL "$url" -o "$tmp"; then
+    rm -f "$tmp"
+    warn "could not download cosign from ${url}. Release-signature verification and automatic updates stay off until it is installed. Nothing else about this install is affected; re-run this script once the host can reach github.com."
+    return 0
+  fi
+  if ! printf '%s  %s\n' "$sha" "$tmp" | sha256sum -c - >/dev/null 2>&1; then
+    rm -f "$tmp"
+    fail "the cosign ${COSIGN_VERSION} download did not match its pinned SHA-256. This is not a transient error: either the release was re-cut or the download was tampered with. Nothing was installed. Do not work around this — report it."
+  fi
+  install -m 0755 "$tmp" /usr/local/bin/cosign
+  rm -f "$tmp"
+  COSIGN_STATE="${COSIGN_VERSION} (installed by this script)"
+  log "cosign ${COSIGN_VERSION} installed to /usr/local/bin/cosign"
+}
+
+# Automatic security updates and automatic backups are "on by default" only
+# if something turns them on. Both sibling scripts write and enable their own
+# systemd unit and both are idempotent, so the whole job here is one call each
+# — but a failure must be loud, because the failure mode is a feature that
+# looks enabled and is not.
+#
+# Neither is fatal: the instance is up and serving by this point, and refusing
+# the install over a timer would trade a working deployment for a broken one.
+# print_success states what actually happened either way.
+enable_companion() {
+  local script="$1" label="$2"
+  shift 2
+  if [ ! -f "${SCRIPT_DIR}/${script}" ]; then
+    warn "${SCRIPT_DIR}/${script} is missing, so ${label} is NOT enabled. That file ships with Hamlaneh — an incomplete checkout is the usual cause. Restore it and run: sudo ${SCRIPT_DIR}/${script} $*"
+    return 1
+  fi
+  if bash "${SCRIPT_DIR}/${script}" "$@"; then
+    return 0
+  fi
+  warn "${SCRIPT_DIR}/${script} $* failed, so ${label} is NOT enabled. Its output is above. Everything else about this install is fine; run that command by hand once the cause is fixed."
+  return 1
+}
+
+enable_update_timer() {
+  if [ "$COSIGN_STATE" = "not installed" ]; then
+    warn "automatic updates are NOT enabled, because cosign is not installed and the updater refuses to apply a release it cannot verify. Install cosign and re-run this script."
+    return 0
+  fi
+  if enable_companion hamlaneh-update.sh "automatic security updates" --install-timer; then
+    UPDATE_TIMER_STATE="enabled (hamlaneh-update.timer, daily)"
+  fi
+}
+
+enable_backup_timer() {
+  # No mechanism is named here on purpose: hamlaneh-backup.sh installs a
+  # systemd timer where there is one and a /etc/cron.d entry where there is
+  # not, and it logs which it chose one line above this. Claiming a systemd
+  # timer on a host that got the cron entry would send the operator looking
+  # for a unit that does not exist.
+  if enable_companion hamlaneh-backup.sh "automated encrypted backups" enable; then
+    BACKUP_TIMER_STATE="enabled, daily (see the line above for systemd or cron)"
+  fi
+}
+
 current_env_domain() {
   [ -f "$ENV_FILE" ] || return 0
   sed -n 's/^HAMLANEH_DOMAIN=//p' "$ENV_FILE" | tail -n 1
@@ -800,11 +913,56 @@ wait_for_stack() {
     sleep 5
   done
 
+  # Before dumping logs, separate the two very different causes. Caddy
+  # answering on port 80 while HTTPS does not serve means the containers are
+  # healthy and the CERTIFICATE is what is missing — for a real domain that
+  # is nearly always ACME being unable to complete, and no amount of reading
+  # the server's logs will show it, because the server is fine.
+  if [ "$(domain_kind "$DOMAIN")" = "domain" ] &&
+    [ "$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' \
+      --resolve "${DOMAIN}:80:127.0.0.1" "http://${DOMAIN}/healthz" 2>/dev/null || true)" != "000" ]; then
+    print_acme_pending_notice
+    print_port_notice
+    fail "the containers are running and answering on port 80, but HTTPS is not serving yet — see the two notices above. Nothing was deleted and nothing here needs re-running."
+  fi
+
   printf '\n[hamlaneh] --- container status ---\n' >&2
   compose ps >&2 || true
   printf '\n[hamlaneh] --- last 40 lines from the server ---\n' >&2
   compose logs --tail 40 server >&2 || true
   fail "the stack started but never answered https://${DOMAIN}/healthz (last status: ${code:-no response}). The output above usually names the cause on its first line. Nothing was deleted; fix the cause and re-run. Full logs: docker compose -f ${COMPOSE_FILE} logs"
+}
+
+# The single most likely way a domain install still goes wrong: the DNS
+# record is not there yet, or the cloud security group is still shut, so
+# Caddy cannot complete an ACME challenge and has no certificate to serve.
+# Neither is visible in any container's logs, and neither is fixed by
+# re-running anything — which is the part an operator most needs told.
+print_acme_pending_notice() {
+  cat <<EOF
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  NO CERTIFICATE YET — THIS IS ALMOST CERTAINLY DNS OR A FIREWALL     │
+  │                                                                      │
+  │  The containers are up: Caddy answered on port 80. What it does not  │
+  │  have is a certificate, so nothing is served over HTTPS. Caddy gets  │
+  │  one automatically, but only once BOTH of these are true:            │
+  │                                                                      │
+  │    1. ${DOMAIN}
+  │       resolves to THIS server's public IP address. Check from        │
+  │       somewhere else, not from this machine.                         │
+  │    2. inbound 80/tcp and 443/tcp reach this host from the internet.  │
+  │       On AWS, Azure, GCP, Hetzner or DigitalOcean that is a cloud    │
+  │       security group, not the host firewall — see the next box.      │
+  │                                                                      │
+  │  Do NOT re-run this script to fix it. Caddy retries on its own, and  │
+  │  the site starts working within about a minute of both being true.   │
+  │  Watch it happen:                                                    │
+  │    docker compose -f ${COMPOSE_FILE}
+  │      logs -f caddy                                                   │
+  └──────────────────────────────────────────────────────────────────────┘
+
+EOF
 }
 
 print_success() {
@@ -824,8 +982,26 @@ print_success() {
   fi
   log "Status:          docker compose -f ${COMPOSE_FILE} ps"
   log "Verify defaults: ${SCRIPT_DIR}/verify-defaults.sh"
+  print_background_jobs
   print_host_notes
   print_port_notice
+}
+
+# What is actually switched on, reported from the state each step reached
+# rather than from what this script set out to do. A feature that failed to
+# arm and says nothing is worse than one that was never offered: nobody
+# discovers an update timer is dead until they needed the update.
+print_background_jobs() {
+  log ""
+  log "Running in the background:"
+  log "  Release signatures: cosign ${COSIGN_STATE}"
+  log "  Security updates:   ${UPDATE_TIMER_STATE}"
+  log "  Encrypted backups:  ${BACKUP_TIMER_STATE}"
+  case "${COSIGN_STATE}${UPDATE_TIMER_STATE}${BACKUP_TIMER_STATE}" in
+    *"not installed"*|*"not enabled"*)
+      log "  ^ Something above is off. The warnings earlier in this run say why and what to run."
+      ;;
+  esac
 }
 
 # What the operator gets for TLS, stated plainly, because it is the single
@@ -949,6 +1125,7 @@ main() {
   require_checkout
   ensure_prereqs
   ensure_docker
+  ensure_cosign
   resolve_domain
   write_env
   scrub_placeholder_secrets
@@ -961,6 +1138,8 @@ main() {
   preflight
   start_stack
   wait_for_stack
+  enable_update_timer
+  enable_backup_timer
   print_success
 }
 

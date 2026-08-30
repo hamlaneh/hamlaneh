@@ -507,6 +507,78 @@ test_no_silent_failures() {
   check_contains "an unexpected failure says re-running is safe" "Re-running this script is safe" "$out"
 }
 
+# cosign's pin must match the one the release pipeline signs with. Drift
+# between the two is only discovered during an incident, so it is asserted
+# here against the workflow files themselves.
+test_cosign_pin_matches_ci() {
+  local ours theirs
+  ours="$(sed -n 's/^COSIGN_VERSION="\(.*\)"$/\1/p' "$INSTALL_SH" | head -n 1)"
+  check_contains "install.sh pins a cosign version" "v3" "$ours"
+
+  theirs="$(grep -rhoE 'cosign-release: *v[0-9.]+|COSIGN_VERSION: *v[0-9.]+' \
+    "${SCRIPT_DIR}/../.github/workflows/" 2>/dev/null |
+    grep -oE 'v[0-9.]+' | sort -u)"
+  if [ -z "$theirs" ]; then
+    bad "no cosign version found in .github/workflows — cannot check the pin matches"
+    return
+  fi
+  # Every version named by CI must be the one install.sh puts on the host.
+  local v
+  while read -r v; do
+    check_eq "cosign pin matches CI (${v})" "$ours" "$v"
+  done <<<"$theirs"
+}
+
+# A missing sibling script must produce an instruction, never a crash, and
+# must never be reported as enabled.
+test_companion_enablement() {
+  local out
+  out="$(run_in_subshell enable_companion no-such-script.sh "automatic updates" --install-timer)"
+  check_contains "a missing companion names the file" "no-such-script.sh is missing" "$out"
+  check_contains "a missing companion says the feature is NOT on" "is NOT enabled" "$out"
+  check_contains "a missing companion gives the command to run later" "sudo" "$out"
+  check_eq "a missing companion returns non-zero, not a crash" "1" \
+    "$(status_in_subshell enable_companion no-such-script.sh "automatic updates" --install-timer)"
+
+  # Without cosign the updater would refuse every release anyway, so the
+  # timer must not be armed and must say why.
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'COSIGN_STATE="not installed"; enable_update_timer; printf "\nSTATE=%s" "$UPDATE_TIMER_STATE"')"
+  check_contains "no cosign means updates are not enabled" "automatic updates are NOT enabled" "$out"
+  check_contains "no cosign explains the updater would refuse anyway" "cannot verify" "$out"
+  check_contains "no cosign leaves the reported state off" "STATE=not enabled" "$out"
+}
+
+# The end-of-run summary must report what happened, not what was intended.
+test_background_jobs_summary() {
+  local out
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval '
+    COSIGN_STATE="v3.0.6 (installed by this script)"
+    UPDATE_TIMER_STATE="enabled (hamlaneh-update.timer, daily)"
+    BACKUP_TIMER_STATE="enabled, daily (see the line above for systemd or cron)"
+    print_background_jobs')"
+  check_contains "summary reports cosign" "cosign v3.0.6" "$out"
+  check_contains "summary reports the update timer" "hamlaneh-update.timer" "$out"
+  check_contains "summary reports backups as enabled" "Encrypted backups:  enabled" "$out"
+  # The backup script picks systemd or cron at run time, so the summary must
+  # not name a mechanism it did not observe.
+  if [[ "$out" == *"hamlaneh-backup.timer"* ]]; then
+    bad "the summary named a systemd timer for backups, which may have been a cron entry"
+  else
+    ok "the backup line names no mechanism it did not observe"
+  fi
+  if [[ "$out" == *"Something above is off"* ]]; then
+    bad "the all-green summary warned anyway"
+  else
+    ok "an all-green summary carries no warning"
+  fi
+
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'BACKUP_TIMER_STATE="not enabled"; print_background_jobs')"
+  check_contains "a half-armed summary says so" "Something above is off" "$out"
+}
+
 test_help_output() {
   local out
   out="$(run_in_subshell usage)"
@@ -595,6 +667,9 @@ main() {
   test_upgrade_from_older_env
   test_bare_ip_posture
   test_no_silent_failures
+  test_cosign_pin_matches_ci
+  test_companion_enablement
+  test_background_jobs_summary
   test_help_output
   finish
 }
