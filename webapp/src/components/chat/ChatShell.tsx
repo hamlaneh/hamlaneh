@@ -13,6 +13,7 @@ import type { RealtimeOverrides } from "../../chat/useChat";
 import { isUuid } from "../../chat/uuid";
 import { useInstance } from "../../instance/instanceInfo";
 import { MessageBodyProvider } from "../../mls/MessageBodyContext";
+import { needsAttention } from "../../mls/types";
 import { useMls } from "../../mls/useMls";
 import { CallRing } from "../calls/CallRing";
 import type { AwayCall } from "../calls/CallStrip";
@@ -30,6 +31,7 @@ import { AccountMenu } from "./plumbing/AccountMenu";
 import { ChannelMenu } from "./plumbing/ChannelMenu";
 import { CreateChannelDialog } from "./plumbing/CreateChannelDialog";
 import { PeoplePicker } from "./plumbing/PeoplePicker";
+import { VerificationSheet, VerificationWarning } from "./plumbing/Verification";
 import { SettingsPanel } from "../settings/SettingsPanel";
 
 export interface ChatShellProps {
@@ -233,6 +235,22 @@ export function ChatShell({
       channelMls.status === "waiting" ||
       channelMls.status === "failed");
 
+  /*
+   * The second, independent reason a composer can be withheld (ADR 008). It is
+   * NOT folded into `encryptionNotReady`: that one says the group is not usable
+   * and the answer is to wait, while this one says the group is perfectly
+   * usable and holds a key nobody here has accepted — and the answer is a
+   * decision only a human can make. A conversation can be `ready` and blocked
+   * at the same time, and the composer is replaced rather than merely disabled,
+   * because there is something to do here and waiting is not it.
+   */
+  const channelVerification =
+    activeChannel === undefined ? undefined : mls.state.verification[activeChannel.id];
+  const verificationBlocked = activeChannel?.e2ee === true && needsAttention(channelVerification);
+
+  /* The per-person sheet, opened from the warning. Null when closed. */
+  const [verifyFor, setVerifyFor] = useState<string | null>(null);
+
   return (
     <MessageBodyProvider resolve={mls.bodyOf}>
       {/* The chat behind the panel is inert, not merely dimmed — the settings
@@ -430,7 +448,25 @@ export function ChatShell({
           />
         )}
 
-        {activeChannel === undefined ? null : (
+        {activeChannel === undefined ? null : verificationBlocked ? (
+          /* Replaced, not disabled: reading and receiving carry on normally,
+             and there is exactly one way back — a decision about the keys. */
+          <VerificationWarning
+            changed={(channelVerification?.changed ?? []).filter(
+              (member) => member.userId !== currentUser.id,
+            )}
+            uncoveredLeaves={channelVerification?.uncoveredLeaves ?? 0}
+            own={mls.state.ownDevices}
+            resolveName={chat.resolveMention}
+            onCompare={setVerifyFor}
+            onAccept={(userId) => {
+              void mls.acceptPeer(userId);
+            }}
+            onAcceptOwn={() => {
+              void mls.acceptOwnDevices();
+            }}
+          />
+        ) : (
           <Composer
             channelId={activeChannel.id}
             target={composerTarget}
@@ -497,6 +533,27 @@ export function ChatShell({
           onClose={closeOverlay}
         />
       ) : null}
+
+      {verifyFor === null ? null : (
+        <VerificationSheet
+          /* Remounted per person, so the number on screen can never be the
+             previous person's while the new one is still being worked out. */
+          key={verifyFor}
+          userId={verifyFor}
+          name={chat.resolveMention(verifyFor) ?? verifyFor}
+          level={mls.state.records[verifyFor]?.level ?? null}
+          safetyNumberFor={mls.safetyNumberFor}
+          onVerify={(userId) => {
+            void mls.verifyPeer(userId);
+          }}
+          onAccept={(userId) => {
+            void mls.acceptPeer(userId);
+          }}
+          onClose={() => {
+            setVerifyFor(null);
+          }}
+        />
+      )}
       </div>
 
       {/* Outside the chat container, so a ring is still answerable while the

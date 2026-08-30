@@ -138,6 +138,10 @@ function spyController(channels: MlsState["channels"] = {}): MlsController {
     rememberSent: vi.fn(),
     decryptAll: vi.fn(),
     bodyOf: vi.fn(() => ({ kind: "plaintext", text: "" }) as const),
+    safetyNumberFor: vi.fn(() => Promise.resolve(null)),
+    verifyPeer: vi.fn(() => Promise.resolve()),
+    acceptPeer: vi.fn(() => Promise.resolve()),
+    acceptOwnDevices: vi.fn(() => Promise.resolve()),
   };
 }
 
