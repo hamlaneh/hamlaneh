@@ -24,6 +24,8 @@ export interface MlsDeviceHandle {
   create_group: (groupId: Uint8Array) => void;
   has_group: (groupId: Uint8Array) => boolean;
   epoch: (groupId: Uint8Array) => bigint;
+  /** 32 exporter bytes for the current epoch — the media key (ADR 009). */
+  exporter: (groupId: Uint8Array) => Uint8Array;
   member_identities: (groupId: Uint8Array) => Uint8Array;
   member_signature_keys: (groupId: Uint8Array) => Uint8Array;
   add_members: (groupId: Uint8Array, packedKeyPackages: Uint8Array) => CommitBundleHandle;

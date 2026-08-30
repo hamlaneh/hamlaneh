@@ -68,8 +68,10 @@ function fakeMedia(initial: MediaParticipant[] = [ME]) {
   let participants = initial;
   const listeners = new Set<(event: MediaEvent) => void>();
   const record = {
-    connections: [] as { url: string; token: string }[],
+    connections: [] as { url: string; token: string; epoch: number | null }[],
     published: [] as string[],
+    /** Epochs this session was rekeyed to, in order (ADR 009 rotation). */
+    keys: [] as number[],
     disconnects: 0,
   };
 
@@ -105,6 +107,10 @@ function fakeMedia(initial: MediaParticipant[] = [ME]) {
       patchLocal({ screenSharing: enabled });
       return Promise.resolve();
     },
+    setKey: (key) => {
+      record.keys.push(key.epoch);
+      return Promise.resolve();
+    },
     disconnect: () => {
       record.disconnects += 1;
       listeners.clear();
@@ -112,8 +118,8 @@ function fakeMedia(initial: MediaParticipant[] = [ME]) {
     },
   };
 
-  const connect: MediaConnect = (url, token) => {
-    record.connections.push({ url, token });
+  const connect: MediaConnect = (url, token, key) => {
+    record.connections.push({ url, token, epoch: key?.epoch ?? null });
     return Promise.resolve(session);
   };
 
@@ -335,7 +341,7 @@ describe("joining", () => {
     // page's own origin, scheme and all, and carries no path — the client
     // appends /rtc itself (ADR 005).
     expect(media.record.connections).toEqual([
-      { url: `ws://${window.location.host}`, token: "fixture-call-ticket-not-a-real-one" },
+      { url: `ws://${window.location.host}`, epoch: null, token: "fixture-call-ticket-not-a-real-one" },
     ]);
     // Microphone published, camera left alone: there is no prejoin screen to
     // check a camera against yet.

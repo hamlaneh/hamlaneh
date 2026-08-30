@@ -6,6 +6,7 @@ import { safetyNumber } from "./safetyNumber";
 import type {
   ChannelMlsState,
   ChannelVerification,
+  MediaKey,
   MlsState,
   MlsUnavailableReason,
   VerificationLevel,
@@ -317,10 +318,42 @@ export class MlsService {
   }
 
   private async persist(): Promise<void> {
+    // Before the keystore, and unconditionally: `persist` is called after
+    // every mutation, which makes it the one place that cannot miss a merge —
+    // and a device running without a keystore (the test seam) still advances
+    // epochs that the call layer has to rotate on.
+    this.publishEpochs();
     if (this.device === null || this.keystore === null) {
       return;
     }
     await this.keystore.save(this.device.export_state());
+  }
+
+  /**
+   * Republishes every held group's epoch.
+   *
+   * Hooked to `persist` rather than to each of `catchUp`, `commit_accepted`
+   * and `join_from_welcome` on purpose: those are the merge points today, and
+   * a fourth added later would silently stop the media key rotating. Persist
+   * is what they all already share.
+   */
+  private publishEpochs(): void {
+    const device = this.device;
+    if (device === null) {
+      return;
+    }
+    const epochs: Record<string, number> = {};
+    for (const [channelId, groupId] of this.groups) {
+      try {
+        epochs[channelId] = Number(device.epoch(groupId));
+      } catch (error) {
+        // A group id in the map the device has no state for: a rolled-back
+        // creation, mid-flight. Reporting no epoch is right — the call layer
+        // then holds no key rather than an imagined one.
+        console.warn(`Could not read the epoch for ${channelId}:`, error);
+      }
+    }
+    this.publish({ epochs });
   }
 
   /* ── per-channel group ─────────────────────────────────────────────── */
@@ -1031,6 +1064,41 @@ export class MlsService {
       }
     }
     throw new Error("the group's epoch kept moving; giving up on this sweep");
+  }
+
+  /* ── media (ADR 009) ───────────────────────────────────────────────── */
+
+  /**
+   * The media key for this conversation's current epoch, or null when this
+   * device holds no group for it.
+   *
+   * Deliberately NOT gated on the verification state, and the asymmetry is
+   * ADR 008's rather than a shortcut: deriving a key in order to *listen*
+   * hands an attacker nothing, and refusing to would only stop this device
+   * hearing a call everyone else is in. Sealing outbound frames under it is
+   * the act that matters, and that gate lives on the publish side.
+   *
+   * Synchronous and derived on demand: `export_secret` is a read of state this
+   * device already holds, so there is nothing to cache and nothing to go
+   * stale — and a stored media key would be one more copy of a secret whose
+   * whole appeal is that it never has to be stored.
+   */
+  mediaKey(channelId: string): MediaKey | null {
+    const groupId = this.groups.get(channelId);
+    if (this.device === null || groupId === undefined) {
+      return null;
+    }
+    try {
+      return {
+        epoch: Number(this.device.epoch(groupId)),
+        secret: this.device.exporter(groupId),
+      };
+    } catch (error) {
+      // An inactive group — this device was evicted from it. No key exists,
+      // and the call layer refuses rather than joining unencrypted.
+      console.warn(`Could not derive the media key for ${channelId}:`, error);
+      return null;
+    }
   }
 
   /* ── messages ──────────────────────────────────────────────────────── */

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router";
 
 import { isolateAuto, isolateLtr } from "../../i18n/bidi";
+import { callKeyState } from "../../calls/e2ee";
 import type { MediaConnect } from "../../calls/media";
 import { useCallSession } from "../../calls/useCallSession";
 import { PRESENCE_LABEL_KEY } from "../../chat/presence";
@@ -119,9 +120,33 @@ export function ChatShell({
     ...(realtime === undefined ? {} : { realtime }),
   });
 
-  const call = useCallSession(media);
-
+  /*
+   * WHAT ENCRYPTION SAYS ABOUT A CALL, asked per target rather than computed
+   * here (ADR 009, decision 2).
+   *
+   * A callback because the call session decides its own target and the answer
+   * depends on it. The room kind is fixed by the fact that this shell is a
+   * member session at all: it mints channel tickets, so every room it enters
+   * is `chan-`. A conference guest runs `MeetGuestScreen`, which passes no
+   * resolver and is therefore never keyed — the boundary is the join path,
+   * and no server signal can move it.
+   */
   const { state, activeChannel, view, markRead } = chat;
+
+  const channels = state.channels;
+  const mlsState = mls.state;
+  const mlsMediaKey = mls.mediaKey;
+  const resolveCallKey = useCallback(
+    (channelId: string) =>
+      callKeyState(
+        channels.find((channel) => channel.id === channelId),
+        mlsState,
+        mlsMediaKey,
+      ),
+    [channels, mlsState, mlsMediaKey],
+  );
+
+  const call = useCallSession(media, undefined, resolveCallKey);
 
   /* Landing on "/" opens the first conversation, which is what the sidebar's
    * own order says is first. */
@@ -186,6 +211,10 @@ export function ChatShell({
    * and a sentence waiting on a channel nobody is looking at is not one. */
   const callTarget = call.target;
   const callChannel = state.channels.find((channel) => channel.id === callTarget);
+  /* Whose keys stopped this device publishing — the CALL's conversation, not
+     the one being read. Somebody can walk away from a call into another
+     channel, and the warning has to keep naming the right people. */
+  const callVerification = callTarget === null ? undefined : mls.state.verification[callTarget];
   const inCall = callsEnabled && call.status !== "idle";
   const callOver = callsEnabled && call.status === "idle" && call.errorKey !== null;
   /** The call is in the conversation being read, so it takes the pane's top. */
@@ -376,6 +405,32 @@ export function ChatShell({
             micEnabled={call.micEnabled}
             cameraEnabled={call.cameraEnabled}
             screenSharing={call.screenSharing}
+            encrypted={call.encrypted}
+            /* The composer's warning, said for a call: the same records, the
+               same two exits, the same absence of a third (ADR 009). It is
+               driven by the CALL's conversation rather than the one on
+               screen, because that is whose keys stopped this device. */
+            publishWarning={
+              call.publishBlocked ? (
+                <VerificationWarning
+                  changed={(callVerification?.changed ?? []).filter(
+                    (member) => member.userId !== currentUser.id,
+                  )}
+                  uncoveredLeaves={callVerification?.uncoveredLeaves ?? 0}
+                  own={mls.state.ownDevices}
+                  resolveName={chat.resolveMention}
+                  headline={t("calls.blocked.title")}
+                  continues={t("calls.blocked.continues")}
+                  onCompare={setVerifyFor}
+                  onAccept={(userId) => {
+                    void mls.acceptPeer(userId);
+                  }}
+                  onAcceptOwn={() => {
+                    void mls.acceptOwnDevices();
+                  }}
+                />
+              ) : null
+            }
             errorKey={call.errorKey}
             onToggleMicrophone={call.toggleMicrophone}
             onToggleCamera={call.toggleCamera}

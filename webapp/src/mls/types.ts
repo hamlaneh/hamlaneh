@@ -135,6 +135,16 @@ export interface MlsState {
   device: MlsDeviceState;
   channels: Record<string, ChannelMlsState>;
   /**
+   * The MLS epoch this device is at, per channel — republished after every
+   * merge, and absent for a channel whose group this device does not hold.
+   *
+   * It is in the state for one reason: the call layer keys media from the
+   * epoch's exporter and has to rotate when the epoch moves (ADR 009,
+   * decision 3). Nothing about messages reads it — a number that only ever
+   * counted commits would not be worth publishing.
+   */
+  epochs: Record<string, number>;
+  /**
    * Plaintext per message id, or null for a message this device cannot open.
    * Null is a real MLS condition — a message from before this device joined
    * the group — and renders as its own state, never as an empty bubble.
@@ -151,11 +161,27 @@ export interface MlsState {
 export const initialMlsState: MlsState = {
   device: { status: "off" },
   channels: {},
+  epochs: {},
   decrypted: {},
   verification: {},
   records: {},
   ownDevices: null,
 };
+
+/* ── media (ADR 009) ─────────────────────────────────────────────────── */
+
+/**
+ * The key a call's media is encrypted under, and the epoch it belongs to.
+ *
+ * Both halves matter to the media layer: the secret is what encrypts frames,
+ * and the epoch is what decides the keyring slot both ends compute
+ * independently — which is why rotation needs no signaling at all.
+ */
+export interface MediaKey {
+  epoch: number;
+  /** 32 bytes of MLS-Exporter output. Never persisted, never transmitted. */
+  secret: Uint8Array;
+}
 
 /** What a bubble draws: plaintext, decrypted text, or the honest refusal. */
 export type MessageBody =

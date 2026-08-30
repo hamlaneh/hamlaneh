@@ -335,6 +335,113 @@ describe.skipIf(!built)("the OpenMLS wrapper", () => {
     expect(() => carol.decrypt(GROUP_ID, early.ciphertext)).toThrow();
   });
 
+  /* ── the media exporter (ADR 009) ─────────────────────────────────────
+   *
+   * The property the whole media design rests on: two devices at the same
+   * epoch derive the same 32 bytes without anything travelling between them,
+   * and a commit makes those bytes unreachable. Only the real OpenMLS can be
+   * asked this — a double would agree with itself whatever it did.
+   */
+
+  it("derives the same media key on both devices, and a new one per epoch", () => {
+    const { MlsDevice } = loadModule();
+    const alice = MlsDevice.create("user-alice");
+    const bob = MlsDevice.create("user-bob");
+    const carol = MlsDevice.create("user-carol");
+    alice.create_group(GROUP_ID);
+
+    const welcome = alice.add_members(
+      GROUP_ID,
+      packFrames(unpackFrames(bob.generate_key_packages(1))),
+    );
+    alice.commit_accepted(GROUP_ID);
+    bob.join_from_welcome(welcome.welcome ?? new Uint8Array());
+
+    // Same group, same epoch, nothing exchanged: identical bytes.
+    const aliceAtOne = alice.exporter(GROUP_ID);
+    const bobAtOne = bob.exporter(GROUP_ID);
+    expect(aliceAtOne).toHaveLength(32);
+    expect(Array.from(bobAtOne)).toEqual(Array.from(aliceAtOne));
+    // Not a constant the wrapper could be returning by mistake.
+    expect(Array.from(aliceAtOne).some((byte) => byte !== 0)).toBe(true);
+    // Idempotent: deriving does not ratchet anything.
+    expect(Array.from(alice.exporter(GROUP_ID))).toEqual(Array.from(aliceAtOne));
+
+    // A commit advances the epoch. Both devices agree on the new key, and the
+    // old one is gone rather than merely different — this is what makes
+    // rotation on epoch change worth doing.
+    const second = alice.add_members(
+      GROUP_ID,
+      packFrames(unpackFrames(carol.generate_key_packages(1))),
+    );
+    alice.commit_accepted(GROUP_ID);
+    bob.apply_commit(GROUP_ID, second.commit ?? new Uint8Array());
+    carol.join_from_welcome(second.welcome ?? new Uint8Array());
+
+    expect(alice.epoch(GROUP_ID)).toBe(2n);
+    const aliceAtTwo = alice.exporter(GROUP_ID);
+    expect(Array.from(bob.exporter(GROUP_ID))).toEqual(Array.from(aliceAtTwo));
+    // And the member added by that commit derives it too, from group state
+    // alone — nobody sent Carol a media key.
+    expect(Array.from(carol.exporter(GROUP_ID))).toEqual(Array.from(aliceAtTwo));
+    expect(Array.from(aliceAtTwo)).not.toEqual(Array.from(aliceAtOne));
+
+    // The old epoch's key is unreachable from the new state: there is no
+    // argument to `exporter` that reaches backwards, which is the point.
+    expect(Array.from(alice.exporter(GROUP_ID))).not.toEqual(Array.from(aliceAtOne));
+  });
+
+  it("keys a removed member out of every epoch after the removal", () => {
+    const { MlsDevice } = loadModule();
+    const alice = MlsDevice.create("user-alice");
+    const bob = MlsDevice.create("user-bob");
+    const mallory = MlsDevice.create("user-mallory");
+    alice.create_group(GROUP_ID);
+
+    const added = alice.add_members(
+      GROUP_ID,
+      packFrames([
+        ...unpackFrames(bob.generate_key_packages(1)),
+        ...unpackFrames(mallory.generate_key_packages(1)),
+      ]),
+    );
+    alice.commit_accepted(GROUP_ID);
+    bob.join_from_welcome(added.welcome ?? new Uint8Array());
+    mallory.join_from_welcome(added.welcome ?? new Uint8Array());
+
+    // While they are in the room they hear it — the media key is the group's.
+    const shared = alice.exporter(GROUP_ID);
+    expect(Array.from(mallory.exporter(GROUP_ID))).toEqual(Array.from(shared));
+
+    const sweep = alice.retain_leaves(
+      GROUP_ID,
+      packFrames([alice.signature_public_key(), bob.signature_public_key()]),
+    );
+    alice.commit_accepted(GROUP_ID);
+    bob.apply_commit(GROUP_ID, sweep.commit ?? new Uint8Array());
+
+    // The removal commit's secrets exclude the removed leaf, so whatever
+    // Mallory still holds is the old epoch's key and nothing later. Frames a
+    // sender seals after merging are noise to them — the crypto, not the
+    // media server's ejection, is what does this.
+    const rotated = alice.exporter(GROUP_ID);
+    expect(Array.from(bob.exporter(GROUP_ID))).toEqual(Array.from(rotated));
+    expect(Array.from(mallory.exporter(GROUP_ID))).not.toEqual(Array.from(rotated));
+    expect(Array.from(mallory.exporter(GROUP_ID))).toEqual(Array.from(shared));
+  });
+
+  it("gives two groups different media keys at the same epoch", () => {
+    const { MlsDevice } = loadModule();
+    const alice = MlsDevice.create("user-alice");
+    const other = new TextEncoder().encode("a second channel");
+    alice.create_group(GROUP_ID);
+    alice.create_group(other);
+
+    // Same device, same epoch, same label: only the group differs, and the
+    // key schedule is what separates them. One call's key never keys another.
+    expect(Array.from(alice.exporter(other))).not.toEqual(Array.from(alice.exporter(GROUP_ID)));
+  });
+
   it("reports an unusable state instead of restoring half a device", () => {
     const { MlsDevice } = loadModule();
     const alice = MlsDevice.create("user-alice");

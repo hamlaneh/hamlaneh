@@ -881,11 +881,22 @@
       "unknown": "Someone",
       "note": "Dismissing closes this. The caller is not told, and no missed-call message is left behind."
     },
+    "encrypted": {
+      "label": "End-to-end encrypted",
+      "detail": "Audio and video are encrypted on the devices in this call, and the server relays what it cannot read.",
+      "metadata": "It can still see who is in the call, when they joined and how long they stay."
+    },
+    "blocked": {
+      "title": "Your microphone and camera have stopped. This is not a fault with them: someone in this conversation has a device key this browser has not accepted, so nothing is sent from here until you decide.",
+      "continues": "You can still hear and see everyone else, and they can still hear each other."
+    },
     "error": {
       "unavailable": "Calls are not available on this instance.",
       "failed": "The call could not be joined.",
       "device": "The microphone or camera could not be used. Check this site’s permissions in the browser.",
-      "ended": "The call ended."
+      "ended": "The call ended.",
+      "encryption": "This conversation's encryption is not ready on this device, so the call was not joined. A call here is never placed unencrypted.",
+      "encryptionUnsupported": "This browser cannot encrypt call media, so it cannot join a call in an end-to-end encrypted conversation. There is no unencrypted fallback here — try a newer browser."
     }
   },
   "meet": {
@@ -897,6 +908,8 @@
     "active": "People are already in this meeting.",
     "empty": "Nobody is here yet. You can go in and wait.",
     "guestNote": "You are joining one meeting as a guest. No account is created for you, and this link opens nothing else here.",
+    "mediaLabel": "This meeting is not end-to-end encrypted. It is protected in transit, and the server that hosts it can access its audio and video.",
+    "mediaWhy": "That is what lets anyone join from a link: end-to-end encryption needs an account on this instance, and a guest link deliberately does not create one.",
     "goHome": "Go to the home page",
     "unusable": {
       "title": "This meeting link does not work",

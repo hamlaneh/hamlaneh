@@ -104,6 +104,30 @@ function key(groupId: Uint8Array): string {
   return Array.from(groupId).join(",");
 }
 
+/**
+ * Thirty-two deterministic bytes from a string — the double's stand-in for the
+ * MLS exporter.
+ *
+ * **Not a hash and not a secret:** anybody holding the group id and the epoch
+ * can compute it, which is exactly why no test may assert confidentiality
+ * against this file. It reproduces the two properties the *service* has to get
+ * right — every member at one epoch of one group derives the same bytes, and
+ * every other (group, epoch) pair derives different ones — and nothing else.
+ * The real exporter is proved in `wasm.roundtrip.test.ts`.
+ */
+function stretch(seed: string): Uint8Array {
+  const bytes = new Uint8Array(32);
+  for (let index = 0; index < bytes.length; index += 1) {
+    const input = `${seed}#${String(index)}`;
+    let hash = 0x811c9dc5;
+    for (let at = 0; at < input.length; at += 1) {
+      hash = Math.imul(hash ^ input.charCodeAt(at), 0x01000193) >>> 0;
+    }
+    bytes[index] = hash & 0xff;
+  }
+  return bytes;
+}
+
 class FakeDevice implements MlsDeviceHandle {
   readonly groups = new Map<string, FakeGroup>();
 
@@ -157,6 +181,18 @@ class FakeDevice implements MlsDeviceHandle {
 
   epoch(groupId: Uint8Array): bigint {
     return BigInt(this.require(groupId).epoch);
+  }
+
+  exporter(groupId: Uint8Array): Uint8Array {
+    const group = this.require(groupId);
+    if (!group.members.has(this.ownKey)) {
+      // The real `export_secret` refuses on a group this device has been
+      // evicted from, and a double that answered anyway would let a test pass
+      // that OpenMLS fails — the removed-listener case this whole rotation
+      // exists for.
+      throw new Error("this device is not a member of that group");
+    }
+    return stretch(`${key(groupId)}@${String(group.epoch)}`);
   }
 
   member_identities(groupId: Uint8Array): Uint8Array {
