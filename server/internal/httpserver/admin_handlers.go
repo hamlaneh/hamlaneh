@@ -403,7 +403,7 @@ func apiAdminUser(u storage.User) api.AdminUser {
 // apiOrgSettings maps stored settings onto the contract shape.
 func apiOrgSettings(s storage.OrgSettings) api.OrgSettings {
 	count := s.AccountsWithoutTotp
-	outside := s.ConversationsOutsideMode
+	encrypted, plaintext := s.EncryptedConversations, s.PlaintextConversations
 	return api.OrgSettings{
 		OrgName:              s.OrgName,
 		DefaultLocale:        api.OrgSettingsDefaultLocale(s.DefaultLocale),
@@ -412,9 +412,12 @@ func apiOrgSettings(s storage.OrgSettings) api.OrgSettings {
 		SsoJitProvisioning:   s.SsoJitProvisioning,
 		SessionLifetimeHours: s.SessionLifetimeHours,
 		EncryptionMode:       api.EncryptionMode(s.EncryptionMode),
-		// Always sent, never omitted: the settings screen states what the
-		// mode does not cover, and an absent count would read as zero.
-		ConversationsOutsideMode: &outside,
-		AccountsWithoutTotp:      &count,
+		// Both totals, always sent: the switch confirmation names what will
+		// be outside the mode being chosen, which is the other set in each
+		// direction, and an absent count would read as zero on a screen
+		// about encryption.
+		EncryptedConversations: &encrypted,
+		PlaintextConversations: &plaintext,
+		AccountsWithoutTotp:    &count,
 	}
 }

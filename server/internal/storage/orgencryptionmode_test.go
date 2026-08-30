@@ -77,61 +77,55 @@ func TestSettingsPatchCannotMoveTheModeIntegration(t *testing.T) {
 	}
 }
 
-func TestConversationsOutsideModeIntegration(t *testing.T) {
+// TestConversationTotalsIntegration pins the two standing totals, and that a
+// mode switch moves neither of them. Both are published rather than one
+// "outside the current mode" count because each switch dialog names what
+// will be outside the mode being CHOSEN — the other set in each direction.
+func TestConversationTotalsIntegration(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store, _ := testdb.New(t)
 
-	creator := mustCreateUser(ctx, t, store, newUser("outsidemode"))
+	creator := mustCreateUser(ctx, t, store, newUser("totals"))
 	settings, err := store.OrgSettings(ctx)
 	if err != nil {
 		t.Fatalf("OrgSettings: %v", err)
 	}
-	if settings.ConversationsOutsideMode != 0 {
-		t.Fatalf("an empty instance counts %d conversations outside its mode, want 0",
-			settings.ConversationsOutsideMode)
+	if settings.EncryptedConversations != 0 || settings.PlaintextConversations != 0 {
+		t.Fatalf("an empty instance counts %d encrypted and %d plaintext conversations, want none",
+			settings.EncryptedConversations, settings.PlaintextConversations)
 	}
 
 	for _, ch := range []struct {
 		slug string
 		e2ee bool
 	}{
-		{"outside-plain-one", false},
-		{"outside-plain-two", false},
-		{"outside-encrypted", true},
+		{"totals-plain-one", false},
+		{"totals-plain-two", false},
+		{"totals-encrypted", true},
 	} {
 		mustCreateChannel(ctx, t, store, storage.NewChannel{
 			Kind: storage.ChannelKindPrivate, Slug: ch.slug, E2EE: ch.e2ee, CreatedBy: creator.ID,
 		})
 	}
 
-	// Under strict the plaintext ones are what the mode does not describe;
-	// under compliance it is exactly the other way round. The count is the
-	// honest standing number either way — nothing is converted to shrink it.
-	for _, tt := range []struct {
-		mode string
-		want int
-	}{
-		{storage.EncryptionModeStrict, 2},
-		{storage.EncryptionModeCompliance, 1},
-	} {
-		t.Run(tt.mode, func(t *testing.T) {
-			written, setErr := store.SetEncryptionMode(ctx, tt.mode)
+	// The same two numbers in either mode: nothing is ever converted, so a
+	// switch cannot move them — decision 2 restated as data.
+	for _, mode := range []string{storage.EncryptionModeStrict, storage.EncryptionModeCompliance} {
+		t.Run(mode, func(t *testing.T) {
+			written, setErr := store.SetEncryptionMode(ctx, mode)
 			if setErr != nil {
 				t.Fatalf("SetEncryptionMode: %v", setErr)
-			}
-			// The write's own answer must already be counted against the mode
-			// it just wrote: the switch dialog reads this number.
-			if written.ConversationsOutsideMode != tt.want {
-				t.Errorf("the write answered %d conversations outside %s, want %d",
-					written.ConversationsOutsideMode, tt.mode, tt.want)
 			}
 			read, readErr := store.OrgSettings(ctx)
 			if readErr != nil {
 				t.Fatalf("OrgSettings: %v", readErr)
 			}
-			if read.ConversationsOutsideMode != tt.want {
-				t.Errorf("a re-read counts %d, want %d", read.ConversationsOutsideMode, tt.want)
+			for _, got := range []storage.OrgSettings{written, read} {
+				if got.EncryptedConversations != 1 || got.PlaintextConversations != 2 {
+					t.Errorf("under %s the totals are %d encrypted / %d plaintext, want 1 / 2",
+						mode, got.EncryptedConversations, got.PlaintextConversations)
+				}
 			}
 		})
 	}

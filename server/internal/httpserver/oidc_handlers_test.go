@@ -1069,7 +1069,7 @@ func TestInstanceInfoSso(t *testing.T) {
 		Issuer: "https://idp.example.com", ClientID: "x", ClientSecret: "y",
 		ProviderName: "FakeIdP", RedirectURL: ssoPublicURL + "/api/v1/auth/oidc/callback",
 	})
-	withSSO := instanceInfo(t, httpserver.Handler(nil, httpserver.WithSSO(svc)))
+	withSSO := instanceInfo(t, httpserver.Handler(&fakeStore{}, httpserver.WithSSO(svc)))
 	if withSSO.Sso == nil || !withSSO.Sso.Enabled {
 		t.Fatal("configured sso not reported enabled")
 	}
@@ -1083,13 +1083,13 @@ func TestInstanceInfoSso(t *testing.T) {
 		Issuer: "https://idp.example.com", ClientID: "x", ClientSecret: "y",
 		RedirectURL: ssoPublicURL + "/api/v1/auth/oidc/callback",
 	})
-	generic := instanceInfo(t, httpserver.Handler(nil, httpserver.WithSSO(unnamed)))
+	generic := instanceInfo(t, httpserver.Handler(&fakeStore{}, httpserver.WithSSO(unnamed)))
 	if generic.Sso == nil || !generic.Sso.Enabled ||
 		generic.Sso.ProviderName == nil || *generic.Sso.ProviderName == "" {
 		t.Error("enabled sso without a display name must still carry a generic provider_name")
 	}
 
-	without := instanceInfo(t, httpserver.Handler(nil))
+	without := instanceInfo(t, httpserver.Handler(&fakeStore{}))
 	if without.Sso == nil || without.Sso.Enabled {
 		t.Fatal("unconfigured sso not reported disabled")
 	}

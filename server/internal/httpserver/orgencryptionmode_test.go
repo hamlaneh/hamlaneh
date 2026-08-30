@@ -197,6 +197,36 @@ func TestChannelCreationValidatesBeforeAskingTheMode(t *testing.T) {
 	wantError(t, rec, http.StatusBadRequest, "invalid_request")
 }
 
+// TestInstanceDocumentPublishesTheMode pins the mode on the one document
+// every member can read. It lives only behind the admin settings endpoint
+// otherwise, which answers 403 to exactly the people whose channel and
+// direct-message creation the mode governs.
+func TestInstanceDocumentPublishesTheMode(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{storage.EncryptionModeStrict, storage.EncryptionModeCompliance} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+
+			store := &fakeStore{}
+			store.encryptionMode = func(context.Context) (string, error) { return mode, nil }
+
+			// No session: this document is read before anybody has one.
+			rec := do(t, store, request(http.MethodGet, "/api/v1/instance", ""))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+			var got api.InstanceInfo
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("body is not the contract InstanceInfo shape: %v", err)
+			}
+			if string(got.EncryptionMode) != mode {
+				t.Errorf("encryption_mode = %q, want %q", got.EncryptionMode, mode)
+			}
+		})
+	}
+}
+
 func TestSetOrgEncryptionMode(t *testing.T) {
 	t.Parallel()
 
@@ -210,7 +240,7 @@ func TestSetOrgEncryptionMode(t *testing.T) {
 			return storage.OrgSettings{
 				OrgName: "Nest", DefaultLocale: "en", RegistrationMode: "invite",
 				SessionLifetimeHours: 720, EncryptionMode: mode,
-				ConversationsOutsideMode: 4,
+				EncryptedConversations: 4, PlaintextConversations: 9,
 			}, nil
 		}
 
@@ -229,11 +259,14 @@ func TestSetOrgEncryptionMode(t *testing.T) {
 		if settings.EncryptionMode != api.Strict {
 			t.Errorf("encryption_mode = %q, want strict", settings.EncryptionMode)
 		}
-		// The dialog and the standing note on the settings screen both read
-		// this number; an omitted count would read as "the mode covers
-		// everything", which is the claim it exists to refuse.
-		if settings.ConversationsOutsideMode == nil || *settings.ConversationsOutsideMode != 4 {
-			t.Errorf("conversations_outside_mode = %v, want 4", settings.ConversationsOutsideMode)
+		// The switch dialogs read both totals — each names the set that will
+		// be outside the mode being chosen — so neither may be omitted, and
+		// they must not be swapped on a screen about encryption.
+		if settings.EncryptedConversations == nil || *settings.EncryptedConversations != 4 {
+			t.Errorf("encrypted_conversations = %v, want 4", settings.EncryptedConversations)
+		}
+		if settings.PlaintextConversations == nil || *settings.PlaintextConversations != 9 {
+			t.Errorf("plaintext_conversations = %v, want 9", settings.PlaintextConversations)
 		}
 	})
 

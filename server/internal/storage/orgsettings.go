@@ -42,13 +42,15 @@ type OrgSettings struct {
 	// value of the number is that the admin can trust it before flipping the
 	// switch.
 	AccountsWithoutTotp int
-	// ConversationsOutsideMode is how many conversations this instance holds
-	// whose encryption disagrees with the current mode. Derived for the same
-	// reason, and permanent rather than transitional: those conversations are
-	// never converted, so this is the standing count of what the mode does
-	// not describe — the number the settings screen shows instead of
-	// implying the mode covers everything.
-	ConversationsOutsideMode int
+	// EncryptedConversations and PlaintextConversations are the two standing
+	// totals, derived for the same reason. Both rather than one "outside the
+	// current mode" count, because the switch confirmation names what will be
+	// outside the mode being CHOSEN — the other set in each direction — so a
+	// single current-mode number would state one total under the other's
+	// name on a screen about encryption. Neither moves on a switch:
+	// conversations are never converted, which is the whole of decision 2.
+	EncryptedConversations int
+	PlaintextConversations int
 }
 
 // OrgSettingsPatch is the settings screen's per-field save. A nil field is
@@ -84,24 +86,25 @@ const countAccountsWithoutTotp = `
 	      WHERE t.user_id = u.id AND t.activated_at IS NOT NULL
 	  )`
 
-// The standing count of conversations the mode does not describe: plaintext
-// ones under strict, encrypted ones under compliance. It is written twice
-// because it must correlate to the row the statement is returning — the
-// stored row when reading, the just-updated row when writing — and a
-// statement that counted against the mode it was replacing would answer a
-// mode change with the previous mode's number.
+// The two conversation totals. They say nothing about the mode, which is the
+// point: neither can move when the mode does, so no statement here has to
+// count against the mode it is writing.
 const (
-	countOutsideStoredMode  = `SELECT count(*) FROM channels c WHERE c.e2ee <> (org_settings.encryption_mode = '` + EncryptionModeStrict + `')`
-	countOutsideUpdatedMode = `SELECT count(*) FROM channels c WHERE c.e2ee <> (updated.encryption_mode = '` + EncryptionModeStrict + `')`
+	countEncryptedConversations = `SELECT count(*) FROM channels c WHERE c.e2ee`
+	countPlaintextConversations = `SELECT count(*) FROM channels c WHERE NOT c.e2ee`
 )
 
-// scanOrgSettings fills out from the projection every statement here selects,
-// in one place so the three cannot drift apart.
+// orgSettingsProjection is what every statement here selects, in the order
+// scanOrgSettings expects, so the three cannot drift apart.
+const orgSettingsProjection = orgSettingsColumns +
+	`, (` + countAccountsWithoutTotp + `), (` + countEncryptedConversations + `), (` + countPlaintextConversations + `)`
+
 func scanOrgSettings(row pgx.Row, out *OrgSettings) error {
 	return row.Scan(
 		&out.OrgName, &out.DefaultLocale, &out.RegistrationMode,
 		&out.RequireTotp, &out.SessionLifetimeHours, &out.SsoJitProvisioning,
-		&out.EncryptionMode, &out.AccountsWithoutTotp, &out.ConversationsOutsideMode,
+		&out.EncryptionMode, &out.AccountsWithoutTotp,
+		&out.EncryptedConversations, &out.PlaintextConversations,
 	)
 }
 
@@ -111,8 +114,7 @@ func scanOrgSettings(row pgx.Row, out *OrgSettings) error {
 func (s *Store) OrgSettings(ctx context.Context) (OrgSettings, error) {
 	var out OrgSettings
 	if err := scanOrgSettings(s.pool.QueryRow(ctx,
-		`SELECT `+orgSettingsColumns+`, (`+countAccountsWithoutTotp+`), (`+countOutsideStoredMode+`)
-		 FROM org_settings`,
+		`SELECT `+orgSettingsProjection+` FROM org_settings`,
 	), &out); err != nil {
 		return OrgSettings{}, fmt.Errorf("org settings: %w", err)
 	}
@@ -133,21 +135,19 @@ func (s *Store) EncryptionMode(ctx context.Context) (string, error) {
 }
 
 // SetEncryptionMode writes the mode and returns the settings as they now
-// stand, counted against the mode that was just written.
+// stand.
 //
 // It touches one column of one row. No channel, no message and no membership
 // is read or written here, which is what makes "switching modes cannot
 // silently decrypt or expose history" a property of the code rather than a
-// promise: there is no path from this statement to a conversation.
+// promise: there is no path from this statement to a conversation. The two
+// conversation totals it answers with are the same two it would have
+// answered before the write, and that is the honest thing to show.
 func (s *Store) SetEncryptionMode(ctx context.Context, mode string) (OrgSettings, error) {
 	var out OrgSettings
 	if err := scanOrgSettings(s.pool.QueryRow(ctx,
-		`WITH updated AS (
-		     UPDATE org_settings SET encryption_mode = $1, updated_at = now()
-		     RETURNING `+orgSettingsColumns+`
-		 )
-		 SELECT `+orgSettingsColumns+`, (`+countAccountsWithoutTotp+`), (`+countOutsideUpdatedMode+`)
-		 FROM updated`,
+		`UPDATE org_settings SET encryption_mode = $1, updated_at = now()
+		 RETURNING `+orgSettingsProjection,
 		mode,
 	), &out); err != nil {
 		return OrgSettings{}, fmt.Errorf("set org encryption mode: %w", err)
@@ -161,19 +161,15 @@ func (s *Store) SetEncryptionMode(ctx context.Context, mode string) (OrgSettings
 func (s *Store) UpdateOrgSettings(ctx context.Context, patch OrgSettingsPatch) (OrgSettings, error) {
 	var out OrgSettings
 	if err := scanOrgSettings(s.pool.QueryRow(ctx,
-		`WITH updated AS (
-		     UPDATE org_settings SET
-		         org_name               = COALESCE($1::text, org_name),
-		         default_locale         = COALESCE($2::text, default_locale),
-		         registration_mode      = COALESCE($3::text, registration_mode),
-		         require_totp           = COALESCE($4::boolean, require_totp),
-		         session_lifetime_hours = COALESCE($5::integer, session_lifetime_hours),
-		         sso_jit_provisioning   = COALESCE($6::boolean, sso_jit_provisioning),
-		         updated_at             = now()
-		     RETURNING `+orgSettingsColumns+`
-		 )
-		 SELECT `+orgSettingsColumns+`, (`+countAccountsWithoutTotp+`), (`+countOutsideUpdatedMode+`)
-		 FROM updated`,
+		`UPDATE org_settings SET
+		     org_name               = COALESCE($1::text, org_name),
+		     default_locale         = COALESCE($2::text, default_locale),
+		     registration_mode      = COALESCE($3::text, registration_mode),
+		     require_totp           = COALESCE($4::boolean, require_totp),
+		     session_lifetime_hours = COALESCE($5::integer, session_lifetime_hours),
+		     sso_jit_provisioning   = COALESCE($6::boolean, sso_jit_provisioning),
+		     updated_at             = now()
+		 RETURNING `+orgSettingsProjection,
 		patch.OrgName, patch.DefaultLocale, patch.RegistrationMode,
 		patch.RequireTotp, patch.SessionLifetimeHours, patch.SsoJitProvisioning,
 	), &out); err != nil {
