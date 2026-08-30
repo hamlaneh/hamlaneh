@@ -564,7 +564,15 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       and TOFU pinning on by default. Client-only: no endpoint, no migration, no contract change.
       **Its gate is the roadmap's own key-swap test**, which this design exists to make
       implementable as written
-- [ ] Encrypted backups + user-held recovery keys; org-level recovery policy; recovery UX drills
+- [x] **Encrypted backups + user-held recovery keys** — *2026-08-30*, [ADR 010](adr/010-encrypted-backups.md).
+      Not org-level recovery, which the ADR refused and named for what it is: an organisation
+      that can recover is an organisation that can read, so that policy *is* Compliance mode,
+      chosen at setup. What a backup restores is the knowledge that cannot be re-derived — your
+      verification decisions — never past message plaintext, which forward secrecy has already
+      destroyed
+- [ ] **The recovery UX drills**, which are the gate rather than the slice: back up, destroy the
+      profile, recover with the key; then the same loss with no key, landing on the documented
+      non-lying failure path. Two browser contexts, and phase gate item 2 is not met until they run
 - [ ] **Slice 3.4 — media E2EE** ([ADR 009](adr/009-media-e2ee.md)) via LiveKit insertable
       streams. The key is MLS exporter output at the current epoch, so nothing distributes it and
       every member derives the same bytes independently; it rotates when the epoch does, into
@@ -576,7 +584,7 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       key provider, which is wrapped because the stock one's `setKey` takes no key index and so
       cannot rotate (verified against the pinned 2.22.1 types); its own ratchet stays unused,
       since MLS is the only ratchet
-- [ ] Per-org mode choice at setup: **Strict E2EE** vs **Compliance mode** — clearly labeled,
+- [x] Per-org mode choice — *2026-08-30*, [ADR 011](adr/011-org-encryption-mode.md), security-reviewed. **Strict E2EE** vs **Compliance mode**, clearly labeled,
       documented bluntly (search/export/retention impossible in Strict, by design)
 - [ ] Compliance-mode server-side half actually built: encryption at rest, retention policy,
       compliance export (promised free in PLAN.md §7 — a mode toggle without them is dishonest)
