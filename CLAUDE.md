@@ -32,9 +32,18 @@ and Phase 1's two weeks of daily-driving.
 | Packaging | Docker Compose + `install.sh` (server); single binary (home) |
 | Migrations | golang-migrate; SQL files in `server/internal/storage/migrations/NNNN_desc.{up,down}.sql`; never edit an applied migration |
 
-**SQLite timing:** the SQLite driver is Phase 4 work. Until then: design against the storage
-interface, implement and test Postgres only. Do not write SQLite code or dual-driver tests before
-Phase 4. From Phase 4 on, the full storage-interface test suite runs against both drivers in CI.
+**SQLite timing:** Phase 4 has begun, so the SQLite driver is now live work
+([ADR 012](docs/adr/012-home-mode.md)). The seam is the **consumer-side** interface —
+`httpserver.Store` and `bootstrap.Store` — not a producer-side twin in `storage`; a second
+driver satisfies those. `storage.Store` itself stays the concrete Postgres implementation and
+keeps its Postgres-specific machinery (row locks, advisory locks, `pg_trgm`, arrays), because a
+lowest-common-denominator rewrite would degrade the mode real deployments use.
+
+From Phase 4 on the storage suite runs against both drivers in CI, with one exception written
+down rather than left to a silent skip: a handful of tests assert Postgres *mechanism* (that a
+removal does not queue behind an add, citext, `information_schema` shapes) which single-writer
+SQLite makes false by design. Those carry a `requiresPostgres(t, reason)` marker and a
+checked-in allow-list that CI diffs both ways, so a skip can never appear or vanish unnoticed.
 
 **Changing a decision:** material technical decisions (including any change to this table) get a
 one-page ADR in `docs/adr/NNN-slug.md` (context, decision, consequences) plus an update to this
