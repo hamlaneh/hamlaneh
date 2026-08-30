@@ -70,6 +70,21 @@ const RECORDS_ID = "verification";
  */
 const SENT_ID = "sent";
 
+/**
+ * How many key packages the directory last reported holding for this device.
+ *
+ * Persisted because it is the input to the low-water replenishment decision
+ * (`KEY_PACKAGE_LOW_WATER` in `service.ts`), and the only reading of the pool
+ * the contract offers is the PUT that *replaces* it. A count that did not
+ * survive the reload would have to be re-established by the very publish it
+ * exists to avoid, which is the behaviour the policy replaces.
+ *
+ * Wrapped like everything else in here, not because a count is a secret but
+ * because a second, unwrapped shape in this store would be one more thing to
+ * reason about for no gain.
+ */
+const KEY_PACKAGE_COUNT_ID = "key-packages";
+
 const IV_BYTES = 12;
 
 /** What a stored state record looks like. `iv` is fresh for every write. */
@@ -485,6 +500,41 @@ export class Keystore {
     }
   }
 
+  /** Records how many key packages the directory holds for this device. */
+  async saveKeyPackageCount(count: number): Promise<boolean> {
+    try {
+      await this.putWrapped(KEY_PACKAGE_COUNT_ID, encoder.encode(String(count)));
+      return true;
+    } catch (error) {
+      // A lost write reads as "never published" next time, which republishes
+      // a pool that did not need it — the same cost the policy set out to
+      // avoid, paid once, and never a device with no packages.
+      console.warn("Could not store the MLS key-package count:", error);
+      return false;
+    }
+  }
+
+  /**
+   * The last recorded count, or null when this device has never published.
+   *
+   * Null for an unreadable or nonsensical value too, and that is the safe
+   * direction: null publishes, and a device with a fresh pool is never the
+   * failure mode — a device the directory has no packages for is.
+   */
+  async loadKeyPackageCount(): Promise<number | null> {
+    try {
+      const bytes = await this.getWrapped(KEY_PACKAGE_COUNT_ID);
+      if (bytes === null) {
+        return null;
+      }
+      const count = Number(decoder.decode(bytes));
+      return Number.isInteger(count) && count >= 0 ? count : null;
+    } catch (error) {
+      console.warn("Could not read the MLS key-package count:", error);
+      return null;
+    }
+  }
+
   /** Drops the stored state (a different user signing in on this profile). */
   async clear(): Promise<void> {
     try {
@@ -497,6 +547,10 @@ export class Keystore {
       // one person's own words in plaintext, and leaving it behind would hand
       // whoever signs in next the previous user's messages.
       await this.store.delete(SENT_ID);
+      // And the key-package count, because the device that replaces this one
+      // has published nothing. An inherited count would suppress its first
+      // publish and leave it unaddable until something else replenished.
+      await this.store.delete(KEY_PACKAGE_COUNT_ID);
     } catch (error) {
       console.warn("Could not clear the stored MLS device state:", error);
     }

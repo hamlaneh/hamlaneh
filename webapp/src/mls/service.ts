@@ -45,6 +45,43 @@ type MlsMemberDevice = components["schemas"]["MlsMemberDevice"];
 /** How many key packages to keep published. The contract's cap is 50. */
 const KEY_PACKAGE_BATCH = 20;
 
+/**
+ * The pool level at or below which the next start republishes.
+ *
+ * **What this replaces.** Publishing used to happen on every successful start,
+ * so every reload minted twenty fresh packages and discarded whatever unclaimed
+ * ones the directory still held. The pool is only consumed when somebody adds
+ * this device to a group — rare next to reloading a tab — so the churn bought
+ * nothing and cost the discarded packages.
+ *
+ * **Where the count comes from.** The contract offers exactly one reading of
+ * the pool: the `unclaimed_count` the PUT itself returns. There is no GET, so
+ * "check, then decide whether to replenish" is not available — checking would
+ * *be* the replenish. So the count is recorded at each publish and then carried
+ * locally, decremented by the one event that proves a package was consumed: a
+ * Welcome addressed to this device. That is a *lower* bound on consumption —
+ * a claim whose commit then lost its epoch race burns a package and produces
+ * no Welcome — so the stored count can only ever read too high, never too low.
+ * The mark is therefore not 1.
+ *
+ * **The number: five of twenty.** A quarter of the batch, leaving room for five
+ * more groups to add this device between two starts before its pool is a
+ * problem, while an ordinary reload publishes nothing at all. Below the mark
+ * mid-session it replenishes on the spot rather than waiting for the next
+ * start, because a tab left open for days would otherwise sit at zero and read
+ * as unaddable to everyone else.
+ *
+ * **Why replace-all is still safe.** A publish replaces the unclaimed pool, so
+ * a package claimed a moment earlier is no longer listed — but its private init
+ * key is what opens the Welcome, and `KEY_PACKAGE_BATCHES_RETAINED` in
+ * `src-mls/src/lib.rs` is 2: the wrapper keeps the private material of the last
+ * two published batches, so a claim outlives one replenish and its Welcome
+ * still joins. Replenishing *less* often than connecting stretches that window
+ * over more wall-clock time than the old behaviour gave it, not less. This
+ * policy widens the existing margin; it does not lean on it.
+ */
+const KEY_PACKAGE_LOW_WATER = 5;
+
 /** The contract's page cap on the commit log. */
 const COMMIT_PAGE_SIZE = 50;
 
@@ -169,6 +206,14 @@ export class MlsService {
    * {@link trimSent}. Restored at start and rewritten on every send.
    */
   private sent: SentMessage[] = [];
+
+  /**
+   * How many key packages the directory is believed to hold for this device.
+   * Null means this device has never published — see
+   * {@link KEY_PACKAGE_LOW_WATER} for where the number comes from and why it
+   * only ever reads high.
+   */
+  private keyPackages: number | null = null;
 
   /**
    * channel id → (user id → the keys the directory listed for them), cached at
@@ -324,6 +369,7 @@ export class MlsService {
     this.device = device;
     this.ownKey = toBase64(device.signature_public_key());
     this.records = (await this.keystore?.loadRecords()) ?? {};
+    this.keyPackages = (await this.keystore?.loadKeyPackageCount()) ?? null;
     await this.restoreSent();
 
     const registered = await this.registerAndPublish(device);
@@ -373,26 +419,62 @@ export class MlsService {
         return false;
       }
       this.deviceId = data.id;
-
-      // Replace-all, on every start: a key package carries an expiry the
-      // server cannot read, so the contract's answer to staleness is a fresh
-      // batch per connect rather than a server-side guess (openapi.yaml,
-      // replaceMlsKeyPackages).
-      const packages = unpackFrames(device.generate_key_packages(KEY_PACKAGE_BATCH)).map(
-        toBase64,
-      );
-      const { response } = await api.PUT(
-        "/api/v1/users/me/mls/devices/{deviceId}/key-packages",
-        {
-          params: { path: { deviceId: data.id } },
-          body: { key_packages: packages },
-        },
-      );
-      return response.ok;
+      return await this.replenishKeyPackages();
     } catch (error) {
       console.warn("Could not register this MLS device:", error);
       return false;
     }
+  }
+
+  /**
+   * Publishes a fresh key-package pool when the recorded count says the old
+   * one is running out, and does nothing when it is not
+   * ({@link KEY_PACKAGE_LOW_WATER} holds the whole argument).
+   *
+   * True whenever the pool is in a good state afterwards, which includes the
+   * ordinary case of having published nothing.
+   */
+  private async replenishKeyPackages(): Promise<boolean> {
+    const device = this.device;
+    const deviceId = this.deviceId;
+    if (device === null || deviceId === null) {
+      return false;
+    }
+    // Null is "this device has never published", which is below every mark —
+    // a first start always publishes.
+    if (this.keyPackages !== null && this.keyPackages > KEY_PACKAGE_LOW_WATER) {
+      return true;
+    }
+    try {
+      const packages = unpackFrames(device.generate_key_packages(KEY_PACKAGE_BATCH)).map(
+        toBase64,
+      );
+      const { data, response } = await api.PUT(
+        "/api/v1/users/me/mls/devices/{deviceId}/key-packages",
+        { params: { path: { deviceId } }, body: { key_packages: packages } },
+      );
+      if (!response.ok) {
+        return false;
+      }
+      // Minting packages writes private init keys into the provider's storage
+      // and retires the batch that aged out of it, so the export has moved.
+      // A device that published and did not persist would offer the directory
+      // packages whose private halves a reload throws away.
+      await this.persist();
+      // The server's number rather than our batch size: the response is the
+      // one reading of the pool the contract offers, and recording what we
+      // sent instead would be recording a count nothing confirmed.
+      await this.setKeyPackageCount(data?.unclaimed_count ?? packages.length);
+      return true;
+    } catch (error) {
+      console.warn("Could not publish a key-package pool:", error);
+      return false;
+    }
+  }
+
+  private async setKeyPackageCount(count: number): Promise<void> {
+    this.keyPackages = count;
+    await this.keystore?.saveKeyPackageCount(count);
   }
 
   private async persist(): Promise<void> {
@@ -1072,6 +1154,21 @@ export class MlsService {
             // one wasted join attempt next time.
             console.warn("Could not acknowledge a welcome:", error);
           });
+
+        // One fewer package in the pool. A Welcome addressed to this device is
+        // proof that one of its key packages was claimed and used, and it is
+        // the only such proof the client ever gets — nothing reports a claim,
+        // and the PUT that would report a count replaces the pool to do it.
+        // A welcome that failed to acknowledge is re-delivered and counted
+        // twice, which pushes the count down rather than up: replenishing a
+        // little early is the harmless direction.
+        if (this.keyPackages !== null) {
+          await this.setKeyPackageCount(Math.max(0, this.keyPackages - 1));
+          // Checked here rather than only at the next start: a tab left open
+          // for days would otherwise sit at zero and read to everybody else as
+          // a device that cannot be added.
+          await this.replenishKeyPackages();
+        }
 
         // Reconcile before calling it ready, rather than setting ready here.
         // A Welcome puts this device into a tree somebody else assembled, and
