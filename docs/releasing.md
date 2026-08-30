@@ -81,18 +81,24 @@ That checks, in order:
 Then check by hand what a script cannot judge: that the release notes name the right changes, and
 that the binaries are the platforms you meant to ship.
 
-The image is verified separately, against the same identity:
+The image is verified separately, against the same identity. Ask the script for
+the pattern rather than retyping it — a hand-copied regex is a regex that can be
+wrong in the permissive direction, and this one is the whole difference between
+"signed by us" and "signed by somebody with a GitHub account":
 
 ```sh
+identity="$(deploy/verify-release.sh --version v1.4.0 --print-identity)"
+image=ghcr.io/hamlaneh/hamlaneh/server:v1.4.0
+
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/hamlaneh/hamlaneh/\.github/workflows/release\.yml@refs/tags/v1\.4\.0$' \
+  --certificate-identity-regexp "$identity" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/hamlaneh/hamlaneh/server:v1.4.0
+  "$image"
 
 cosign verify-attestation --type spdxjson \
-  --certificate-identity-regexp '^https://github\.com/hamlaneh/hamlaneh/\.github/workflows/release\.yml@refs/tags/v1\.4\.0$' \
+  --certificate-identity-regexp "$identity" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/hamlaneh/hamlaneh/server:v1.4.0
+  "$image"
 ```
 
 ## What an operator (or the updater) runs

@@ -18,6 +18,7 @@
 # Usage:
 #   verify-release.sh --version vX.Y.Z [--dir DIR] [--installed vA.B.C]
 #                     [--force] [--repo OWNER/NAME] [--key FILE] [--cosign PATH]
+#   verify-release.sh --version vX.Y.Z --print-identity
 #
 #   --version    the release being verified. Required.
 #   --dir        directory holding the downloaded assets. Default: the
@@ -33,6 +34,11 @@
 #                verify-release.test.sh, which needs real cosign verification
 #                without reaching Sigstore's production infrastructure.
 #   --cosign     path to the cosign binary. Also $COSIGN_BIN. Default: cosign.
+#   --print-identity
+#                print the Fulcio certificate identity a genuine release of
+#                this version must carry, and exit. Paste it into `cosign
+#                verify` to check the container image by hand, and see
+#                docs/releasing.md.
 #
 # Expects in DIR (as produced by .github/workflows/release.yml):
 #   SHA256SUMS                    every released file, one line each
@@ -60,6 +66,7 @@ force=0
 repo="$REPO_DEFAULT"
 key=""
 cosign_bin="${COSIGN_BIN:-cosign}"
+print_identity=0
 
 usage() {
   sed -n '/^# Usage:/,/^#   3  refused/p' "$0" | sed 's/^#[[:space:]]\{0,1\}//'
@@ -168,6 +175,31 @@ semver_cmp() {
 }
 
 # ---------------------------------------------------------------------------
+# The signing identity
+# ---------------------------------------------------------------------------
+
+# The Fulcio certificate identity that a genuine release carries: this
+# repository's release workflow, at this exact tag. This one string is what
+# separates "signed by us" from "signed by somebody with a GitHub account", so
+# it is built in one place, printable with --print-identity, and tested.
+#
+# Every literal dot matters: an unescaped dot is a regex wildcard, and this
+# pattern fails OPEN when it is too permissive — unescaped, `.github` also
+# matches `Xgithub`, a path an attacker owns in their own repository.
+#
+# Dots are written as the character class [.] rather than \. deliberately. A
+# backslash here has to survive bash's double quotes, then a substitution's
+# replacement text, then printf, and getting that count wrong is silent in
+# both directions. [.] needs no backslash at all, so there is nothing to
+# miscount.
+signing_identity() {
+  local workflow_re="${SIGNING_WORKFLOW//./[.]}"
+  local version_re="${version//./[.]}"
+  printf '^https://github[.]com/%s/%s@refs/tags/%s$' \
+    "$repo" "$workflow_re" "$version_re"
+}
+
+# ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
 
@@ -235,8 +267,8 @@ check_signature() {
   # Keyless. The certificate identity is pinned to this repository's release
   # workflow AT THIS TAG, so a genuine signature over a different version's
   # checksums cannot be replayed onto this one.
-  local escaped_version="${version//./\\.}"
-  local identity="^https://github\\.com/${repo}/${SIGNING_WORKFLOW//./\\.}@refs/tags/${escaped_version}\$"
+  local identity
+  identity="$(signing_identity)"
 
   "$cosign_bin" verify-blob \
     --bundle "$bundle" \
@@ -305,6 +337,7 @@ while [ $# -gt 0 ]; do
     --key) key="${2-}"; shift 2 ;;
     --cosign) cosign_bin="${2-}"; shift 2 ;;
     --force) force=1; shift ;;
+    --print-identity) print_identity=1; shift ;;
     -h | --help) usage; exit 0 ;;
     *) usage_error "unknown argument: $1" ;;
   esac
@@ -313,6 +346,13 @@ done
 [ -n "$version" ] || usage_error "--version is required"
 version_is_valid "$version" ||
   usage_error "--version '$version' is not a semantic version (expected vX.Y.Z)"
+
+if [ "$print_identity" -eq 1 ]; then
+  signing_identity
+  printf '\n'
+  exit 0
+fi
+
 [ -d "$dir" ] || usage_error "--dir '$dir' is not a directory"
 
 require_tools

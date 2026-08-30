@@ -256,6 +256,61 @@ check "SBOM named by the signature but not downloaded is rejected" 1 \
   "download the SBOM before installing" \
   verify "$SBOM_GONE" v1.2.3
 
+# --- the keyless signing identity -------------------------------------------
+#
+# The signature checks above all run in --key mode, so the pattern that decides
+# WHOSE keyless signature counts is never reached by them. It is still the most
+# security-critical string in the script, and it fails OPEN when it is too
+# permissive — an unescaped dot is a regex wildcard, so `.github` also matches
+# `Xgithub`, a path an attacker owns in their own repository. That is a real
+# bug this block caught. Fulcio is out of reach here; the pattern is not.
+
+identity="$(bash "$VERIFY" --version v1.2.3 --print-identity)"
+printf 'Signing identity pattern: %s\n' "$identity"
+
+# matches_identity <candidate> — the grep cosign's Go regexp stands in for.
+matches_identity() {
+  printf '%s' "$1" | grep -qE "$identity"
+}
+
+expect_identity() {
+  local want="$1" subject="$2" candidate="$3"
+  checks=$((checks + 1))
+  local got="reject"
+  if matches_identity "$candidate"; then got="match"; fi
+  if [ "$got" = "$want" ]; then
+    printf 'PASS  identity (%s) %s\n' "$want" "$subject"
+  else
+    printf 'FAIL  identity should %s %s, but did %s\n       %s\n' \
+      "$want" "$subject" "$got" "$candidate"
+    failures=$((failures + 1))
+  fi
+}
+
+GENUINE="https://github.com/hamlaneh/hamlaneh/.github/workflows/release.yml@refs/tags/v1.2.3"
+
+expect_identity match "the genuine release workflow at this tag" "$GENUINE"
+
+expect_identity reject "another account's fork" \
+  "https://github.com/attacker/hamlaneh/.github/workflows/release.yml@refs/tags/v1.2.3"
+
+expect_identity reject "a different workflow in our own repository" \
+  "https://github.com/hamlaneh/hamlaneh/.github/workflows/evil.yml@refs/tags/v1.2.3"
+
+expect_identity reject "our release workflow at a different tag" \
+  "https://github.com/hamlaneh/hamlaneh/.github/workflows/release.yml@refs/tags/v9.9.9"
+
+# The dot-escaping case. Unescaped, `.github` matches this too.
+expect_identity reject "a lookalike path exploiting an unescaped dot" \
+  "https://github.com/hamlaneh/hamlaneh/Xgithub/workflows/release.yml@refs/tags/v1.2.3"
+
+# Anchoring: without ^ and $ an attacker just prefixes or suffixes the identity.
+expect_identity reject "the genuine identity with a prefix" \
+  "https://github.com/evil/x?=${GENUINE}"
+
+expect_identity reject "the genuine identity with a suffix" \
+  "${GENUINE}.evil.example"
+
 # --- usage errors are not verification failures -----------------------------
 
 check "a malformed --version is a usage error, not a pass" 2 \
