@@ -38,6 +38,13 @@
 // lazy and retried — an identity provider that is down never stops this
 // server booting, and password sign-in is unaffected while it is.
 //
+// HAMLANEH_COMPRESS_RESPONSES=1 gzips the embedded web build on the way out.
+// It is for home mode, which is a single binary with nothing in front of it:
+// the compose stack's Caddy already runs `encode zstd gzip`, so leaving it
+// unset there keeps the better encoding and costs this process no CPU. API
+// responses are never compressed either way — see
+// internal/httpserver/compress.go for why that is a security decision.
+//
 // The server speaks plain HTTP; TLS termination is the reverse proxy's job.
 // It shuts down gracefully on SIGINT/SIGTERM.
 package main
@@ -211,6 +218,11 @@ func run(args []string) error {
 			// something an admin can paste into a message.
 			httpserver.WithPublicURL(os.Getenv(passwordreset.EnvPublicURL)),
 			httpserver.WithRealtime(gateway),
+			// Response compression, off unless this install asked. The
+			// compose stack puts Caddy in front and Caddy already compresses;
+			// home mode has no proxy at all and is what this is for
+			// (internal/httpserver/compress.go).
+			httpserver.WithCompression(os.Getenv(httpserver.EnvCompressResponses) == "1"),
 			httpserver.WithFiles(httpserver.Files{
 				Signer:      signer,
 				Attachments: store,

@@ -67,6 +67,19 @@ func WithSCIM(h http.Handler) Option {
 	return func(s *apiServer) { s.scim = h }
 }
 
+// WithCompression gzips the embedded web build on the way out. It takes a
+// bool rather than being presence-means-on because the install decides it
+// from one environment variable (EnvCompressResponses), and a conditional
+// append at the only call site would read worse than this.
+//
+// It is off by default, and belongs to home mode: the compose stack fronts
+// this server with Caddy, which already runs `encode zstd gzip`. compress.go
+// carries the reasoning, including why no API response is compressed
+// whatever this is set to.
+func WithCompression(enabled bool) Option {
+	return func(s *apiServer) { s.compressAssets = enabled }
+}
+
 // New returns an *http.Server bound to addr with the Hamlaneh router and
 // hardened timeouts configured. store backs everything stateful and may be
 // nil in unit tests (readyz then reports degraded and authenticated routes
@@ -122,9 +135,12 @@ func Handler(store Store, opts ...Option) http.Handler {
 // to be exercised against something that looks like a real one.
 func handler(store Store, web fs.FS, opts ...Option) http.Handler {
 	mux := http.NewServeMux()
-	routeWebapp(mux, web)
 
+	// Built before the web routes because one option — compression — decides
+	// how the build itself is served (compress.go).
 	s := newAPIServer(store, opts...)
+	routeWebapp(mux, web, s.compressAssets)
+
 	// Registered on the base mux, deliberately outside the contract router
 	// and its session middleware: the files origin carries no cookie to
 	// check (files_origin.go).
