@@ -19,6 +19,7 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
 	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
 	"github.com/hamlaneh/hamlaneh/server/internal/sqlitestore"
+	"github.com/hamlaneh/hamlaneh/server/internal/wsgateway"
 )
 
 // envHomeAddr moves home mode off loopback. It is deliberately an explicit
@@ -165,6 +166,26 @@ func homeMode() (mode, error) {
 
 // dbPath is where home mode's database lives. Server mode has none.
 func (m mode) dbPath() string { return filepath.Join(m.dataDir, homeDBFile) }
+
+// gatewayOptions is what the realtime gateway is configured with beyond the
+// public origin, and the list differs by mode in exactly one entry.
+//
+// Home mode binds 127.0.0.1 and prints that address, but a person types
+// localhost — the same machine, the same port, the same trust boundary. The
+// handshake's Origin check is a single exact origin, so without this the page
+// loads under the other spelling and every WebSocket upgrade is refused: a
+// chat that appears to work and silently receives nothing.
+//
+// Server mode gets no such allowance and must not: there, one origin is the
+// CSRF defense a browser cannot otherwise provide on a handshake. It is a
+// method rather than an `if` at the call site so that the difference is
+// something a test can hold — see TestServerModeGetsNoOriginAllowance.
+func (m mode) gatewayOptions() []wsgateway.Option {
+	if !m.home {
+		return nil
+	}
+	return []wsgateway.Option{wsgateway.WithLoopbackAlias()}
+}
 
 // prepare creates home mode's data directory, so the keys, the database and
 // the blob store all find it there rather than each discovering separately
