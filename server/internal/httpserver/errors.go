@@ -145,6 +145,24 @@ const (
 	// prevents (openapi.yaml, acknowledgeMlsWelcome).
 	codeMlsDeviceNotFound errorCode = "mls_device_not_found"
 
+	// Phase 3: the organisation encryption mode (ADR 011).
+	//
+	// The first two are the creation rule's two refusals, one per mode. They
+	// are refusals rather than silent coercion because an explicit flag that
+	// disagrees with the mode means the client's picture of the instance is
+	// stale at the exact moment it matters — fixing a property that can never
+	// be changed again — and handing somebody the opposite of what their
+	// screen said is how an immutable surprise is manufactured. The code is
+	// what teaches the client the real mode.
+	codeE2EERequiredByOrg  errorCode = "e2ee_required_by_org"
+	codeE2EEForbiddenByOrg errorCode = "e2ee_forbidden_by_org"
+	// codeEncryptionModeLocked answers an attempt to select compliance. The
+	// mode is defined from the first day and selectable only once the
+	// server-side half it promises — encryption at rest, retention, export —
+	// exists; until then it would deliver nothing but the absence of E2EE,
+	// which is the dishonest toggle the mode exists to avoid being.
+	codeEncryptionModeLocked errorCode = "encryption_mode_locked"
+
 	// codeNotFound answers a path under /api that no contract route claims.
 	// It is the router's answer, not a resource's: the contract's
 	// resource-level 404s carry their own codes (session_not_found,

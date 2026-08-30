@@ -86,6 +86,8 @@ type fakeStore struct {
 	redeemInvite          func(ctx context.Context, tokenHash []byte, nu storage.NewUser) (storage.User, error)
 	orgSettings           func(ctx context.Context) (storage.OrgSettings, error)
 	updateOrgSettings     func(ctx context.Context, patch storage.OrgSettingsPatch) (storage.OrgSettings, error)
+	encryptionMode        func(ctx context.Context) (string, error)
+	setEncryptionMode     func(ctx context.Context, mode string) (storage.OrgSettings, error)
 
 	createScimToken func(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string) (storage.ScimToken, error)
 	listScimTokens  func(ctx context.Context) ([]storage.ScimToken, error)
@@ -692,6 +694,26 @@ func (f *fakeStore) UpdateOrgSettings(ctx context.Context, patch storage.OrgSett
 		return storage.OrgSettings{}, errFakeUnwired
 	}
 	return f.updateOrgSettings(ctx, patch)
+}
+
+// EncryptionMode is the one method here that answers instead of failing when
+// a test did not wire it. The organisation's mode is a property of the
+// INSTANCE rather than of anything a test is the subject of, every test runs
+// against an instance, and every instance's is strict until an administrator
+// says otherwise — so unwired means the default rather than "undefined", and
+// a test that cares about the mode still sets it.
+func (f *fakeStore) EncryptionMode(ctx context.Context) (string, error) {
+	if f.encryptionMode == nil {
+		return storage.EncryptionModeStrict, nil
+	}
+	return f.encryptionMode(ctx)
+}
+
+func (f *fakeStore) SetEncryptionMode(ctx context.Context, mode string) (storage.OrgSettings, error) {
+	if f.setEncryptionMode == nil {
+		return storage.OrgSettings{}, errFakeUnwired
+	}
+	return f.setEncryptionMode(ctx, mode)
 }
 
 func (f *fakeStore) CreateScimToken(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string) (storage.ScimToken, error) {

@@ -477,6 +477,9 @@ var endpointBudgets = map[string]budgetName{
 	"DELETE /api/v1/admin/invites/{inviteId}":          budgetNone,
 	"GET /api/v1/admin/org":                            budgetNone,
 	"PATCH /api/v1/admin/org":                          budgetNone,
+	// The encryption mode. One indexed update of one column by an admin who
+	// already holds the instance, and the contract reserves no 429 on it.
+	"PUT /api/v1/admin/org/encryption-mode": budgetNone,
 	// The preview is public and carries no 429 in the contract. It runs one
 	// indexed lookup against a hash and answers the same 404 to everything
 	// that is not live, so there is nothing here a budget would protect that

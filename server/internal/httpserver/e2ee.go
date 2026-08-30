@@ -92,6 +92,45 @@ func (s *apiServer) e2eeBody(w http.ResponseWriter, r *http.Request, e2ee bool, 
 	return &storage.MessageMls{Epoch: body.mls.Epoch, Ciphertext: ciphertext}, true
 }
 
+// e2eeAtBirth decides the encryption a conversation created now must carry,
+// from the organisation's mode and the request's assertion (ADR 011).
+//
+// Omitted means "whatever the mode says". A value that agrees is fine. A
+// value that disagrees is refused with the mode's own code — never coerced,
+// because the flag fixes a property no later request can change, and a
+// client that asked for the opposite of what it gets has been told nothing.
+//
+// It is one function called from both creation choke points for the same
+// reason e2eeBody is one function: two copies of a birth rule are two
+// chances for the channel path and the direct-message path to disagree, and
+// the disagreement would show up as exactly one way to create a conversation
+// the mode forbids.
+//
+// The mode is read here rather than passed in, so no caller can supply one.
+func (s *apiServer) e2eeAtBirth(w http.ResponseWriter, r *http.Request, store Store, asserted *bool) (bool, bool) {
+	mode, err := store.EncryptionMode(r.Context())
+	if err != nil {
+		internalError(w, r, err)
+		return false, false
+	}
+
+	// Strict is the only mode that encrypts, and anything that is not
+	// literally compliance is treated as strict: an unreadable mode must fail
+	// towards encryption, never away from it.
+	encrypted := mode != storage.EncryptionModeCompliance
+	if asserted == nil || *asserted == encrypted {
+		return encrypted, true
+	}
+	if encrypted {
+		writeError(w, r, http.StatusBadRequest, codeE2EERequiredByOrg,
+			"this organisation creates only end-to-end encrypted conversations")
+	} else {
+		writeError(w, r, http.StatusBadRequest, codeE2EEForbiddenByOrg,
+			"this organisation creates only conversations it can retain and export")
+	}
+	return false, false
+}
+
 // writeE2EEAttachmentsUnsupported is the single answer to a file in an
 // encrypted conversation, written from the send path, the edit path and the
 // upload route alike. One call site is what keeps the three from drifting

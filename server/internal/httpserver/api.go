@@ -200,6 +200,11 @@ type Store interface {
 	// count the enforcement switch is read beside.
 	OrgSettings(ctx context.Context) (storage.OrgSettings, error)
 	UpdateOrgSettings(ctx context.Context, patch storage.OrgSettingsPatch) (storage.OrgSettings, error)
+	// EncryptionMode is the mode alone, which is what the two conversation
+	// creation paths read; SetEncryptionMode is the only way it is written,
+	// and OrgSettingsPatch deliberately carries no field for it.
+	EncryptionMode(ctx context.Context) (string, error)
+	SetEncryptionMode(ctx context.Context, mode string) (storage.OrgSettings, error)
 }
 
 // The production store satisfies the whole surface at compile time.
