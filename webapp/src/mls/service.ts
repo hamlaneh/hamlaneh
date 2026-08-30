@@ -1069,12 +1069,21 @@ export class MlsService {
    * The floor deliberately survives. It records the highest counter this
    * device ever wrote, and resetting it because somebody turned a feature off
    * would re-open the rollback window it exists to close.
+   *
+   * False when the server did not confirm the delete, and the handle stays in
+   * that case: dropping it anyway would leave a sealed copy of these records
+   * on a server nobody could ever update or remove again, which is worse than
+   * a button that has to be pressed twice.
    */
-  async disableBackup(): Promise<void> {
-    await api.DELETE("/api/v1/users/me/mls/backup", {});
+  async disableBackup(): Promise<boolean> {
+    const { response } = await api.DELETE("/api/v1/users/me/mls/backup", {});
+    if (!response.ok) {
+      return false;
+    }
     await this.keystore?.deleteBackupKey();
     this.backupKey = null;
     await this.setBackup({ status: "offer", writeFailed: false });
+    return true;
   }
 
   /**

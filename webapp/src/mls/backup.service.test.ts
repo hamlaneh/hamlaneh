@@ -1,3 +1,4 @@
+import { http, HttpResponse } from "msw";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { api } from "../api/client";
@@ -197,13 +198,29 @@ describe("the offer", () => {
     await service.enableBackup();
     expect(mockMlsBackup()).not.toBeNull();
 
-    await service.disableBackup();
+    expect(await service.disableBackup()).toBe(true);
 
     expect(mockMlsBackup()).toBeNull();
     await expect(keystore.loadBackupKey()).resolves.toBeNull();
     // The floor is not a feature toggle: resetting it would re-open the
     // rollback window turning backup off has nothing to do with.
     expect(latest().backup).toMatchObject({ status: "offer", floor: 1 });
+  });
+
+  it("keeps the handle when the server did not confirm the delete", async () => {
+    const { service, keystore } = await newService();
+    await service.start();
+    await service.enableBackup();
+
+    server.use(
+      http.delete("/api/v1/users/me/mls/backup", () => new HttpResponse(null, { status: 503 })),
+    );
+
+    expect(await service.disableBackup()).toBe(false);
+    // Dropping the handle anyway would leave a sealed copy of these records on
+    // a server nobody could ever update or remove again.
+    await expect(keystore.loadBackupKey()).resolves.not.toBeNull();
+    expect(latest().backup.status).toBe("on");
   });
 });
 
