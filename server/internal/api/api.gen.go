@@ -678,6 +678,17 @@ type MessagePage struct {
 	Messages     []Message `json:"messages"`
 }
 
+// MlsBackup defines model for MlsBackup.
+type MlsBackup struct {
+	Counter int64 `json:"counter"`
+
+	// Envelope Base64, exactly as stored.
+	Envelope string `json:"envelope"`
+
+	// UpdatedAt When the server last accepted a write. Shown to the person during a restore so a rolled-back envelope has a visible date to disagree with — the only defence available on a first restore, where the device that would hold the floor is the one that was lost.
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // MlsCommit defines model for MlsCommit.
 type MlsCommit struct {
 	CreatedAt time.Time `json:"created_at"`
@@ -864,6 +875,15 @@ type PasswordResetRequest struct {
 
 // Presence online — a live socket. away — the client reported itself idle. offline — no socket after a short grace period.
 type Presence string
+
+// PutMlsBackupRequest defines model for PutMlsBackupRequest.
+type PutMlsBackupRequest struct {
+	// Counter A readable copy of the counter sealed in the header. The server compares it only to refuse a backward write; the client compares the SEALED one against its own stored floor, which is the check a hostile server cannot pass by lying here.
+	Counter int64 `json:"counter"`
+
+	// Envelope Base64 of `header ‖ iv ‖ ciphertext` (ADR 010). The header is the magic HMLB, a version byte, and the length-prefixed framing of the counter and the user id, used verbatim as the AEAD's additional data — so a server that edits any of it produces a blob that will not open, rather than one that opens differently. The cap is ~512 KiB raw: verification records are kilobytes, and this endpoint is not a blob store.
+	Envelope string `json:"envelope"`
+}
 
 // RecoveryCodes Ten single-use codes in the design's XXXX-XXXX format, shown exactly once — the server keeps only argon2id hashes and can never display them again. Regeneration replaces the entire set.
 type RecoveryCodes struct {
@@ -1375,6 +1395,9 @@ type JoinConferenceJSONRequestBody = JoinConferenceRequest
 // UpdateCurrentUserJSONRequestBody defines body for UpdateCurrentUser for application/json ContentType.
 type UpdateCurrentUserJSONRequestBody = UpdateCurrentUserRequest
 
+// PutMlsBackupJSONRequestBody defines body for PutMlsBackup for application/json ContentType.
+type PutMlsBackupJSONRequestBody = PutMlsBackupRequest
+
 // RegisterMlsDeviceJSONRequestBody defines body for RegisterMlsDevice for application/json ContentType.
 type RegisterMlsDeviceJSONRequestBody = RegisterMlsDeviceRequest
 
@@ -1563,9 +1586,21 @@ type ServerInterface interface {
 	// UpdateCurrentUser Change your own account settings.
 	// (PATCH /api/v1/users/me)
 	UpdateCurrentUser(w http.ResponseWriter, r *http.Request)
+	// DeleteMlsBackup Forget this account's backup.
+	// (DELETE /api/v1/users/me/mls/backup)
+	DeleteMlsBackup(w http.ResponseWriter, r *http.Request)
+	// GetMlsBackup Fetch this account's sealed backup, if one exists.
+	// (GET /api/v1/users/me/mls/backup)
+	GetMlsBackup(w http.ResponseWriter, r *http.Request)
+	// PutMlsBackup Store this account's sealed verification backup.
+	// (PUT /api/v1/users/me/mls/backup)
+	PutMlsBackup(w http.ResponseWriter, r *http.Request)
 	// RegisterMlsDevice Register this client instance as an MLS device.
 	// (POST /api/v1/users/me/mls/device)
 	RegisterMlsDevice(w http.ResponseWriter, r *http.Request)
+	// DeregisterMlsDevice Drop one of this account's devices from the directory.
+	// (DELETE /api/v1/users/me/mls/devices/{deviceId})
+	DeregisterMlsDevice(w http.ResponseWriter, r *http.Request, deviceId MlsDeviceId)
 	// ReplaceMlsKeyPackages Replace this device's pool of unclaimed key packages.
 	// (PUT /api/v1/users/me/mls/devices/{deviceId}/key-packages)
 	ReplaceMlsKeyPackages(w http.ResponseWriter, r *http.Request, deviceId MlsDeviceId)
@@ -3233,11 +3268,79 @@ func (siw *ServerInterfaceWrapper) UpdateCurrentUser(w http.ResponseWriter, r *h
 	handler.ServeHTTP(w, r)
 }
 
+// DeleteMlsBackup operation middleware
+func (siw *ServerInterfaceWrapper) DeleteMlsBackup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteMlsBackup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMlsBackup operation middleware
+func (siw *ServerInterfaceWrapper) GetMlsBackup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMlsBackup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PutMlsBackup operation middleware
+func (siw *ServerInterfaceWrapper) PutMlsBackup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PutMlsBackup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // RegisterMlsDevice operation middleware
 func (siw *ServerInterfaceWrapper) RegisterMlsDevice(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RegisterMlsDevice(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeregisterMlsDevice operation middleware
+func (siw *ServerInterfaceWrapper) DeregisterMlsDevice(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "deviceId" -------------
+	var deviceId MlsDeviceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deviceId", r.PathValue("deviceId"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deviceId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeregisterMlsDevice(w, r, deviceId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3712,6 +3815,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/key-package-claims", wrapper.ClaimMlsKeyPackages)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/commits", wrapper.ListMlsCommits)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/commits", wrapper.SubmitMlsCommit)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/users/me/mls/backup", wrapper.DeleteMlsBackup)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me/mls/backup", wrapper.GetMlsBackup)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/users/me/mls/backup", wrapper.PutMlsBackup)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/users/me/mls/devices/{deviceId}", wrapper.DeregisterMlsDevice)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me/mls/welcomes", wrapper.ListMlsWelcomes)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/users/me/mls/welcomes/{welcomeId}", wrapper.AcknowledgeMlsWelcome)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/search", wrapper.Search)

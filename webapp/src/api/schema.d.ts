@@ -1259,6 +1259,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/me/mls/backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch this account's sealed backup, if one exists.
+         * @description Owner only, and the only thing that can open it is a recovery key the server has never seen. 404 mls_backup_not_found when there is none — which is a state a person can genuinely be in, and the restore screen says so rather than implying a lost key.
+         */
+        get: operations["getMlsBackup"];
+        /**
+         * Store this account's sealed verification backup.
+         * @description One envelope per account, replaced in place (ADR 010). The server stores bytes it cannot read and never could: the key that opens them is derived from a recovery key generated on the device, shown once, and never sent here in any form — there is no reset, because a server that could reset it could read the backup, which is the entire thing this defends.
+         *     `counter` is a convenience copy of the value sealed inside the envelope's authenticated header, and the server refuses one that does not move forward (409 mls_backup_stale). That refusal is not the security control — the client checks the sealed counter against its own floor, which is what a lying server cannot forge — it is what stops an ordinary lost update between two of the owner's own devices.
+         */
+        put: operations["putMlsBackup"];
+        post?: never;
+        /**
+         * Forget this account's backup.
+         * @description Idempotent — deleting one that is not there is still 204. Deleting is the honest end of "I no longer want a copy of this off my device", and it is the one direction the server can take unilaterally anyway, so offering it changes nothing about what the server can do and quite a lot about what a person can.
+         */
+        delete: operations["deleteMlsBackup"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/mls/devices/{deviceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deviceId: components["parameters"]["MlsDeviceId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Drop one of this account's devices from the directory.
+         * @description The lost-device path. Without it a stolen or discarded device's signature key stays in the directory, and therefore stays inside every group's allow-list, for as long as the account exists — ADR 007's sweep evicts exactly what the directory stops listing, so this write is what makes the sweep able to act.
+         *     Owner only: another account's device id answers 404 mls_device_not_found, the same answer as one that names nothing. It does not revoke sessions and does not touch messages; it removes the key from the mapping other members' clients sweep against, and their next reconcile does the eviction. That is deliberately a separate act from signing the device out, because the two answer different questions and a person who has lost a laptop needs both.
+         */
+        delete: operations["deregisterMlsDevice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/me/mls/welcomes": {
         parameters: {
             query?: never;
@@ -2006,6 +2058,26 @@ export interface components {
              * @description The member whose devices are being added. May be the caller — that is how a person's own second device gets added.
              */
             user_id: string;
+        };
+        PutMlsBackupRequest: {
+            /** @description Base64 of `header ‖ iv ‖ ciphertext` (ADR 010). The header is the magic HMLB, a version byte, and the length-prefixed framing of the counter and the user id, used verbatim as the AEAD's additional data — so a server that edits any of it produces a blob that will not open, rather than one that opens differently. The cap is ~512 KiB raw: verification records are kilobytes, and this endpoint is not a blob store. */
+            envelope: string;
+            /**
+             * Format: int64
+             * @description A readable copy of the counter sealed in the header. The server compares it only to refuse a backward write; the client compares the SEALED one against its own stored floor, which is the check a hostile server cannot pass by lying here.
+             */
+            counter: number;
+        };
+        MlsBackup: {
+            /** @description Base64, exactly as stored. */
+            envelope: string;
+            /** Format: int64 */
+            counter: number;
+            /**
+             * Format: date-time
+             * @description When the server last accepted a write. Shown to the person during a restore so a rolled-back envelope has a visible date to disagree with — the only defence available on a first restore, where the device that would hold the floor is the one that was lost.
+             */
+            updated_at: string;
         };
         /** @description One member and the signature keys of every device they have registered. A member with no devices yet appears with an empty list rather than being omitted, so a client can tell "has no device" from "is not a member" without a second question. */
         MlsMemberDevice: {
@@ -4385,6 +4457,104 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getMlsBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sealed envelope. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsBackup"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    putMlsBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutMlsBackupRequest"];
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description The counter does not move forward (code mls_backup_stale). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    deleteMlsBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Gone, or already was. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    deregisterMlsDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deviceId: components["parameters"]["MlsDeviceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deregistered, or already was. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
         };
     };
