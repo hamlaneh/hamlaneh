@@ -78,7 +78,7 @@ func (s *Store) ListDirectory(ctx context.Context, params storage.ListDirectoryP
 	if err != nil {
 		return nil, fmt.Errorf("list directory: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 
 	users := make([]storage.User, 0, params.Limit)
 	for rows.Next() {

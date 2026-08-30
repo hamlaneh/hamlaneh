@@ -147,7 +147,7 @@ func (s *Store) SearchMessages(ctx context.Context, params storage.SearchMessage
 	if err != nil {
 		return storage.SearchPage{}, fmt.Errorf("search messages: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 
 	// ponytail: linear scan per search — fine for a household's history, not
 	// for an organization's. FTS5's trigram tokenizer is the recorded upgrade
@@ -196,7 +196,7 @@ func (s *Store) searchTotal(ctx context.Context, userID uuid.UUID, needle string
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 
 	total := 0
 	for rows.Next() {

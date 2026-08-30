@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 )
 
 // querier is the statement surface shared by *sql.DB and *sql.Tx, so a query
@@ -52,6 +53,23 @@ func (s *Store) withTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
 	return nil
+}
+
+// closeRows releases a result set.
+//
+// database/sql closes a fully drained one by itself, so a failure here can
+// only come from an early return, and no caller could act on it — the error
+// that ended the iteration is the one worth returning. It is logged rather
+// than discarded, because a connection that did not make it back to the pool
+// is worth a line: on SQLite that pool is small and a leak would show up as
+// the whole instance waiting.
+//
+// It exists so every read in this package spells that the same way, and so
+// none of them has to write `_ = rows.Close()`.
+func closeRows(rows *sql.Rows) {
+	if err := rows.Close(); err != nil {
+		slog.Warn("close result set", "error", err)
+	}
 }
 
 // rowsAffected reports how many rows a statement changed, turning the driver's

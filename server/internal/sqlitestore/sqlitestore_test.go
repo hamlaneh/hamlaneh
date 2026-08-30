@@ -36,8 +36,8 @@ func TestOpenMigratesAndIsReady(t *testing.T) {
 	}
 	t.Cleanup(store.Close)
 
-	if err := store.Ready(ctx); err != nil {
-		t.Errorf("Ready right after Open: %v", err)
+	if readyErr := store.Ready(ctx); readyErr != nil {
+		t.Errorf("Ready right after Open: %v", readyErr)
 	}
 
 	again, err := sqlitestore.Open(ctx, path)
@@ -204,10 +204,10 @@ func TestCitextCollationGovernsUsernames(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
-	if _, err := store.CreateUser(t.Context(), storage.NewUser{
+	if _, variantErr := store.CreateUser(t.Context(), storage.NewUser{
 		Username: "alice", PasswordHash: "argon2id$fixture", Locale: "en",
-	}); !errors.Is(err, storage.ErrUsernameTaken) {
-		t.Errorf("second CreateUser with a case variant = %v, want ErrUsernameTaken", err)
+	}); !errors.Is(variantErr, storage.ErrUsernameTaken) {
+		t.Errorf("second CreateUser with a case variant = %v, want ErrUsernameTaken", variantErr)
 	}
 
 	found, err := store.UserByIdentifier(t.Context(), "ALICE")
@@ -222,15 +222,15 @@ func TestCitextCollationGovernsUsernames(t *testing.T) {
 	// and SQLite's NOCASE folds only A-Z. É and é must be one address.
 	upper := "ÉLODIE@example.test"
 	lower := "élodie@example.test"
-	if _, err := store.CreateUser(t.Context(), storage.NewUser{
+	if _, upperErr := store.CreateUser(t.Context(), storage.NewUser{
 		Username: "elodie", Email: &upper, PasswordHash: "argon2id$fixture", Locale: "en",
-	}); err != nil {
-		t.Fatalf("CreateUser with a non-ASCII email: %v", err)
+	}); upperErr != nil {
+		t.Fatalf("CreateUser with a non-ASCII email: %v", upperErr)
 	}
-	if _, err := store.CreateUser(t.Context(), storage.NewUser{
+	if _, lowerErr := store.CreateUser(t.Context(), storage.NewUser{
 		Username: "elodie2", Email: &lower, PasswordHash: "argon2id$fixture", Locale: "en",
-	}); !errors.Is(err, storage.ErrEmailTaken) {
-		t.Errorf("CreateUser with the same email in another case = %v, want ErrEmailTaken", err)
+	}); !errors.Is(lowerErr, storage.ErrEmailTaken) {
+		t.Errorf("CreateUser with the same email in another case = %v, want ErrEmailTaken", lowerErr)
 	}
 }
 

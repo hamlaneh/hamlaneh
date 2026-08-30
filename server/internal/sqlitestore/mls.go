@@ -405,7 +405,7 @@ func (s *Store) ListMlsMemberDevices(ctx context.Context, channelID uuid.UUID, a
 	if err != nil {
 		return nil, fmt.Errorf("list mls member devices: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 
 	// The result is flat and ordered by user id, so a member's rows are
 	// adjacent and the grouping is a single pass: a new user id opens a member
@@ -565,7 +565,7 @@ func (s *Store) ListMlsCommits(ctx context.Context, channelID uuid.UUID, afterEp
 	if err != nil {
 		return nil, fmt.Errorf("list mls commits: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 
 	commits := []storage.MlsCommit{}
 	for rows.Next() {
@@ -601,7 +601,7 @@ func (s *Store) ListMlsWelcomes(ctx context.Context, userID uuid.UUID) ([]storag
 	if err != nil {
 		return nil, fmt.Errorf("list mls welcomes: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 
 	welcomes := []storage.MlsWelcome{}
 	for rows.Next() {
@@ -692,7 +692,7 @@ func mlsDeviceIDs(ctx context.Context, q querier, userID uuid.UUID) ([]uuid.UUID
 	if err != nil {
 		return nil, fmt.Errorf("list mls devices: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 
 	ids := []uuid.UUID{}
 	for rows.Next() {
@@ -723,7 +723,7 @@ func mlsDeviceOwners(ctx context.Context, q querier, deviceIDs []uuid.UUID) ([]u
 	if err != nil {
 		return nil, fmt.Errorf("resolve welcome recipients: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 
 	for rows.Next() {
 		var id uuid.UUID

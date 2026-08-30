@@ -113,8 +113,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}
 
 	connString := dsn(abs)
-	if err := runMigrations(connString); err != nil {
-		return nil, err
+	if migErr := runMigrations(connString); migErr != nil {
+		return nil, migErr
 	}
 
 	db, err := sql.Open("sqlite", connString)

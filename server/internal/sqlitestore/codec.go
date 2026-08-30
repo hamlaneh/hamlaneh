@@ -38,14 +38,17 @@ const timeLayout = TimeLayout
 // asTime, and decodes with parseTime.
 const TimeLayout = "2006-01-02T15:04:05.000000Z"
 
-// sqlNow renders the current time in timeLayout from inside SQLite. strftime's
-// %f yields SS.SSS (millisecond resolution), so the trailing 000 pads it to
-// the six fractional digits timeLayout requires.
+// The same layout is rendered from inside SQLite exactly once, as the
+// org_settings.updated_at default in migration 0009:
 //
-// It is only ever a column DEFAULT. Every write this package performs binds
-// its timestamp from Go instead (Store.clock), because the audit chain, the
-// session TTLs and the search snippets all need the value the caller sees.
-const sqlNow = `strftime('%Y-%m-%dT%H:%M:%f000Z','now')`
+//	strftime('%Y-%m-%dT%H:%M:%f000Z','now')
+//
+// strftime's %f yields SS.SSS, so the trailing 000 pads it to the six
+// fractional digits this layout requires; a value of a different width would
+// not compare correctly against the ones the driver writes. It is a default
+// and nothing more — every write this package performs binds its timestamp
+// from Go (Store.clock), because the audit chain, the session TTLs and the
+// search snippets all need the value the caller sees.
 
 // negInfinity stands in for PostgreSQL's '-infinity'::timestamptz, which
 // storage/channels.go coalesces a missing read position to so the unread
@@ -154,7 +157,7 @@ func (t zeroTimeScan) Scan(src any) error {
 		*t.dst = time.Time{}
 		return nil
 	}
-	return (timeScan{dst: t.dst}).Scan(src)
+	return timeScan(t).Scan(src)
 }
 
 // boolValue binds a Go bool the way the schema stores one: SQLite has no

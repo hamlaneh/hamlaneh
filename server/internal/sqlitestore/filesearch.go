@@ -100,7 +100,7 @@ func (s *Store) SearchFiles(ctx context.Context, params storage.SearchFilesParam
 	if err != nil {
 		return storage.FileSearchPage{}, fmt.Errorf("search files: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 
 	// ponytail: linear scan per search — fine for a household's history, not
 	// for an organization's. FTS5's trigram tokenizer is the recorded upgrade
@@ -149,7 +149,7 @@ func (s *Store) fileSearchTotal(ctx context.Context, userID uuid.UUID, needle st
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 
 	total := 0
 	for rows.Next() {

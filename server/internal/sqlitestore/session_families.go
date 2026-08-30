@@ -68,7 +68,7 @@ func (s *Store) ListSessionFamilies(ctx context.Context, userID, currentFamilyID
 	if err != nil {
 		return nil, fmt.Errorf("list session families: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 
 	families := []storage.SessionFamily{}
 	for rows.Next() {

@@ -289,11 +289,11 @@ func (s *Store) UpdateChannelTopic(ctx context.Context, id uuid.UUID, topic stri
 			return storage.ErrDMHasNoTopic
 		}
 
-		if _, err := tx.ExecContext(ctx,
+		if _, execErr := tx.ExecContext(ctx,
 			`UPDATE channels SET topic = ?, updated_at = ? WHERE id = ?`,
 			topic, s.nowText(), id,
-		); err != nil {
-			return err
+		); execErr != nil {
+			return execErr
 		}
 
 		ch, err = scanChannel(tx.QueryRowContext(ctx,

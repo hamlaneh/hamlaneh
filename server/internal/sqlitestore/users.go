@@ -162,7 +162,7 @@ func (s *Store) ListUsers(ctx context.Context, params storage.ListUsersParams) (
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 
 	users := []storage.User{}
 	for rows.Next() {

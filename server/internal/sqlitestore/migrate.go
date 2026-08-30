@@ -21,8 +21,8 @@ import (
 // the two read side by side and a future slice adds one sibling to each.
 //
 // It lives inside this package rather than beside the PostgreSQL tree because
-// go:embed cannot reach outside its own directory; the package name is the
-// dialect name ADR 012 asks the directory to carry.
+// an embed directive cannot reach outside its own directory; the package name
+// is the dialect name ADR 012 asks the directory to carry.
 const migrationsDir = "migrations"
 
 //go:embed migrations/*.sql
