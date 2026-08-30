@@ -1,0 +1,326 @@
+package storage_test
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/hamlaneh/hamlaneh/server/internal/storage"
+	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
+)
+
+// The organisation encryption mode (migration 0018, ADR 011): what it is,
+// what it counts, and — the one that matters — what it leaves alone.
+
+func TestEncryptionModeRoundTripIntegration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, _ := testdb.New(t)
+
+	mode, err := store.EncryptionMode(ctx)
+	if err != nil {
+		t.Fatalf("EncryptionMode: %v", err)
+	}
+	if mode != storage.EncryptionModeStrict {
+		t.Fatalf("a fresh instance reads %q, want strict", mode)
+	}
+
+	// The compliance branch is written and reachable here even though the
+	// API refuses to select it: the write path must already be correct the
+	// day the gate lifts (ADR 011 decision 3).
+	for _, want := range []string{storage.EncryptionModeCompliance, storage.EncryptionModeStrict} {
+		settings, setErr := store.SetEncryptionMode(ctx, want)
+		if setErr != nil {
+			t.Fatalf("SetEncryptionMode(%s): %v", want, setErr)
+		}
+		if settings.EncryptionMode != want {
+			t.Errorf("the write answered %q, want %q", settings.EncryptionMode, want)
+		}
+		got, readErr := store.EncryptionMode(ctx)
+		if readErr != nil {
+			t.Fatalf("EncryptionMode: %v", readErr)
+		}
+		if got != want {
+			t.Errorf("stored mode = %q, want %q", got, want)
+		}
+	}
+
+	// The column refuses a third mode; §6.4 named two.
+	if _, err := store.SetEncryptionMode(ctx, "both"); err == nil {
+		t.Error("SetEncryptionMode accepted a mode outside the CHECK")
+	}
+}
+
+// TestSettingsPatchCannotMoveTheModeIntegration pins the structural half of
+// "the mode is written only through its own endpoint": the field-by-field
+// save has no field for it, so no patch can flip it in passing.
+func TestSettingsPatchCannotMoveTheModeIntegration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, _ := testdb.New(t)
+
+	if _, err := store.SetEncryptionMode(ctx, storage.EncryptionModeCompliance); err != nil {
+		t.Fatalf("SetEncryptionMode: %v", err)
+	}
+	patched, err := store.UpdateOrgSettings(ctx, storage.OrgSettingsPatch{
+		OrgName: ptr("Nest"), RequireTotp: ptr(true),
+	})
+	if err != nil {
+		t.Fatalf("UpdateOrgSettings: %v", err)
+	}
+	if patched.EncryptionMode != storage.EncryptionModeCompliance {
+		t.Errorf("a settings patch moved the mode to %q", patched.EncryptionMode)
+	}
+}
+
+func TestConversationsOutsideModeIntegration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, _ := testdb.New(t)
+
+	creator := mustCreateUser(ctx, t, store, newUser("outsidemode"))
+	settings, err := store.OrgSettings(ctx)
+	if err != nil {
+		t.Fatalf("OrgSettings: %v", err)
+	}
+	if settings.ConversationsOutsideMode != 0 {
+		t.Fatalf("an empty instance counts %d conversations outside its mode, want 0",
+			settings.ConversationsOutsideMode)
+	}
+
+	for _, ch := range []struct {
+		slug string
+		e2ee bool
+	}{
+		{"outside-plain-one", false},
+		{"outside-plain-two", false},
+		{"outside-encrypted", true},
+	} {
+		mustCreateChannel(ctx, t, store, storage.NewChannel{
+			Kind: storage.ChannelKindPrivate, Slug: ch.slug, E2EE: ch.e2ee, CreatedBy: creator.ID,
+		})
+	}
+
+	// Under strict the plaintext ones are what the mode does not describe;
+	// under compliance it is exactly the other way round. The count is the
+	// honest standing number either way — nothing is converted to shrink it.
+	for _, tt := range []struct {
+		mode string
+		want int
+	}{
+		{storage.EncryptionModeStrict, 2},
+		{storage.EncryptionModeCompliance, 1},
+	} {
+		t.Run(tt.mode, func(t *testing.T) {
+			written, setErr := store.SetEncryptionMode(ctx, tt.mode)
+			if setErr != nil {
+				t.Fatalf("SetEncryptionMode: %v", setErr)
+			}
+			// The write's own answer must already be counted against the mode
+			// it just wrote: the switch dialog reads this number.
+			if written.ConversationsOutsideMode != tt.want {
+				t.Errorf("the write answered %d conversations outside %s, want %d",
+					written.ConversationsOutsideMode, tt.mode, tt.want)
+			}
+			read, readErr := store.OrgSettings(ctx)
+			if readErr != nil {
+				t.Fatalf("OrgSettings: %v", readErr)
+			}
+			if read.ConversationsOutsideMode != tt.want {
+				t.Errorf("a re-read counts %d, want %d", read.ConversationsOutsideMode, tt.want)
+			}
+		})
+	}
+}
+
+// TestModeSwitchTouchesNoConversationIntegration is Phase 3 gate item 3:
+// switching modes cannot silently decrypt or expose history.
+//
+// It is the drill ADR 011 decision 2 specifies, automated: a canary inside an
+// encrypted conversation and a plaintext control beside it, the mode switched
+// in both directions, and then the whole database scanned. What must hold
+// after every switch is that the encrypted canary is nowhere in the stored
+// bytes, the control canary still is (which is what proves the scan can see
+// anything at all), and every channel row and every message row is
+// byte-identical to what it was before.
+//
+// The assertion is deliberately made on whole rows rendered as text rather
+// than on the e2ee flag alone: a mode switch that quietly rewrote a
+// ciphertext, a timestamp or an epoch would be just as much a silent
+// mode-switch as one that flipped the flag.
+func TestModeSwitchTouchesNoConversationIntegration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, dsn := testdb.New(t)
+
+	// The plaintext the client encrypted. It never reaches the server, and
+	// no switch may make it appear.
+	const secretCanary = "the merger closes on friday"
+	// The control. It was stored server-readable, so the scan MUST find it —
+	// a scan that found nothing would pass this test while proving nothing.
+	const controlCanary = "the picnic is on saturday"
+
+	author := mustCreateUser(ctx, t, store, newUser("gatethree"))
+	peer := mustCreateUser(ctx, t, store, newUser("gatethreepeer"))
+
+	encrypted := mustCreateChannel(ctx, t, store, storage.NewChannel{
+		Kind: storage.ChannelKindPrivate, Slug: "gate3-encrypted", E2EE: true, CreatedBy: author.ID,
+	})
+	plain := mustCreateChannel(ctx, t, store, storage.NewChannel{
+		Kind: storage.ChannelKindPrivate, Slug: "gate3-plain", CreatedBy: author.ID,
+	})
+	dm := mustOpenDM(ctx, t, store, author.ID, peer.ID)
+
+	if _, _, err := store.CreateMessage(ctx, storage.NewMessage{
+		ChannelID: encrypted.ID, AuthorID: author.ID, ClientMsgID: uuid.New(),
+		Mls: &storage.MessageMls{Epoch: 4, Ciphertext: []byte("opaque-envelope-bytes")},
+	}); err != nil {
+		t.Fatalf("CreateMessage (encrypted): %v", err)
+	}
+	for _, target := range []uuid.UUID{plain.ID, dm.ID} {
+		if _, _, err := store.CreateMessage(ctx, storage.NewMessage{
+			ChannelID: target, AuthorID: author.ID, ClientMsgID: uuid.New(),
+			Content: controlCanary,
+		}); err != nil {
+			t.Fatalf("CreateMessage (plaintext): %v", err)
+		}
+	}
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	assertCanaries := func(t *testing.T, when string) {
+		t.Helper()
+		if hits := scanDatabaseFor(ctx, t, conn, controlCanary); len(hits) == 0 {
+			t.Fatalf("%s: the control canary is nowhere in the database; this drill proves nothing until the scan can see plaintext", when)
+		}
+		if hits := scanDatabaseFor(ctx, t, conn, secretCanary); len(hits) > 0 {
+			t.Errorf("%s: the encrypted canary is readable in %v", when, hits)
+		}
+	}
+
+	before := map[string][]string{
+		"channels": rowDump(ctx, t, conn, "channels"),
+		"messages": rowDump(ctx, t, conn, "messages"),
+	}
+	assertCanaries(t, "before any switch")
+
+	// Both directions, because both were argued and both must be inert:
+	// strict→compliance cannot decrypt what exists, and compliance→strict
+	// cannot retroactively protect what was stored in the clear.
+	for _, mode := range []string{storage.EncryptionModeCompliance, storage.EncryptionModeStrict} {
+		t.Run("after switching to "+mode, func(t *testing.T) {
+			if _, setErr := store.SetEncryptionMode(ctx, mode); setErr != nil {
+				t.Fatalf("SetEncryptionMode(%s): %v", mode, setErr)
+			}
+			for table, want := range before {
+				got := rowDump(ctx, t, conn, table)
+				if len(got) != len(want) {
+					t.Fatalf("%s holds %d rows after the switch, want %d", table, len(got), len(want))
+				}
+				for i := range want {
+					if got[i] != want[i] {
+						t.Errorf("%s row changed across the mode switch:\nbefore %s\nafter  %s", table, want[i], got[i])
+					}
+				}
+			}
+			assertCanaries(t, "after switching to "+mode)
+		})
+	}
+}
+
+// rowDump renders every row of one table as text, ordered by id, so two
+// dumps can be compared byte for byte. A whole-row rendering is the point:
+// it covers columns this test never had to know about, including any a later
+// slice adds.
+func rowDump(ctx context.Context, t *testing.T, conn *pgx.Conn, table string) []string {
+	t.Helper()
+
+	// table is a literal from this file's own call sites, never input.
+	rows, err := conn.Query(ctx, `SELECT t::text FROM `+table+` t ORDER BY t.id`)
+	if err != nil {
+		t.Fatalf("dump %s: %v", table, err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var rendered string
+		if scanErr := rows.Scan(&rendered); scanErr != nil {
+			t.Fatalf("dump %s: %v", table, scanErr)
+		}
+		out = append(out, rendered)
+	}
+	if rows.Err() != nil {
+		t.Fatalf("dump %s: %v", table, rows.Err())
+	}
+	return out
+}
+
+// scanDatabaseFor is the drill's database dump, done in SQL: every text and
+// bytea column of every table in the schema is searched for needle, and the
+// "table.column" of each hit is reported.
+//
+// It walks the catalogue rather than a list of columns this test knows about,
+// so a later slice that stores something readable beside a ciphertext turns
+// this red without anybody remembering to add it here.
+func scanDatabaseFor(ctx context.Context, t *testing.T, conn *pgx.Conn, needle string) []string {
+	t.Helper()
+
+	rows, err := conn.Query(ctx,
+		`SELECT table_name, column_name, data_type FROM information_schema.columns
+		 WHERE table_schema = 'public'
+		   AND data_type IN ('text', 'character varying', 'character', 'bytea')
+		 ORDER BY table_name, column_name`)
+	if err != nil {
+		t.Fatalf("list columns: %v", err)
+	}
+	type column struct{ table, name, dataType string }
+	var columns []column
+	for rows.Next() {
+		var c column
+		if scanErr := rows.Scan(&c.table, &c.name, &c.dataType); scanErr != nil {
+			rows.Close()
+			t.Fatalf("list columns: %v", scanErr)
+		}
+		columns = append(columns, c)
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		t.Fatalf("list columns: %v", rows.Err())
+	}
+
+	var hits []string
+	for _, c := range columns {
+		// A bytea rendered ::text comes back as \x hex, which would hide the
+		// very bytes this looks for; escape output keeps printable ASCII
+		// printable, so a canary stored raw in a bytea is still found.
+		rendered := fmt.Sprintf("%q::text", c.name)
+		if c.dataType == "bytea" {
+			rendered = fmt.Sprintf("encode(%q, 'escape')", c.name)
+		}
+		// Identifiers come from the catalogue and are quoted; the needle is
+		// the only value, and it is bound.
+		query := fmt.Sprintf(`SELECT count(*) FROM %q WHERE position($1 in %s) > 0`, c.table, rendered)
+		var found int
+		if scanErr := conn.QueryRow(ctx, query, needle).Scan(&found); scanErr != nil {
+			t.Fatalf("scan %s.%s: %v", c.table, c.name, scanErr)
+		}
+		if found > 0 {
+			hits = append(hits, c.table+"."+c.name)
+		}
+	}
+	sort.Strings(hits)
+	return hits
+}
