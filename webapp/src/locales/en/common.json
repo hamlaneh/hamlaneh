@@ -374,7 +374,46 @@
       "passwordMinLabel": "Minimum password length",
       "passwordMinNote": "Set on the server, not here. It applies to every password screen: the forced change after a temporary password, resets by email, and self-service changes.",
       "loadFailed": "We could not load the organization settings.",
-      "saveFailed": "That setting was not saved. The instance still holds the previous value."
+      "saveFailed": "That setting was not saved. The instance still holds the previous value.",
+      "encryption": {
+        "title": "Encryption mode",
+        "intro": "Which kind of conversation this instance creates from now on. It decides what new channels and direct messages are born as, and changes nothing that already exists.",
+        "current": {
+          "strict": "This instance is in Strict end-to-end encryption. Every channel and direct message created here is end-to-end encrypted, and asking for a server-readable one is refused.",
+          "compliance": "This instance is in Compliance mode. Every channel and direct message created here is stored server-readable, so that search, retention and export can cover it."
+        },
+        "outside": {
+          "none": "Every conversation this instance holds matches the current mode.",
+          "strict": "{{conversations}} conversations this instance holds are not end-to-end encrypted. They were created before this mode or under another one, they are never converted, and this server can read them.",
+          "compliance": "{{conversations}} conversations this instance holds are end-to-end encrypted. They are never converted, so search, retention and export do not reach them and never will."
+        },
+        "chooseLabel": "Mode for conversations created from now on",
+        "mode": {
+          "strict": "Strict end-to-end encryption",
+          "compliance": "Compliance"
+        },
+        "modeHint": {
+          "strict": "New conversations are encrypted on their members' devices. This server stores ciphertext and holds no key, so server-side search, retention and export cannot reach them.",
+          "compliance": "New conversations are stored so this server can read them, which is what lets search, retention and export exist."
+        },
+        "complianceLocked": "Compliance is not selectable yet. It is honest only once this instance has encryption at rest, a retention policy and compliance export, and none of the three are built. Choosing it today would remove end-to-end encryption and deliver none of what it promises, which is a label rather than a compliance regime.",
+        "switchFailed": "The encryption mode was not changed. The instance still creates conversations the way it did before.",
+        "switch": {
+          "compliance": {
+            "title": "Switch to Compliance mode?",
+            "unchanged": "Nothing already encrypted becomes readable. This server holds no keys, so it cannot decrypt the conversations that are already end-to-end encrypted. They stay encrypted, and permanently outside search, retention and export.",
+            "begins": "Compliance coverage begins with conversations created after this switch. Nothing created before it is converted, moved or re-encrypted.",
+            "exportImpossible": "A complete export of the past is impossible. That impossibility is what end-to-end encryption is, not a gap in this feature.",
+            "confirm": "Switch to Compliance"
+          },
+          "strict": {
+            "title": "Switch to Strict end-to-end encryption?",
+            "unchanged": "Nothing already stored becomes end-to-end encrypted. The conversations this instance already holds were stored where this server could read them, and their history stays that way. Encryption applied now cannot un-read what has already been read.",
+            "begins": "End-to-end encryption begins with conversations created after this switch. Nothing created before it is converted.",
+            "confirm": "Switch to Strict"
+          }
+        }
+      }
     },
     "audit": {
       "title": "Audit log",
@@ -778,8 +817,11 @@
       "visibilityNote": "Both kinds are visible only to their members. Nobody can find or read a channel they were not invited to.",
       "submit": "Create channel",
       "failed": "The channel could not be created.",
-      "e2eeLabel": "End-to-end encrypt this channel",
-      "e2eeNote": "Cannot be changed later. Encrypted channels have no server-side search, no link previews and no mention badges, and files cannot be attached yet."
+      "e2eeByMode": {
+        "strict": "This channel will be end-to-end encrypted. Your organization encrypts every conversation created here, and a channel's encryption is fixed when it is created.",
+        "compliance": "This channel will not be end-to-end encrypted. Your organization stores conversations so the server can read them, which is what lets search, retention and export exist, and a channel's encryption is fixed when it is created."
+      },
+      "e2eeNote": "Encrypted channels have no server-side search, no link previews and no mention badges, and files cannot be attached yet."
     },
     "channelMenu": {
       "topicLabel": "Topic",
@@ -791,8 +833,15 @@
       "invite": "Invite",
       "message": "Message",
       "failed": "That did not work. Try again.",
-      "e2eeLabel": "End-to-end encrypt this conversation",
-      "e2eeNote": "Cannot be changed later, and only applies if this conversation does not exist yet — reopening one you already have keeps whatever it was opened as."
+      "e2eeByMode": {
+        "strict": "A new conversation started here will be end-to-end encrypted. Your organization encrypts every conversation created here.",
+        "compliance": "A new conversation started here will not be end-to-end encrypted. Your organization stores conversations so the server can read them, which is what lets search, retention and export exist."
+      },
+      "reopenNote": "This applies only if the conversation does not exist yet. Reopening one you already have keeps whatever it was opened as, whatever the mode is now."
+    },
+    "e2eeByOrg": {
+      "requiredError": "Your organization now encrypts every conversation created here, so this one was not created. Nothing was made — try again and it will be end-to-end encrypted.",
+      "forbiddenError": "Your organization now stores conversations so the server can read them, so this one was not created. Nothing was made — try again and it will not be end-to-end encrypted."
     },
     "e2ee": {
       "regionLabel": "Encryption",

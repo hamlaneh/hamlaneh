@@ -12,6 +12,7 @@ import type { Channel, Presence, User, UserSummary } from "../../chat/types";
 import { useChat } from "../../chat/useChat";
 import type { RealtimeOverrides } from "../../chat/useChat";
 import { isUuid } from "../../chat/uuid";
+import { ORG_ENCRYPTION_MODE, bornEncrypted } from "../../instance/encryptionMode";
 import { useInstance } from "../../instance/instanceInfo";
 import { MessageBodyProvider } from "../../mls/MessageBodyContext";
 import { needsAttention } from "../../mls/types";
@@ -235,14 +236,8 @@ export function ChatShell({
   const ringCaller =
     ring?.from?.display_name ?? ringChannel?.dm_peer?.display_name ?? t("calls.ring.unknown");
 
-  /* The DM picker's encryption choice. It lives here rather than inside the
-   * picker so closing and reopening starts from the default rather than from
-   * whatever the last attempt left behind. */
-  const [newDmEncrypted, setNewDmEncrypted] = useState(false);
-
   const closeOverlay = () => {
     setOverlay("none");
-    setNewDmEncrypted(false);
   };
 
   const runSearch = (kind: SearchKind) => {
@@ -560,13 +555,14 @@ export function ChatShell({
 
       {overlay === "createChannel" ? (
         <CreateChannelDialog
+          mode={ORG_ENCRYPTION_MODE}
           onCreate={async (slug, kind, e2ee) => {
-            const channel = await chat.createChannel(slug, kind, e2ee);
-            if (channel === null) {
-              return false;
+            const result = await chat.createChannel(slug, kind, e2ee);
+            if ("error" in result) {
+              return result.error;
             }
-            await navigate(`/c/${channel.id}`);
-            return true;
+            await navigate(`/c/${result.channel.id}`);
+            return null;
           }}
           onClose={closeOverlay}
         />
@@ -576,7 +572,7 @@ export function ChatShell({
         <PeoplePicker
           title={t("chat.empty.invite")}
           actionLabel={t("chat.people.invite")}
-          onPick={(user) => chat.inviteMember(user.id)}
+          onPick={async (user) => ((await chat.inviteMember(user.id)) ? null : "unexpected")}
           onClose={closeOverlay}
         />
       ) : null}
@@ -585,14 +581,20 @@ export function ChatShell({
         <PeoplePicker
           title={t("chat.sidebar.newDirectMessage")}
           actionLabel={t("chat.people.message")}
-          encryption={{ checked: newDmEncrypted, onChange: setNewDmEncrypted }}
+          encryptionMode={ORG_ENCRYPTION_MODE}
           onPick={async (user) => {
-            const channel = await chat.openDirectMessage(user.id, newDmEncrypted);
-            if (channel === null) {
-              return false;
+            // The mode's value, asserted rather than omitted, so a stale view
+            // of it is refused by name instead of silently creating a DM whose
+            // encryption is the opposite of what the picker just promised.
+            const result = await chat.openDirectMessage(
+              user.id,
+              bornEncrypted(ORG_ENCRYPTION_MODE),
+            );
+            if ("error" in result) {
+              return result.error;
             }
-            await navigate(`/c/${channel.id}`);
-            return true;
+            await navigate(`/c/${result.channel.id}`);
+            return null;
           }}
           onClose={closeOverlay}
         />

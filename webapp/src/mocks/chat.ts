@@ -23,6 +23,7 @@ type SetReadPositionRequest = components["schemas"]["SetReadPositionRequest"];
 type ChannelCall = components["schemas"]["ChannelCall"];
 type CallToken = components["schemas"]["CallToken"];
 type ApiError = components["schemas"]["Error"];
+type EncryptionMode = components["schemas"]["EncryptionMode"];
 
 /**
  * Contract mocks for the messaging and file surface, typed against the
@@ -300,6 +301,20 @@ let uploadSequence = 0;
 let calls = new Map<string, ChannelCall>();
 
 /**
+ * The organisation's encryption mode, which decides what a conversation is
+ * born as (ADR 011 decision 1). Strict on every install and every migrated
+ * instance, and the only mode the real API can currently be in — the
+ * compliance branch exists here for the same reason it exists on the server:
+ * the creation rule has to be right the day Compliance unlocks.
+ */
+let encryptionMode: EncryptionMode = "strict";
+
+/** Puts the mock instance in a mode the API cannot yet be talked into. */
+export function setMockEncryptionMode(mode: EncryptionMode): void {
+  encryptionMode = mode;
+}
+
+/**
  * Puts a call in a channel, the way one is already running before this client
  * ever opened the conversation. That is the case the REST read exists for.
  */
@@ -313,6 +328,28 @@ export function resetMockChat(): void {
   calls = new Map();
   uploaded = new Map();
   uploadSequence = 0;
+  encryptionMode = "strict";
+}
+
+/** What a conversation created right now is born as. */
+function bornE2ee(): boolean {
+  return encryptionMode === "strict";
+}
+
+/**
+ * The named refusal when a request's `e2ee` disagrees with the mode, or null
+ * when it may proceed. The contract's own rule: omitted means the mode's
+ * value, matching is fine, and mismatching is refused rather than coerced — a
+ * client whose view of the mode is stale must not be handed the opposite of
+ * what its screen said about a property fixed forever at creation.
+ */
+function modeRefusal(requested: boolean | undefined) {
+  if (requested === undefined || requested === bornE2ee()) {
+    return null;
+  }
+  return bornE2ee()
+    ? errorResponse(400, "e2ee_required_by_org", "This organisation encrypts every conversation.")
+    : errorResponse(400, "e2ee_forbidden_by_org", "This organisation stores conversations readable.");
 }
 
 /** The fixture history of one channel, for assertions in tests. */
@@ -430,12 +467,16 @@ export const chatHandlers = [
       if (chat.channels.some((entry) => entry.slug === body.slug)) {
         return errorResponse(409, "channel_slug_taken", "That name is taken.");
       }
+      const refusal = modeRefusal(body.e2ee);
+      if (refusal !== null) {
+        return refusal;
+      }
       const created: Channel = {
         id: `00000000-0000-4000-8000-${String(chat.channels.length).padStart(12, "9")}`,
         kind: body.kind,
-        // Immutable from here (openapi.yaml -> Channel.e2ee): the mock records
-        // what the request asked for and never lets anything toggle it later.
-        e2ee: body.e2ee ?? false,
+        // Immutable from here (openapi.yaml -> Channel.e2ee): the organisation
+        // mode decides it at birth and nothing ever toggles it afterwards.
+        e2ee: bornE2ee(),
         slug: body.slug,
         topic: body.topic ?? "",
         member_count: 1,
@@ -462,15 +503,22 @@ export const chatHandlers = [
         (entry) => entry.kind === "dm" && entry.dm_peer?.id === peer.id,
       );
       if (existing !== undefined) {
+        // Before the mode check, deliberately: reopening is idempotent and
+        // returns the conversation as it is, so a flag that disagrees with
+        // today's mode is not a refusal here — there is nothing being born.
         return HttpResponse.json(existing);
+      }
+      const refusal = modeRefusal(body.e2ee);
+      if (refusal !== null) {
+        return refusal;
       }
       const created: Channel = {
         id: `00000000-0000-4000-8000-${String(chat.channels.length).padStart(12, "8")}`,
         kind: "dm",
-        // Only this branch reads it: the flag applies when the call *creates*
-        // the DM, and the get-or-create above returns an existing one as it
-        // is, whatever the request says (openapi.yaml).
-        e2ee: body.e2ee ?? false,
+        // Only this branch reaches the mode: it decides when the call
+        // *creates* the DM, and the get-or-create above returns an existing
+        // one as it is, whatever the request says (openapi.yaml).
+        e2ee: bornE2ee(),
         slug: null,
         topic: "",
         member_count: 2,

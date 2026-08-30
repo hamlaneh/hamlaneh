@@ -300,6 +300,7 @@ function freshAuthState(): MockAuthState {
       password_min_length: 12,
       password_reset_available: true,
       max_file_size_bytes: 25 * 1024 * 1024,
+      encryption_mode: "strict",
       // Configured by default, same reasoning as the reset flag: the screens
       // that offer single sign-on exist, and a case that wants the instance
       // without a provider says so with setMockInstance.

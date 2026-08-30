@@ -357,8 +357,14 @@ describe("a group that could not be finished in one go", () => {
       });
       const before = calls(mls.syncWelcomes);
 
+      // Three ceilings rather than one. The first wait is jittered inside
+      // [0, 5s), and the socket reaching `online` during that window is a
+      // deliberate reset — a cause that just arrived deserves the first
+      // attempt, not the twelfth one's wait. One 5s window can therefore be
+      // consumed entirely by a reset, which says nothing about whether the
+      // retry works; three cannot.
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.advanceTimersByTimeAsync(15_000);
       });
       // The Welcome list, not the group: only a Welcome can move this state,
       // and the nudge that announces one reaches sockets — so one sent while
