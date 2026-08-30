@@ -137,7 +137,7 @@ func (s *Store) SearchFiles(ctx context.Context, params SearchFilesParams) (File
 	// The wildcards are added here so the parameter carries no pattern
 	// syntax of the caller's: a search for "report_final" looks for that
 	// underscore rather than for any character.
-	needle := foldSearchText(params.Query)
+	needle := FoldSearchText(params.Query)
 	pattern := "%" + escapeLike(needle) + "%"
 
 	var total int
@@ -215,6 +215,6 @@ func scanFileSearchResult(row pgx.Row, needle string) (FileSearchResult, error) 
 	if peerID != nil && peerUsername != nil && peerDisplayName != nil {
 		res.Channel.DMPeer = &DMPeer{ID: *peerID, Username: *peerUsername, DisplayName: *peerDisplayName}
 	}
-	res.Snippet = searchSnippet(res.Attachment.Filename, needle)
+	res.Snippet = SearchSnippet(res.Attachment.Filename, needle)
 	return res, nil
 }

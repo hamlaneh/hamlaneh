@@ -89,7 +89,7 @@ var mentionParseCases = []mentionParseCase{
 	},
 	{
 		// The documented decision, pinned here: the parser is not
-		// markdown-aware. See parseMentions on why.
+		// markdown-aware. See ParseMentions on why.
 		name:    "a token in inline code is still a mention",
 		content: "the wire format is `" + mentionToken(mentionAliceID) + "`",
 		want:    []uuid.UUID{uuid.MustParse(mentionAliceID)},

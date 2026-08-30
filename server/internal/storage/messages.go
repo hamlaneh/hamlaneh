@@ -365,7 +365,7 @@ func (s *Store) CreateMessage(ctx context.Context, nm NewMessage) (Message, bool
 	if nm.Content == "" && len(nm.AttachmentIDs) == 0 && nm.Mls == nil {
 		return Message{}, false, ErrEmptyMessage
 	}
-	mentioned := parseMentions(nm.Content)
+	mentioned := ParseMentions(nm.Content)
 
 	for range sendAttempts {
 		msg, err := s.insertMessage(ctx, nm, mentioned)
@@ -535,7 +535,7 @@ func (s *Store) MessageByID(ctx context.Context, channelID, messageID uuid.UUID)
 // the caller's to enforce; the messages_content_shape constraint is the
 // backstop.
 func (s *Store) UpdateMessageContent(ctx context.Context, channelID, messageID uuid.UUID, content string, mls *MessageMls) (Message, error) {
-	row := s.pool.QueryRow(ctx, updateMessageQuery, channelID, messageID, content, parseMentions(content),
+	row := s.pool.QueryRow(ctx, updateMessageQuery, channelID, messageID, content, ParseMentions(content),
 		mlsEpochArg(mls), mlsCiphertextArg(mls))
 	msg, err := scanMessage(row)
 	if err != nil {
