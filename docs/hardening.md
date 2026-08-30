@@ -205,6 +205,25 @@ put something in front of it that has TLS.
 A self-signed certificate is **not** on this list. It trains a household to click through
 browser warnings, which costs more than it buys.
 
+Both loopback spellings work on the bound port: `localhost`, `127.0.0.1` and `[::1]` are one
+machine and one trust boundary, so the `Origin` check accepts all three there. That allowance
+exists only when the instance is actually bound to loopback — set `HAMLANEH_PUBLIC_URL` to a name
+or a LAN address and the check is a single exact origin again, as it is in server mode.
+
+### The first administrator
+
+There is no installer here, so home mode creates the first account itself on a fresh database:
+`admin`, with a password generated from `crypto/rand` and **printed to the console once**. It is
+never written to disk and never appears in the log, and the account must change it at first
+sign-in. Setting `HAMLANEH_ADMIN_USERNAME` and `HAMLANEH_ADMIN_PASSWORD` uses those instead.
+
+Because the password exists only in that console output, losing it before signing in means
+starting over: delete the data directory and run the binary again. A restart prints nothing — the
+account already exists, so the bootstrap is a no-op, which is also what stops a second admin ever
+being created or a live credential reappearing on every start.
+
+### The data directory
+
 Everything home mode has lives in one directory — `%AppData%\hamlaneh` on Windows,
 `~/Library/Application Support/hamlaneh` on macOS, `~/.config/hamlaneh` on Linux, or wherever
 `HAMLANEH_DATA_DIR` points. It holds the database, the uploaded bytes, and the two instance
@@ -212,10 +231,21 @@ secrets, which home mode generates on first run because there is no installer to
 That directory is the backup unit; see the custody rules below, which apply to those two files
 exactly as they apply to the compose stack's `.env`.
 
+**On Windows, move it only somewhere your account owns.** The `0600` the server asks for is a
+POSIX mode Windows does not have: no permissions are written on the files, so what protects them
+is whatever the parent directory hands down. Under `%AppData%` that is your user profile's rule
+and the keys are yours alone. Point `HAMLANEH_DATA_DIR` at a volume root such as `C:\hamlaneh` or
+a second drive and it inherits the volume's rule instead, where every local account can read —
+including `audit.key` and `file-url.key`. The server warns at startup when the directory is
+outside your profile; if you need it there anyway, restrict it yourself with `icacls` first.
+
 **Protects against:** a home instance silently serving sessions over plaintext to a network.
 
 **Does not protect against:** anything reaching the machine itself. Home mode has no media
-server, so calls are off and the instance says so.
+server, so calls are off and the instance says so. The audit chain is narrower here than in the
+compose stack for the same reason: `audit.key` sits beside the database it protects, with the
+same owner, so it shows tampering that did not have this machine's user account — an edited
+backup, a direct write to the file, corruption — and not tampering by someone who did.
 
 ---
 
