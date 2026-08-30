@@ -667,7 +667,18 @@ Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measur
 - [ ] Response compression in the Go server, for home mode only. Caddy's `encode zstd gzip`
       covers the compose path, but home mode has no proxy in front of it and would otherwise
       serve the ~560 KB web bundle uncompressed over whatever link the household has
-- [ ] Signed releases (Sigstore/cosign) + SBOM; auto-update channel, on by default for security
+- [x] **Signed releases (Sigstore/cosign) + SPDX SBOM + the anti-rollback refusal** —
+      *2026-08-30*, `.github/workflows/release.yml`, `deploy/verify-release.sh` and its test
+      suite, runbook in [`docs/releasing.md`](releasing.md). One signature over `SHA256SUMS`
+      rather than per artifact, and the release is drafted so §6.6's simultaneous patch and
+      advisory is a control rather than an intention. Every control in the verifier was
+      mutation-tested. **Keyless signing is the untested half**: Fulcio and Rekor cannot be
+      exercised offline, so the first real tag is where a wrong identity pattern would show
+- [ ] **The auto-updater itself**, which the gate's first clause needs ("auto-update applies a
+      signed release"). Nothing in the repo applies anything yet — the release pipeline builds
+      and signs, and `verify-release.sh` is what an updater would call. It also needs
+      `hamlaneh-server --version`, which does not exist, to know what is installed
+- [ ] Auto-update channel, on by default for security
       patches, **with anti-rollback** (older validly-signed release refused unless forced)
 - [ ] Automated encrypted backups on by default; documented restore
 - [ ] Publish `docs/hardening.md` (defaults already carry the load; guide covers optional
