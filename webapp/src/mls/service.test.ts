@@ -12,6 +12,7 @@ import { memoryStore, Keystore } from "./keystore";
 import { safetyNumber } from "./safetyNumber";
 import { MlsService } from "./service";
 import type { MlsState } from "./types";
+import { needsAttention } from "./types";
 import { setMlsModule } from "./wasm";
 
 /**
@@ -601,8 +602,14 @@ describe("membership events", () => {
 const NASRIN = CHAT_USERS.nasrin.id;
 const OMID = CHAT_USERS.omid.id;
 
-/** A key the directory hands out that no honest device ever generated. */
-const PLANTED = toBase64(encoder.encode("sig:planted"));
+/**
+ * A key the directory hands out that no honest device ever generated, as a
+ * LEAF carries it — a bare string, the way `fakeModule` writes one.
+ */
+const PLANTED_LEAF = "sig:planted";
+
+/** The same key as the directory carries it: base64. */
+const PLANTED = toBase64(encoder.encode(PLANTED_LEAF));
 
 /** The directory's claim about somebody, as a second registered device. */
 function plantDirectoryKey(userId: string, key = PLANTED) {
@@ -766,6 +773,59 @@ describe("the send gate", () => {
 
     expect(latest().verification[channelId]?.uncoveredLeaves).toBe(0);
     expect(await service.encrypt(channelId, "fine now")).not.toBeNull();
+  });
+});
+
+/* ── the media gate's timing (ADR 009, decision 3) ─────────────────────── */
+
+describe("the epoch and the gate that guards it", () => {
+  /**
+   * The published epoch and the published verification state have to reach an
+   * observer TOGETHER.
+   *
+   * The call layer rotates its outbound key to whatever `epochs` last said and
+   * withholds publishing on whatever `verification` last said, and ADR 009
+   * decision 3 puts the check before the outbound slot switches. Published in
+   * two updates, `catchUp` announces the new epoch while the gate still reads
+   * the previous, clear state — so between the two, a device seals audio under
+   * an epoch a leaf it has never accepted is already a member of, for as long
+   * as the directory round trip takes.
+   *
+   * Which is why this asserts over the whole SEQUENCE of published states
+   * rather than over the last one. The last one is correct either way: the
+   * reconcile that follows re-reads the directory and closes the gate. Only
+   * the states in between can tell a single update from two.
+   */
+  it("never shows an advanced epoch beside a clear gate", async () => {
+    const { service, channelId } = await openWith("rotation-gate");
+    const settled = latest().epochs[channelId] ?? 0;
+    expect(settled).toBe(1);
+    expect(needsAttention(latest().verification[channelId])).toBe(false);
+
+    // Somebody else's commit lands, carrying a second leaf under Nasrin's id
+    // whose key she never published. The directory is made to vouch for it in
+    // the same breath, which is what stops the allow-list sweep from evicting
+    // it: this stays a decision for a human rather than a window that heals
+    // itself, so the gate is still closed at the end and a test that looked
+    // only at the end would see nothing wrong in either version.
+    plantDirectoryKey(NASRIN);
+    injectCommit(channelId, [
+      `${ME}|${fakeSignatureKey(ME)}`,
+      `${NASRIN}|${fakeSignatureKey(NASRIN)}`,
+      `${NASRIN}|${PLANTED_LEAF}`,
+    ]);
+    await service.syncChannel(channelId);
+
+    const advanced = states.filter((state) => (state.epochs[channelId] ?? 0) > settled);
+    // Without this the loop below is vacuously true — a service that stopped
+    // publishing epochs at all would pass it.
+    expect(advanced.length, "no published state ever carried the new epoch").toBeGreaterThan(0);
+    for (const state of advanced) {
+      expect(
+        needsAttention(state.verification[channelId]),
+        `epoch ${String(state.epochs[channelId])} was published while the gate still read clear`,
+      ).toBe(true);
+    }
   });
 });
 
