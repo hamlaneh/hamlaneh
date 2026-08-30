@@ -2,8 +2,17 @@ import { api } from "../api/client";
 import type { components } from "../api/schema";
 import { fromBase64, packFrames, toBase64, unpackFrames, unpackStrings } from "./bytes";
 import { Keystore, openKeystore } from "./keystore";
-import type { ChannelMlsState, MlsState, MlsUnavailableReason } from "./types";
-import { initialMlsState } from "./types";
+import { safetyNumber } from "./safetyNumber";
+import type {
+  ChannelMlsState,
+  ChannelVerification,
+  MlsState,
+  MlsUnavailableReason,
+  VerificationLevel,
+  VerificationRecords,
+} from "./types";
+import { clearVerification, initialMlsState, needsAttention } from "./types";
+import { acceptedKeys, inspect } from "./verification";
 import type { MlsDeviceHandle, MlsModule } from "./wasm";
 import { loadMlsModule } from "./wasm";
 
@@ -97,6 +106,30 @@ export class MlsService {
    * an edited message — same id, new bytes — is opened again.
    */
   private readonly opened = new Map<string, string>();
+
+  /**
+   * This device's own leaf signature key, base64 — read from the wrapper's
+   * `signature_public_key()` at start.
+   *
+   * The one key in the system this device did not learn from the server, which
+   * is why it and not the directory anchors the own half of every safety
+   * number (see `acceptedKeys` in `verification.ts`).
+   */
+  private ownKey: string | null = null;
+
+  /** Accepted key sets per person, loaded once and written on every change. */
+  private records: VerificationRecords = {};
+
+  /**
+   * channel id → (user id → the keys the directory listed for them), cached at
+   * the last reconcile.
+   *
+   * Cached rather than fetched because the send path must not touch the
+   * network: `encrypt` re-checks the invariant against this, and a gate that
+   * needed a round trip would be a gate that fails open when the server is
+   * slow. Rebuilt from the server on every reconcile, never persisted.
+   */
+  private readonly directory = new Map<string, Map<string, string[]>>();
 
   private readonly chains = new Map<string, Promise<unknown>>();
   private starting: Promise<boolean> | null = null;
@@ -239,6 +272,8 @@ export class MlsService {
       }
     }
     this.device = device;
+    this.ownKey = toBase64(device.signature_public_key());
+    this.records = (await this.keystore?.loadRecords()) ?? {};
 
     const registered = await this.registerAndPublish(device);
     if (!registered) {
@@ -246,7 +281,7 @@ export class MlsService {
       return this.unavailable("server");
     }
     await this.persist();
-    this.publish({ device: { status: "ready" } });
+    this.publish({ device: { status: "ready" }, records: this.records });
     return true;
   }
 
@@ -458,6 +493,11 @@ export class MlsService {
     // the channel as failed.
     const members = await this.listMemberDevices(channelId);
 
+    // Trust before the tree: pinning first sight, noticing a changed set and
+    // raising the own-account prompt are all decisions about *people*, and
+    // they are the same whatever the tree happens to hold this second.
+    await this.absorbDirectory(channelId, members);
+
     // Before the adds: handing a new epoch's secrets to a leaf that should be
     // gone is the one ordering mistake this whole reconcile can make.
     await this.sweepLeaves(
@@ -490,9 +530,222 @@ export class MlsService {
       .filter((userId) => userId !== this.options.currentUserId && !inGroup.has(userId));
     if (missing.length === 0) {
       this.setChannel(channelId, { status: "ready" });
+      this.publishVerification(channelId);
       return;
     }
     await this.addUsers(channelId, missing);
+    // After the adds, not before: the leaves this pass just committed are
+    // exactly the ones the invariant has to be re-read over.
+    this.publishVerification(channelId);
+  }
+
+  /* ── verification (ADR 008) ────────────────────────────────────────── */
+
+  /**
+   * Turns one directory read into trust decisions about people.
+   *
+   * Three outcomes per person, and they are the whole of decision 3's state
+   * machine: no record → pin now, silently, because first sight is the only
+   * moment at which there is nothing to compare against and a question would
+   * be noise; record matches → nothing to say; record differs → left alone, so
+   * the stored set stays the one a human accepted and `changed` can be derived
+   * from the difference for as long as it stands.
+   *
+   * This device's own account is deliberately excluded from pinning. A key
+   * appearing under your own id is either your other browser profile or an
+   * attack, no software here can tell the two apart, and silently pinning it
+   * would answer the one question ADR 008 insists a human answers.
+   */
+  private async absorbDirectory(
+    channelId: string,
+    members: readonly MlsMemberDevice[],
+  ): Promise<void> {
+    this.directory.set(
+      channelId,
+      new Map(members.map((member) => [member.user_id, [...member.signature_public_keys]])),
+    );
+
+    let pinned = false;
+    for (const member of members) {
+      if (member.user_id === this.options.currentUserId) {
+        continue;
+      }
+      if (this.records[member.user_id] === undefined) {
+        this.records = {
+          ...this.records,
+          [member.user_id]: {
+            userId: member.user_id,
+            keys: [...member.signature_public_keys],
+            level: "pinned",
+            at: Date.now(),
+          },
+        };
+        pinned = true;
+      }
+    }
+    if (pinned) {
+      await this.saveRecords();
+    }
+    this.publishOwnDevices(members);
+  }
+
+  /**
+   * Raises the own-account prompt when the directory lists a key under this
+   * account that no human here has accepted — the loudest thing in the slice.
+   */
+  private publishOwnDevices(members: readonly MlsMemberDevice[]): void {
+    const listed = members.find((member) => member.user_id === this.options.currentUserId);
+    if (listed === undefined) {
+      return;
+    }
+    const accepted = new Set(this.acceptedFor(this.options.currentUserId));
+    const unaccepted = listed.signature_public_keys.filter((key) => !accepted.has(key));
+    this.publish({ ownDevices: unaccepted.length === 0 ? null : { keys: unaccepted } });
+  }
+
+  /** The keys this device accepts for a person — see `verification.ts`. */
+  private acceptedFor(userId: string): readonly string[] {
+    return acceptedKeys(userId, this.records, this.options.currentUserId, this.ownKey);
+  }
+
+  /**
+   * The conversation's verification state, computed from what is already in
+   * hand: the cached directory, the records, and the tree.
+   *
+   * Purely local, and that is a requirement rather than an optimization — this
+   * runs on the send path, where a network call would be a gate that fails
+   * open whenever the server is slow or hostile enough to stall it.
+   */
+  private verificationOf(channelId: string): ChannelVerification {
+    const directory = this.directory.get(channelId);
+    if (directory === undefined || this.device === null || !this.groups.has(channelId)) {
+      // Nothing has been reconciled here yet, so there is nothing to have
+      // changed. The channel's own availability state is what withholds the
+      // composer until then; this state answers a different question.
+      return clearVerification;
+    }
+    const treeKeys = unpackFrames(
+      this.device.member_signature_keys(this.requireGroup(channelId)),
+    ).map(toBase64);
+    return inspect(directory, treeKeys, this.ownKey, (userId) => this.acceptedFor(userId));
+  }
+
+  private publishVerification(channelId: string): ChannelVerification {
+    const verification = this.verificationOf(channelId);
+    this.publish({
+      verification: { ...this.state.verification, [channelId]: verification },
+    });
+    return verification;
+  }
+
+  private async saveRecords(): Promise<void> {
+    await this.keystore?.saveRecords(this.records);
+    this.publish({ records: this.records });
+  }
+
+  /**
+   * Records `userId`'s current directory set at `level`, and re-checks every
+   * conversation the decision touches.
+   *
+   * The set is stored rather than a flag, so an acceptance names exactly what
+   * it accepted and can never generalize to the next change (ADR 008,
+   * decision 3). Both exits come through here and there is no third: nothing
+   * in this service clears a warning on a timer, on a dismissal, or per
+   * message.
+   */
+  private async record(userId: string, level: VerificationLevel): Promise<void> {
+    const keys = this.currentKeysOf(userId);
+    if (keys === null) {
+      return;
+    }
+    this.records = {
+      ...this.records,
+      [userId]: { userId, keys: [...keys], level, at: Date.now() },
+    };
+    await this.saveRecords();
+    for (const channelId of this.directory.keys()) {
+      this.publishVerification(channelId);
+    }
+    if (userId === this.options.currentUserId) {
+      this.publish({ ownDevices: null });
+    }
+  }
+
+  /**
+   * The directory's current claim about a person, from whichever conversation
+   * has read it most recently.
+   *
+   * Trust is per person and instance-global while the directory read is per
+   * channel, so this is the join between the two. Null when no reconcile has
+   * ever seen them, in which case there is nothing to accept.
+   */
+  private currentKeysOf(userId: string): readonly string[] | null {
+    for (const members of this.directory.values()) {
+      const keys = members.get(userId);
+      if (keys !== undefined) {
+        return keys;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The safety number for this conversation with `userId` — sixty digits, and
+   * the same string on both screens (ADR 008, decision 4).
+   *
+   * **The two halves come from deliberately different places, and that
+   * asymmetry is the entire security of the ceremony.** Our own half is
+   * computed from this device's own signature key plus own devices a human
+   * explicitly accepted — never from the directory. The peer's half is
+   * computed from the directory's current claim about them, because that claim
+   * is precisely what the ceremony puts under test.
+   *
+   * Read the other way round it is easier to see why it cannot drift: if this
+   * function took both halves from the directory, a server that planted a key
+   * on the peer would plant it in both computations, both screens would print
+   * the same number, the humans would say "they match", and the ceremony would
+   * bless the attack while looking exactly like it does now. Nothing would
+   * throw and no other test would fail. `safetyNumberFor` is therefore the one
+   * place allowed to ask the directory about a peer and the one place forbidden
+   * to ask it about us.
+   */
+  async safetyNumberFor(userId: string): Promise<string | null> {
+    const theirs = this.currentKeysOf(userId);
+    if (theirs === null || this.ownKey === null) {
+      return null;
+    }
+    return safetyNumber(
+      { userId: this.options.currentUserId, keys: this.acceptedFor(this.options.currentUserId) },
+      { userId, keys: theirs },
+    );
+  }
+
+  /** Exit 1: the humans compared the number out of band and it matched. */
+  verifyPeer(userId: string): Promise<void> {
+    return this.record(userId, "verified");
+  }
+
+  /**
+   * Exit 2: "I checked", with no ceremony behind it.
+   *
+   * Always `pinned`, including on a peer who was `verified` a moment ago —
+   * which visibly downgrades the badge, and is meant to. An unceremonied
+   * acceptance is a pin, and a UI that let it keep a verified badge would be
+   * claiming a proof that nobody produced.
+   */
+  acceptPeer(userId: string): Promise<void> {
+    return this.record(userId, "pinned");
+  }
+
+  /**
+   * The own-account prompt's yes: this new device under your id is yours.
+   *
+   * `pinned` rather than `verified` for the same reason as `acceptPeer` — it
+   * is a human judgment call about a plausible-looking device, which the
+   * multi-device slice's authenticated linking is what actually replaces.
+   */
+  acceptOwnDevices(): Promise<void> {
+    return this.record(this.options.currentUserId, "pinned");
   }
 
   /**
@@ -778,12 +1031,30 @@ export class MlsService {
    * Encrypts one message, or null when this device cannot — in which case
    * nothing is sent, because a plaintext fallback in an encrypted channel is
    * the silent downgrade the whole design exists to prevent.
+   *
+   * Two different refusals come out of here as the same null, and the caller
+   * tells them apart by state rather than by the return value: the channel's
+   * own status says "unavailable", and `state.verification[channelId]` says
+   * "blocked pending verification". Keeping the second in published state
+   * rather than in a return code is what lets the composer be *replaced* by
+   * the warning — a send that merely failed would leave the user retyping.
    */
   encrypt(channelId: string, text: string): Promise<{ epoch: number; ciphertext: string } | null> {
     return this.runOn(channelId, async () => {
       if (this.device === null || !this.groups.has(channelId)) {
         return null;
       }
+
+      // Re-checked here and not merely trusted from the last reconcile: this
+      // is the only operation wholly this client's own, so it is the only
+      // place refusal can bite (ADR 007 — a sequenced commit cannot be
+      // vetoed, so receipt is not consent). Local, and published as it is
+      // computed, so a tree that changed under a stale screen raises the
+      // warning at the moment of the send rather than swallowing it.
+      if (needsAttention(this.publishVerification(channelId))) {
+        return null;
+      }
+
       const groupId = this.requireGroup(channelId);
       try {
         const message = this.device.encrypt(groupId, text);
