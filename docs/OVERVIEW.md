@@ -233,9 +233,9 @@ placeholder renders, and a permalink resolves through a cursor that centres the 
 message it names.
 
 **Not yet built:** the rest of Phase 3 — multi-device and device verification, key verification
-UX, encrypted backups and recovery, media E2EE, and the per-org Strict/Compliance mode. Its
-first slice has shipped; the section on encrypted conversations below says what that covers and,
-more usefully, what it does not.
+UX and encrypted backups with a recovery key. Four slices have shipped — the MLS transport,
+eviction by key, key verification, media encryption — and the organisation's encryption mode.
+The sections below say what each covers and, more usefully, what it does not.
 
 A DM now carries its peer, resolved by a join in the same query that draws the sidebar rather
 than a lookup per row; mentions are parsed from the contract's `<@{id}>` token when a message is
@@ -395,10 +395,10 @@ was not entitled to read the message it points at.
 built: [ADR 006](adr/006-mls-library-and-boundaries.md) fixed the library (OpenMLS,
 exact-pinned, WASM in the browser), the MLS-blind server, and guests-outside-E2EE; slice 1
 shipped the transport end to end (see "Current state"). What remains is the rest of the phase:
-own-message and received history across reloads (the local plaintext store), multi-device keys
-and device verification, key verification UX (safety numbers/QR), encrypted backups and the
-recovery path, media E2EE through LiveKit insertable streams, the per-org Strict/Compliance
-mode choice with the compliance half actually built, and the mobile-push research spike.
+received history across reloads, multi-device keys and authenticated device linking, encrypted
+backups and the recovery path, and Compliance mode's own half — encryption at rest, retention
+and export — without which that mode stays refused rather than shipping as a toggle that
+delivers only the absence of encryption.
 
 **Everything through Phase 2 is code-complete**, each proven by a Playwright suite against the
 real stack rather than against mocks — two browsers, two accounts, a message crossing live; and
@@ -418,6 +418,26 @@ key-management decision deferred to Phase 5.
 settings. Phone-width artboards are not: `docs/design/STATUS.md` is the authority on which
 screens still say `awaiting-design`, and it is the file to read rather than this sentence,
 which cannot know what was delivered after it was written.
+
+- **The organisation's encryption mode ([ADR 011](adr/011-org-encryption-mode.md)).** An
+  instance is in one of two modes, and the mode decides what kind of conversation is *born* from
+  now on: Strict makes every new channel and DM end-to-end encrypted and refuses a plaintext one;
+  Compliance would do the reverse, so that server-side search, retention and export can exist.
+  Every install and every upgrade starts Strict.
+
+  It changes nothing that already exists, and that is the design rather than a shortcut. A
+  switch to Compliance cannot make an existing encrypted conversation readable — nobody but its
+  members holds a key, the server included — and a switch to Strict cannot un-store what was
+  already written in the clear. So the per-conversation flag stays fixed at creation, the
+  settings screen shows the standing count of what the current mode does not describe even when
+  that count is zero, and the confirmation an admin sees before switching names what will sit
+  outside the mode they are choosing. "Switching modes cannot silently decrypt or expose
+  history" is true here because nothing converts, not because a check forbids it.
+
+  **Compliance is defined but not selectable.** Choosing it answers a refusal, because encryption
+  at rest, a retention policy and compliance export do not exist yet, and a mode whose only
+  delivered effect was the absence of end-to-end encryption would be a toggle that lies. It is
+  shown rather than hidden, with the three missing pieces named.
 
 ## Architecture at a glance
 
