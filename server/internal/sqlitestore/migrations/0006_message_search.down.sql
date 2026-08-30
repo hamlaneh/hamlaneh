@@ -1,0 +1,1 @@
+-- Nothing to undo: 0006 creates no object in this tree (search is a scan).

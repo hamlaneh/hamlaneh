@@ -1,0 +1,30 @@
+-- SQLite counterpart of 0006_message_search.up.sql.
+--
+-- THE DECISION IS UNCHANGED and is a product decision, not a PostgreSQL one:
+-- substring matching over a normalized copy of the text, no stemming, with
+-- the Persian fold that maps the three visually identical letter pairs and
+-- drops the zero-width non-joiner. Read 0006 in the PostgreSQL tree for the
+-- full argument; nothing about it is revisited here.
+--
+--     U+064A ARABIC LETTER YEH          -> U+06CC ARABIC LETTER FARSI YEH
+--     U+0643 ARABIC LETTER KAF          -> U+06A9 ARABIC LETTER KEHEH
+--     U+0629 ARABIC LETTER TEH MARBUTA  -> U+0647 ARABIC LETTER HEH
+--     U+200C ZERO WIDTH NON-JOINER      -> removed
+--
+-- WHAT CHANGES IS ONLY THE ACCELERATION, and this file is where it is
+-- honestly absent. PostgreSQL puts the fold inside a GIN pg_trgm index
+-- expression, so matching is indexed. SQLite has no trigram index, so there
+-- is no index to create: the driver applies the SAME fold in Go
+-- (storage.FoldSearchText, already pinned to the expression above by a test)
+-- and matches with instr() over the folded content, which is a scan.
+--
+-- The ceiling is named rather than discovered later: one linear pass over a
+-- channel's messages per search. That is fine for a household's history and
+-- would not be fine for an organization's — which is exactly the split
+-- between the two deployment modes. FTS5's trigram tokenizer is the recorded
+-- upgrade path (ADR 012), behind the same interface and changing no
+-- semantics; search.go carries the same note beside the query.
+--
+-- This file therefore intentionally creates nothing. It exists so the two
+-- trees stay numbered in step and so the absence is written down where a
+-- reader comparing them will look for it.
