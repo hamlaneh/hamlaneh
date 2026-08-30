@@ -331,7 +331,8 @@ jobs:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.release == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 20, not 10: this job now runs three suites rather than one.
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -351,6 +352,41 @@ jobs:
 
       - name: Verify the release gate
         run: bash deploy/verify-release.test.sh
+
+      # The updater is the half that APPLIES what the verifier passed, so its
+      # own suite has to run beside it: a verifier that refuses correctly and
+      # an updater that applies anyway is still a shipped downgrade.
+      - name: Verify the updater gate
+        run: bash deploy/hamlaneh-update.test.sh
+
+      # Installer detection, idempotency and error paths. Container-level only
+      # -- it cannot start systemd or install Docker, which is why the roadmap
+      # still calls for real VMs. What it does prove is that a second run
+      # leaves deploy/.env byte-identical, which is the property most likely
+      # to break silently.
+      - name: Verify the installer
+        run: bash deploy/install.test.sh
+
+  # Separate from release-tooling because this suite is not shell-only: it
+  # runs a real PostgreSQL container and a real docker volume, and proves the
+  # canary is absent from an encrypted archive AND recoverable from a
+  # decrypted one. The positive control is the point -- absence alone would
+  # certify a plain gzip as encrypted.
+  backup-tooling:
+    name: Backup and restore drill
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The suite exits 2 rather than passing when docker or sqlite3 is
+      # missing, so a runner image that loses either fails loudly instead of
+      # reporting a green run that tested nothing.
+      - name: Run the backup and restore drill
+        run: bash deploy/hamlaneh-backup.test.sh
 
   gitleaks:
     name: Secret scan (gitleaks)

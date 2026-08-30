@@ -283,3 +283,26 @@ jobs:
           set -euo pipefail
           cosign sign --yes "$REF"
           cosign attest --yes --type spdxjson --predicate image-sbom.spdx.json "$REF"
+
+      # The image path's counterpart to the artifacts job's "Verify what we
+      # are about to publish", and it exists for the same reason: signing
+      # proves nothing until something checks the signature against the
+      # identity an operator will actually demand. Without this step a wrong
+      # --certificate-identity-regexp on the IMAGE path is discoverable only
+      # when a real operator's updater refuses a real release -- which is the
+      # failure the artifacts job's self-check was added to prevent, left
+      # open on the other half of the pipeline.
+      #
+      # The identity is ASKED FOR rather than retyped. A second copy of that
+      # pattern is a second thing to get wrong, and this one fails OPEN when
+      # it is too permissive.
+      - name: Verify the image we just signed
+        env:
+          REF: ${{ steps.push.outputs.ref }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          identity="$(bash deploy/verify-release.sh --version "$VERSION"             --repo "$GITHUB_REPOSITORY" --print-identity)"
+          cosign verify             --certificate-identity-regexp "$identity"             --certificate-oidc-issuer https://token.actions.githubusercontent.com             "$REF" > /dev/null
+          cosign verify-attestation --type spdxjson             --certificate-identity-regexp "$identity"             --certificate-oidc-issuer https://token.actions.githubusercontent.com             "$REF" > /dev/null
+          echo "image signature and SBOM attestation verify against $identity"

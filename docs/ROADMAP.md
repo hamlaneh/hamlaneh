@@ -659,7 +659,21 @@ the shorter version is not reinvented by somebody who never saw this note.
 
 Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measured**.
 
-- [ ] `install.sh` hardened: Ubuntu LTS, Debian, Fedora, RHEL-clone; idempotent re-runs; clear errors
+- [x] **`install.sh` hardened** — *2026-08-30*. Ubuntu, Debian, Fedora, RHEL-clones, and
+      AlmaLinux, which needed its own route because `get.docker.com` refuses it outright
+      (verified: `ERROR: Unsupported distribution 'almalinux'`, and its docker-ce repo 404s).
+      Idempotent: a second run leaves `deploy/.env` byte-identical. It also installs cosign,
+      pinned to the version CI signs with, because nothing did — without it the update timer
+      would have failed on every fire on every stock install. 118 checks.
+      **Container-level only**: detection, idempotency and error paths are covered; actually
+      installing Docker, starting systemd units and SELinux at runtime are not, which is why
+      the VM matrix below is still open rather than satisfied by this
+- [x] **A security finding closed in passing**: `.env.example` shipped `REPLACED_AT_INSTALL`
+      for five secrets and the README told readers to copy it, while every `ensure_*` check
+      tested for the *key* and never the *value* — so a placeholder LiveKit secret that mints
+      admin tokens for every room could survive an install. Unexploitable only by luck (the
+      32-byte key floor rejects a 19-byte placeholder, so the server refused to boot).
+      Placeholders are now stripped and regenerated
 - [ ] Installer served from `get.hamlaneh.com` (redirect/proxy to repo raw) — the documented
       one-liner uses this URL so tutorials never break
 - [x] **The SQLite driver** — *2026-08-30*, `server/internal/sqlitestore`, 102 methods, the
@@ -672,10 +686,20 @@ Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measur
       the SQLite concurrency *shape* (one connection, a retrying busy handler) is its own.
       Six PostgreSQL-mechanism tests are skipped under an allow-list whose gate was proved
       to fail in **both** directions — a stale entry fails it, a missing one fails it too
-- [ ] Home mode's **boot path**: nothing selects the driver yet, so the binary still always
-      opens PostgreSQL. Mode selection, per-OS data directory, loopback bind, calls off,
-      compression on — and `hamlaneh-server --version`, which the updater needs
-- [ ] Bare-IP mode polished; Tauri desktop app builds
+- [x] **Home mode's boot path** — *2026-08-30*. `hamlaneh-server home`: SQLite at the per-OS
+      data directory, loopback bind, calls refused, compression on, and `--version`, which the
+      updater needs to know what is installed. It mints its own signing and audit keys on first
+      run, since home mode has no `install.sh` to generate them; that key path was reviewed
+      adversarially before merge. The inverse is pinned too — a test proves server mode never
+      creates a SQLite file, so an organisation's data cannot silently fork onto one
+- [ ] Home mode's **first run**: a household user who just runs the binary still cannot sign
+      in (the admin bootstrap needs environment variables), and typing `localhost` rather than
+      `127.0.0.1` loads the page but silently refuses every WebSocket, because the origin check
+      is a single exact origin. Both make gate clause 4 unreachable by a real person
+- [ ] Bare-IP mode polished; Tauri desktop app builds. *(The Caddy half is fixed: the files
+      origin now has its own variable, because gluing `files.` onto a bare IP produced a name
+      neither the internal CA nor any public CA could ever certify, and Caddy retried that
+      impossible order for a month on an otherwise-working install.)*
 - [ ] Response compression in the Go server, for home mode only. Caddy's `encode zstd gzip`
       covers the compose path, but home mode has no proxy in front of it and would otherwise
       serve the ~560 KB web bundle uncompressed over whatever link the household has
@@ -686,13 +710,19 @@ Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measur
       advisory is a control rather than an intention. Every control in the verifier was
       mutation-tested. **Keyless signing is the untested half**: Fulcio and Rekor cannot be
       exercised offline, so the first real tag is where a wrong identity pattern would show
-- [ ] **The auto-updater itself**, which the gate's first clause needs ("auto-update applies a
-      signed release"). Nothing in the repo applies anything yet — the release pipeline builds
-      and signs, and `verify-release.sh` is what an updater would call. It also needs
-      `hamlaneh-server --version`, which does not exist, to know what is installed
-- [ ] Auto-update channel, on by default for security
-      patches, **with anti-rollback** (older validly-signed release refused unless forced)
-- [ ] Automated encrypted backups on by default; documented restore
+- [x] **The auto-updater** — *2026-08-30*, `deploy/hamlaneh-update.sh`. It contains no
+      signature logic and no version ordering: `verify-release.sh`'s exit code is the authority,
+      so there is only ever one copy of that check to rot. Both deployment shapes, atomic swap
+      by `rename(2)` between siblings on one filesystem, rollback on a failed health check.
+      43 checks, 14 controls mutated and all 14 went red.
+      **On by default only where systemd is** — on a systemd-less host the timer cannot be armed
+      and the installer says so rather than reporting success; backups already have a cron
+      fallback and the updater does not
+- [x] **Automated encrypted backups on by default; documented restore** — *2026-08-30*,
+      `deploy/hamlaneh-backup.sh`, [`docs/backups.md`](backups.md). Verification happens before
+      anything is stopped or written, so a wrong key or a tampered archive leaves the instance
+      untouched rather than half-restored — asserted by comparing checksums before and after,
+      not by inspection
 - [ ] Publish `docs/hardening.md` (defaults already carry the load; guide covers optional
       extras: IP allow-lists, reverse-proxy variants, backup key custody)
 - [ ] Start pre-selling Managed to interested orgs (validates pricing, near-zero build cost)
@@ -704,11 +734,25 @@ Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measur
 ### Test gate ✅
 
 1. ≥3 strangers, fresh VPS each, median time-to-working-instance **< 5 minutes** — timed, logged.
+   **At risk, structurally, and not by a margin tuning will close:** `install.sh` runs
+   `compose up -d --build`, which is a Go compile plus a Vite build on the stranger's VPS. On a
+   modest machine that alone exceeds five minutes, and on a 1 GB one the web build is
+   OOM-killed. The release pipeline already builds and signs images that nobody pulls. Making
+   compose reference the published image, with `--build` kept for CI and development, is what
+   this clause needs — and it also puts the signed-image supply chain on the path operators
+   actually take, instead of leaving it theoretical.
 2. Auto-update applies a signed release; a tampered release is rejected; an **older
    validly-signed release is rejected** unless explicitly forced (anti-rollback negative test).
 3. Restore drill on a fresh machine: pre-backup canary message present, file checksums match,
-   existing users log in. Negatives: backup archive unreadable without key (scripted scan finds
-   no plaintext canary); restore with wrong key fails with a clear error, not a corrupt instance.
+   existing users log in. Negatives: backup archive unreadable without key; restore with wrong
+   key fails with a clear error, not a corrupt instance.
+   **The encryption check is not "a scan finds no plaintext canary"** — that wording was
+   vacuous and is corrected here rather than quietly met. Gzip hides a literal string exactly
+   as well as a cipher does, so absence alone certifies an unencrypted archive as clean; it was
+   demonstrated by replacing encryption with `cat` and watching the naive check pass. The real
+   check is four: the canary absent from the ciphertext, the archive not readable as gzip, not
+   readable as tar, **and** the canary recovered from the archive once the key is supplied. The
+   positive control is what makes the three absences mean anything.
 4. Home mode: the single binary starts on Windows, macOS, Linux; first run creates the SQLite
    DB; a sent message survives process restart. Tauri app builds for all three OSes in CI and
    passes a login + send-message smoke e2e.

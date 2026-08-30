@@ -92,7 +92,20 @@
 # serve /files/* from the app origin instead, with the identical headers.
 # That is why deploy/verify-defaults.sh probes the app origin unconditionally
 # and this hostname only when the domain is a real one.
-files.{$HAMLANEH_DOMAIN:localhost} {
+#
+# The site address is its OWN variable rather than "files." glued onto
+# HAMLANEH_DOMAIN, and that is load-bearing rather than tidiness. Glued to a
+# bare IP it produced "files.203.0.113.7" -- not an IP, so Caddy could not use
+# the internal CA, and not a name anyone controls, so ACME could never
+# succeed. Caddy retried that for max_duration 2592000: a month of failing
+# certificate orders on an install that was otherwise working, from a
+# hostname the deployment had already decided not to use.
+#
+# The default is a .localhost name, which Caddy certifies from its internal
+# CA without touching the network, so a deployment that never sets the
+# variable declares an inert block instead of an impossible one. install.sh
+# sets it to files.<domain> only when it was given a real domain.
+{$HAMLANEH_FILES_DOMAIN:files.localhost} {
 	encode zstd gzip
 
 	# Same ownership rule as above: HSTS and hiding the server software are

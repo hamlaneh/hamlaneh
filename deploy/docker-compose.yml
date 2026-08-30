@@ -50,6 +50,9 @@ services:
       net.ipv4.ip_unprivileged_port_start: 0
     environment:
       HAMLANEH_DOMAIN: ${HAMLANEH_DOMAIN:-localhost}
+      # Its own variable, not "files." glued onto the one above: see the
+      # Caddyfile block that reads it.
+      HAMLANEH_FILES_DOMAIN: ${HAMLANEH_FILES_DOMAIN:-files.localhost}
     ports:
       - "80:80"
       - "443:443"
