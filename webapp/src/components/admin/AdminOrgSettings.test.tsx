@@ -22,6 +22,8 @@ const SETTINGS: OrgSettings = {
   require_totp: false,
   session_lifetime_hours: 168,
   sso_jit_provisioning: false,
+  encryption_mode: "strict",
+  conversations_outside_mode: 0,
 };
 
 /** What the instance holds, mutated by the PATCH handler. */

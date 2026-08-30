@@ -519,12 +519,12 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       db container carries a plaintext control and no canary. History across reloads is the
       next item's local store; the first implementation's seven contract findings were
       adjudicated back into the contract in the same slice
-- [ ] **Own-message history after a reload** (found by the first client implementation): MLS
+- [x] **Own-message history after a reload** — *2026-08-30*, bounded at 500 messages and 30 days, in the keystore under the same wrapping key. (Found by the first client implementation): MLS
       gives a sender no way to decrypt its own application messages, so without a local
       plaintext store your own words render as undecryptable after a reload — honest, but
       visible. Its own slice, because the store needs the same at-rest design as the keystore:
       what you said is as sensitive as what you received
-- [ ] Key-package pool management beyond replace-on-connect: a read for `unclaimed_count`
+- [x] **Key-package pool replenishes on a low-water mark** — *2026-08-30*, at a quarter of a batch, with the local count treated as a lower bound on consumption. No contract read was needed after all: the PUT already returns `unclaimed_count`. (Was: a read for `unclaimed_count`
       (today only the PUT returns it) and a low-water replenishment policy — with the
       multi-device slice, which owns the device lifecycle this feeds
 - [ ] **One MLS device per browser profile, shared across tabs.** Each tab builds its own
