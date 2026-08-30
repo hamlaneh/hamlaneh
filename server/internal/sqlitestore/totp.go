@@ -335,12 +335,18 @@ func (s *Store) DisableTotp(ctx context.Context, userID uuid.UUID) error {
 // exists to close.
 //
 // In home mode that second of CPU is spent while this transaction holds the
-// database's write lock, so every other writer waits behind it. That cost is
-// accepted deliberately and it is bounded: one regeneration, on an account
-// that has already proved it has a second factor, on a household-sized
-// instance. The alternative — hashing before the check — spends the same CPU
-// on accounts that qualify for nothing, which is the attack the ordering
-// closes.
+// database's write lock, so every other writer waits behind it — and, because
+// the driver runs on a single connection (sqlitestore.go), so does every
+// reader, /readyz among them. That cost is accepted deliberately and it is
+// bounded: one regeneration, on an account that has already proved it has a
+// second factor, on a household-sized instance. The alternative — hashing
+// before the check — spends the same CPU on accounts that qualify for
+// nothing, which is the attack the ordering closes.
+//
+// ponytail: this is the longest lock hold in the driver by three orders of
+// magnitude. If a home instance ever notices a second of stalled requests
+// here, the fix is to split the transaction — commit the check, hash, then
+// re-check and insert — not to hash first.
 func (s *Store) ReplaceRecoveryCodes(ctx context.Context, userID uuid.UUID, hashes func() []string) error {
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
 		// storage.ReplaceRecoveryCodes reads this row FOR UPDATE so a
