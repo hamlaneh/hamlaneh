@@ -111,6 +111,19 @@ test.describe("key swap", () => {
     });
     await expect(app.composerField).toBeEnabled({ timeout: 30_000 });
 
+    // Enabled is not the same as working: an unblocked composer over a gate
+    // that still refuses would leave the message queued and the person told
+    // nothing. Sending for real is what proves the decision actually restored
+    // the thing it was blocking.
+    await app.sendMessage("after the swap");
+    // Only the new message: the reload above threw away the keys that opened
+    // "before the swap", so it renders as the undecryptable placeholder and
+    // not as a body. That is the accepted own-history limitation the
+    // encryption suite pins in its own right (ROADMAP Phase 3, "Own-message
+    // history after a reload"), and asserting the pair here would be
+    // asserting it away.
+    await expect(app.messageBodies).toHaveText(["after the swap"], { timeout: 30_000 });
+
     // The acceptance is per key set, not a standing permission: a second
     // substitution has to be decided on its own. This is what stops one
     // "I checked" from blessing every future swap, which is the difference

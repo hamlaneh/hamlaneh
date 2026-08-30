@@ -555,7 +555,7 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       residue of ADR 007 goes: the sweep trusts the directory's key↔person mapping, and only two
       humans comparing key material out of band can close that — no server signature can, because
       under PLAN §6.1's adversary 3 the signer is the adversary
-- [ ] **Slice 3.3 — key verification** ([ADR 008](adr/008-key-verification.md)): client-local
+- [x] **Slice 3.3 — key verification** ([ADR 008](adr/008-key-verification.md)) — *2026-08-30*: client-local
       records in the wrapped keystore (never server-stored — a server that can *set* a verified
       flag marks its own planted key safe), a safety number over a person's whole device-key set
       with **your own half computed locally and never from the directory** (both halves from the

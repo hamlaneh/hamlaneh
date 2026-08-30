@@ -372,7 +372,11 @@ was not entitled to read the message it points at.
   Records of what you accepted live only in this browser, wrapped with the device state, and the
   server never sees them — a verified flag the server could write would be one it could forge
   about its own planted key. Keys are recorded on first sight, so a *change* is a visible event
-  even for people who never ran a ceremony; when one happens, the conversation keeps receiving
+  even for people who never ran a ceremony. That first sight is trusted, and it is the honest
+  limit of the mechanism: a directory that lies from the very first answer is pinned as if true,
+  and only comparing the number out loud catches it. What recording buys is that the server
+  cannot change its story afterwards without saying so. When a change does happen, the
+  conversation keeps receiving
   and decrypting normally and **stops being able to send**, because that is the only step MLS
   leaves entirely to this client (a commit cannot be refused without forking off the log). There
   are exactly two ways out — compare and match, or say you checked, which records the keys and
