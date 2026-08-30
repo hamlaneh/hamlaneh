@@ -992,6 +992,46 @@ export function useChat({
 
   /* ── mention directory ──────────────────────────────────────────── */
 
+  /**
+   * Names of the open channel's members, whether or not they have ever spoken.
+   *
+   * Authors and DM peers are not enough, and the gap is not cosmetic: the
+   * encryption warnings name a *person* whose devices changed, and the person
+   * most likely to trigger one is a member who has said nothing yet — a
+   * colleague who was invited, opened the app, and registered a device. With
+   * only authors to go on, that warning asked somebody to make a security
+   * judgement about a UUID.
+   */
+  const [memberNames, setMemberNames] = useState<ReadonlyMap<string, string>>(new Map());
+  useEffect(() => {
+    if (channelId === undefined) {
+      return undefined;
+    }
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const { data } = await api.GET("/api/v1/channels/{channelId}/members", {
+          params: { path: { channelId }, query: { limit: 100 } },
+          signal: controller.signal,
+        });
+        if (data !== undefined) {
+          setMemberNames(
+            new Map(data.members.map((member) => [member.id, member.display_name])),
+          );
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          // A name this could not fetch degrades to the generic placeholder,
+          // never to an id — see resolveMention's callers.
+          console.warn("Could not load member names:", error);
+        }
+      }
+    })();
+    return () => {
+      controller.abort();
+    };
+  }, [channelId]);
+
   const directory = useMemo(() => {
     const names = new Map<string, string>([[currentUser.id, currentUser.display_name]]);
     for (const channel of state.channels) {
@@ -999,13 +1039,16 @@ export function useChat({
         names.set(channel.dm_peer.id, channel.dm_peer.display_name);
       }
     }
+    for (const [userId, displayName] of memberNames) {
+      names.set(userId, displayName);
+    }
     for (const channelView of Object.values(state.views)) {
       for (const message of channelView.messages) {
         names.set(message.author.id, message.author.display_name);
       }
     }
     return names;
-  }, [currentUser, state.channels, state.views]);
+  }, [currentUser, memberNames, state.channels, state.views]);
 
   const resolveMention = useCallback(
     (userId: string) => directory.get(userId) ?? null,

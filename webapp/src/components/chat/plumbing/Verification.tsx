@@ -182,7 +182,11 @@ export function VerificationWarning({
       )}
 
       {changed.map((member) => {
-        const name = resolveName(member.userId) ?? member.userId;
+        // Never the raw id as a fallback: this line asks somebody to make a
+        // security judgement about a person, and a UUID is not a person. The
+        // generic placeholder is worse copy and better honesty — it says the
+        // name is unknown instead of implying that string is one.
+        const name = resolveName(member.userId) ?? t("chat.messages.unknownMember");
         return (
           <div key={member.userId}>
             {/* Which of the two it is matters to the person reading it: "a new
