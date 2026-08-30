@@ -30,7 +30,7 @@
  * crash and never a silent fallback to plaintext.
  */
 
-import type { VerificationRecord, VerificationRecords } from "./types";
+import type { SentMessage, VerificationRecord, VerificationRecords } from "./types";
 
 const DATABASE_NAME = "hamlaneh-mls";
 const DATABASE_VERSION = 1;
@@ -53,6 +53,38 @@ const STATE_ID = "state";
  * the UI then renders the attack as safety.
  */
 const RECORDS_ID = "verification";
+
+/**
+ * The plaintext of what this device sent, beside the state and under the same
+ * wrapping key.
+ *
+ * Here rather than in `localStorage` or a plain object store for one reason:
+ * what you said is as sensitive as what you received, and the state slot next
+ * to it holds the keys that opened the latter. It carries the module note's
+ * ceiling unchanged and gains no other — a copied database does not read it;
+ * an attacker running as this origin does.
+ *
+ * Bounded by the caller, which owns the retention policy: see `trimSent` in
+ * `service.ts`. Nothing here enforces a size, and nothing here needs to —
+ * `saveSent` writes exactly the list it is handed.
+ */
+const SENT_ID = "sent";
+
+/**
+ * How many key packages the directory last reported holding for this device.
+ *
+ * Persisted because it is the input to the low-water replenishment decision
+ * (`KEY_PACKAGE_LOW_WATER` in `service.ts`), and the only reading of the pool
+ * the contract offers is the PUT that *replaces* it. A count that did not
+ * survive the reload would have to be re-established by the very publish it
+ * exists to avoid, which is the behaviour the policy replaces.
+ *
+ * Wrapped like everything else in here, not because a count is a secret but
+ * because a second, unwrapped shape in this store would be one more thing to
+ * reason about for no gain.
+ */
+const KEY_PACKAGE_COUNT_ID = "key-packages";
+
 const IV_BYTES = 12;
 
 /** What a stored state record looks like. `iv` is fresh for every write. */
@@ -222,6 +254,38 @@ function readRecords(json: string): VerificationRecords {
     records[userId] = { userId, keys: [...keys], level: record.level, at: record.at };
   }
   return records;
+}
+
+/**
+ * Parses a stored sent-message history, dropping anything malformed.
+ *
+ * Validated entry by entry for the same reason the records are, pointed at a
+ * different risk: a half-read entry here would put text on the screen inside
+ * the author's own bubble. An entry that fails any field is dropped, and the
+ * consequence is the honest one — that bubble renders undecryptable, which is
+ * exactly what it would have done before this store existed.
+ */
+function readSent(json: string): SentMessage[] {
+  const parsed: unknown = JSON.parse(json);
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  const sent: SentMessage[] = [];
+  for (const value of parsed as unknown[]) {
+    if (typeof value !== "object" || value === null) {
+      continue;
+    }
+    const entry = value as Partial<SentMessage>;
+    if (
+      typeof entry.id !== "string" ||
+      typeof entry.text !== "string" ||
+      typeof entry.at !== "number"
+    ) {
+      continue;
+    }
+    sent.push({ id: entry.id, text: entry.text, at: entry.at });
+  }
+  return sent;
 }
 
 function readStoredState(value: unknown): StoredState | null {
@@ -404,6 +468,73 @@ export class Keystore {
     }
   }
 
+  /** Stores the sent-message history. False when it could not be written. */
+  async saveSent(sent: readonly SentMessage[]): Promise<boolean> {
+    try {
+      await this.putWrapped(SENT_ID, encoder.encode(JSON.stringify(sent)));
+      return true;
+    } catch (error) {
+      // A lost write costs the author their own words on the next reload —
+      // the undecryptable state this store exists to replace, which is a
+      // visible disappointment rather than a broken session.
+      console.warn("Could not store the sent-message history:", error);
+      return false;
+    }
+  }
+
+  /**
+   * The sent-message history, or an empty list when there is none.
+   *
+   * Also empty when there is one that will not decrypt or will not parse: a
+   * history this profile can no longer open is indistinguishable from never
+   * having had one, and the degradation is honest either way — the author's
+   * own bubbles read as undecryptable, which is true of them.
+   */
+  async loadSent(): Promise<SentMessage[]> {
+    try {
+      const bytes = await this.getWrapped(SENT_ID);
+      return bytes === null ? [] : readSent(decoder.decode(bytes));
+    } catch (error) {
+      console.warn("Could not read the sent-message history:", error);
+      return [];
+    }
+  }
+
+  /** Records how many key packages the directory holds for this device. */
+  async saveKeyPackageCount(count: number): Promise<boolean> {
+    try {
+      await this.putWrapped(KEY_PACKAGE_COUNT_ID, encoder.encode(String(count)));
+      return true;
+    } catch (error) {
+      // A lost write reads as "never published" next time, which republishes
+      // a pool that did not need it — the same cost the policy set out to
+      // avoid, paid once, and never a device with no packages.
+      console.warn("Could not store the MLS key-package count:", error);
+      return false;
+    }
+  }
+
+  /**
+   * The last recorded count, or null when this device has never published.
+   *
+   * Null for an unreadable or nonsensical value too, and that is the safe
+   * direction: null publishes, and a device with a fresh pool is never the
+   * failure mode — a device the directory has no packages for is.
+   */
+  async loadKeyPackageCount(): Promise<number | null> {
+    try {
+      const bytes = await this.getWrapped(KEY_PACKAGE_COUNT_ID);
+      if (bytes === null) {
+        return null;
+      }
+      const count = Number(decoder.decode(bytes));
+      return Number.isInteger(count) && count >= 0 ? count : null;
+    } catch (error) {
+      console.warn("Could not read the MLS key-package count:", error);
+      return null;
+    }
+  }
+
   /** Drops the stored state (a different user signing in on this profile). */
   async clear(): Promise<void> {
     try {
@@ -412,6 +543,14 @@ export class Keystore {
       // leaving them for whoever signs in next would show that person a
       // `verified` badge nobody on this device ever earned.
       await this.store.delete(RECORDS_ID);
+      // And the sent history, for a blunter reason than the records: it is
+      // one person's own words in plaintext, and leaving it behind would hand
+      // whoever signs in next the previous user's messages.
+      await this.store.delete(SENT_ID);
+      // And the key-package count, because the device that replaces this one
+      // has published nothing. An inherited count would suppress its first
+      // publish and leave it unaddable until something else replenished.
+      await this.store.delete(KEY_PACKAGE_COUNT_ID);
     } catch (error) {
       console.warn("Could not clear the stored MLS device state:", error);
     }

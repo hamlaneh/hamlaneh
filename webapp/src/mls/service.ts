@@ -9,6 +9,7 @@ import type {
   MediaKey,
   MlsState,
   MlsUnavailableReason,
+  SentMessage,
   VerificationLevel,
   VerificationRecords,
 } from "./types";
@@ -44,6 +45,43 @@ type MlsMemberDevice = components["schemas"]["MlsMemberDevice"];
 /** How many key packages to keep published. The contract's cap is 50. */
 const KEY_PACKAGE_BATCH = 20;
 
+/**
+ * The pool level at or below which the next start republishes.
+ *
+ * **What this replaces.** Publishing used to happen on every successful start,
+ * so every reload minted twenty fresh packages and discarded whatever unclaimed
+ * ones the directory still held. The pool is only consumed when somebody adds
+ * this device to a group — rare next to reloading a tab — so the churn bought
+ * nothing and cost the discarded packages.
+ *
+ * **Where the count comes from.** The contract offers exactly one reading of
+ * the pool: the `unclaimed_count` the PUT itself returns. There is no GET, so
+ * "check, then decide whether to replenish" is not available — checking would
+ * *be* the replenish. So the count is recorded at each publish and then carried
+ * locally, decremented by the one event that proves a package was consumed: a
+ * Welcome addressed to this device. That is a *lower* bound on consumption —
+ * a claim whose commit then lost its epoch race burns a package and produces
+ * no Welcome — so the stored count can only ever read too high, never too low.
+ * The mark is therefore not 1.
+ *
+ * **The number: five of twenty.** A quarter of the batch, leaving room for five
+ * more groups to add this device between two starts before its pool is a
+ * problem, while an ordinary reload publishes nothing at all. Below the mark
+ * mid-session it replenishes on the spot rather than waiting for the next
+ * start, because a tab left open for days would otherwise sit at zero and read
+ * as unaddable to everyone else.
+ *
+ * **Why replace-all is still safe.** A publish replaces the unclaimed pool, so
+ * a package claimed a moment earlier is no longer listed — but its private init
+ * key is what opens the Welcome, and `KEY_PACKAGE_BATCHES_RETAINED` in
+ * `src-mls/src/lib.rs` is 2: the wrapper keeps the private material of the last
+ * two published batches, so a claim outlives one replenish and its Welcome
+ * still joins. Replenishing *less* often than connecting stretches that window
+ * over more wall-clock time than the old behaviour gave it, not less. This
+ * policy widens the existing margin; it does not lean on it.
+ */
+const KEY_PACKAGE_LOW_WATER = 5;
+
 /** The contract's page cap on the commit log. */
 const COMMIT_PAGE_SIZE = 50;
 
@@ -65,6 +103,48 @@ const MEMBER_DEVICE_PAGES = 20;
 
 /** The single chain every MLS operation runs on — see {@link MlsService.runOn}. */
 const DEVICE_CHAIN = "device";
+
+/**
+ * How much of this device's own outgoing plaintext survives a reload, and for
+ * how long.
+ *
+ * MLS gives a sender no way to decrypt its own application message, so without
+ * a local copy the author's own words render as undecryptable the moment the
+ * tab reloads. The store buys that back, and the price is exact and worth
+ * stating: for as long as an entry exists, this device holds plaintext that
+ * MLS's forward secrecy would otherwise have destroyed. An unbounded log of
+ * everything ever sent would surrender that property permanently and grow
+ * without limit, so both ends are closed.
+ *
+ * **Both axes, because each covers the other's blind spot.** A count alone
+ * keeps a light sender's messages for years; an age alone lets a heavy one
+ * accumulate without bound. Neither is sufficient and together they are.
+ *
+ * **500 messages.** `HISTORY_PAGE_SIZE` in `useChat.ts` is 50, so this is ten
+ * pages of the author's own scrollback across every conversation on this
+ * device — well past what a reload is expected to restore — and at a few
+ * hundred bytes an entry it stays comfortably under a megabyte wrapped.
+ *
+ * **30 days.** Long enough to answer "what did I say last month", short enough
+ * that a profile compromised today does not yield a year of what this user
+ * said. Nothing recovers an entry once either bound drops it; that is the
+ * design, not a limitation of it.
+ */
+const SENT_HISTORY_LIMIT = 500;
+const SENT_HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Applies both bounds, dropping oldest first.
+ *
+ * Deterministic by construction rather than by sorting: the list is held in
+ * send order, so the age filter runs first and the count then takes the newest
+ * entries **by position**. Two messages recorded in the same millisecond have
+ * an order here and a comparison sort would not preserve it.
+ */
+function trimSent(sent: readonly SentMessage[], now: number): SentMessage[] {
+  const fresh = sent.filter((entry) => now - entry.at < SENT_HISTORY_MAX_AGE_MS);
+  return fresh.slice(Math.max(0, fresh.length - SENT_HISTORY_LIMIT));
+}
 
 function errorCode(error: unknown): string | null {
   if (typeof error !== "object" || error === null) {
@@ -120,6 +200,20 @@ export class MlsService {
 
   /** Accepted key sets per person, loaded once and written on every change. */
   private records: VerificationRecords = {};
+
+  /**
+   * The plaintext of what this device sent, newest last, bounded by
+   * {@link trimSent}. Restored at start and rewritten on every send.
+   */
+  private sent: SentMessage[] = [];
+
+  /**
+   * How many key packages the directory is believed to hold for this device.
+   * Null means this device has never published — see
+   * {@link KEY_PACKAGE_LOW_WATER} for where the number comes from and why it
+   * only ever reads high.
+   */
+  private keyPackages: number | null = null;
 
   /**
    * channel id → (user id → the keys the directory listed for them), cached at
@@ -275,6 +369,8 @@ export class MlsService {
     this.device = device;
     this.ownKey = toBase64(device.signature_public_key());
     this.records = (await this.keystore?.loadRecords()) ?? {};
+    this.keyPackages = (await this.keystore?.loadKeyPackageCount()) ?? null;
+    await this.restoreSent();
 
     const registered = await this.registerAndPublish(device);
     if (!registered) {
@@ -282,8 +378,36 @@ export class MlsService {
       return this.unavailable("server");
     }
     await this.persist();
-    this.publish({ device: { status: "ready" }, records: this.records });
+    this.publish({
+      device: { status: "ready" },
+      records: this.records,
+      // Merged OVER what is already there rather than under it. Nothing waits
+      // for the device before rendering, so a bubble the list already gave up
+      // on and recorded as null is one of ours, and the restored plaintext is
+      // the truth about it.
+      decrypted: {
+        ...this.state.decrypted,
+        ...Object.fromEntries(this.sent.map((entry) => [entry.id, entry.text])),
+      },
+    });
     return true;
+  }
+
+  /**
+   * Brings back what this device said, and re-applies the bounds to it.
+   *
+   * The trim runs on the way in as well as on the way out, and writes back
+   * when it dropped anything, because the bound is a statement about what
+   * exists at rest and not about what a session chooses to show: a browser
+   * left closed for two months must not still be holding two-month-old
+   * plaintext the moment it opens.
+   */
+  private async restoreSent(): Promise<void> {
+    const stored = (await this.keystore?.loadSent()) ?? [];
+    this.sent = trimSent(stored, Date.now());
+    if (this.sent.length !== stored.length) {
+      await this.keystore?.saveSent(this.sent);
+    }
   }
 
   private async registerAndPublish(device: MlsDeviceHandle): Promise<boolean> {
@@ -295,26 +419,62 @@ export class MlsService {
         return false;
       }
       this.deviceId = data.id;
-
-      // Replace-all, on every start: a key package carries an expiry the
-      // server cannot read, so the contract's answer to staleness is a fresh
-      // batch per connect rather than a server-side guess (openapi.yaml,
-      // replaceMlsKeyPackages).
-      const packages = unpackFrames(device.generate_key_packages(KEY_PACKAGE_BATCH)).map(
-        toBase64,
-      );
-      const { response } = await api.PUT(
-        "/api/v1/users/me/mls/devices/{deviceId}/key-packages",
-        {
-          params: { path: { deviceId: data.id } },
-          body: { key_packages: packages },
-        },
-      );
-      return response.ok;
+      return await this.replenishKeyPackages();
     } catch (error) {
       console.warn("Could not register this MLS device:", error);
       return false;
     }
+  }
+
+  /**
+   * Publishes a fresh key-package pool when the recorded count says the old
+   * one is running out, and does nothing when it is not
+   * ({@link KEY_PACKAGE_LOW_WATER} holds the whole argument).
+   *
+   * True whenever the pool is in a good state afterwards, which includes the
+   * ordinary case of having published nothing.
+   */
+  private async replenishKeyPackages(): Promise<boolean> {
+    const device = this.device;
+    const deviceId = this.deviceId;
+    if (device === null || deviceId === null) {
+      return false;
+    }
+    // Null is "this device has never published", which is below every mark —
+    // a first start always publishes.
+    if (this.keyPackages !== null && this.keyPackages > KEY_PACKAGE_LOW_WATER) {
+      return true;
+    }
+    try {
+      const packages = unpackFrames(device.generate_key_packages(KEY_PACKAGE_BATCH)).map(
+        toBase64,
+      );
+      const { data, response } = await api.PUT(
+        "/api/v1/users/me/mls/devices/{deviceId}/key-packages",
+        { params: { path: { deviceId } }, body: { key_packages: packages } },
+      );
+      if (!response.ok) {
+        return false;
+      }
+      // Minting packages writes private init keys into the provider's storage
+      // and retires the batch that aged out of it, so the export has moved.
+      // A device that published and did not persist would offer the directory
+      // packages whose private halves a reload throws away.
+      await this.persist();
+      // The server's number rather than our batch size: the response is the
+      // one reading of the pool the contract offers, and recording what we
+      // sent instead would be recording a count nothing confirmed.
+      await this.setKeyPackageCount(data?.unclaimed_count ?? packages.length);
+      return true;
+    } catch (error) {
+      console.warn("Could not publish a key-package pool:", error);
+      return false;
+    }
+  }
+
+  private async setKeyPackageCount(count: number): Promise<void> {
+    this.keyPackages = count;
+    await this.keystore?.saveKeyPackageCount(count);
   }
 
   private async persist(): Promise<void> {
@@ -995,6 +1155,21 @@ export class MlsService {
             console.warn("Could not acknowledge a welcome:", error);
           });
 
+        // One fewer package in the pool. A Welcome addressed to this device is
+        // proof that one of its key packages was claimed and used, and it is
+        // the only such proof the client ever gets — nothing reports a claim,
+        // and the PUT that would report a count replaces the pool to do it.
+        // A welcome that failed to acknowledge is re-delivered and counted
+        // twice, which pushes the count down rather than up: replenishing a
+        // little early is the harmless direction.
+        if (this.keyPackages !== null) {
+          await this.setKeyPackageCount(Math.max(0, this.keyPackages - 1));
+          // Checked here rather than only at the next start: a tab left open
+          // for days would otherwise sit at zero and read to everybody else as
+          // a device that cannot be added.
+          await this.replenishKeyPackages();
+        }
+
         // Reconcile before calling it ready, rather than setting ready here.
         // A Welcome puts this device into a tree somebody else assembled, and
         // `ready` is what enables the composer — so announcing ready straight
@@ -1161,16 +1336,33 @@ export class MlsService {
   }
 
   /**
-   * Records the plaintext of a message this device just sent.
+   * Records the plaintext of a message this device just sent — on the screen
+   * now, and in the keystore for the next reload.
    *
    * MLS gives a sender no way to open its own application message — the
-   * sender ratchet only produces — so without this the author's own bubbles
-   * would render as undecryptable the moment they arrived. Session-scoped:
-   * after a reload this device's own history is genuinely unreadable to it,
-   * which a local plaintext store would fix and this slice does not build.
+   * sender ratchet only produces — so this is the only copy of the author's
+   * own words that will ever exist. It is wrapped at rest under the keystore's
+   * key in its own slot, carrying that module's ceiling unchanged and gaining
+   * no other: a copied database does not read it; an attacker running as this
+   * origin does.
+   *
+   * Bounded by {@link trimSent}, which is the whole reason this is not simply
+   * a map that grows.
+   *
+   * Awaitable rather than fire-and-forget because it now does I/O and saying
+   * otherwise in the signature would be a lie; callers that have nothing to do
+   * with the result still discard it explicitly.
    */
-  rememberSent(messageId: string, text: string): void {
+  async rememberSent(messageId: string, text: string): Promise<void> {
     this.setDecrypted(messageId, text);
+    const now = Date.now();
+    // Keyed on the id so an edit replaces its own entry rather than
+    // duplicating it, and re-appended rather than updated in place so the
+    // replacement counts as the newest thing said — which it is.
+    const sent = this.sent.filter((entry) => entry.id !== messageId);
+    sent.push({ id: messageId, text, at: now });
+    this.sent = trimSent(sent, now);
+    await this.keystore?.saveSent(this.sent);
   }
 
   /**
@@ -1234,10 +1426,10 @@ export class MlsService {
    *
    * Two ways to be done with a message: it was decrypted from these very
    * bytes, or its plaintext is known without ever having been decrypted —
-   * this device sent it, and `rememberSent` recorded it. The second needs its
-   * own arm because the sender genuinely cannot decrypt its own message, so
-   * without it every author's bubble would be retried on every render and
-   * fail every time.
+   * this device sent it, and `rememberSent` recorded it, in this session or in
+   * one before it. The second needs its own arm because the sender genuinely
+   * cannot decrypt its own message, so without it every author's bubble would
+   * be retried on every render and fail every time.
    */
   private alreadyOpen(messageId: string, ciphertext: string): boolean {
     if (this.opened.get(messageId) === ciphertext) {

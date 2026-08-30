@@ -160,6 +160,64 @@ describe("Keystore", () => {
     expect(await keystore?.loadRecords()).toEqual({});
   });
 
+  it("round-trips the sent history, wrapped like the state", async () => {
+    const store = memoryStore();
+    const keystore = await Keystore.open(store);
+    const sent = [{ id: "m-1", text: "what I said", at: 1_700_000_000 }];
+    expect(await keystore?.saveSent(sent)).toBe(true);
+    expect(await keystore?.loadSent()).toEqual(sent);
+
+    // The author's own words are as sensitive as what they received, so what
+    // sits on disk must not spell them out.
+    const stored = (await store.get("sent")) as { ciphertext: Uint8Array };
+    expect(new TextDecoder().decode(stored.ciphertext)).not.toContain("what I said");
+  });
+
+  it("has no sent history before anything is written", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    expect(await keystore?.loadSent()).toEqual([]);
+  });
+
+  it("drops a malformed sent entry rather than rendering half of it", async () => {
+    const store = memoryStore();
+    const keystore = await Keystore.open(store);
+    await keystore?.saveSent([
+      { id: "good", text: "kept", at: 1 },
+      { id: "textless", at: 2 },
+      { id: 7, text: "wrong id", at: 3 },
+      { id: "timeless", text: "no timestamp" },
+      "not an entry at all",
+    ] as never);
+
+    expect(await keystore?.loadSent()).toEqual([{ id: "good", text: "kept", at: 1 }]);
+  });
+
+  it("reports no sent history rather than throwing when it will not decrypt", async () => {
+    const store = memoryStore();
+    const keystore = await Keystore.open(store);
+    await keystore?.saveSent([{ id: "m-1", text: "what I said", at: 1 }]);
+    await store.put("sent", { iv: new Uint8Array(12), ciphertext: new Uint8Array(32) });
+    expect(await keystore?.loadSent()).toEqual([]);
+  });
+
+  it("reports no sent history when the decrypted bytes are not a list", async () => {
+    const store = memoryStore();
+    const keystore = await Keystore.open(store);
+    // Wrapped correctly, so it decrypts — and then does not parse. The two
+    // failures are different and both have to end in "no history".
+    await keystore?.saveSent({ nonsense: true } as never);
+    expect(await keystore?.loadSent()).toEqual([]);
+  });
+
+  it("clears the sent history with the state, so the next user gets no words", async () => {
+    const store = memoryStore();
+    const keystore = await Keystore.open(store);
+    await keystore?.save(STATE);
+    await keystore?.saveSent([{ id: "m-1", text: "what I said", at: 1 }]);
+    await keystore?.clear();
+    expect(await keystore?.loadSent()).toEqual([]);
+  });
+
   it("is unavailable rather than unsafe when the store refuses", async () => {
     const broken = {
       get: () => Promise.reject(new Error("no storage here")),

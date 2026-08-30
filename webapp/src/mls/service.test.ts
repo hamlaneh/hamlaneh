@@ -419,7 +419,7 @@ describe("messages", () => {
     const service = newService();
     await service.openChannel(channelId);
 
-    service.rememberSent("m-2", "what I said");
+    await service.rememberSent("m-2", "what I said");
     expect(latest().decrypted["m-2"]).toBe("what I said");
   });
 });
@@ -977,6 +977,242 @@ describe("records at rest", () => {
     await second.start();
 
     expect(latest().records[NASRIN]).toMatchObject({ level: "verified" });
+  });
+});
+
+describe("the key-package pool", () => {
+  /**
+   * Counts pool publishes from here on.
+   *
+   * It answers the way the default handler does for everything the client
+   * reads — replace-all, and the count it hands back is the batch it was given
+   * — and skips only the mock device's own bookkeeping, which no case in this
+   * group claims against.
+   */
+  function countPublishes(): () => number {
+    let publishes = 0;
+    server.use(
+      http.put("/api/v1/users/me/mls/devices/:deviceId/key-packages", async ({ request }) => {
+        publishes += 1;
+        const body = (await request.json()) as { key_packages: string[] };
+        return HttpResponse.json({ unclaimed_count: body.key_packages.length });
+      }),
+    );
+    return () => publishes;
+  }
+
+  it("publishes on the first start of a device that has never published", async () => {
+    const publishes = countPublishes();
+    const service = newService(await Keystore.open(memoryStore()));
+    expect(await service.start()).toBe(true);
+    expect(publishes()).toBe(1);
+  });
+
+  it("publishes nothing on a restart while the pool is above the mark", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    // The first start fills the pool through the ordinary handler: twenty.
+    await newService(keystore).start();
+
+    const publishes = countPublishes();
+    const second = newService(keystore);
+    expect(await second.start()).toBe(true);
+    // The whole point of the slice: a reload is not a reason to throw away
+    // twenty unclaimed packages and mint twenty more.
+    expect(publishes()).toBe(0);
+  });
+
+  it("still publishes nothing one package above the mark", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    await newService(keystore).start();
+    // KEY_PACKAGE_LOW_WATER + 1: the last count that is not low.
+    await keystore?.saveKeyPackageCount(6);
+
+    const publishes = countPublishes();
+    await newService(keystore).start();
+    expect(publishes()).toBe(0);
+  });
+
+  it("replenishes once the pool has fallen to the mark", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    await newService(keystore).start();
+    // KEY_PACKAGE_LOW_WATER exactly — at the mark counts as low.
+    await keystore?.saveKeyPackageCount(5);
+
+    const publishes = countPublishes();
+    const second = newService(keystore);
+    expect(await second.start()).toBe(true);
+    expect(publishes()).toBe(1);
+    // And the new count is recorded, so the *next* start publishes nothing.
+    expect(await keystore?.loadKeyPackageCount()).toBe(20);
+  });
+
+  it("counts a welcome as one package spent", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    const channelId = await createE2eeChannel("spent");
+    const service = newService(keystore);
+    await service.start();
+    expect(await keystore?.loadKeyPackageCount()).toBe(20);
+
+    const ourDevice = mockMlsDevices().find((device) => device.userId === ME);
+    await api.POST("/api/v1/channels/{channelId}/mls/group", {
+      params: { path: { channelId } },
+      body: { group_id: toBase64(new Uint8Array([7])) },
+    });
+    await api.POST("/api/v1/channels/{channelId}/mls/commits", {
+      params: { path: { channelId } },
+      body: {
+        epoch: 0,
+        message: toBase64(encoder.encode(`commit:7:${ME}|${fakeSignatureKey(ME)}`)),
+        welcomes: [
+          {
+            device_ids: [ourDevice?.id ?? ""],
+            welcome: toBase64(encoder.encode(`welcome:7:${ME}|${fakeSignatureKey(ME)}`)),
+          },
+        ],
+      },
+    });
+    for (const userId of OTHERS) {
+      seedDevice(userId);
+    }
+
+    await service.syncWelcomes();
+
+    // Nothing reports a claim, so a Welcome addressed to this device is the
+    // only evidence the client ever gets that one of its packages was used.
+    expect(await keystore?.loadKeyPackageCount()).toBe(19);
+  });
+
+  it("replenishes mid-session when welcomes drain the pool to the mark", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    const channelId = await createE2eeChannel("drained");
+    const service = newService(keystore);
+    await service.start();
+    // One above the mark, so the single welcome below takes it to it.
+    await keystore?.saveKeyPackageCount(6);
+
+    const ourDevice = mockMlsDevices().find((device) => device.userId === ME);
+    await api.POST("/api/v1/channels/{channelId}/mls/group", {
+      params: { path: { channelId } },
+      body: { group_id: toBase64(new Uint8Array([7])) },
+    });
+    await api.POST("/api/v1/channels/{channelId}/mls/commits", {
+      params: { path: { channelId } },
+      body: {
+        epoch: 0,
+        message: toBase64(encoder.encode(`commit:7:${ME}|${fakeSignatureKey(ME)}`)),
+        welcomes: [
+          {
+            device_ids: [ourDevice?.id ?? ""],
+            welcome: toBase64(encoder.encode(`welcome:7:${ME}|${fakeSignatureKey(ME)}`)),
+          },
+        ],
+      },
+    });
+    for (const userId of OTHERS) {
+      seedDevice(userId);
+    }
+
+    // Reloaded from the store, because `saveKeyPackageCount` above wrote past
+    // the running service's own copy.
+    const reloaded = newService(keystore);
+    await reloaded.start();
+    const publishes = countPublishes();
+    await reloaded.syncWelcomes();
+
+    // A tab open for days must not sit at zero waiting for a restart: at that
+    // point every other member's client reports it as unaddable.
+    expect(publishes()).toBe(1);
+  });
+});
+
+describe("own-message history at rest", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it("shows the author their own words again after a reload", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    seedDevice(NASRIN);
+    const channelId = await createE2eeChannel("my-words");
+    const first = newService(keystore);
+    await first.openChannel(channelId);
+    await first.rememberSent("m-1", "what I said");
+
+    // The reload: a brand-new service over the same profile's keystore, which
+    // is exactly what a fresh tab is. MLS itself cannot help here — the sender
+    // ratchet only produces — so anything that comes back came from the store.
+    const second = newService(keystore);
+    expect(await second.start()).toBe(true);
+    expect(latest().decrypted["m-1"]).toBe("what I said");
+  });
+
+  it("replaces an edited message rather than keeping both versions", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    const service = newService(keystore);
+    await service.start();
+    await service.rememberSent("m-1", "first draft");
+    await service.rememberSent("m-1", "second draft");
+
+    expect(await keystore?.loadSent()).toEqual([
+      { id: "m-1", text: "second draft", at: expect.any(Number) as number },
+    ]);
+  });
+
+  it("keeps the newest 500 and drops the oldest first", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    const service = newService(keystore);
+    await service.start();
+    // One past the bound, so exactly one entry has to go and there is no
+    // ambiguity about which.
+    for (let index = 0; index <= 500; index += 1) {
+      await service.rememberSent(`m-${String(index)}`, `line ${String(index)}`);
+    }
+
+    const stored = (await keystore?.loadSent()) ?? [];
+    expect(stored).toHaveLength(500);
+    expect(stored[0]?.id).toBe("m-1");
+    expect(stored.at(-1)?.id).toBe("m-500");
+  });
+
+  it("drops what has aged out, and drops it from the store and not just the screen", async () => {
+    const keystore = await Keystore.open(memoryStore());
+    const now = Date.now();
+    await keystore?.saveSent([
+      { id: "ancient", text: "said last month", at: now - 31 * DAY },
+      { id: "recent", text: "said yesterday", at: now - DAY },
+    ]);
+
+    const service = newService(keystore);
+    await service.start();
+    expect(latest().decrypted.recent).toBe("said yesterday");
+    expect(latest().decrypted.ancient).toBeUndefined();
+
+    // The bound is a statement about what exists at rest, so the expired entry
+    // is written out rather than merely filtered on the way to the screen: a
+    // profile that sits closed for two months must not still be holding
+    // two-month-old plaintext the moment it opens.
+    expect(await keystore?.loadSent()).toEqual([
+      { id: "recent", text: "said yesterday", at: now - DAY },
+    ]);
+  });
+
+  it("degrades to no history when the store will not open, and never throws", async () => {
+    const store = memoryStore();
+    const keystore = await Keystore.open(store);
+    await keystore?.saveSent([{ id: "m-1", text: "what I said", at: Date.now() }]);
+    // A history encrypted under a key this profile no longer has.
+    await store.put("sent", { iv: new Uint8Array(12), ciphertext: new Uint8Array(32) });
+
+    seedDevice(NASRIN);
+    const channelId = await createE2eeChannel("lost-words");
+    const service = newService(keystore);
+    expect(await service.start()).toBe(true);
+    expect(latest().decrypted["m-1"]).toBeUndefined();
+
+    // And the bubble then says the true thing rather than an empty one: MLS
+    // cannot open what this device sent, the store no longer can either, so
+    // undecryptable is the honest state and it is what renders.
+    await service.openChannel(channelId);
+    await service.decrypt(channelId, "m-1", toBase64(encoder.encode("unopenable")));
+    expect(latest().decrypted["m-1"]).toBeNull();
   });
 });
 
