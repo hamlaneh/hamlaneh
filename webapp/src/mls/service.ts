@@ -1276,15 +1276,17 @@ export class MlsService {
     next: Partial<MlsBackupState> & { declined?: boolean },
   ): Promise<void> {
     const declined = next.declined ?? this.backup.status === "declined";
+    const durableFloor = this.backup.floor;
     this.backup = { ...this.backup, ...next };
     const written =
       (await this.keystore?.saveBackupState({ floor: this.backup.floor, declined })) ?? true;
     if (!written) {
-      // The floor is only as good as the write behind it: keeping a higher
-      // number in memory than the one on disk would make this session refuse
-      // envelopes the next session accepts, and the disagreement would look
-      // like a rollback that is not there.
-      this.backup = { ...this.backup, floor: (await this.keystore?.loadBackupState())?.floor ?? 0 };
+      // The floor is only as good as the write behind it. Rolling back to the
+      // last one that DID land keeps memory and disk in step: a higher number
+      // held only in memory would have this session refuse envelopes the next
+      // session accepts, and the disagreement would look like a rollback that
+      // is not there.
+      this.backup = { ...this.backup, floor: durableFloor };
     }
     this.publish({ backup: this.backup });
   }
