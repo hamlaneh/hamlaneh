@@ -31,14 +31,19 @@ const (
 // to execute. Anything unrecognised is served as an opaque download rather
 // than guessed at, because guessing is exactly what nosniff forbids.
 var contentTypes = map[string]string{
-	".css":   "text/css; charset=utf-8",
-	".html":  "text/html; charset=utf-8",
-	".js":    "text/javascript; charset=utf-8",
-	".json":  "application/json",
-	".md":    "text/markdown; charset=utf-8",
-	".png":   "image/png",
-	".svg":   "image/svg+xml",
-	".txt":   "text/plain; charset=utf-8",
+	".css":  "text/css; charset=utf-8",
+	".html": "text/html; charset=utf-8",
+	".js":   "text/javascript; charset=utf-8",
+	".json": "application/json",
+	".md":   "text/markdown; charset=utf-8",
+	".png":  "image/png",
+	".svg":  "image/svg+xml",
+	".txt":  "text/plain; charset=utf-8",
+	// Without this the MLS core is served as an opaque download, and
+	// nosniff then makes WebAssembly.instantiateStreaming refuse it —
+	// the module still loads, through wasm-bindgen's slower buffered
+	// fallback, which is exactly the kind of failure that hides.
+	".wasm":  "application/wasm",
 	".webp":  "image/webp",
 	".woff":  "font/woff",
 	".woff2": "font/woff2",
