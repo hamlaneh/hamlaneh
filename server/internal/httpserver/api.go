@@ -366,6 +366,13 @@ type apiServer struct {
 	// never told its own origin; the link is then site-relative, which still
 	// resolves for the admin looking at it (admin_handlers.go).
 	publicURL string
+
+	// compressAssets gzips the embedded web build. False — the default, and
+	// what every compose install stays on, because Caddy compresses there —
+	// serves the build's bytes as they are. It is read once, when the routes
+	// are built (server.go), and reaches nothing under /api by design
+	// (compress.go).
+	compressAssets bool
 }
 
 var _ api.ServerInterface = (*apiServer)(nil)

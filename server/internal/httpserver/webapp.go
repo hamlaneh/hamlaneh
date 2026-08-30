@@ -50,6 +50,12 @@ const defaultContentType = "application/octet-stream"
 // rooted at the build's own directory.
 type webapp struct {
 	files fs.FS
+
+	// compress gzips the build's compressible files on the way out. Off
+	// unless the install asked for it, because the compose stack's proxy is
+	// already doing it — compress.go carries the whole argument, including
+	// why no API response is ever compressed whatever this says.
+	compress bool
 }
 
 // routeWebapp registers the web application's routes on mux.
@@ -83,8 +89,8 @@ type webapp struct {
 //	          non-admins, and the shell renders nothing without it
 //
 // — and adding a route to the app means adding it here in the same change.
-func routeWebapp(mux *http.ServeMux, files fs.FS) {
-	a := &webapp{files: files}
+func routeWebapp(mux *http.ServeMux, files fs.FS, compress bool) {
+	a := &webapp{files: files, compress: compress}
 
 	mux.HandleFunc("GET /{$}", a.serveIndex)
 	mux.HandleFunc("GET /reset", a.serveIndex)
@@ -157,6 +163,19 @@ func (a *webapp) serveFile(w http.ResponseWriter, r *http.Request, name, cacheCo
 	}
 	w.Header().Set("Content-Type", contentTypeFor(name))
 	w.Header().Set("Cache-Control", cacheControl)
+
+	if a.compressible(w, name, info.Size()) {
+		// This URL now has two representations, so every response for it —
+		// including the plain one being served to a client that did not ask
+		// — must tell caches which one they stored. Without this a shared
+		// cache hands a gzipped body to a client that cannot read it.
+		w.Header().Add("Vary", "Accept-Encoding")
+		if acceptsGzip(r) {
+			a.serveGzipped(w, r, name)
+			return
+		}
+	}
+
 	http.ServeFileFS(w, r, a.files, name) // #nosec G703 -- a.files is the embedded build; embed.FS has no host paths to traverse into (see above)
 }
 
