@@ -1303,7 +1303,8 @@ export interface paths {
         /**
          * Drop one of this account's devices from the directory.
          * @description The lost-device path. Without it a stolen or discarded device's signature key stays in the directory, and therefore stays inside every group's allow-list, for as long as the account exists — ADR 007's sweep evicts exactly what the directory stops listing, so this write is what makes the sweep able to act.
-         *     Owner only: another account's device id answers 404 mls_device_not_found, the same answer as one that names nothing. It does not revoke sessions and does not touch messages; it removes the key from the mapping other members' clients sweep against, and their next reconcile does the eviction. That is deliberately a separate act from signing the device out, because the two answer different questions and a person who has lost a laptop needs both.
+         *     Owner only. Anything that is not currently one of the caller's devices answers 404 mls_device_not_found — another account's, one that never existed, and one this caller already deregistered are a single answer, so a guessed id confirms nothing. **A client retrying after a network failure must treat that 404 as success**: the device is gone either way, and the only thing the two answers distinguish is which attempt did it.
+         *     It does not revoke sessions and does not touch messages; it removes the key from the mapping other members' clients sweep against, and their next reconcile does the eviction. That is deliberately a separate act from signing the device out, because the two answer different questions and a person who has lost a laptop needs both.
          */
         delete: operations["deregisterMlsDevice"];
         options?: never;
@@ -4546,7 +4547,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Deregistered, or already was. */
+            /** @description Deregistered. */
             204: {
                 headers: {
                     [name: string]: unknown;
