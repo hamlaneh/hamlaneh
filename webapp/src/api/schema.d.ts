@@ -699,6 +699,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/org/encryption-mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change which kind of conversation this instance creates.
+         * @description adminOnly. Deliberately its own endpoint rather than a field on the settings PATCH: that screen saves as you type, and this is a decision an administrator should have to mean — it is audited (`org.encryption_mode_changed`) and the UI confirms it, which a field among a dozen others cannot be.
+         *     It changes the rule for conversations born from now on and nothing else. No existing conversation is converted in either direction, and that is the design rather than a limitation: a strict-to-compliance switch could not decrypt what is already encrypted even if it wanted to, because the server holds no key, and a compliance-to-strict switch cannot un-store plaintext that has already been written. Selecting `compliance` answers 409 encryption_mode_locked until the server-side half it promises exists.
+         */
+        put: operations["setOrgEncryptionMode"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/org": {
         parameters: {
             query?: never;
@@ -1646,10 +1667,7 @@ export interface components {
             kind: "public" | "private";
             /** @default  */
             topic?: string;
-            /**
-             * @description Opt-in per channel until the per-org mode slice lands, which will set the default and, in strict mode, forbid creating it false. Immutable after creation.
-             * @default false
-             */
+            /** @description Omit it and the organisation's encryption mode decides (ADR 011). Send it and it must agree with that mode: under `strict`, false is refused with 400 e2ee_required_by_org; under `compliance`, true is refused with 400 e2ee_forbidden_by_org. There is no per-conversation opt-out, because one would be a hole in exactly the guarantee the mode exists to state. Immutable after creation — the flag is never updated, which is what makes a later mode switch unable to touch this conversation either way. */
             e2ee?: boolean;
         };
         UpdateChannelRequest: {
@@ -1662,10 +1680,7 @@ export interface components {
              * @description The other person. Must not be the caller.
              */
             user_id: string;
-            /**
-             * @description Applies only when this call creates the DM; reopening an existing one returns it as it is, whatever this says — get-or- create is idempotent and a flag cannot re-decide a conversation that already exists. Whoever opens the DM first fixes it; the per-org mode slice will make the default uniform and remove the ambiguity.
-             * @default false
-             */
+            /** @description Applies only when this call CREATES the DM; reopening an existing one returns it as it is, whatever this says — get-or-create is idempotent and a flag cannot re-decide a conversation that already exists, which is also why a mode switch cannot. On creation the organisation's encryption mode decides when this is omitted, and a value that disagrees with the mode is refused exactly as on channel creation (400 e2ee_required_by_org / e2ee_forbidden_by_org). */
             e2ee?: boolean;
         };
         AddChannelMemberRequest: {
@@ -1787,7 +1802,18 @@ export interface components {
          * @enum {string}
          */
         RegistrationMode: "invite" | "open";
+        SetEncryptionModeRequest: {
+            encryption_mode: components["schemas"]["EncryptionMode"];
+        };
+        /**
+         * @description Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+         * @enum {string}
+         */
+        EncryptionMode: "strict" | "compliance";
         OrgSettings: {
+            encryption_mode: components["schemas"]["EncryptionMode"];
+            /** @description How many conversations this instance holds whose encryption does not match the current mode — plaintext ones under `strict`, or encrypted ones under `compliance`. Read-only and permanent: they are never converted, so this number is the honest standing count of what the mode does not describe, and the settings screen shows it rather than implying the mode covers everything. */
+            readonly conversations_outside_mode: number;
             org_name: string;
             /**
              * @description The locale a new account starts in.
@@ -3288,6 +3314,42 @@ export interface operations {
                 };
             };
             429: components["responses"]["RateLimited"];
+        };
+    };
+    setOrgEncryptionMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetEncryptionModeRequest"];
+            };
+        };
+        responses: {
+            /** @description The settings as they now stand. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description `compliance` was asked for while it is not yet available (code encryption_mode_locked). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     getOrgSettings: {

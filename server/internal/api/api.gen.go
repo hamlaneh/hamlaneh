@@ -72,6 +72,24 @@ func (e CreateChannelRequestKind) Valid() bool {
 	}
 }
 
+// Defines values for EncryptionMode.
+const (
+	Compliance EncryptionMode = "compliance"
+	Strict     EncryptionMode = "strict"
+)
+
+// Valid indicates whether the value is a known member of the EncryptionMode enum.
+func (e EncryptionMode) Valid() bool {
+	switch e {
+	case Compliance:
+		return true
+	case Strict:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HealthStatusStatus.
 const (
 	Degraded HealthStatusStatus = "degraded"
@@ -452,7 +470,7 @@ type ConferencePreview struct {
 
 // CreateChannelRequest defines model for CreateChannelRequest.
 type CreateChannelRequest struct {
-	// E2ee Opt-in per channel until the per-org mode slice lands, which will set the default and, in strict mode, forbid creating it false. Immutable after creation.
+	// E2ee Omit it and the organisation's encryption mode decides (ADR 011). Send it and it must agree with that mode: under `strict`, false is refused with 400 e2ee_required_by_org; under `compliance`, true is refused with 400 e2ee_forbidden_by_org. There is no per-conversation opt-out, because one would be a hole in exactly the guarantee the mode exists to state. Immutable after creation — the flag is never updated, which is what makes a later mode switch unable to touch this conversation either way.
 	E2ee *bool `json:"e2ee,omitempty"`
 
 	// Kind Direct messages are opened through /api/v1/dms, not here.
@@ -529,6 +547,9 @@ type EditMessageRequest struct {
 	// Mls The replacement ciphertext. Required on an e2ee channel, refused elsewhere — the same boundary as send, at the same choke point.
 	Mls *MlsMessageEnvelope `json:"mls,omitempty"`
 }
+
+// EncryptionMode Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+type EncryptionMode string
 
 // Error defines model for Error.
 type Error struct {
@@ -776,7 +797,7 @@ type OidcRedirect struct {
 
 // OpenDirectMessageRequest defines model for OpenDirectMessageRequest.
 type OpenDirectMessageRequest struct {
-	// E2ee Applies only when this call creates the DM; reopening an existing one returns it as it is, whatever this says — get-or- create is idempotent and a flag cannot re-decide a conversation that already exists. Whoever opens the DM first fixes it; the per-org mode slice will make the default uniform and remove the ambiguity.
+	// E2ee Applies only when this call CREATES the DM; reopening an existing one returns it as it is, whatever this says — get-or-create is idempotent and a flag cannot re-decide a conversation that already exists, which is also why a mode switch cannot. On creation the organisation's encryption mode decides when this is omitted, and a value that disagrees with the mode is refused exactly as on channel creation (400 e2ee_required_by_org / e2ee_forbidden_by_org).
 	E2ee *bool `json:"e2ee,omitempty"`
 
 	// UserId The other person. Must not be the caller.
@@ -788,9 +809,15 @@ type OrgSettings struct {
 	// AccountsWithoutTotp How many accounts enforcement would affect. Read-only, and the reason the screen can say who it hits before it is turned on.
 	AccountsWithoutTotp *int `json:"accounts_without_totp,omitempty"`
 
+	// ConversationsOutsideMode How many conversations this instance holds whose encryption does not match the current mode — plaintext ones under `strict`, or encrypted ones under `compliance`. Read-only and permanent: they are never converted, so this number is the honest standing count of what the mode does not describe, and the settings screen shows it rather than implying the mode covers everything.
+	ConversationsOutsideMode *int `json:"conversations_outside_mode,omitempty"`
+
 	// DefaultLocale The locale a new account starts in.
 	DefaultLocale OrgSettingsDefaultLocale `json:"default_locale"`
-	OrgName       string                   `json:"org_name"`
+
+	// EncryptionMode Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+	EncryptionMode EncryptionMode `json:"encryption_mode"`
+	OrgName        string         `json:"org_name"`
 
 	// RegistrationMode How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
 	RegistrationMode RegistrationMode `json:"registration_mode"`
@@ -964,6 +991,12 @@ type SessionFamily struct {
 // SessionFamilyList defines model for SessionFamilyList.
 type SessionFamilyList struct {
 	Sessions []SessionFamily `json:"sessions"`
+}
+
+// SetEncryptionModeRequest defines model for SetEncryptionModeRequest.
+type SetEncryptionModeRequest struct {
+	// EncryptionMode Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+	EncryptionMode EncryptionMode `json:"encryption_mode"`
 }
 
 // SetReadPositionRequest defines model for SetReadPositionRequest.
@@ -1264,6 +1297,9 @@ type CreateInviteJSONRequestBody = CreateInviteRequest
 // UpdateOrgSettingsJSONRequestBody defines body for UpdateOrgSettings for application/json ContentType.
 type UpdateOrgSettingsJSONRequestBody = UpdateOrgSettingsRequest
 
+// SetOrgEncryptionModeJSONRequestBody defines body for SetOrgEncryptionMode for application/json ContentType.
+type SetOrgEncryptionModeJSONRequestBody = SetEncryptionModeRequest
+
 // CreateScimTokenJSONRequestBody defines body for CreateScimToken for application/json ContentType.
 type CreateScimTokenJSONRequestBody = CreateScimTokenRequest
 
@@ -1368,6 +1404,9 @@ type ServerInterface interface {
 	// UpdateOrgSettings Change the instance's settings.
 	// (PATCH /api/v1/admin/org)
 	UpdateOrgSettings(w http.ResponseWriter, r *http.Request)
+	// SetOrgEncryptionMode Change which kind of conversation this instance creates.
+	// (PUT /api/v1/admin/org/encryption-mode)
+	SetOrgEncryptionMode(w http.ResponseWriter, r *http.Request)
 	// ListScimTokens Provisioning tokens.
 	// (GET /api/v1/admin/scim/tokens)
 	ListScimTokens(w http.ResponseWriter, r *http.Request)
@@ -1760,6 +1799,20 @@ func (siw *ServerInterfaceWrapper) UpdateOrgSettings(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateOrgSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetOrgEncryptionMode operation middleware
+func (siw *ServerInterfaceWrapper) SetOrgEncryptionMode(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetOrgEncryptionMode(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3620,6 +3673,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/admin/invites/{inviteId}", wrapper.RevokeInvite)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/invites/{token}", wrapper.PreviewInvite)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/invites/{token}", wrapper.RedeemInvite)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/admin/org/encryption-mode", wrapper.SetOrgEncryptionMode)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/org", wrapper.GetOrgSettings)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/admin/org", wrapper.UpdateOrgSettings)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/audit", wrapper.ListAuditEntries)
