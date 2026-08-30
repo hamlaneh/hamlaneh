@@ -33,6 +33,7 @@ import { setMlsModule } from "./wasm";
 
 const ME = CHAT_USERS.me.id;
 const NASRIN = CHAT_USERS.nasrin.id;
+const OMID = CHAT_USERS.omid.id;
 
 const encoder = new TextEncoder();
 
@@ -398,6 +399,47 @@ describe("restore", () => {
 
     expect(latest().records[ME]).toBeUndefined();
     expect(latest().records[NASRIN]).toBeDefined();
+  });
+
+  it("brings a verdict back, and still warns where the keys moved", async () => {
+    // The security content of the whole slice, stated as an outcome: TOFU's
+    // weakness is first sight, and a server that waited for a device loss to
+    // swap a peer's key is caught only by a device that remembers. Nasrin's
+    // set is unchanged, so her verdict comes back; Omid's changed during the
+    // absence, so he raises a warning instead of being re-pinned silently.
+    seedDevice(NASRIN);
+    seedDevice(OMID);
+    const channelId = await createE2eeChannel("restored-verdicts");
+
+    const envelope = await sealBackup(await deriveBackupKey(FIXED_KEY), ME, 2, {
+      v: 1,
+      createdAt: "2026-03-03T09:15:00.000Z",
+      verificationRecords: {
+        [NASRIN]: {
+          userId: NASRIN,
+          keys: [directoryKey(NASRIN)],
+          level: "verified",
+          at: 1,
+        },
+        [OMID]: { userId: OMID, keys: ["b2xkLWtleQ=="], level: "verified", at: 1 },
+      },
+    });
+    seedMockMlsBackup({
+      envelope: toBase64(envelope),
+      counter: 2,
+      updatedAt: "2026-03-03T09:15:01.000Z",
+    });
+
+    const { service } = await newService();
+    await service.start();
+    await service.openBackup(await formatRecoveryKey(FIXED_KEY));
+    await service.applyRestore();
+    await service.openChannel(channelId);
+
+    const changed = latest().verification[channelId]?.changed ?? [];
+    expect(changed.map((member) => member.userId)).toContain(OMID);
+    expect(changed.map((member) => member.userId)).not.toContain(NASRIN);
+    expect(latest().records[NASRIN]).toMatchObject({ level: "verified" });
   });
 
   it("backing out changes nothing", async () => {
