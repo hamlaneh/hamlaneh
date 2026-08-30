@@ -831,6 +831,16 @@ func instanceRegistry() []Entry {
 		adminEntry(http.MethodPatch, "/api/v1/admin/org", "",
 			func(Fixture) string { return `{"require_totp":false}` },
 			http.StatusOK, ""),
+		// Phase 3: the encryption mode (ADR 011). It asks for strict, which
+		// every instance already is, so the row changes nothing and pins only
+		// who may ask — and the five refusals to its left are the point: this
+		// is the one setting that decides whether a conversation can ever be
+		// read by this server, and nobody below an administrator may move it.
+		// The 409 that compliance answers is asserted in internal/httpserver;
+		// it is a question about the value, not about the caller.
+		adminEntry(http.MethodPut, "/api/v1/admin/org/encryption-mode", "",
+			func(Fixture) string { return `{"encryption_mode":"strict"}` },
+			http.StatusOK, ""),
 
 		// The two public halves of an invitation, asked with a token of the
 		// right shape that was never issued. All four principals get one

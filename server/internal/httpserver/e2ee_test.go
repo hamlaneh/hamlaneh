@@ -299,68 +299,32 @@ func TestUploadFileRefusalComesAfterMembership(t *testing.T) {
 	wantError(t, rec, http.StatusNotFound, "channel_not_found")
 }
 
-// TestChannelCreationCarriesE2EE pins that the flag reaches storage on the
-// two paths that can set it, and only on those two.
+// TestChannelCreationCarriesE2EE pins that a created channel's encryption
+// reaches the response, so a client can render what it just made.
+//
+// Which value it gets is no longer a request bound: the organisation's mode
+// decides it (ADR 011), and that rule — both modes, both creation paths,
+// omitted, matching and mismatching flags — is pinned in
+// orgencryptionmode_test.go. What is left here is the wiring.
 func TestChannelCreationCarriesE2EE(t *testing.T) {
 	t.Parallel()
 
-	t.Run("createChannel", func(t *testing.T) {
-		t.Parallel()
-		store := authedStore(fixtureUser())
-		var got storage.NewChannel
-		store.createChannel = func(_ context.Context, nc storage.NewChannel) (storage.Channel, error) {
-			got = nc
-			return encryptedChannel(), nil
-		}
+	store := authedStore(fixtureUser())
+	var got storage.NewChannel
+	store.createChannel = func(_ context.Context, nc storage.NewChannel) (storage.Channel, error) {
+		got = nc
+		return encryptedChannel(), nil
+	}
 
-		rec := do(t, store, request(http.MethodPost, "/api/v1/channels",
-			`{"slug":"secrets","kind":"private","e2ee":true}`, withSessionCookie("tok"), withCSRF()))
-		if rec.Code != http.StatusCreated {
-			t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
-		}
-		if !got.E2EE {
-			t.Error("storage got e2ee=false although the request asked for true")
-		}
-		if !strings.Contains(rec.Body.String(), `"e2ee":true`) {
-			t.Errorf("response %s does not report the channel as encrypted", rec.Body.String())
-		}
-	})
-
-	t.Run("createChannel defaults to plaintext", func(t *testing.T) {
-		t.Parallel()
-		store := authedStore(fixtureUser())
-		var got storage.NewChannel
-		store.createChannel = func(_ context.Context, nc storage.NewChannel) (storage.Channel, error) {
-			got = nc
-			return fixtureChannel(), nil
-		}
-
-		do(t, store, request(http.MethodPost, "/api/v1/channels",
-			`{"slug":"open","kind":"private"}`, withSessionCookie("tok"), withCSRF()))
-		if got.E2EE {
-			t.Error("an absent e2ee flag created an encrypted channel")
-		}
-	})
-
-	t.Run("openDirectMessage", func(t *testing.T) {
-		t.Parallel()
-		store := authedStore(fixtureUser())
-		var gotE2EE bool
-		store.openDirectMessage = func(_ context.Context, _, _ uuid.UUID, e2ee bool) (storage.Channel, bool, error) {
-			gotE2EE = e2ee
-			dm := fixtureDM()
-			dm.E2EE = true
-			return dm, true, nil
-		}
-		store.channelForUser = dmPerParticipant()
-
-		rec := do(t, store, request(http.MethodPost, "/api/v1/dms",
-			`{"user_id":"`+testPeerID+`","e2ee":true}`, withSessionCookie("tok"), withCSRF()))
-		if rec.Code != http.StatusCreated {
-			t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
-		}
-		if !gotE2EE {
-			t.Error("storage got e2ee=false although the request asked for true")
-		}
-	})
+	rec := do(t, store, request(http.MethodPost, "/api/v1/channels",
+		`{"slug":"secrets","kind":"private","e2ee":true}`, withSessionCookie("tok"), withCSRF()))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !got.E2EE {
+		t.Error("storage got e2ee=false although the instance is strict")
+	}
+	if !strings.Contains(rec.Body.String(), `"e2ee":true`) {
+		t.Errorf("response %s does not report the channel as encrypted", rec.Body.String())
+	}
 }

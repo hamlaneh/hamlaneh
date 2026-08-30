@@ -210,6 +210,10 @@ var routePolicies = map[string]routePolicy{
 	"DELETE /api/v1/admin/invites/{inviteId}":          {class: classAdmin, action: authz.AdminInvitesRevoke},
 	"GET /api/v1/admin/org":                            {class: classAdmin, action: authz.AdminOrgRead},
 	"PATCH /api/v1/admin/org":                          {class: classAdmin, action: authz.AdminOrgUpdate},
+	// Phase 3: the encryption mode (ADR 011). Its own route rather than a
+	// field on the patch above, and the same instance-settings authority —
+	// changing what conversations are born as is an org-settings write.
+	"PUT /api/v1/admin/org/encryption-mode": {class: classAdmin, action: authz.AdminOrgUpdate},
 	// Read-only, and the only read in the table that is also the record of
 	// every other route above it.
 	"GET /api/v1/admin/audit": {class: classAdmin, action: authz.AdminAuditList},

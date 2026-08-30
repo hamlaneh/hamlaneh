@@ -33,6 +33,12 @@ func TestOrgSettingsIntegration(t *testing.T) {
 		if settings.OrgName == "" || settings.DefaultLocale != "en" || settings.SessionLifetimeHours != 720 {
 			t.Errorf("unexpected defaults: %+v", settings)
 		}
+		// Strict is this product's secure posture, so it is what both
+		// populations come up in — a fresh install and an instance migrated
+		// from Phase 2 (ADR 011 decision 3).
+		if settings.EncryptionMode != storage.EncryptionModeStrict {
+			t.Errorf("encryption_mode = %q, want strict on a fresh instance", settings.EncryptionMode)
+		}
 	})
 
 	t.Run("each field saves on its own", func(t *testing.T) {
@@ -90,6 +96,7 @@ func TestOrgSettingsIntegration(t *testing.T) {
 		want := storage.OrgSettings{
 			OrgName: "Hamlaneh QA", DefaultLocale: "fa", RegistrationMode: "open",
 			RequireTotp: false, SessionLifetimeHours: 24, SsoJitProvisioning: false,
+			EncryptionMode:      storage.EncryptionModeStrict,
 			AccountsWithoutTotp: got.AccountsWithoutTotp,
 		}
 		if got != want {
