@@ -1417,8 +1417,9 @@ export interface components {
             /** @default false */
             is_admin?: boolean;
         };
-        /** @description What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere. */
+        /** @description What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere. encryption_mode is here rather than only on the admin settings document because every member's creation surfaces need it and that document answers 403 to them. It is not withheld as a secret: an instance's encryption posture is a product characteristic its own users are entitled to know before they type anything into it, and a client that had to guess would guess wrong somewhere. */
         InstanceInfo: {
+            encryption_mode: components["schemas"]["EncryptionMode"];
             /**
              * Format: int64
              * @description The per-file upload cap, published so a client can refuse a file before spending the user's bandwidth on a doomed request. The server enforces it regardless; this is a courtesy, not the check.
@@ -1812,8 +1813,10 @@ export interface components {
         EncryptionMode: "strict" | "compliance";
         OrgSettings: {
             encryption_mode: components["schemas"]["EncryptionMode"];
-            /** @description How many conversations this instance holds whose encryption does not match the current mode — plaintext ones under `strict`, or encrypted ones under `compliance`. Read-only and permanent: they are never converted, so this number is the honest standing count of what the mode does not describe, and the settings screen shows it rather than implying the mode covers everything. */
-            readonly conversations_outside_mode: number;
+            /** @description How many conversations this instance holds that are end-to-end encrypted. */
+            readonly encrypted_conversations: number;
+            /** @description How many are not. Both totals rather than one "outside the current mode" count, because the switch confirmation has to name what will be outside the mode being CHOSEN — which is the other set in each direction, so a single current-mode count would state the plaintext total as the encrypted one on a screen about encryption. Neither number ever moves on a switch: conversations are never converted, which is the whole of decision 2, so these are also the honest standing answer to "what does the mode not describe". */
+            readonly plaintext_conversations: number;
             org_name: string;
             /**
              * @description The locale a new account starts in.

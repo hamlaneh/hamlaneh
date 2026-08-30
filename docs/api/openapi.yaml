@@ -3051,8 +3051,18 @@ components:
         into the client; password_reset_available is false when no mail
         transport is configured, so the sign-in screen can omit the link
         instead of offering one that goes nowhere.
-      required: [password_min_length, password_reset_available, max_file_size_bytes]
+        encryption_mode is here rather than only on the admin settings
+        document because every member's creation surfaces need it and that
+        document answers 403 to them. It is not withheld as a secret: an
+        instance's encryption posture is a product characteristic its own
+        users are entitled to know before they type anything into it, and a
+        client that had to guess would guess wrong somewhere.
+      required:
+        [password_min_length, password_reset_available, max_file_size_bytes,
+         encryption_mode]
       properties:
+        encryption_mode:
+          $ref: "#/components/schemas/EncryptionMode"
         max_file_size_bytes:
           type: integer
           format: int64
@@ -3896,21 +3906,31 @@ components:
       required:
         [org_name, default_locale, registration_mode, require_totp,
          sso_jit_provisioning, session_lifetime_hours, encryption_mode,
-         conversations_outside_mode]
+         encrypted_conversations, plaintext_conversations]
       properties:
         encryption_mode:
           $ref: "#/components/schemas/EncryptionMode"
-        conversations_outside_mode:
+        encrypted_conversations:
           type: integer
           minimum: 0
           readOnly: true
           description: >
-            How many conversations this instance holds whose encryption does
-            not match the current mode — plaintext ones under `strict`, or
-            encrypted ones under `compliance`. Read-only and permanent: they
-            are never converted, so this number is the honest standing count
-            of what the mode does not describe, and the settings screen shows
-            it rather than implying the mode covers everything.
+            How many conversations this instance holds that are end-to-end
+            encrypted.
+        plaintext_conversations:
+          type: integer
+          minimum: 0
+          readOnly: true
+          description: >
+            How many are not. Both totals rather than one "outside the current
+            mode" count, because the switch confirmation has to name what will
+            be outside the mode being CHOSEN — which is the other set in each
+            direction, so a single current-mode count would state the
+            plaintext total as the encrypted one on a screen about
+            encryption. Neither number ever moves on a switch: conversations
+            are never converted, which is the whole of decision 2, so these
+            are also the honest standing answer to "what does the mode not
+            describe".
         org_name: { type: string, maxLength: 64 }
         default_locale:
           type: string
