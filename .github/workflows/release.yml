@@ -129,7 +129,7 @@ jobs:
             goos="${target%/*}"
             goarch="${target#*/}"
             out="hamlaneh-server"
-            [ "$goos" = "windows" ] && out="hamlaneh-server.exe"
+            if [ "$goos" = "windows" ]; then out="hamlaneh-server.exe"; fi
             echo "building $goos/$goarch"
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
               go build -trimpath -ldflags="-s -w" \
