@@ -443,7 +443,7 @@ var endpointBudgets = map[string]budgetName{
 	"POST /api/v1/auth/login/totp":     budgetElsewhere, // totp_handlers.go: per IP and per account
 	"POST /api/v1/auth/reset-request":  budgetElsewhere, // internal/passwordreset: per address and per IP
 	"POST /api/v1/auth/reset-complete": budgetElsewhere, // internal/passwordreset: per IP
-	"GET /api/v1/ws":                   budgetElsewhere, // internal/wsgateway: per family and per IP — still to build
+	"GET /api/v1/ws":                   budgetElsewhere, // internal/wsgateway/connectbudget.go: per family and per IP
 
 	// Single sign-on. The two flow halves are the public per-IP window
 	// declared above; the Settings pair shares one per-account window.

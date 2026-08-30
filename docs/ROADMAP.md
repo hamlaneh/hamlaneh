@@ -701,7 +701,28 @@ security *marketing*, not launch.
       with zero unresolved crashes (crashes file blocking issues); automated header test keeps
       CSP free of inline/eval on every served page; rate-limit tests assert documented
       thresholds on login, signup, reset
-- [ ] `security.txt`, disclosure policy, security contact, stated patch SLA
+- [x] `security.txt`, disclosure policy, security contact, stated patch targets — *2026-08-30*,
+      drafted in `docs/security.txt` and `SECURITY.md`. **Not yet true in the world**: the
+      contact address and canonical domain are placeholders, the file is served nowhere, and
+      GitHub private vulnerability reporting is off by default — SECURITY.md links to that form
+      today, so the link is a dead contact until it is switched on
+- [ ] **Fronting the stack with a CDN or upstream proxy has no correct configuration** (found
+      while writing the hardening guide). Caddy ships without `trusted_proxies` so it strips
+      client-supplied `X-Forwarded-For`, and `clientIP` reads XFF only from a trusted peer — so
+      behind a CDN every client collapses onto the CDN's address and per-IP limits on sign-in
+      stop distinguishing anyone, while trusting the proxy naively would make the leftmost hop
+      spoofable. The fix is code, not documentation: rightmost-untrusted parsing plus a
+      trusted-proxy list behind one env var. Until then the guide tells operators not to try
+- [ ] **IP allow-listing is promised in PLAN §6.5 and reachable only by editing a baked-in
+      Caddyfile**, which `up -d --build` rebuilds and any upgrade overwrites. One env var
+      (`HAMLANEH_ADMIN_ALLOW_CIDRS`) consumed by the Caddyfile turns a documented workaround
+      into a supported default — and note the trap the guide had to correct: `/admin` is a
+      client-side route served the same index.html as everything else, so blocking it protects
+      nothing. The surfaces with power are `/api/v1/admin/*` and `/scim/v2/*`
+- [ ] **No operator backup tooling exists at all** — the only backup code in the tree is the
+      per-user MLS key backup (ADR 010), which is a different thing entirely. This is the Phase
+      4 automated-backups box; the hardening guide deliberately did not paper over it with a
+      cron recipe, because that is how a missing feature turns into folklore
 - [ ] External pentest → fix findings → publish report
 - [ ] Cryptography audit of the E2EE integration → fix → publish
 
