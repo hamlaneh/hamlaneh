@@ -1,0 +1,277 @@
+# Hamlaneh release pipeline — signed artifacts, an SBOM, and a signed image.
+#
+# PLAN.md §6.6: unpatched self-hosted instances are this category's biggest
+# failure mode, and open source cuts both ways on patching — attackers diff
+# public commits and weaponize fixes within days. So a release has to be
+# something an operator (or the updater) can *verify* came from us, and a
+# security patch has to be able to go out the same hour the advisory does.
+#
+# What a tag produces:
+#   hamlaneh-<version>-<os>-<arch>.tar.gz / .zip   the server binaries
+#   hamlaneh-<version>.spdx.json                   the SBOM
+#   SHA256SUMS                                     covers every file above
+#   SHA256SUMS.sigstore.json                       ONE cosign bundle over SHA256SUMS
+#   ghcr.io/<repo>/server:<version>                signed by digest, SBOM attested
+#
+# One signature, not one per file: SHA256SUMS names every artifact including
+# the SBOM, so tampering with any artifact breaks its checksum and tampering
+# with the checksums breaks the signature. deploy/verify-release.sh checks
+# exactly this, and refuses a downgrade on top of it.
+#
+# SBOM format: SPDX (spdx-json). CycloneDX would also have been defensible —
+# it is the richer format for vulnerability tooling. SPDX wins here because
+# the SBOM exists for the reason PLAN.md §6.6 gives ("enterprises ask"), and
+# that ask is a procurement ask: SPDX is the ISO/IEC 5962:2021 standard, it is
+# what the NTIA minimum-elements guidance and US federal procurement name, and
+# it is the format GitHub's own dependency export emits. One format, chosen for
+# the audience that asked.
+#
+# CI hygiene (CLAUDE.md "CI gates"), same rules as ci.yml:
+#   - Every third-party action pinned by full commit SHA, version in the comment;
+#     Dependabot's github-actions ecosystem covers this file and keeps both in sync.
+#   - contents: read at the top level; each job opts in to the least it needs.
+#   - No pull_request_target, no secrets echoed. GHCR login reads the token from
+#     stdin so it never appears in an argument list or a log line.
+#   - Superseded runs are NOT cancelled: a half-published release is worse than
+#     a wasted runner.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # cosign is pinned to one version for the whole pipeline, and
+  # deploy/verify-release.test.sh pins the SAME version. A test that passes
+  # against a different cosign major than the one that signs the release
+  # proves nothing — v3 changed the default blob format to Sigstore bundles.
+  COSIGN_VERSION: v3.0.6
+  # syft generates the SBOM. Pinned for the same reason every other tool here is.
+  SYFT_VERSION: v1.51.1
+
+jobs:
+  # Binaries, SBOM, checksums, signature, GitHub release.
+  #
+  # The release is created as a DRAFT on purpose. docs/releasing.md turns that
+  # into the coordinated-disclosure control PLAN.md §6.6 asks for: the
+  # maintainer verifies the draft with deploy/verify-release.sh, and publishing
+  # it is the single act that releases the fix and the advisory together.
+  artifacts:
+    name: Binaries, SBOM and signature
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      # Creating the draft release and uploading its assets.
+      contents: write
+      # REQUIRED FOR KEYLESS SIGNING. cosign exchanges this workflow's OIDC
+      # token for a short-lived Fulcio certificate; the certificate's identity
+      # is this workflow file at this tag, which is what verify-release.sh
+      # pins with --certificate-identity-regexp. Without id-token: write there
+      # is no token to exchange and keyless signing cannot happen at all.
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Verify module checksums
+        working-directory: server
+        run: go mod verify
+
+      - name: Build the web bundle
+        # Reuses deploy/Dockerfile's webbuild stage rather than adding a second
+        # build definition — that stage already compiles the MLS wasm crate and
+        # runs `npm run build` against the committed lockfiles, and the repo's
+        # standing rule (see deploy/Dockerfile) is that drift between two build
+        # definitions ships a bundle nobody tested. The image job below builds
+        # the same stage again; a duplicated web build on a tag is cheaper than
+        # a second definition that can disagree with the first.
+        run: |
+          set -euo pipefail
+          docker build -f deploy/Dockerfile --target webbuild -t hamlaneh-webbuild .
+          cid="$(docker create hamlaneh-webbuild)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          # The committed placeholder goes entirely, so no placeholder file can
+          # survive into a released binary (same reasoning as deploy/Dockerfile).
+          rm -rf server/internal/webassets/dist
+          docker cp "$cid:/src/webapp/dist" server/internal/webassets/dist
+          test -n "$(ls -A server/internal/webassets/dist)"
+
+      - name: Build the release binaries
+        working-directory: server
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          # One loop, not a job matrix: Go cross-compiles these for free, but
+          # the web bundle above costs minutes and a matrix would rebuild it
+          # once per target.
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            out="hamlaneh-server"
+            [ "$goos" = "windows" ] && out="hamlaneh-server.exe"
+            echo "building $goos/$goarch"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -ldflags="-s -w" \
+              -o "$RUNNER_TEMP/$out" ./cmd/hamlaneh-server
+            base="hamlaneh-${VERSION}-${goos}-${goarch}"
+            if [ "$goos" = "windows" ]; then
+              (cd "$RUNNER_TEMP" && zip -q "$GITHUB_WORKSPACE/dist/${base}.zip" "$out")
+            else
+              tar -czf "$GITHUB_WORKSPACE/dist/${base}.tar.gz" -C "$RUNNER_TEMP" "$out"
+            fi
+            rm -f "$RUNNER_TEMP/$out"
+          done
+          ls -l "$GITHUB_WORKSPACE/dist"
+
+      - name: Generate the SBOM (SPDX)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          # The source tree, not the final image: the shipped server embeds the
+          # web bundle and the MLS wasm, so go.mod, package-lock.json and
+          # Cargo.lock together are the honest dependency picture. Scanning the
+          # distroless image would report the Go modules and silently drop the
+          # npm and Cargo halves.
+          path: .
+          format: spdx-json
+          output-file: dist/hamlaneh-${{ github.ref_name }}.spdx.json
+          syft-version: ${{ env.SYFT_VERSION }}
+          # This workflow publishes the SBOM itself, via the signed SHA256SUMS.
+          # Letting the action upload it separately would put a copy on the
+          # release that no signature covers.
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: Checksum and sign
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          # LC_ALL=C so the glob's order is the same everywhere, and basenames
+          # only (no ./ prefix) so `sha256sum -c` works from whatever directory
+          # the operator downloaded into. The glob expands before the
+          # redirection, so SHA256SUMS never lists itself.
+          LC_ALL=C sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+          # Keyless: the identity in the certificate is this workflow file at
+          # this tag, issued by GitHub's OIDC provider against Fulcio, and
+          # logged in Rekor. No key material exists for anyone to steal.
+          cosign sign-blob --yes \
+            --bundle SHA256SUMS.sigstore.json \
+            SHA256SUMS
+
+      - name: Verify what we are about to publish
+        env:
+          VERSION: ${{ github.ref_name }}
+        # The release pipeline runs the operator's own verification script
+        # against its own output before uploading anything. If the script and
+        # the pipeline ever disagree about layout, naming or signing identity,
+        # the release fails here rather than in an operator's terminal.
+        run: |
+          bash deploy/verify-release.sh \
+            --version "$VERSION" \
+            --dir dist \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Publish the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$VERSION" >/dev/null 2>&1; then
+            # --draft: docs/releasing.md — the maintainer verifies, and
+            # publishing is the moment the fix and the advisory go out together.
+            # --verify-tag: refuse to create a release for a tag that is not
+            # actually in this repository.
+            gh release create "$VERSION" \
+              --draft --verify-tag \
+              --title "$VERSION" \
+              --generate-notes
+          fi
+          gh release upload "$VERSION" --clobber dist/*
+
+  # The server image: pushed to GHCR, signed by digest, SBOM attached as an
+  # attestation. Separate from the job above so each holds only the write scope
+  # it needs — this one can push packages and cannot touch releases.
+  image:
+    name: Server image (GHCR)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      # Keyless signing again — see the comment in the artifacts job.
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # --password-stdin: the token never becomes an argument, so it cannot
+        # surface in a process list or a command echo.
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push
+        id: push
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY}/server"
+          docker build -f deploy/Dockerfile -t "${image}:${VERSION}" .
+          docker push "${image}:${VERSION}"
+          # The registry digest, read back from the registry rather than from
+          # the local image id: signing and attesting go against the digest, so
+          # the signature covers exactly the bytes that were pushed. No :latest
+          # tag is published — a moving tag is how instances silently move
+          # between versions, which is the thing anti-rollback exists to stop.
+          digest="$(docker buildx imagetools inspect "${image}:${VERSION}" --format '{{.Manifest.Digest}}')"
+          echo "ref=${image}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "signed reference: ${image}@${digest}"
+
+      - name: Generate the SBOM (SPDX)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: .
+          format: spdx-json
+          output-file: image-sbom.spdx.json
+          syft-version: ${{ env.SYFT_VERSION }}
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: Sign the image and attach the SBOM
+        env:
+          REF: ${{ steps.push.outputs.ref }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$REF"
+          cosign attest --yes --type spdxjson --predicate image-sbom.spdx.json "$REF"
