@@ -156,8 +156,8 @@ ever becomes one. The three cases the question names:
 
 The planted-leaf case closes the loop with ADR 008 rather than adding machinery. A leaf outside
 every accepted set holds the epoch's exporter — deriving is what group members do — but the
-conversation it taints is in needs-attention, which blocks call join, and mid-call the same rule
-applies at the same place messages apply it: **this device publishes media only under an epoch
+conversation it taints is in needs-attention, and the rule that follows is the same one messages
+apply, at the same place: **this device publishes media only under an epoch
 whose every non-own leaf key is inside the accepted set of the member the directory attributes it
 to.** The check runs before the outbound slot switches at each rotation, exactly as `encrypt`
 re-checks at each send. Refusal unpublishes every local track and surfaces the same warning with
@@ -165,6 +165,13 @@ the same two exits and no third; subscribing and decrypting continue, because AD
 works" holds for media too — deriving a key to *listen* hands the attacker nothing, sealing your
 outbound frames under it is the act that does. And the sweep that evicts the planted leaf bumps
 the epoch, so the rotation that follows is what locks it out of everything after.
+
+> **Correction, 2026-08-30.** An earlier draft of the sentence above also said needs-attention
+> "blocks call join", which contradicts the rest of it three clauses later: a device that cannot
+> join cannot subscribe, and subscribing is what "reading works" means for media. The
+> implementation followed the argument rather than the stray clause — join and subscribe are
+> allowed, publishing is blocked — and the clause is removed rather than left for somebody to
+> implement the half that was never reasoned for.
 
 ## Decision 4 — LiveKit's machinery as-is, its provider minimally subclassed, its ratchet unused
 
