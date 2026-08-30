@@ -112,6 +112,11 @@ type fakeStore struct {
 	listMlsCommits        func(ctx context.Context, channelID uuid.UUID, afterEpoch int64, limit int) ([]storage.MlsCommit, error)
 	listMlsWelcomes       func(ctx context.Context, userID uuid.UUID) ([]storage.MlsWelcome, error)
 	deleteMlsWelcome      func(ctx context.Context, userID, welcomeID uuid.UUID) error
+
+	putMlsBackup        func(ctx context.Context, userID uuid.UUID, envelope []byte, counter int64) error
+	mlsBackupByUser     func(ctx context.Context, userID uuid.UUID) (storage.MlsBackup, error)
+	deleteMlsBackup     func(ctx context.Context, userID uuid.UUID) error
+	deregisterMlsDevice func(ctx context.Context, userID, deviceID uuid.UUID) error
 }
 
 var _ httpserver.Store = (*fakeStore)(nil)
@@ -846,4 +851,34 @@ func (f *fakeStore) DeleteMlsWelcome(ctx context.Context, userID, welcomeID uuid
 		return errFakeUnwired
 	}
 	return f.deleteMlsWelcome(ctx, userID, welcomeID)
+}
+
+// The recovery surface (ADR 010).
+
+func (f *fakeStore) PutMlsBackup(ctx context.Context, userID uuid.UUID, envelope []byte, counter int64) error {
+	if f.putMlsBackup == nil {
+		return errFakeUnwired
+	}
+	return f.putMlsBackup(ctx, userID, envelope, counter)
+}
+
+func (f *fakeStore) MlsBackupByUser(ctx context.Context, userID uuid.UUID) (storage.MlsBackup, error) {
+	if f.mlsBackupByUser == nil {
+		return storage.MlsBackup{}, errFakeUnwired
+	}
+	return f.mlsBackupByUser(ctx, userID)
+}
+
+func (f *fakeStore) DeleteMlsBackup(ctx context.Context, userID uuid.UUID) error {
+	if f.deleteMlsBackup == nil {
+		return errFakeUnwired
+	}
+	return f.deleteMlsBackup(ctx, userID)
+}
+
+func (f *fakeStore) DeregisterMlsDevice(ctx context.Context, userID, deviceID uuid.UUID) error {
+	if f.deregisterMlsDevice == nil {
+		return errFakeUnwired
+	}
+	return f.deregisterMlsDevice(ctx, userID, deviceID)
 }

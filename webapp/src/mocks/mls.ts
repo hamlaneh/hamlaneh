@@ -18,6 +18,8 @@ type MlsCommit = components["schemas"]["MlsCommit"];
 type SubmitMlsCommitRequest = components["schemas"]["SubmitMlsCommitRequest"];
 type MlsWelcome = components["schemas"]["MlsWelcome"];
 type MlsWelcomeList = components["schemas"]["MlsWelcomeList"];
+type MlsBackup = components["schemas"]["MlsBackup"];
+type PutMlsBackupRequest = components["schemas"]["PutMlsBackupRequest"];
 
 /**
  * The E2EE transport, mocked exactly as illiterately as the real server
@@ -46,15 +48,27 @@ interface MockGroup {
   commits: MlsCommit[];
 }
 
+/**
+ * The one sealed envelope this account has stored (ADR 010). The mock is as
+ * illiterate about it as the server: it holds the base64, mirrors the counter
+ * the client claimed, and can compare that number and nothing else.
+ */
+interface MockBackup {
+  envelope: string;
+  counter: number;
+  updatedAt: string;
+}
+
 interface MockState {
   devices: MockDevice[];
   groups: Map<string, MockGroup>;
   welcomes: MlsWelcome[];
+  backup: MockBackup | null;
   sequence: number;
 }
 
 function empty(): MockState {
-  return { devices: [], groups: new Map(), welcomes: [], sequence: 0 };
+  return { devices: [], groups: new Map(), welcomes: [], backup: null, sequence: 0 };
 }
 
 let mls: MockState = empty();
@@ -101,6 +115,21 @@ export function mockMlsWelcomes(): MlsWelcome[] {
 
 export function mockMlsDevices(): MockDevice[] {
   return [...mls.devices];
+}
+
+/** The stored envelope, for assertions. */
+export function mockMlsBackup(): MockBackup | null {
+  return mls.backup === null ? null : { ...mls.backup };
+}
+
+/**
+ * Plants an envelope the client did not upload — how a test plays the server
+ * that lies. The counter is settable independently of what is sealed inside
+ * the bytes, which is the entire point: it is what lets a test prove the
+ * client checks the sealed one.
+ */
+export function seedMockMlsBackup(backup: MockBackup): void {
+  mls.backup = { ...backup };
 }
 
 function uuid(tag: string): string {
@@ -351,6 +380,62 @@ export const mlsHandlers = [
       // Always 204: an already-acknowledged, unknown or foreign id is a
       // silent no-op, so a guessed id confirms nothing.
       mls.welcomes = mls.welcomes.filter((welcome) => welcome.id !== params.welcomeId);
+      return new HttpResponse(null, { status: 204 });
+    },
+  ),
+
+  // The recovery surface (ADR 010).
+
+  http.put<never, PutMlsBackupRequest, ApiError | null>(
+    "/api/v1/users/me/mls/backup",
+    async ({ request }) => {
+      const body = await request.json();
+      // The convenience rail, mirrored exactly: a counter that does not move
+      // forward is refused, and that refusal is not the security control —
+      // the client's floor against the SEALED counter is.
+      if (mls.backup !== null && body.counter <= mls.backup.counter) {
+        return errorResponse(409, "mls_backup_stale", "A newer backup is already stored.");
+      }
+      mls.backup = {
+        envelope: body.envelope,
+        counter: body.counter,
+        updatedAt: new Date().toISOString(),
+      };
+      return new HttpResponse(null, { status: 204 });
+    },
+  ),
+
+  http.get<never, never, MlsBackup | ApiError>("/api/v1/users/me/mls/backup", () => {
+    if (mls.backup === null) {
+      return errorResponse(404, "mls_backup_not_found", "This account has no stored backup.");
+    }
+    return HttpResponse.json({
+      envelope: mls.backup.envelope,
+      counter: mls.backup.counter,
+      updated_at: mls.backup.updatedAt,
+    });
+  }),
+
+  http.delete<never, never, null>("/api/v1/users/me/mls/backup", () => {
+    // Idempotent: the asked-for state is already true when there is nothing.
+    mls.backup = null;
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.delete<{ deviceId: string }, never, ApiError | null>(
+    "/api/v1/users/me/mls/devices/:deviceId",
+    ({ params }) => {
+      const device = mls.devices.find(
+        (candidate) => candidate.id === params.deviceId && candidate.userId === ME,
+      );
+      if (device === undefined) {
+        // Another account's device and an id naming nothing are one answer.
+        return errorResponse(404, "mls_device_not_found", "No such device.");
+      }
+      mls.devices = mls.devices.filter((candidate) => candidate !== device);
+      // The cascades, which are what keep a pending Welcome from becoming a
+      // row nobody can ever acknowledge.
+      mls.welcomes = mls.welcomes.filter((welcome) => welcome.device_id !== device.id);
       return new HttpResponse(null, { status: 204 });
     },
   ),

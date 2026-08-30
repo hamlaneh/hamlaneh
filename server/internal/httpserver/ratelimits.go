@@ -142,6 +142,7 @@ const (
 	budgetMlsDirectory      budgetName = "mls-directory"
 	budgetMlsGroupWork      budgetName = "mls-group-work"
 	budgetMlsMemberDevices  budgetName = "mls-member-devices"
+	budgetMlsBackup         budgetName = "mls-backup"
 )
 
 // budgetSpec is one budget: how many requests fit its sliding window, how
@@ -382,6 +383,26 @@ var budgetSpecs = map[budgetName]budgetSpec{
 	// nil and the work it bounds is small.
 	budgetMlsMemberDevices: {limit: 240, window: time.Minute},
 
+	// The sealed backup upload (ADR 010). It gets its own window rather than
+	// joining any MLS budget beside it, because what it bounds is unlike all
+	// of them: one row of up to ~512 KiB that is REPLACED on every write, so
+	// the standing storage is fixed and what a loop buys is bytes over the
+	// wire and write amplification on one row.
+	//
+	// The burst it must clear is the write-behind. The client re-seals and
+	// re-uploads whenever its verification records change, and records change
+	// in bursts — a first start pins every member of every conversation it
+	// reconciles, and a client opening a dozen channels after a reconnect can
+	// legitimately produce a dozen uploads inside a minute. 30 clears that
+	// several times over.
+	//
+	// It is also the ceiling on how fast one account can move this row, which
+	// matters more than the bytes: two of the owner's browser profiles racing
+	// the counter (ADR 010, decision 3) turn into 409s rather than a tight
+	// loop of accepted writes, and 30 a minute is far below anything that
+	// looks like a fight and far above one device keeping its backup current.
+	budgetMlsBackup: {limit: 30, window: time.Minute},
+
 	// Redeeming an invitation is a public route keyed on the client
 	// address (like the SSO flow above). It hashes the chosen
 	// password with argon2id before the token is known to be good — the same
@@ -557,6 +578,27 @@ var endpointBudgets = map[string]budgetName{
 	// from, and a read that important is better with a declared ceiling than
 	// with none.
 	"GET /api/v1/channels/{channelId}/mls/member-devices": budgetMlsMemberDevices,
+
+	// Phase 3 slice 5: encrypted backups (ADR 010). Exactly the two routes the
+	// contract reserves a 429 on are budgeted, and the two it does not are
+	// declared unbudgeted rather than left out.
+	//
+	// Deregistering a lost device joins the directory window rather than
+	// getting one of its own: registering a device, republishing its pool and
+	// dropping it are three writes to the same directory, and an attacker
+	// holding a session picks whichever is cheapest — separate windows would
+	// only multiply the total. It is also the rarest call in the contract (a
+	// person loses a laptop, not a laptop a minute), so it can never crowd out
+	// the startup handshake it shares the window with.
+	//
+	// The fetch is unbudgeted because the contract reserves no 429 on it and
+	// it is one indexed read of one row by its own owner; the delete is
+	// unbudgeted for the same reason, and because refusing somebody's "stop
+	// keeping a copy of this" is the wrong direction to fail in.
+	"PUT /api/v1/users/me/mls/backup":                budgetMlsBackup,
+	"DELETE /api/v1/users/me/mls/devices/{deviceId}": budgetMlsDirectory,
+	"GET /api/v1/users/me/mls/backup":                budgetNone,
+	"DELETE /api/v1/users/me/mls/backup":             budgetNone,
 
 	// Reads and edits the contract reserves no 429 on. Listing messages is
 	// the read a client repeats most — a budget nobody declared must not

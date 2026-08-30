@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 
 import type { Message } from "../chat/types";
 import { MlsService } from "./service";
-import type { MediaKey, MessageBody, MlsState } from "./types";
+import type { MediaKey, MessageBody, MlsState, OpenBackupOutcome } from "./types";
 import { initialMlsState } from "./types";
 
 export interface MlsController {
@@ -41,6 +41,16 @@ export interface MlsController {
   acceptPeer: (userId: string) => Promise<void>;
   /** The own-account prompt's yes: that new device under your id is yours. */
   acceptOwnDevices: () => Promise<void>;
+  /** The enrolment ceremony: returns the recovery key to show exactly once. */
+  enableBackup: () => Promise<string | null>;
+  /** The offer's no, recorded and respected (ADR 010). */
+  declineBackup: () => Promise<void>;
+  /** Step one of a restore. Nothing local changes until `applyRestore`. */
+  openBackup: (recoveryKey: string) => Promise<OpenBackupOutcome>;
+  /** Step two: the person confirmed the sealed date. */
+  applyRestore: () => Promise<boolean>;
+  /** The person backed out of a restore. */
+  discardRestore: () => void;
 }
 
 /**
@@ -132,6 +142,17 @@ export function useMls(currentUserId: string): MlsController {
 
   const acceptOwnDevices = useCallback(() => service.acceptOwnDevices(), [service]);
 
+  const enableBackup = useCallback(() => service.enableBackup(), [service]);
+  const declineBackup = useCallback(() => service.declineBackup(), [service]);
+  const openBackup = useCallback(
+    (recoveryKey: string) => service.openBackup(recoveryKey),
+    [service],
+  );
+  const applyRestore = useCallback(() => service.applyRestore(), [service]);
+  const discardRestore = useCallback(() => {
+    service.discardRestore();
+  }, [service]);
+
   const decrypted = state.decrypted;
   const bodyOf = useCallback(
     (message: Message): MessageBody => {
@@ -170,6 +191,11 @@ export function useMls(currentUserId: string): MlsController {
       verifyPeer,
       acceptPeer,
       acceptOwnDevices,
+      enableBackup,
+      declineBackup,
+      openBackup,
+      applyRestore,
+      discardRestore,
     }),
     [
       state,
@@ -187,6 +213,11 @@ export function useMls(currentUserId: string): MlsController {
       verifyPeer,
       acceptPeer,
       acceptOwnDevices,
+      enableBackup,
+      declineBackup,
+      openBackup,
+      applyRestore,
+      discardRestore,
     ],
   );
 }

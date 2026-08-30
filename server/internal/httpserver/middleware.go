@@ -181,6 +181,21 @@ var routePolicies = map[string]routePolicy{
 	// gate changes because the read is the one an eviction sweep trusts.
 	"GET /api/v1/channels/{channelId}/mls/member-devices": {class: classSession},
 
+	// Phase 3 slice 5: encrypted backups (ADR 010). Four more own-account
+	// routes, decided by the session alone for the reason the four above them
+	// are — the subject IS the session's user, and the one path parameter here
+	// is scoped inside the query rather than checked beside it.
+	//
+	// Neither gate lets a flagged account past. Deregistering a lost device is
+	// the one that invites an exception, and it does not get one: an account
+	// that owes a password change is an account whose sign-in may already be
+	// somebody else's, which is a reason to finish the change first rather
+	// than a reason to hand it a directory write.
+	"PUT /api/v1/users/me/mls/backup":                {class: classSession},
+	"GET /api/v1/users/me/mls/backup":                {class: classSession},
+	"DELETE /api/v1/users/me/mls/backup":             {class: classSession},
+	"DELETE /api/v1/users/me/mls/devices/{deviceId}": {class: classSession},
+
 	// Phase 1.1b self-service security. All session-gated; none joins the
 	// must-change trio, because a user who owes a password change fixes that
 	// before touching their second factor or their device list.

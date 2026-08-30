@@ -543,6 +543,14 @@ const (
 	mlsPackagesPath = "/api/v1/users/me/mls/devices/{deviceId}/key-packages"
 	mlsWelcomesPath = "/api/v1/users/me/mls/welcomes"
 	mlsWelcomePath  = mlsWelcomesPath + "/{welcomeId}"
+
+	// The recovery surface (ADR 010). Same half of the matrix and for the same
+	// reason: the backup is keyed by the caller's own id, and the device id on
+	// the deregistration is scoped inside the query rather than checked beside
+	// it — so no request here can name another account's row.
+	mlsBackupPath          = "/api/v1/users/me/mls/backup"
+	mlsDeregisterPath      = "/api/v1/users/me/mls/devices/{deviceId}"
+	mlsUnknownDeviceTarget = "/api/v1/users/me/mls/devices/00000000-0000-4000-8000-0000000000d2"
 )
 
 // mlsBlob is a well-formed base64 payload for the rows that must get past
@@ -981,6 +989,41 @@ func instanceRegistry() []Entry {
 		sessionEntry(http.MethodDelete, mlsWelcomePath,
 			"/api/v1/users/me/mls/welcomes/00000000-0000-4000-8000-0000000000e1",
 			nil, http.StatusNoContent, ""),
+
+		// Phase 3 slice 5: the recovery surface (ADR 010). Four more
+		// own-account rows. Nobody else reads or writes another person's
+		// envelope — it is ciphertext this server cannot open, and least
+		// privilege is not a function of what the bytes reveal — and the
+		// matrix is where "owner only" is a fact rather than a sentence in an
+		// ADR.
+		//
+		// The upload is the 204 of a fresh fixture: each cell is its own
+		// account, so counter 1 always advances past the nothing that is
+		// stored. The stale refusal needs one account writing twice, which is
+		// a handler test rather than a matrix shape.
+		sessionEntry(http.MethodPut, mlsBackupPath, "",
+			func(Fixture) string {
+				return fmt.Sprintf(`{"envelope":%q,"counter":1}`, mlsBlob)
+			},
+			http.StatusNoContent, ""),
+		// A fresh account has stored nothing, and the endpoint says so with
+		// its own code rather than the router's generic 404 — the restore
+		// screen has to be able to distinguish "the server says there is
+		// nothing here" from "your key was wrong".
+		sessionEntry(http.MethodGet, mlsBackupPath, "", nil,
+			http.StatusNotFound, "mls_backup_not_found"),
+		// Idempotent: an account with no backup asked for a state that is
+		// already true. The uniformity is the point — a 404 here would tell a
+		// caller whether a backup existed, which is not something a delete
+		// needs to answer.
+		sessionEntry(http.MethodDelete, mlsBackupPath, "", nil,
+			http.StatusNoContent, ""),
+		// A well-formed device id that was never registered, which answers
+		// exactly like another account's device. That indistinguishability IS
+		// the property: the lost-device write must not double as a way to
+		// confirm somebody else's device exists.
+		sessionEntry(http.MethodDelete, mlsDeregisterPath, mlsUnknownDeviceTarget, nil,
+			http.StatusNotFound, "mls_device_not_found"),
 
 		// Phase 1.1b two-step verification. Real outcomes: every cell below is
 		// the handler's own answer for a fresh account, so a Member/Admin cell

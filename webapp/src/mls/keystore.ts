@@ -85,7 +85,73 @@ const SENT_ID = "sent";
  */
 const KEY_PACKAGE_COUNT_ID = "key-packages";
 
+/**
+ * The backup key handle (ADR 010, decision 2).
+ *
+ * A non-extractable `CryptoKey` beside the wrapping key, stored the same way
+ * and carrying the same honest ceiling. The recovery key it was derived from
+ * is shown once and then discarded — never persisted here, never anywhere —
+ * so this handle is what ongoing backups are sealed with and the string is
+ * asked for again only on a fresh device's restore.
+ */
+const BACKUP_KEY_ID = "backup-key";
+
+/**
+ * The anti-rollback floor and the enrolment decision, wrapped like everything
+ * else in here (ADR 010, decision 3).
+ *
+ * The floor is the highest counter this device has ever written or accepted,
+ * and it is the security control of the whole slice: any envelope whose
+ * SEALED counter is below it is a rollback and is refused. It lives beside the
+ * records rather than in `localStorage` for the reason everything else here
+ * does — one shape, one wrapping, one thing to reason about — and it must
+ * survive turning backup off, because a floor that reset would re-open the
+ * window it exists to close.
+ */
+const BACKUP_STATE_ID = "backup";
+
 const IV_BYTES = 12;
+
+/**
+ * What this device remembers about its backup between reloads.
+ *
+ * `declined` is recorded because ADR 010 says a decline is respected rather
+ * than re-asked: the offer becomes a passive indicator in settings, never a
+ * nag. It is deliberately not the same fact as "has no backup key" — somebody
+ * who turned backup off later has neither a key nor a decline, and the offer
+ * is right to be available to them again.
+ */
+export interface StoredBackupState {
+  floor: number;
+  declined: boolean;
+}
+
+const noBackupState: StoredBackupState = { floor: 0, declined: false };
+
+/**
+ * Parses the stored backup state, falling back to the safe direction for each
+ * field independently.
+ *
+ * The floor falls back to 0, which accepts any envelope — and that is the only
+ * honest answer for a device that cannot read its own floor, because inventing
+ * one would refuse the user's real backup. The decline falls back to false,
+ * which re-offers rather than silently leaving somebody with no backup they
+ * believe they turned on.
+ */
+function readBackupState(json: string): StoredBackupState {
+  const parsed: unknown = JSON.parse(json);
+  if (typeof parsed !== "object" || parsed === null) {
+    return noBackupState;
+  }
+  const state = parsed as { floor?: unknown; declined?: unknown };
+  return {
+    floor:
+      typeof state.floor === "number" && Number.isInteger(state.floor) && state.floor >= 0
+        ? state.floor
+        : 0,
+    declined: state.declined === true,
+  };
+}
 
 /** What a stored state record looks like. `iv` is fresh for every write. */
 interface StoredState {
@@ -230,7 +296,7 @@ const decoder = new TextDecoder();
  * that must never be invented is `verified`, so the level is matched exactly
  * and anything else is thrown away with the record.
  */
-function readRecords(json: string): VerificationRecords {
+export function parseVerificationRecords(json: string): VerificationRecords {
   const parsed: unknown = JSON.parse(json);
   if (typeof parsed !== "object" || parsed === null) {
     return {};
@@ -461,7 +527,7 @@ export class Keystore {
   async loadRecords(): Promise<VerificationRecords> {
     try {
       const bytes = await this.getWrapped(RECORDS_ID);
-      return bytes === null ? {} : readRecords(decoder.decode(bytes));
+      return bytes === null ? {} : parseVerificationRecords(decoder.decode(bytes));
     } catch (error) {
       console.warn("Could not read the stored MLS verification records:", error);
       return {};
@@ -535,6 +601,66 @@ export class Keystore {
     }
   }
 
+  /**
+   * Stores the backup key handle. False when it could not be written — and
+   * the caller must treat that as "backup is not on", because a device that
+   * lost the handle cannot re-seal and the recovery key is already gone.
+   */
+  async saveBackupKey(key: CryptoKey): Promise<boolean> {
+    try {
+      await withKeystoreLock(() => this.store.put(BACKUP_KEY_ID, key));
+      return true;
+    } catch (error) {
+      console.warn("Could not store the backup key:", error);
+      return false;
+    }
+  }
+
+  /** The backup key handle, or null when this device holds none. */
+  async loadBackupKey(): Promise<CryptoKey | null> {
+    try {
+      const stored = await this.store.get(BACKUP_KEY_ID);
+      return isCryptoKey(stored) ? stored : null;
+    } catch (error) {
+      console.warn("Could not read the backup key:", error);
+      return null;
+    }
+  }
+
+  /** Forgets the backup key handle — turning backup off, and signing out. */
+  async deleteBackupKey(): Promise<void> {
+    try {
+      await this.store.delete(BACKUP_KEY_ID);
+    } catch (error) {
+      console.warn("Could not drop the backup key:", error);
+    }
+  }
+
+  /** Stores the floor and the enrolment decision. False when it could not. */
+  async saveBackupState(state: StoredBackupState): Promise<boolean> {
+    try {
+      await this.putWrapped(BACKUP_STATE_ID, encoder.encode(JSON.stringify(state)));
+      return true;
+    } catch (error) {
+      // A lost floor write means the next fetched envelope is compared against
+      // a stale number, which is the direction that accepts a rollback — so
+      // the caller does not advance its in-memory floor past a failed write.
+      console.warn("Could not store the backup floor:", error);
+      return false;
+    }
+  }
+
+  /** The floor and the decision, or the defaults when there are none. */
+  async loadBackupState(): Promise<StoredBackupState> {
+    try {
+      const bytes = await this.getWrapped(BACKUP_STATE_ID);
+      return bytes === null ? noBackupState : readBackupState(decoder.decode(bytes));
+    } catch (error) {
+      console.warn("Could not read the backup floor:", error);
+      return noBackupState;
+    }
+  }
+
   /** Drops the stored state (a different user signing in on this profile). */
   async clear(): Promise<void> {
     try {
@@ -551,6 +677,13 @@ export class Keystore {
       // has published nothing. An inherited count would suppress its first
       // publish and leave it unaddable until something else replenished.
       await this.store.delete(KEY_PACKAGE_COUNT_ID);
+      // And the backup: the key handle is one person's, and so is the floor.
+      // Leaving the handle would let the next person's records be sealed under
+      // a recovery key only the previous one was ever shown — a backup nobody
+      // can open — and leaving the floor would have this profile refuse the
+      // new person's own real backup as a rollback.
+      await this.store.delete(BACKUP_KEY_ID);
+      await this.store.delete(BACKUP_STATE_ID);
     } catch (error) {
       console.warn("Could not clear the stored MLS device state:", error);
     }
