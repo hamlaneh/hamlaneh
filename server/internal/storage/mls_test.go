@@ -23,7 +23,7 @@ import (
 
 // mlsFixture is one test's world: a store, a channel, and its two members.
 type mlsFixture struct {
-	store     *storage.Store
+	store     testdb.Store
 	channelID uuid.UUID
 	alice     storage.User
 	bob       storage.User
@@ -52,7 +52,7 @@ func newMlsFixture(ctx context.Context, t *testing.T, slug string) mlsFixture {
 }
 
 // mustRegisterDevice registers one device and fails the test if it cannot.
-func mustRegisterDevice(ctx context.Context, t *testing.T, store *storage.Store, userID uuid.UUID, key string) storage.MlsDevice {
+func mustRegisterDevice(ctx context.Context, t *testing.T, store testdb.Store, userID uuid.UUID, key string) storage.MlsDevice {
 	t.Helper()
 
 	device, _, err := store.RegisterMlsDevice(ctx, userID, []byte(key))
@@ -64,7 +64,7 @@ func mustRegisterDevice(ctx context.Context, t *testing.T, store *storage.Store,
 
 // mustCreateGroup registers the channel's group and fails the test if it
 // cannot.
-func mustCreateGroup(ctx context.Context, t *testing.T, store *storage.Store, channelID uuid.UUID, groupID string) storage.MlsGroup {
+func mustCreateGroup(ctx context.Context, t *testing.T, store testdb.Store, channelID uuid.UUID, groupID string) storage.MlsGroup {
 	t.Helper()
 
 	group, err := store.CreateMlsGroup(ctx, channelID, []byte(groupID))

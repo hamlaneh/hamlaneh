@@ -262,12 +262,24 @@ func run(args []string) error {
 // reactivation both leave calls alone, and the ejection itself is background
 // work that cannot fail the request — see calls.Service.EjectEverywhere.
 type offboarding struct {
-	*storage.Store
+	store
 	calls *calls.Service
 }
 
+// store is what this command needs from persistent storage: everything the
+// HTTP surface reads and writes, plus the provisioning surface's own reads,
+// because offboarding decorates one method and is handed to both.
+//
+// It is an interface rather than *storage.Store so that home mode's SQLite
+// driver can be wired here too (ADR 012): the seam between the server and a
+// driver is the consumer's interface, and this is the consumer.
+type store interface {
+	httpserver.Store
+	scim.Store
+}
+
 func (o offboarding) UpdateUserAdmin(ctx context.Context, userID uuid.UUID, upd storage.AdminUserUpdate) (storage.User, error) {
-	user, err := o.Store.UpdateUserAdmin(ctx, userID, upd)
+	user, err := o.store.UpdateUserAdmin(ctx, userID, upd)
 	if err == nil && !user.IsActive {
 		o.calls.EjectEverywhere(ctx, user.ID)
 	}

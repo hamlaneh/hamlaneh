@@ -17,7 +17,7 @@ import (
 // attachmentWorld is one test's fixture: a store, a channel, and two users
 // who can upload into it.
 type attachmentWorld struct {
-	store  *storage.Store
+	store  testdb.Store
 	conn   *pgx.Conn
 	ctx    context.Context
 	people struct {

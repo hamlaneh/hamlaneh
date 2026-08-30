@@ -8,14 +8,19 @@ CREATE TABLE channels (
     kind       TEXT NOT NULL
                     CHECK (kind IN ('public', 'private', 'dm')),
     -- The name rendered after '#'. CITEXT matches users.username so casing
-    -- can never fork one channel into two. PostgreSQL states the shape with a
-    -- regex; SQLite's GLOB is the anchored, case-sensitive equivalent, and
-    -- lower() is applied first because PostgreSQL's ~ on a citext column is
-    -- case-insensitive.
+    -- can never fork one channel into two.
+    --
+    -- PostgreSQL states the shape as the regex ^[a-z0-9][a-z0-9_-]*$. SQLite
+    -- has no regex and GLOB has no repetition operator — its '*' is the
+    -- any-sequence wildcard, so '[a-z0-9][a-z0-9_-]*' would accept 'ab!!!'.
+    -- "Every character is in the class" is therefore written as "no character
+    -- is outside it", which is what the NOT GLOB does. lower() is applied
+    -- first because PostgreSQL's ~ on a citext column is case-insensitive.
     slug       TEXT COLLATE CITEXT
                     CHECK (slug IS NULL
                            OR (length(slug) BETWEEN 2 AND 64
-                               AND lower(slug) GLOB '[a-z0-9][a-z0-9_-]*')),
+                               AND lower(slug) GLOB '[a-z0-9]*'
+                               AND lower(slug) NOT GLOB '*[^a-z0-9_-]*')),
     topic      TEXT NOT NULL DEFAULT ''
                     CHECK (length(topic) <= 250),
     -- The two participants of a direct message, canonicalized as a < b so the

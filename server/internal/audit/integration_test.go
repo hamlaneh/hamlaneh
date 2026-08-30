@@ -31,7 +31,7 @@ func rawConn(ctx context.Context, t *testing.T, dsn string) *pgx.Conn {
 }
 
 // appendN records n entries through the recorder and returns the log.
-func appendN(ctx context.Context, t *testing.T, store *storage.Store, chain *audit.Chain, n int) []storage.AuditEntry {
+func appendN(ctx context.Context, t *testing.T, store testdb.Store, chain *audit.Chain, n int) []storage.AuditEntry {
 	t.Helper()
 
 	actor, err := store.CreateUser(ctx, storage.NewUser{

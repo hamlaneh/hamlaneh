@@ -581,7 +581,7 @@ func TestListMessagesPagingIntegration(t *testing.T) {
 // walkBackwards pages from the live edge into the past with `before`,
 // stitching the pages back into one ascending history.
 func walkBackwards(
-	ctx context.Context, t *testing.T, store *storage.Store,
+	ctx context.Context, t *testing.T, store testdb.Store,
 	channelID uuid.UUID, limit, total int,
 ) []storage.Message {
 	t.Helper()
@@ -612,7 +612,7 @@ func walkBackwards(
 // walkForwards pages from the beginning of history with `after`, the
 // reconnect backfill the WS protocol falls back to.
 func walkForwards(
-	ctx context.Context, t *testing.T, store *storage.Store,
+	ctx context.Context, t *testing.T, store testdb.Store,
 	channelID uuid.UUID, limit, total int,
 ) []storage.Message {
 	t.Helper()

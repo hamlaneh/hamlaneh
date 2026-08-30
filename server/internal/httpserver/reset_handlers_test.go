@@ -557,7 +557,7 @@ func TestPasswordResetFlowIntegration(t *testing.T) {
 
 // expiredTokenResponse mints a token that is already past its expiry and
 // returns what reset-complete answers for it.
-func expiredTokenResponse(ctx context.Context, t *testing.T, store *storage.Store, handler http.Handler, newPassword string) *httptest.ResponseRecorder {
+func expiredTokenResponse(ctx context.Context, t *testing.T, store testdb.Store, handler http.Handler, newPassword string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	raw, hash := session.NewToken()

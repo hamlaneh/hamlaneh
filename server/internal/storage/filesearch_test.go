@@ -43,7 +43,7 @@ func seedAttachment(
 
 // mustSearchFiles runs one page of filename search for a caller.
 func mustSearchFiles(
-	ctx context.Context, t *testing.T, store *storage.Store,
+	ctx context.Context, t *testing.T, store testdb.Store,
 	userID uuid.UUID, query string, limit int, after *storage.MessageCursor,
 ) storage.FileSearchPage {
 	t.Helper()

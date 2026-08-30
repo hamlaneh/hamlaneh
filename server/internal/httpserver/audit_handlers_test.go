@@ -28,7 +28,7 @@ const auditKey = "audit handler test key, 32+ bytes long"
 // auditFixture is a signed-in admin, a server that can verify its own log,
 // and the recorder that fills it.
 type auditFixture struct {
-	store   *storage.Store
+	store   testdb.Store
 	dsn     string
 	handler http.Handler
 	chain   *audit.Chain

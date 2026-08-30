@@ -74,11 +74,27 @@ func conflictColumns(err error) []string {
 	if !isUniqueViolation(err) {
 		return nil
 	}
+	// The whole message reads
+	//
+	//	constraint failed: UNIQUE constraint failed: t.a, t.b (2067)
+	//
+	// so the column list is what lies between the LAST "constraint failed:"
+	// and the trailing result code the driver appends. Cutting at the first
+	// marker or keeping the tail would put "UNIQUE" or "(2067)" in the list,
+	// and a mapping that silently matched nothing would turn a 409 into a 500.
+	const marker = "constraint failed:"
 	msg := err.Error()
-	_, list, found := strings.Cut(msg, "constraint failed:")
-	if !found {
+	at := strings.LastIndex(msg, marker)
+	if at < 0 {
 		return nil
 	}
+	list := strings.TrimSpace(msg[at+len(marker):])
+	if strings.HasSuffix(list, ")") {
+		if open := strings.LastIndex(list, "("); open >= 0 {
+			list = strings.TrimSpace(list[:open])
+		}
+	}
+
 	parts := strings.Split(list, ",")
 	cols := make([]string, 0, len(parts))
 	for _, p := range parts {

@@ -26,7 +26,7 @@ func newUser(name string) storage.NewUser {
 	}
 }
 
-func mustCreateUser(ctx context.Context, t *testing.T, store *storage.Store, nu storage.NewUser) storage.User {
+func mustCreateUser(ctx context.Context, t *testing.T, store testdb.Store, nu storage.NewUser) storage.User {
 	t.Helper()
 	u, err := store.CreateUser(ctx, nu)
 	if err != nil {

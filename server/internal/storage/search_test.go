@@ -72,7 +72,7 @@ func searchSeedMessage(
 
 // mustSearch runs one page of search for a caller.
 func mustSearch(
-	ctx context.Context, t *testing.T, store *storage.Store,
+	ctx context.Context, t *testing.T, store testdb.Store,
 	userID uuid.UUID, query string, limit int, after *storage.MessageCursor,
 ) storage.SearchPage {
 	t.Helper()

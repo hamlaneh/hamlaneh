@@ -18,7 +18,7 @@ import (
 // search ever held them in the first place.
 
 // e2eeMessageWorld provisions a store, an author, and a channel they are in.
-func e2eeMessageWorld(ctx context.Context, t *testing.T, slug string) (*storage.Store, storage.User, uuid.UUID) {
+func e2eeMessageWorld(ctx context.Context, t *testing.T, slug string) (testdb.Store, storage.User, uuid.UUID) {
 	t.Helper()
 
 	store, _ := testdb.New(t)

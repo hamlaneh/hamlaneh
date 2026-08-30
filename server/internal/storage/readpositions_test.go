@@ -95,7 +95,7 @@ func storedReadPosition(
 }
 
 func mustSetReadPosition(
-	ctx context.Context, t *testing.T, store *storage.Store, channelID, userID, messageID uuid.UUID,
+	ctx context.Context, t *testing.T, store testdb.Store, channelID, userID, messageID uuid.UUID,
 ) {
 	t.Helper()
 

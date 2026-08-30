@@ -46,7 +46,7 @@ type twoStepAccount struct {
 
 // newTotpFixture creates a user, signs it in, and returns the store, the
 // scratch DSN and the handler under test.
-func newTotpFixture(t *testing.T, username string) (*storage.Store, string, http.Handler, twoStepAccount) {
+func newTotpFixture(t *testing.T, username string) (testdb.Store, string, http.Handler, twoStepAccount) {
 	t.Helper()
 
 	store, dsn := testdb.New(t)
@@ -179,7 +179,7 @@ func totpStatus(t *testing.T, handler http.Handler, sc sessionCookies) api.TotpS
 
 // mintChallenge creates the half-authenticated state the 202 login answer
 // sets, and returns the cookie value that carries it.
-func mintChallenge(t *testing.T, store *storage.Store, userID uuid.UUID) string {
+func mintChallenge(t *testing.T, store testdb.Store, userID uuid.UUID) string {
 	t.Helper()
 
 	raw, hash := session.NewToken()
@@ -444,7 +444,7 @@ func passwordLogin(t *testing.T, handler http.Handler, identifier, addr string) 
 
 // secondTwoStepAccount provisions another two-step account on the SAME
 // handler (and so the same rate limiters) as an existing fixture.
-func secondTwoStepAccount(t *testing.T, store *storage.Store, handler http.Handler, username string) twoStepAccount {
+func secondTwoStepAccount(t *testing.T, store testdb.Store, handler http.Handler, username string) twoStepAccount {
 	t.Helper()
 
 	email := username + "@example.com"
@@ -829,7 +829,7 @@ func TestTotpSettingsRateLimitIntegration(t *testing.T) {
 
 // signedInAccount creates a plain password-only account on an existing
 // store and signs it in through handler.
-func signedInAccount(t *testing.T, store *storage.Store, handler http.Handler, username string) sessionCookies {
+func signedInAccount(t *testing.T, store testdb.Store, handler http.Handler, username string) sessionCookies {
 	t.Helper()
 
 	email := username + "@example.com"

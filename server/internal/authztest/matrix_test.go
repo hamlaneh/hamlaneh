@@ -89,7 +89,7 @@ type cell struct {
 // entry a channel of that entry's kind with its own members and message.
 // Cells mutate — a removal, an edit, a send — and sharing any of this across
 // cells would make a failure depend on the order they ran in.
-func provisionCell(ctx context.Context, t *testing.T, store *storage.Store, pool *pgxpool.Pool, entry Entry, principal Principal) cell {
+func provisionCell(ctx context.Context, t *testing.T, store testdb.Store, pool *pgxpool.Pool, entry Entry, principal Principal) cell {
 	t.Helper()
 
 	rel, known := relations[principal]
@@ -141,7 +141,7 @@ func provisionCell(ctx context.Context, t *testing.T, store *storage.Store, pool
 // while claiming to assert somebody else's. A conference has no membership to
 // arrange — that is the whole feature — so who made it is the only fact to
 // set up.
-func provisionConference(ctx context.Context, t *testing.T, store *storage.Store,
+func provisionConference(ctx context.Context, t *testing.T, store testdb.Store,
 	rel relation, seq int64, actor storage.User,
 ) uuid.UUID {
 	t.Helper()
@@ -171,7 +171,7 @@ func provisionConference(ctx context.Context, t *testing.T, store *storage.Store
 // removal, and the fixture message's author unless the principal wrote it
 // themselves. That last part is what makes the plain member columns genuine
 // non-authors instead of accidental ones.
-func provisionChannel(ctx context.Context, t *testing.T, store *storage.Store,
+func provisionChannel(ctx context.Context, t *testing.T, store testdb.Store,
 	kind storage.ChannelKind, rel relation, seq int64, actor storage.User,
 ) (channelID, messageID, otherMemberID uuid.UUID) {
 	t.Helper()
@@ -240,7 +240,7 @@ func provisionChannel(ctx context.Context, t *testing.T, store *storage.Store,
 }
 
 // newFixtureUser creates one account for a cell.
-func newFixtureUser(ctx context.Context, t *testing.T, store *storage.Store,
+func newFixtureUser(ctx context.Context, t *testing.T, store testdb.Store,
 	username string, admin, mustChange bool,
 ) storage.User {
 	t.Helper()
@@ -260,7 +260,7 @@ func newFixtureUser(ctx context.Context, t *testing.T, store *storage.Store,
 
 // newFixtureSession mints a live session for the acting user and returns its
 // raw cookie values.
-func newFixtureSession(ctx context.Context, t *testing.T, store *storage.Store,
+func newFixtureSession(ctx context.Context, t *testing.T, store testdb.Store,
 	userID uuid.UUID,
 ) (accessToken, refreshToken string) {
 	t.Helper()
@@ -303,7 +303,7 @@ func flagSessionTotpPending(ctx context.Context, t *testing.T, pool *pgxpool.Poo
 }
 
 // addFixtureMember puts a user in the cell's channel.
-func addFixtureMember(ctx context.Context, t *testing.T, store *storage.Store,
+func addFixtureMember(ctx context.Context, t *testing.T, store testdb.Store,
 	channelID, userID, addedBy uuid.UUID,
 ) {
 	t.Helper()

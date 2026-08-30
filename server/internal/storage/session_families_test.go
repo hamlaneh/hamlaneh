@@ -64,7 +64,7 @@ func familyIDs(families []storage.SessionFamily) []uuid.UUID {
 }
 
 // mustListFamilies lists the caller's families or fails the test.
-func mustListFamilies(ctx context.Context, t *testing.T, store *storage.Store, userID, currentFamilyID uuid.UUID) []storage.SessionFamily {
+func mustListFamilies(ctx context.Context, t *testing.T, store testdb.Store, userID, currentFamilyID uuid.UUID) []storage.SessionFamily {
 	t.Helper()
 
 	families, err := store.ListSessionFamilies(ctx, userID, currentFamilyID)

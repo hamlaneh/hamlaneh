@@ -32,7 +32,7 @@ func oidcRawConn(ctx context.Context, t *testing.T, dsn string) *pgx.Conn {
 }
 
 // newOidcFixtureUser creates one account for these tests.
-func newOidcFixtureUser(ctx context.Context, t *testing.T, store *storage.Store, username string) storage.User {
+func newOidcFixtureUser(ctx context.Context, t *testing.T, store testdb.Store, username string) storage.User {
 	t.Helper()
 	user, err := store.CreateUser(ctx, storage.NewUser{
 		Username:     username,

@@ -53,7 +53,7 @@ func matchTotpCodeHash(want string) func(string) bool {
 }
 
 // startVerifiedTotpSetup walks a user to the verified-but-not-active state.
-func startVerifiedTotpSetup(ctx context.Context, t *testing.T, store *storage.Store, userID uuid.UUID, hashes []string) {
+func startVerifiedTotpSetup(ctx context.Context, t *testing.T, store testdb.Store, userID uuid.UUID, hashes []string) {
 	t.Helper()
 
 	if err := store.StartTotpSetup(ctx, userID, totpTestSecret, totpTestSetupTTL); err != nil {
@@ -74,7 +74,7 @@ func startVerifiedTotpSetup(ctx context.Context, t *testing.T, store *storage.St
 }
 
 // enableTotp walks a user all the way to two-step verification on.
-func enableTotp(ctx context.Context, t *testing.T, store *storage.Store, userID uuid.UUID, hashes []string) {
+func enableTotp(ctx context.Context, t *testing.T, store testdb.Store, userID uuid.UUID, hashes []string) {
 	t.Helper()
 
 	startVerifiedTotpSetup(ctx, t, store, userID, hashes)
@@ -821,7 +821,7 @@ func TestTotpChallengeUserByTokenHashIntegration(t *testing.T) {
 }
 
 // mustCreateTotpChallenge mints a challenge for token with the given lifetime.
-func mustCreateTotpChallenge(ctx context.Context, t *testing.T, store *storage.Store, userID uuid.UUID, token string, ttl time.Duration) {
+func mustCreateTotpChallenge(ctx context.Context, t *testing.T, store testdb.Store, userID uuid.UUID, token string, ttl time.Duration) {
 	t.Helper()
 	if err := store.CreateTotpChallenge(ctx, userID, hashOf(token), ttl); err != nil {
 		t.Fatalf("CreateTotpChallenge(%s): %v", token, err)
@@ -833,7 +833,7 @@ func mustCreateTotpChallenge(ctx context.Context, t *testing.T, store *storage.S
 func attemptTotpRecoveryLogin(
 	ctx context.Context,
 	t *testing.T,
-	store *storage.Store,
+	store testdb.Store,
 	token string,
 	userID uuid.UUID,
 	codeHash string,

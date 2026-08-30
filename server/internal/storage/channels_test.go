@@ -27,7 +27,7 @@ func newChannel(slug string, kind storage.ChannelKind, createdBy uuid.UUID) stor
 	}
 }
 
-func mustCreateChannel(ctx context.Context, t *testing.T, store *storage.Store, nc storage.NewChannel) storage.Channel {
+func mustCreateChannel(ctx context.Context, t *testing.T, store testdb.Store, nc storage.NewChannel) storage.Channel {
 	t.Helper()
 
 	ch, err := store.CreateChannel(ctx, nc)
@@ -37,7 +37,7 @@ func mustCreateChannel(ctx context.Context, t *testing.T, store *storage.Store, 
 	return ch
 }
 
-func mustOpenDM(ctx context.Context, t *testing.T, store *storage.Store, caller, peer uuid.UUID) storage.Channel {
+func mustOpenDM(ctx context.Context, t *testing.T, store testdb.Store, caller, peer uuid.UUID) storage.Channel {
 	t.Helper()
 
 	ch, _, err := store.OpenDirectMessage(ctx, caller, peer, false)
@@ -47,7 +47,7 @@ func mustOpenDM(ctx context.Context, t *testing.T, store *storage.Store, caller,
 	return ch
 }
 
-func mustListChannels(ctx context.Context, t *testing.T, store *storage.Store, userID uuid.UUID) []storage.Channel {
+func mustListChannels(ctx context.Context, t *testing.T, store testdb.Store, userID uuid.UUID) []storage.Channel {
 	t.Helper()
 
 	channels, err := store.ListChannelsForUser(ctx, userID, storage.ListChannelsParams{Limit: 100})
@@ -57,7 +57,7 @@ func mustListChannels(ctx context.Context, t *testing.T, store *storage.Store, u
 	return channels
 }
 
-func mustListMembers(ctx context.Context, t *testing.T, store *storage.Store, channelID uuid.UUID) []storage.User {
+func mustListMembers(ctx context.Context, t *testing.T, store testdb.Store, channelID uuid.UUID) []storage.User {
 	t.Helper()
 
 	members, err := store.ListChannelMembers(ctx, channelID, storage.ListChannelMembersParams{Limit: 100})
@@ -89,7 +89,7 @@ func usernamesOf(users []storage.User) []string {
 // the sidebar actually runs, rather than a single-row read that could quietly
 // compute the counts differently.
 func sidebarChannel(
-	ctx context.Context, t *testing.T, store *storage.Store, userID, channelID uuid.UUID,
+	ctx context.Context, t *testing.T, store testdb.Store, userID, channelID uuid.UUID,
 ) storage.Channel {
 	t.Helper()
 
@@ -1073,7 +1073,7 @@ func TestChannelMembersIntegration(t *testing.T) {
 
 // memberCount is the channel's membership as the database has it, read
 // outside any of the calls under test.
-func memberCount(ctx context.Context, t *testing.T, store *storage.Store, channelID uuid.UUID) int {
+func memberCount(ctx context.Context, t *testing.T, store testdb.Store, channelID uuid.UUID) int {
 	t.Helper()
 
 	ch, err := store.ChannelByID(ctx, channelID)

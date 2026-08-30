@@ -32,8 +32,8 @@ CREATE INDEX attachments_orphan_idx ON attachments (created_at) WHERE message_id
 
 -- No filename search index, for the same reason 0006 creates none: the
 -- PostgreSQL tree accelerates the identical fold with pg_trgm, and here the
--- fold is applied in Go and matched with instr() over a scan. Semantics are
--- the same; the ceiling is the one 0006 names.
+-- fold is applied in Go and the match decided there, over a scan. Semantics
+-- are the same; the ceiling is the one 0006 names.
 
 -- PostgreSQL also replaces messages_content_shape here, loosening the live
 -- lower bound from 1 to 0 so an image with no caption is an ordinary message.

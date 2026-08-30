@@ -14,9 +14,11 @@
 -- WHAT CHANGES IS ONLY THE ACCELERATION, and this file is where it is
 -- honestly absent. PostgreSQL puts the fold inside a GIN pg_trgm index
 -- expression, so matching is indexed. SQLite has no trigram index, so there
--- is no index to create: the driver applies the SAME fold in Go
--- (storage.FoldSearchText, already pinned to the expression above by a test)
--- and matches with instr() over the folded content, which is a scan.
+-- is no index to create — and no way to write the match in SQL either, since
+-- SQLite has no translate() and its lower() folds ASCII only. The driver
+-- therefore applies the SAME fold in Go (storage.FoldSearchText, already
+-- pinned to the expression above by a test) and decides the match there, over
+-- rows the statement has scoped to the caller's channels. That is a scan.
 --
 -- The ceiling is named rather than discovered later: one linear pass over a
 -- channel's messages per search. That is fine for a household's history and
