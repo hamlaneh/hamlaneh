@@ -580,7 +580,25 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       documented bluntly (search/export/retention impossible in Strict, by design)
 - [ ] Compliance-mode server-side half actually built: encryption at rest, retention policy,
       compliance export (promised free in PLAN.md §7 — a mode toggle without them is dishonest)
-- [ ] Research spike: mobile push architecture with metadata minimization (decision in PLAN.md §12)
+- [x] Research spike: mobile push architecture with metadata minimisation
+      ([`docs/spikes/mobile-push.md`](spikes/mobile-push.md)) — *2026-08-30*. It corrected this
+      bullet's own framing: on the web path the push provider **cannot** read the payload (RFC
+      8291 encrypts it end to end), so the adversary a push design must defend against here is
+      our own untrusted server, not Apple or Google. Recommendation is standard Web Push sent by
+      the instance itself under a self-generated VAPID key — no Apple Developer membership, no
+      Firebase, no vendor relationship, which is the only shape that survives "installation is
+      the product", and UnifiedPush comes free because UnifiedPush 3.x *is* Web Push. Two
+      supposed blockers dissolved: the manifest already meets iOS's precondition, and §1.5's
+      no-service-worker reasoning is about a cached shell, which a push-only worker is not
+- [ ] **The one device test the push recommendation rests on**: can a service worker instantiate
+      the ~489 KB MLS core, open the IndexedDB keystore through its non-extractable key, take the
+      lock against a live tab, decrypt and display — inside a push handler's budget? Answerable
+      only on real hardware. If it cannot, the recommendation collapses and the fallback is a
+      generic "New message" with no content, which is honest but much less useful
+- [ ] **Mentions cannot be computed server-side under Strict E2EE** (found by the same spike):
+      `parseMentions` reads message content, which the server no longer has. Matrix hits the
+      identical wall. It decides what a push can say and what the mention badge can count, so it
+      belongs to whichever slice ships push
 - Tests: **MLS integration tests** (the glue, not the audited library): two independent client
   instances create a group, exchange, persist state, restart, resume; a removed member cannot
   decrypt anything sent after removal; a new member cannot decrypt anything sent before joining;

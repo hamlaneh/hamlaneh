@@ -290,7 +290,7 @@ Explicitly out of scope until after v1 ships — each is a scope trap:
 | Pricing numbers | ⬜ Open | Validate via Managed pre-sales |
 | Opt-in telemetry design (version ping) | ⬜ Open | Privacy-first or none |
 | Company formation timing/structure | ⬜ Open | Before first paying customer |
-| Mobile push architecture (metadata) | ⬜ Open | Research during Phase 3 |
+| Mobile push architecture (metadata) | 🟡 Leaning | Spike done: [`docs/spikes/mobile-push.md`](spikes/mobile-push.md) — standard Web Push from our own server, no vendor relationship. Blocked on one device test: can a service worker run the MLS core? |
 
 ---
 
