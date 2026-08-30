@@ -33,6 +33,7 @@ package testdb
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"net/url"
@@ -138,23 +139,24 @@ func Driver() string {
 }
 
 // New creates a throwaway database, opens a migrated store on it, and returns
-// the store plus the PostgreSQL DSN for tests that need raw assertions.
+// the store plus a driver-neutral raw connection to the same database.
 //
-// The DSN is empty on the SQLite driver, and a test that needs it must have
-// called RequiresPostgres first — a raw pgx assertion is by definition a
-// PostgreSQL-mechanism test. Cleanup disposes of the database when the test
-// finishes.
-func New(t *testing.T) (Store, string) {
+// The Raw handle is for the rows the Store API cannot write and the columns a
+// test asserts on directly; see raw.go for what it does and does not do. Its
+// DSN is the PostgreSQL connection string, empty on SQLite, and belongs only
+// to tests that have called RequiresPostgres. Cleanup disposes of the
+// database when the test finishes.
+func New(t *testing.T) (Store, *Raw) {
 	t.Helper()
 
 	switch driver := Driver(); driver {
 	case DriverSQLite:
-		return newSQLite(t), ""
+		return newSQLite(t)
 	case DriverPostgres:
 		return newPostgres(t)
 	default:
 		t.Fatalf("testdb: unknown %s %q, want %q or %q", EnvDriver, driver, DriverSQLite, DriverPostgres)
-		return nil, ""
+		return nil, nil
 	}
 }
 
@@ -162,24 +164,43 @@ func New(t *testing.T) (Store, string) {
 // There is nothing to provision and nothing to drop: the file goes when the
 // directory does, and the Close registered here runs before that removal
 // because cleanups run in reverse order.
-func newSQLite(t *testing.T) Store {
+func newSQLite(t *testing.T) (Store, *Raw) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), setupTimeout)
 	defer cancel()
 
-	store, err := sqlitestore.Open(ctx, filepath.Join(t.TempDir(), "hamlaneh.db"))
+	path := filepath.Join(t.TempDir(), "hamlaneh.db")
+	store, err := sqlitestore.Open(ctx, path)
 	if err != nil {
 		t.Fatalf("testdb: open sqlite database: %v", err)
 	}
 	t.Cleanup(store.Close)
-	return store
+
+	return store, openRaw(t, DriverSQLite, "sqlite", sqlitestore.DSN(path), "")
+}
+
+// openRaw opens the harness's own handle on the database the store just
+// opened, with the driver's own pragmas so the two see the same rules.
+func openRaw(t *testing.T, driver, sqlDriver, connString, dsn string) *Raw {
+	t.Helper()
+
+	db, err := sql.Open(sqlDriver, connString)
+	if err != nil {
+		t.Fatalf("testdb: open raw %s connection: %v", driver, err)
+	}
+	t.Cleanup(func() {
+		if closeErr := db.Close(); closeErr != nil {
+			t.Errorf("testdb: close raw connection: %v", closeErr)
+		}
+	})
+	return &Raw{db: db, driver: driver, dsn: dsn}
 }
 
 // newPostgres creates a scratch database on the server named by EnvDSN and
 // opens a migrated store on it. Tests are skipped loudly when the DSN is
 // unset, which is what an unconfigured PostgreSQL leg is.
-func newPostgres(t *testing.T) (Store, string) {
+func newPostgres(t *testing.T) (Store, *Raw) {
 	t.Helper()
 
 	adminDSN := os.Getenv(EnvDSN)
@@ -218,7 +239,7 @@ func newPostgres(t *testing.T) (Store, string) {
 	}
 	t.Cleanup(store.Close)
 
-	return store, dsn
+	return store, openRaw(t, DriverPostgres, "pgx", dsn, dsn)
 }
 
 // scratchName generates a unique database name like hamlaneh_test_a1b2c3d4.

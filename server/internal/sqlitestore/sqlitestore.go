@@ -128,6 +128,14 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return &Store{db: db, wantVersion: wantVersion, path: abs}, nil
 }
 
+// DSN builds the connection string for the database at path.
+//
+// It is exported so the shared test harness (internal/testdb) can open its
+// raw connection with exactly these pragmas — a raw handle with foreign keys
+// off, or with a deferred transaction lock, would behave differently from the
+// driver it is meant to be inspecting.
+func DSN(path string) string { return dsn(path) }
+
 // dsn builds the connection string. Every parameter here is load-bearing and
 // none of them is a default we could rely on:
 //

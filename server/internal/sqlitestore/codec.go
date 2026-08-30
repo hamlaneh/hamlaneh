@@ -26,7 +26,17 @@ import (
 //
 // sqlNow below is the same layout produced inside SQLite, for the handful of
 // column defaults in the migration tree.
-const timeLayout = "2006-01-02T15:04:05.000000Z"
+//
+// It is exported as TimeLayout because the shared test harness
+// (internal/testdb) writes and reads raw rows on both drivers and has to
+// encode a timestamp the way this driver stores one. A second copy of the
+// layout in the harness would be a second encoding waiting to drift.
+const timeLayout = TimeLayout
+
+// TimeLayout is timeLayout, exported for internal/testdb. Nothing in
+// production reads it: the driver binds every timestamp it writes through
+// asTime, and decodes with parseTime.
+const TimeLayout = "2006-01-02T15:04:05.000000Z"
 
 // sqlNow renders the current time in timeLayout from inside SQLite. strftime's
 // %f yields SS.SSS (millisecond resolution), so the trailing 000 pads it to
