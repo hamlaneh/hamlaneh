@@ -407,14 +407,52 @@ was not entitled to read the message it points at.
 
 ## What's next
 
-**Phase 3 — end-to-end encryption with MLS.** The foundations are decided and the transport is
-built: [ADR 006](adr/006-mls-library-and-boundaries.md) fixed the library (OpenMLS,
-exact-pinned, WASM in the browser), the MLS-blind server, and guests-outside-E2EE; slice 1
-shipped the transport end to end (see "Current state"). What remains is the rest of the phase:
-received history across reloads, multi-device keys and authenticated device linking, encrypted
-backups and the recovery path, and Compliance mode's own half — encryption at rest, retention
-and export — without which that mode stays refused rather than shipping as a toggle that
-delivers only the absence of encryption.
+**Phase 4 — packaging polish, and the gate public launch waits on.** Phases 0 through 3 are
+code-complete; what remains is everything that turns a working codebase into something a
+stranger can install. Landed since Phase 3 closed:
+
+- **A second storage driver.** `internal/sqlitestore` implements the same 102 methods as the
+  PostgreSQL store, behind the *consumer-side* interfaces that already existed rather than a
+  producer-side twin invented for it — so the compiler proves completeness. The whole module
+  passes on both drivers and CI runs a full `-race` leg per driver, because SQLite's
+  concurrency shape (one connection, a busy handler that retries rather than queues) is its
+  own and the PostgreSQL leg cannot reach a race in it. Six PostgreSQL-*mechanism* tests skip
+  under an allow-list whose gate was proved to fail in both directions.
+- **Home mode**, the single binary: `hamlaneh-server home` opens SQLite at a per-OS data
+  directory, binds loopback, refuses calls, compresses its own responses (there is no proxy in
+  front of it), mints its own signing and audit keys on first run, and creates a first admin
+  whose generated password is printed once and stored nowhere. It accepts both spellings of its
+  own loopback origin, because the WebSocket origin check is a single exact origin and a person
+  who types `localhost` rather than `127.0.0.1` would otherwise get a page that loads and a
+  chat that silently receives nothing.
+- **Signed releases and the updater that applies them.** A tag builds binaries, an SPDX SBOM
+  and `SHA256SUMS`, and signs the checksum file once rather than each artifact. The updater
+  contains no signature logic and no version ordering: `verify-release.sh`'s exit code is the
+  authority, so there is exactly one copy of that check to rot. An older validly-signed release
+  is refused unless forced.
+- **Operator backups and a restore that refuses rather than half-runs**, verifying before
+  anything is stopped or written. The encryption check is four assertions rather than one,
+  because gzip hides a literal string as well as a cipher does and a naive canary scan would
+  certify a plaintext archive as clean.
+- **An installer that covers four distribution families**, is idempotent, and installs the
+  cosign the other two depend on — without which "auto-update on by default" would have failed
+  on every fire of every stock install.
+
+**What is honestly not done in Phase 4:**
+
+- **The sub-5-minute install is at structural risk.** `install.sh` runs `compose up -d --build`,
+  which is a Go compile plus a web bundle on the stranger's own VPS; on a modest machine that
+  alone exceeds the gate, and on a 1 GB machine the web build is OOM-killed. The release
+  pipeline already builds and signs images nobody pulls. Pointing compose at the published
+  image is what this needs — and it also puts the signed-image supply chain on the path
+  operators actually take instead of leaving it theoretical.
+- **Keyless signing has never run.** Fulcio, Rekor and identity matching cannot be exercised
+  offline, so the first real tag is where a wrong identity pattern would surface. The pipeline
+  now verifies both halves of its own output, which is what makes that a CI failure rather than
+  an operator's.
+- The desktop app does not build in CI yet, the install matrix has never run on real VMs
+  (containers have no systemd and no Docker of their own, so they prove detection and
+  idempotency and nothing about installing), and `get.hamlaneh.com` does not serve.
 
 **Everything through Phase 2 is code-complete**, each proven by a Playwright suite against the
 real stack rather than against mocks — two browsers, two accounts, a message crossing live; and
