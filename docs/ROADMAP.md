@@ -589,6 +589,22 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
    recovery key hits the documented, non-lying failure path.
 3. Mode choice is irreversible-safe: switching modes can't silently decrypt or expose history.
 
+**Where the gate actually stands** — kept here rather than inferred from the checkboxes above,
+because a phase with most of its slices done can still be nowhere near its gate, and that is the
+distinction worth being able to see at a glance:
+
+| Gate item | Status |
+|---|---|
+| 1(a) message canary → ciphertext only | **met**, automated rather than drilled — `webapp/e2e/specs/e2ee-messaging.e2e.ts` asserts the row shape and scans a real `pg_dump` from inside the database container, with a plaintext control so a clean scan cannot be vacuous |
+| 1(b) media packets undecodable at the SFU | **not met** — slice 3.4 |
+| 2 key-loss / recovery drill | **not met** — needs encrypted backups and a recovery key, neither built |
+| 3 mode choice irreversible-safe | **not met** — no Strict/Compliance mode exists yet |
+
+`docs/drills/e2ee-drill.md` does not exist. Item 1(a) is covered by a test rather than a written
+drill, which is stronger for CI and weaker for the audit trail the other drills are written for;
+the file is owed and should say which parts are automated and which a human runs, as
+`nat-drill.md` does.
+
 ---
 
 ## Phase 4 — Packaging polish (~1 month, overlaps 2–3)
