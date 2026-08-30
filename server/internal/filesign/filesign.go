@@ -54,8 +54,9 @@ const TTL = time.Hour
 const EnvKey = "HAMLANEH_FILE_URL_KEY"
 
 // minKeyLen is the shortest key accepted, in bytes. HMAC-SHA256's security
-// stops improving past its 32-byte block-adjacent size, and shorter is how
-// a "temporary" placeholder gets in.
+// stops improving past the 32 bytes of its output size, and shorter is how a
+// "temporary" placeholder gets in. (SHA-256's block is 64 bytes; that is the
+// size HMAC pads the key to, not a security level.)
 const minKeyLen = 32
 
 // The signed query parameters.

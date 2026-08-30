@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/audit"
 	"github.com/hamlaneh/hamlaneh/server/internal/blobstore"
@@ -57,7 +59,10 @@ const (
 	auditKeyFile = "audit.key"
 
 	// homeKeyBytes is the entropy behind a generated key. Both consumers MAC
-	// with SHA-256, whose block-sized key is 32 bytes.
+	// with SHA-256, whose 32-byte OUTPUT is the security level worth matching;
+	// past that a longer key buys nothing. (SHA-256's BLOCK is 64 bytes — a
+	// different number, and not the one that matters here: HMAC pads or hashes
+	// the key to the block either way.)
 	homeKeyBytes = 32
 )
 
@@ -204,7 +209,69 @@ func (m mode) prepare() error {
 	if err := os.MkdirAll(m.dataDir, dataDirPerm); err != nil { // #nosec G703 -- operator configuration, not user input
 		return fmt.Errorf("create the home data directory %s: %w", m.dataDir, err)
 	}
+	warnIfUnprotectedOnWindows(m.dataDir)
 	return nil
+}
+
+// warnIfUnprotectedOnWindows says so when the data directory is somewhere
+// Windows will not protect it.
+//
+// The 0700 and 0600 above are POSIX mode bits, and Go maps them on Windows to
+// nothing but the read-only attribute: no DACL is written, so the protection
+// is entirely INHERITED from the parent. Under the default %AppData%\hamlaneh
+// that inherits the user profile's ACL and the intended protection holds. A
+// HAMLANEH_DATA_DIR pointing at a volume root — C:\hamlaneh, or a data drive —
+// inherits the volume-root ACL instead, where BUILTIN\Users get read access
+// and Authenticated Users get modify. Every local account can then read
+// audit.key and file-url.key, and nothing anywhere says so.
+//
+// This warns rather than refuses: it is the operator's own machine and their
+// own choice of directory, and a hard failure on a valid single-user setup
+// would be worse than a line they can act on. It also deliberately does not
+// try to read the actual ACL — that is a Windows API call and a pile of
+// platform-specific code to answer a question a location check answers well
+// enough. A false warning costs a sentence; a missed one costs the keys.
+func warnIfUnprotectedOnWindows(dataDir string) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	profile := os.Getenv("USERPROFILE")
+	if profile != "" && underDir(dataDir, profile) {
+		return
+	}
+	slog.Warn("the home data directory is outside your Windows user profile, "+
+		"so it does not inherit the profile's access rules and other accounts on this machine "+
+		"may be able to read the database and the keys beside it; "+
+		"move it under %AppData% or restrict it yourself (icacls)",
+		"data_dir", dataDir, "user_profile", profile)
+}
+
+// underDir reports whether path is dir or something inside it. Both are
+// resolved to absolute, cleaned form first.
+//
+// Case is ignored on Windows, where the file system ignores it, and honoured
+// everywhere else, where /home/Amir and /home/amir are two directories. Only
+// the Windows answer has a caller today; getting the other one right anyway is
+// cheaper than leaving a function that lies on the platform CI runs.
+func underDir(path, dir string) bool {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	absPath, absDir = filepath.Clean(absPath), filepath.Clean(absDir)
+	if runtime.GOOS == "windows" {
+		absPath, absDir = strings.ToLower(absPath), strings.ToLower(absDir)
+	}
+	if absPath == absDir {
+		return true
+	}
+	// The separator matters: C:\Users\amirtwo must not read as inside
+	// C:\Users\amir.
+	return strings.HasPrefix(absPath, absDir+string(os.PathSeparator))
 }
 
 // The first administrator of a home install.
@@ -349,24 +416,59 @@ func (m mode) keys() (*filesign.Signer, *audit.Chain, error) {
 		return signer, chain, nil
 	}
 
-	fileKey, err := homeKey(m.dataDir, filesign.EnvKey, fileKeyFile)
+	fileKey, fileSource, err := homeKey(m.dataDir, filesign.EnvKey, fileKeyFile)
 	if err != nil {
 		return nil, nil, err
 	}
 	signer, err := filesign.New(fileKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%s: %w", filepath.Join(m.dataDir, fileKeyFile), err)
+		// The source, not the file: an environment-supplied key that is too
+		// short must not be reported against a path that does not exist.
+		return nil, nil, fmt.Errorf("%s: %w", fileSource, err)
 	}
 
-	auditKey, err := homeKey(m.dataDir, audit.EnvKey, auditKeyFile)
+	auditKey, auditSource, err := homeKey(m.dataDir, audit.EnvKey, auditKeyFile)
 	if err != nil {
 		return nil, nil, err
 	}
 	chain, err := audit.New(auditKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%s: %w", filepath.Join(m.dataDir, auditKeyFile), err)
+		return nil, nil, fmt.Errorf("%s: %w%s", auditSource, err, auditKeyRepairHint)
 	}
+	noteHomeAuditKeyScope()
 	return signer, chain, nil
+}
+
+// auditKeyRepairHint is appended to a rejected audit key, because the obvious
+// reaction to "this key is too short" is to delete the file and let the server
+// mint a new one — and that silently orphans the whole audit log. A new key
+// verifies nothing written under the old one, and every existing entry then
+// reports as broken forever. Restoring the file is nearly always the right
+// move, and an operator who has no copy should know what the alternative costs
+// BEFORE they choose it rather than after.
+const auditKeyRepairHint = "\n(restore this key from a backup if you have one: deleting it and letting a new one " +
+	"be generated permanently orphans every audit entry written so far, which will then all fail verification)"
+
+// noteHomeAuditKeyScope states, once, what the audit chain is and is not worth
+// in home mode.
+//
+// internal/audit's package comment rests the guarantee on the key being "not
+// in the database to be stolen along with the rows". That holds in server
+// mode, where the key is an environment variable of a container and the rows
+// are in PostgreSQL. It very nearly evaporates here: audit.key sits in the same
+// directory, with the same owner, as hamlaneh.db, so anybody who can rewrite
+// the database can also read the key and re-seal the chain invisibly.
+//
+// What survives is still worth having and is what this says: the chain catches
+// tampering that touched the database WITHOUT the key — an edited backup, a
+// restore of the wrong file, a tool that wrote rows directly, ordinary
+// corruption. It does not catch an attacker who already owns the account this
+// process runs as. CLAUDE.md principle 4 is why that is written down rather
+// than left for somebody to assume the stronger claim.
+func noteHomeAuditKeyScope() {
+	slog.Info("home mode keeps the audit key beside the database it protects; " +
+		"the chain therefore shows tampering that did not have this machine's user account " +
+		"(an edited backup, a direct write, corruption), not tampering by someone who did")
 }
 
 // openStore opens the driver this mode runs on. There is no fallback in
@@ -420,25 +522,35 @@ func openHomeStore(ctx context.Context, path string) (*sqlitestore.Store, error)
 // one on first run. env wins where it is set, so an operator who already has
 // the key keeps it and nothing is written.
 //
+// source names where the returned key actually came from — the environment
+// variable or the file — so a caller that rejects it can send the operator to
+// the right place. Naming the file for a key the environment supplied sends
+// somebody hunting a file that does not exist.
+//
 // The value is 32 bytes of crypto/rand, base64 — the same shape the
 // environment carries.
-func homeKey(dir, env, file string) ([]byte, error) {
+//
+// A key file is trusted once it exists and is long enough: a file truncated or
+// hand-edited to any 32+ bytes is taken as authoritative, because there is no
+// way to tell an operator's deliberate replacement from a damaged file. That
+// is why the callers' rejection message has to say what deleting it costs.
+func homeKey(dir, env, file string) (key []byte, source string, err error) {
 	if v := os.Getenv(env); v != "" {
-		return []byte(v), nil
+		return []byte(v), env, nil
 	}
 	path := filepath.Join(dir, file)
 
 	key, found, err := readKey(path)
 	if err != nil {
-		return nil, err
+		return nil, path, err
 	}
 	if found {
-		return key, nil
+		return key, path, nil
 	}
 
 	buf := make([]byte, homeKeyBytes)
 	if _, randErr := rand.Read(buf); randErr != nil {
-		return nil, fmt.Errorf("generate a key for %s: %w", path, randErr)
+		return nil, path, fmt.Errorf("generate a key for %s: %w", path, randErr)
 	}
 	minted := []byte(base64.StdEncoding.EncodeToString(buf))
 
@@ -446,29 +558,35 @@ func homeKey(dir, env, file string) ([]byte, error) {
 	// mint a key, because the loser's signature would then verify against
 	// nothing anybody kept. Whoever creates the file wins and the other
 	// reads it.
+	//
+	// ponytail: a crash or power cut between this create and the write below
+	// leaves an empty file, which then fails the length check on every start
+	// until a human removes it. The window is microseconds on a household
+	// machine and the failure is loud and fail-closed, so it is named here
+	// rather than answered with a temp-file-and-rename dance.
 	// #nosec G304 -- a fixed file name under the data directory the operator configured
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, keyFilePerm)
 	if errors.Is(err, fs.ErrExist) {
 		key, found, err = readKey(path)
 		if err != nil {
-			return nil, err
+			return nil, path, err
 		}
 		if !found {
-			return nil, fmt.Errorf("%s disappeared while it was being created", path)
+			return nil, path, fmt.Errorf("%s disappeared while it was being created", path)
 		}
-		return key, nil
+		return key, path, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("create %s: %w", path, err)
+		return nil, path, fmt.Errorf("create %s: %w", path, err)
 	}
 	if _, err = f.Write(minted); err != nil {
-		return nil, errors.Join(fmt.Errorf("write %s: %w", path, err), f.Close())
+		return nil, path, errors.Join(fmt.Errorf("write %s: %w", path, err), f.Close())
 	}
 	if err = f.Close(); err != nil {
-		return nil, fmt.Errorf("write %s: %w", path, err)
+		return nil, path, fmt.Errorf("write %s: %w", path, err)
 	}
 	slog.Info("generated a key for this install", "path", path)
-	return minted, nil
+	return minted, path, nil
 }
 
 // readKey reads a stored key, reporting found=false when there is no file
