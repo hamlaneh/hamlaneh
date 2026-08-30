@@ -361,7 +361,7 @@ func writeIdpTokenError(w http.ResponseWriter, status int, code string) {
 // ssoFixture is one test's whole world: a migrated database, a fake
 // provider, and a handler configured against it.
 type ssoFixture struct {
-	store   *storage.Store
+	store   testdb.Store
 	handler http.Handler
 	idp     *fakeIDP
 	audit   *recordingAudit

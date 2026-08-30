@@ -21,11 +21,12 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/password"
 	"github.com/hamlaneh/hamlaneh/server/internal/session"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
+	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
 )
 
 // enableJit turns just-in-time provisioning on, the way the org settings
 // screen does.
-func enableJit(ctx context.Context, t *testing.T, store *storage.Store) {
+func enableJit(ctx context.Context, t *testing.T, store testdb.Store) {
 	t.Helper()
 	on := true
 	if _, err := store.UpdateOrgSettings(ctx, storage.OrgSettingsPatch{SsoJitProvisioning: &on}); err != nil {
@@ -55,7 +56,7 @@ func (f *ssoFixture) newScimUser(ctx context.Context, t *testing.T, username, em
 
 // countUsers is what the ordering tests assert on: a refusal that creates an
 // account is the failure they exist to catch, and only a count sees it.
-func countUsers(ctx context.Context, t *testing.T, store *storage.Store) int64 {
+func countUsers(ctx context.Context, t *testing.T, store testdb.Store) int64 {
 	t.Helper()
 	n, err := store.CountUsers(ctx)
 	if err != nil {

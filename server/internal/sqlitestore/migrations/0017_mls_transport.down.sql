@@ -1,0 +1,10 @@
+DROP TRIGGER IF EXISTS messages_mls_both_or_neither_update;
+DROP TRIGGER IF EXISTS messages_mls_both_or_neither_insert;
+ALTER TABLE messages DROP COLUMN mls_ciphertext;
+ALTER TABLE messages DROP COLUMN mls_epoch;
+ALTER TABLE channels DROP COLUMN e2ee;
+DROP TABLE IF EXISTS mls_welcomes;
+DROP TABLE IF EXISTS mls_commits;
+DROP TABLE IF EXISTS mls_groups;
+DROP TABLE IF EXISTS mls_key_packages;
+DROP TABLE IF EXISTS mls_devices;

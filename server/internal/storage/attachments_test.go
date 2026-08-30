@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
@@ -17,8 +16,8 @@ import (
 // attachmentWorld is one test's fixture: a store, a channel, and two users
 // who can upload into it.
 type attachmentWorld struct {
-	store  *storage.Store
-	conn   *pgx.Conn
+	store  testdb.Store
+	conn   *testdb.Raw
 	ctx    context.Context
 	people struct {
 		uploader storage.User
@@ -33,9 +32,8 @@ type attachmentWorld struct {
 func newAttachmentWorld(t *testing.T) attachmentWorld {
 	t.Helper()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	w := attachmentWorld{store: store, conn: conn, ctx: ctx}
 	w.people.uploader = mustCreateUser(ctx, t, store, newUser("uploader"))
@@ -82,7 +80,7 @@ func (w attachmentWorld) messageIDOf(t *testing.T, id uuid.UUID) *uuid.UUID {
 	t.Helper()
 
 	var messageID *uuid.UUID
-	err := w.conn.QueryRow(w.ctx, `SELECT message_id FROM attachments WHERE id = $1`, id).Scan(&messageID)
+	err := w.conn.QueryRow(w.ctx, `SELECT message_id FROM attachments WHERE id = ?`, id).Scan(&messageID)
 	if err != nil {
 		t.Fatalf("read message_id of %s: %v", id, err)
 	}
@@ -367,11 +365,9 @@ func TestSweepOrphanAttachmentsIntegration(t *testing.T) {
 
 	// Age the abandoned one past the window. created_at is stamped by the
 	// database, so backdating is the only way to test the boundary.
-	if _, err := w.conn.Exec(w.ctx,
-		`UPDATE attachments SET created_at = now() - interval '25 hours' WHERE id = $1`, stale.ID,
-	); err != nil {
-		t.Fatalf("backdate the orphan: %v", err)
-	}
+	w.conn.Exec(w.ctx, t,
+		`UPDATE attachments SET created_at = ? WHERE id = ?`,
+		time.Now().UTC().Add(-25*time.Hour), stale.ID)
 
 	swept, err := w.store.SweepOrphanAttachments(w.ctx, 24*time.Hour)
 	if err != nil {

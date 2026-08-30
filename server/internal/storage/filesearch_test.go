@@ -25,25 +25,27 @@ import (
 // it produces, so they write the rows themselves. messageID nil is an
 // orphan — a file uploaded and never sent.
 func seedAttachment(
-	ctx context.Context, t *testing.T, conn *pgx.Conn,
+	ctx context.Context, t *testing.T, raw *testdb.Raw,
 	channelID, uploaderID uuid.UUID, messageID *uuid.UUID, filename string,
 ) {
 	t.Helper()
 
-	_, err := conn.Exec(ctx,
-		`INSERT INTO attachments
-		     (channel_id, uploader_id, message_id, filename, content_type, size_bytes)
-		 VALUES ($1, $2, $3, $4, 'application/pdf', 1024)`,
-		channelID, uploaderID, messageID, filename,
-	)
-	if err != nil {
-		t.Fatalf("seed attachment %q: %v", filename, err)
+	// A nil *uuid.UUID is not a NULL either driver recognises, so the
+	// optional message is unwrapped to an untyped nil here.
+	var message any
+	if messageID != nil {
+		message = *messageID
 	}
+	raw.Exec(ctx, t,
+		`INSERT INTO attachments
+		     (id, channel_id, uploader_id, message_id, filename, content_type, size_bytes, created_at)
+		 VALUES (?, ?, ?, ?, ?, 'application/pdf', 1024, ?)`,
+		uuid.New(), channelID, uploaderID, message, filename, time.Now().UTC())
 }
 
 // mustSearchFiles runs one page of filename search for a caller.
 func mustSearchFiles(
-	ctx context.Context, t *testing.T, store *storage.Store,
+	ctx context.Context, t *testing.T, store testdb.Store,
 	userID uuid.UUID, query string, limit int, after *storage.MessageCursor,
 ) storage.FileSearchPage {
 	t.Helper()
@@ -77,9 +79,8 @@ func fileNames(page storage.FileSearchPage) []string {
 func TestFileSearchScopeIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	mallory := mustCreateUser(ctx, t, store, newUser("mallory"))
@@ -135,9 +136,8 @@ func TestFileSearchScopeIntegration(t *testing.T) {
 func TestFileSearchMatchingIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	ch := mustCreateChannel(ctx, t, store, newChannel("files", storage.ChannelKindPrivate, alice.ID))
@@ -212,9 +212,8 @@ func TestFileSearchMatchingIntegration(t *testing.T) {
 func TestFileSearchExcludesUnreachableFilesIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	ch := mustCreateChannel(ctx, t, store, newChannel("files", storage.ChannelKindPrivate, alice.ID))
@@ -229,11 +228,8 @@ func TestFileSearchExcludesUnreachableFilesIntegration(t *testing.T) {
 
 	// Soft delete is what the product does: the content is erased, the
 	// attachments rows stay attached, and the cards must go with the message.
-	if _, err := conn.Exec(ctx,
-		`UPDATE messages SET deleted_at = now(), content = '' WHERE id = $1`, doomed,
-	); err != nil {
-		t.Fatalf("soft-delete the message: %v", err)
-	}
+	conn.Exec(ctx, t,
+		`UPDATE messages SET deleted_at = ?, content = '' WHERE id = ?`, time.Now().UTC(), doomed)
 
 	page := mustSearchFiles(ctx, t, store, alice.ID, "wqfbzt", 50, nil)
 	if got := fileNames(page); !slices.Equal(got, []string{"wqfbzt-sent.pdf"}) {
@@ -252,9 +248,8 @@ func TestFileSearchExcludesUnreachableFilesIntegration(t *testing.T) {
 func TestFileSearchPagingIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	ch := mustCreateChannel(ctx, t, store, newChannel("files", storage.ChannelKindPrivate, alice.ID))
@@ -297,9 +292,6 @@ func TestFileSearchPagingIntegration(t *testing.T) {
 func explainPlan(ctx context.Context, t *testing.T, conn *pgx.Conn, query string, args ...any) string {
 	t.Helper()
 
-	if _, err := conn.Exec(ctx, "SET enable_seqscan = off"); err != nil {
-		t.Fatalf("disable sequential scans: %v", err)
-	}
 	rows, err := conn.Query(ctx, "EXPLAIN "+query, args...)
 	if err != nil {
 		t.Fatalf("EXPLAIN: %v", err)
@@ -337,17 +329,18 @@ func explainPlan(ctx context.Context, t *testing.T, conn *pgx.Conn, query string
 // "the fold is indexable" and "the scope is joined" are the two facts this
 // query has to keep at once.
 func TestFileSearchUsesTrigramIndexIntegration(t *testing.T) {
+	testdb.RequiresPostgres(t, "EXPLAIN against migration 0007's GIN pg_trgm index, which the SQLite tree deliberately does not build")
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	ch := mustCreateChannel(ctx, t, store, newChannel("planned", storage.ChannelKindPrivate, alice.ID))
 	at := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
-	msg := searchSeedMessage(ctx, t, conn, ch.ID, alice.ID, "one file", at)
-	seedAttachment(ctx, t, conn, ch.ID, alice.ID, &msg, "quarterly-report.pdf")
+	msg := searchSeedMessage(ctx, t, raw, ch.ID, alice.ID, "one file", at)
+	seedAttachment(ctx, t, raw, ch.ID, alice.ID, &msg, "quarterly-report.pdf")
+	conn := explainConn(ctx, t, raw.DSN())
 
 	// The fold, alone: does migration 0007's index answer this predicate?
 	probe := `SELECT 1 FROM attachments a WHERE ` + storage.NormalizedFilename + ` ILIKE $1 ESCAPE '\'`

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
@@ -16,7 +15,7 @@ import (
 func TestConferencesIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 	host := mustCreateUser(ctx, t, store, newUser("confhost"))
 
@@ -48,19 +47,9 @@ func TestConferencesIntegration(t *testing.T) {
 	t.Run("the raw link is never stored", func(t *testing.T) {
 		mustCreate(t, "a-secret-conference-link", "", nil)
 
-		conn, err := pgx.Connect(ctx, dsn)
-		if err != nil {
-			t.Fatalf("connect: %v", err)
-		}
-		defer func() {
-			if closeErr := conn.Close(ctx); closeErr != nil {
-				t.Errorf("close: %v", closeErr)
-			}
-		}()
-
 		var n int
-		if err := conn.QueryRow(ctx,
-			`SELECT count(*) FROM conferences WHERE link_token_hash = $1::bytea`,
+		if err := raw.QueryRow(ctx,
+			`SELECT count(*) FROM conferences WHERE link_token_hash = ?`,
 			[]byte("a-secret-conference-link"),
 		).Scan(&n); err != nil {
 			t.Fatalf("count raw links: %v", err)
@@ -233,7 +222,7 @@ func TestConferenceListing(t *testing.T) {
 func TestConferenceOutlivesItsOwner(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 	owner := mustCreateUser(ctx, t, store, newUser("departing"))
 
@@ -245,18 +234,7 @@ func TestConferenceOutlivesItsOwner(t *testing.T) {
 	// Accounts are deactivated rather than deleted by this server; the row is
 	// deleted directly here because the nullable column is what is under
 	// test, and nothing in the API can produce that state on demand.
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			t.Errorf("close: %v", closeErr)
-		}
-	}()
-	if _, delErr := conn.Exec(ctx, `DELETE FROM users WHERE id = $1`, owner.ID); delErr != nil {
-		t.Fatalf("delete the owning account: %v", delErr)
-	}
+	raw.Exec(ctx, t, `DELETE FROM users WHERE id = ?`, owner.ID)
 
 	orphan, err := store.ConferenceByID(ctx, conf.ID)
 	if err != nil {

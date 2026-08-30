@@ -18,7 +18,7 @@ import (
 // tested.
 
 // scimFixture is a store with one administrator to hang credentials off.
-func scimFixture(t *testing.T) (*storage.Store, storage.User) {
+func scimFixture(t *testing.T) (testdb.Store, storage.User) {
 	t.Helper()
 
 	store, _ := testdb.New(t)

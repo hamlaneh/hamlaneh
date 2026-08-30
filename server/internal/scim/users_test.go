@@ -29,7 +29,7 @@ import (
 // fixture is a running provisioning surface plus the store behind it.
 type fixture struct {
 	t     *testing.T
-	store *storage.Store
+	store testdb.Store
 	srv   *httptest.Server
 	log   *recordingAudit
 	token string
@@ -83,7 +83,7 @@ func newFixture(t *testing.T) *fixture {
 
 // mintToken creates one live provisioning credential and returns the value a
 // provider would present.
-func mintToken(t *testing.T, store *storage.Store, adminID uuid.UUID) string {
+func mintToken(t *testing.T, store testdb.Store, adminID uuid.UUID) string {
 	t.Helper()
 
 	raw, hash := session.NewToken()

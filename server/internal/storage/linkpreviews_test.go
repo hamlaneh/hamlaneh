@@ -17,9 +17,8 @@ import (
 func TestLinkPreviewsIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("previewauthor"))
 	channelID := seedMessagesChannel(ctx, t, conn, "previews")
@@ -108,7 +107,7 @@ func TestLinkPreviewsIntegration(t *testing.T) {
 		var titleIsNull, descriptionIsNull, imageIsNull bool
 		queryErr := conn.QueryRow(ctx,
 			`SELECT title IS NULL, description IS NULL, image_blob_id IS NULL
-			 FROM link_previews WHERE message_id = $1`, plain.ID,
+			 FROM link_previews WHERE message_id = ?`, plain.ID,
 		).Scan(&titleIsNull, &descriptionIsNull, &imageIsNull)
 		if queryErr != nil {
 			t.Fatalf("read nullability: %v", queryErr)
@@ -170,13 +169,11 @@ func TestLinkPreviewsIntegration(t *testing.T) {
 			t.Fatalf("SaveLinkPreview: %v", saveErr)
 		}
 
-		if _, execErr := conn.Exec(ctx, `DELETE FROM messages WHERE id = $1`, doomed.ID); execErr != nil {
-			t.Fatalf("hard delete message: %v", execErr)
-		}
+		conn.Exec(ctx, t, `DELETE FROM messages WHERE id = ?`, doomed.ID)
 
 		var count int
 		if scanErr := conn.QueryRow(ctx,
-			`SELECT count(*) FROM link_previews WHERE message_id = $1`, doomed.ID,
+			`SELECT count(*) FROM link_previews WHERE message_id = ?`, doomed.ID,
 		).Scan(&count); scanErr != nil {
 			t.Fatalf("count cards: %v", scanErr)
 		}

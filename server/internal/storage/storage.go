@@ -208,7 +208,7 @@ func Open(ctx context.Context, connString string) (*Store, error) {
 		}
 	}
 
-	wantVersion, err := latestMigrationVersion(migrationFiles, migrationsDir)
+	wantVersion, err := LatestMigrationVersion(migrationFiles, migrationsDir)
 	if err != nil {
 		return nil, fmt.Errorf("embedded migrations: %w", err)
 	}
