@@ -104,6 +104,13 @@ export async function post(session: ApiSession, url: string, data?: unknown): Pr
   });
 }
 
+/** The DELETE half of `post` — same session, same CSRF rule. */
+export async function del(session: ApiSession, url: string): Promise<APIResponse> {
+  return session.context.delete(url, {
+    headers: { [CSRF_HEADER]: await csrfToken(session.context) },
+  });
+}
+
 /**
  * The multipart half of `post`, for the one endpoint that takes a file
  * (openapi.yaml -> uploadFile). Same CSRF rule; only the encoding differs.

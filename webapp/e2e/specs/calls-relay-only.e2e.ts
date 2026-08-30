@@ -2,13 +2,12 @@ import dgram from "node:dgram";
 import { randomBytes } from "node:crypto";
 import process from "node:process";
 
-import type { BrowserContext, Page } from "@playwright/test";
+import type { BrowserContext } from "@playwright/test";
 
-import type { App } from "../support/app";
 import { createChannelApi, inviteApi, uniqueSlug } from "../support/chat";
 import { expect, test } from "../support/fixtures";
-import type { Translate } from "../support/i18n";
 import { readStackState } from "../support/stack";
+import { audioBytes, MEDIA_ARGS, peerFacts } from "../support/webrtc";
 
 /**
  * ROADMAP §2 gate 2: a client forced to relay-only ICE completes a call
@@ -80,24 +79,10 @@ import { readStackState } from "../support/stack";
  * lets it run there too, minus the probe, which the runner cannot make.
  */
 
-declare global {
-  interface Window {
-    /** Every peer connection the page opened; installed by forceRelayPolicy. */
-    __hamlanehPeerConnections?: RTCPeerConnection[];
-  }
-}
-
 /** A Linux browser on the stack's own network; see the header. */
 const LINUX_BROWSER = process.env.HAMLANEH_E2E_LINUX_BROWSER;
 const RUNNER_IS_DOCKER_HOST = process.platform === "linux";
 const CAN_RUN = RUNNER_IS_DOCKER_HOST || LINUX_BROWSER !== undefined;
-
-/**
- * Headless Chromium has no capture device, so a call joined without these
- * fails at getUserMedia rather than at anything this test is about. The fake
- * device publishes a real tone, which is what makes `bytesReceived` grow.
- */
-const MEDIA_ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"];
 
 /** LiveKit's own relay allocation range — drill 001 §2, and its startup log. */
 const RELAY_RANGE = { start: 30_000, end: 40_000 };
@@ -159,81 +144,6 @@ function forceRelayPolicy(): void {
 const installRelayShim = async (context: BrowserContext): Promise<void> => {
   await context.addInitScript(forceRelayPolicy);
 };
-
-/* ── reading what the connection actually did ─────────────────────────── */
-
-interface CandidateFacts {
-  type: string;
-  protocol: string;
-  address: string;
-  port: number;
-}
-
-interface PeerFacts {
-  /** What `getConfiguration()` reports — the setting, kept beside the fact. */
-  policy: string;
-  connectionState: string;
-  nominated: boolean;
-  pairState: string;
-  local: CandidateFacts | null;
-  remote: CandidateFacts | null;
-  audioBytesReceived: number;
-  audioPacketsReceived: number;
-}
-
-/** `getStats()` on every peer connection the page opened, reduced to facts. */
-function peerFacts(page: Page): Promise<PeerFacts[]> {
-  return page.evaluate(async () => {
-    const num = (value: unknown): number => (typeof value === "number" ? value : 0);
-    const str = (value: unknown): string => (typeof value === "string" ? value : "");
-
-    const facts: PeerFacts[] = [];
-    for (const connection of window.__hamlanehPeerConnections ?? []) {
-      const entries: Record<string, unknown>[] = [];
-      (await connection.getStats()).forEach((entry: Record<string, unknown>) => {
-        entries.push(entry);
-      });
-
-      const byId = new Map(entries.map((entry) => [str(entry.id), entry]));
-      const pair =
-        entries.find((entry) => entry.type === "candidate-pair" && entry.nominated === true) ??
-        null;
-      const audio = entries.filter(
-        (entry) => entry.type === "inbound-rtp" && entry.kind === "audio",
-      );
-
-      const candidate = (id: unknown): CandidateFacts | null => {
-        const entry = byId.get(str(id));
-        return entry === undefined
-          ? null
-          : {
-              type: str(entry.candidateType),
-              protocol: str(entry.protocol),
-              address: str(entry.address),
-              port: num(entry.port),
-            };
-      };
-
-      facts.push({
-        policy: str(connection.getConfiguration().iceTransportPolicy),
-        connectionState: connection.connectionState,
-        nominated: pair !== null,
-        pairState: pair === null ? "" : str(pair.state),
-        local: pair === null ? null : candidate(pair.localCandidateId),
-        remote: pair === null ? null : candidate(pair.remoteCandidateId),
-        audioBytesReceived: audio.reduce((total, one) => total + num(one.bytesReceived), 0),
-        audioPacketsReceived: audio.reduce((total, one) => total + num(one.packetsReceived), 0),
-      });
-    }
-    return facts;
-  });
-}
-
-/** Bytes of audio this page has received across all of its connections. */
-async function audioBytes(page: Page): Promise<number> {
-  const facts = await peerFacts(page);
-  return facts.reduce((total, one) => total + one.audioBytesReceived, 0);
-}
 
 /* ── the control probe ────────────────────────────────────────────────── */
 
@@ -327,24 +237,6 @@ function probePort(host: string, port: number, timeoutMs = 2_500): Promise<PortO
   });
 }
 
-/* ── driving the call ─────────────────────────────────────────────────── */
-
-/**
- * Clicks the one button in the call strip and waits for the tiles.
- *
- * Located by role rather than by label on purpose: the same control reads
- * "Start a call" or "Join call" depending on whether this person's client has
- * heard about the call yet, and which of the two it says is not this test's
- * subject. The participant list exists only once the session is connected.
- */
-async function joinCall(app: App, t: Translate): Promise<void> {
-  await app.page
-    .getByRole("region", { name: t("calls.strip.label") })
-    .getByRole("button")
-    .click();
-  await app.page.getByRole("list", { name: t("calls.view.participants") }).waitFor();
-}
-
 test.describe("relay-only calls", () => {
   test.skip(
     !CAN_RUN,
@@ -371,8 +263,8 @@ test.describe("relay-only calls", () => {
     const aliceApp = await openApp(alice, `/c/${channelId}`, installRelayShim);
     const bobApp = await openApp(bob, `/c/${channelId}`, installRelayShim);
 
-    await joinCall(aliceApp, t);
-    await joinCall(bobApp, t);
+    await aliceApp.joinCall();
+    await bobApp.joinCall();
 
     // Both clients agree two people are in the room. This is the application's
     // own account of the call; everything below is the transport's.

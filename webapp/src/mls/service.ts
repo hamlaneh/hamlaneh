@@ -330,12 +330,24 @@ export class MlsService {
   }
 
   /**
-   * Republishes every held group's epoch.
+   * Republishes every held group's epoch **and its verification state, in the
+   * same update**.
    *
    * Hooked to `persist` rather than to each of `catchUp`, `commit_accepted`
    * and `join_from_welcome` on purpose: those are the merge points today, and
    * a fourth added later would silently stop the media key rotating. Persist
    * is what they all already share.
+   *
+   * The two are published together because splitting them leaks audio. A
+   * commit that adds a leaf advances the epoch, and `catchUp` publishes that
+   * epoch before `reconcileMembers` gets as far as re-reading the directory —
+   * so with separate updates the call layer rotates its outbound key to the
+   * new epoch while the publish gate is still reading the previous, clear
+   * verification state. A leaf added at that epoch is a member of it and can
+   * open every frame sealed under it, for as long as the directory round trip
+   * takes. Recomputing here costs nothing to be right: `verificationOf` reads
+   * the cached directory and the local tree and touches no network, which is
+   * the same reason `encrypt` can re-check it on every single send.
    */
   private publishEpochs(): void {
     const device = this.device;
@@ -343,6 +355,7 @@ export class MlsService {
       return;
     }
     const epochs: Record<string, number> = {};
+    const verification = { ...this.state.verification };
     for (const [channelId, groupId] of this.groups) {
       try {
         epochs[channelId] = Number(device.epoch(groupId));
@@ -352,8 +365,9 @@ export class MlsService {
         // then holds no key rather than an imagined one.
         console.warn(`Could not read the epoch for ${channelId}:`, error);
       }
+      verification[channelId] = this.verificationOf(channelId);
     }
-    this.publish({ epochs });
+    this.publish({ epochs, verification });
   }
 
   /* ── per-channel group ─────────────────────────────────────────────── */
