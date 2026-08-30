@@ -15,7 +15,7 @@
  */
 import { randomBytes, randomUUID } from "node:crypto";
 
-import { expectOk, post, postFile, type ApiSession } from "./accounts";
+import { del, expectOk, post, postFile, type ApiSession } from "./accounts";
 
 /** Matches the contract's channel-slug shape, and carries no digits. */
 export function uniqueSlug(prefix = "chan"): string {
@@ -55,6 +55,21 @@ export async function inviteApi(
   await expectOk(
     await post(session, `/api/v1/channels/${channelId}/members`, { user_id: userId }),
     "channel invitation",
+  );
+}
+
+/**
+ * Removes somebody from a channel — the caller must be its creator, or an
+ * admin who is a member (openapi.yaml -> removeChannelMember).
+ */
+export async function removeMemberApi(
+  session: ApiSession,
+  channelId: string,
+  userId: string,
+): Promise<void> {
+  await expectOk(
+    await del(session, `/api/v1/channels/${channelId}/members/${userId}`),
+    "channel member removal",
   );
 }
 

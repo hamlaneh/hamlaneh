@@ -254,6 +254,31 @@ export class App {
     return this.page.getByRole("heading", { level: 1 });
   }
 
+  /* ── calls ───────────────────────────────────────────────────────── */
+
+  /**
+   * Clicks the one control in the call strip and waits for the tiles.
+   *
+   * Located by role rather than by label on purpose: the same control reads
+   * "Start a call" or "Join call" depending on whether this person's client
+   * has heard about the call yet, and which of the two it says is not
+   * something a spec about media should depend on. The participant list
+   * exists only once the session is connected, which is what makes waiting
+   * for it the right "the call is up" signal.
+   */
+  async joinCall(): Promise<void> {
+    await this.page
+      .getByRole("region", { name: this.t("calls.strip.label") })
+      .getByRole("button")
+      .click();
+    await this.callParticipants.waitFor();
+  }
+
+  /** The participant grid — present only while a call session is connected. */
+  get callParticipants(): Locator {
+    return this.page.getByRole("list", { name: this.t("calls.view.participants") });
+  }
+
   /* ── the sidebar ─────────────────────────────────────────────────── */
 
   /** One conversation row, by the label it draws. */
