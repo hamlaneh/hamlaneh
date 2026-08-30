@@ -174,6 +174,18 @@ func homeMode() (mode, error) {
 // dbPath is where home mode's database lives. Server mode has none.
 func (m mode) dbPath() string { return filepath.Join(m.dataDir, homeDBFile) }
 
+// addrInUseRemedy is what to suggest when the listen address is taken. The
+// two modes have different ways out, and the household case is the one that
+// needs saying: on a machine with Docker Desktop installed, :8080 is usually
+// already Docker's, so the first run of the binary fails for a reason that
+// has nothing to do with Hamlaneh.
+func (m mode) addrInUseRemedy() string {
+	if m.home {
+		return "set " + envHomeAddr + " to a free port, e.g. " + envHomeAddr + "=127.0.0.1:8099"
+	}
+	return "another process is already listening there"
+}
+
 // gatewayOptions is what the realtime gateway is configured with beyond the
 // public origin, and the list differs by mode in exactly one entry.
 //

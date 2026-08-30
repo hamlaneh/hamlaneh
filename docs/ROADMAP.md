@@ -692,10 +692,23 @@ Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measur
       run, since home mode has no `install.sh` to generate them; that key path was reviewed
       adversarially before merge. The inverse is pinned too — a test proves server mode never
       creates a SQLite file, so an organisation's data cannot silently fork onto one
-- [ ] Home mode's **first run**: a household user who just runs the binary still cannot sign
-      in (the admin bootstrap needs environment variables), and typing `localhost` rather than
-      `127.0.0.1` loads the page but silently refuses every WebSocket, because the origin check
-      is a single exact origin. Both make gate clause 4 unreachable by a real person
+- [x] **Home mode's first run** — *2026-08-30*. The first admin is generated and printed once,
+      chosen over a setup screen because a screen is a privileged unauthenticated path that must
+      be proven shut afterwards and proven unreachable from a LAN bind, while a console line has
+      no network surface to close. `localhost` and `127.0.0.1` are now both accepted, by an
+      option that takes no argument and so cannot be handed a name: it derives siblings only
+      when the configured origin is already loopback, same scheme and port. Proven in a real
+      browser, and proven not to widen — a page on a *different* loopback port is still refused,
+      and server mode's origin table is asserted byte-identical with the option forced on
+- [ ] **Gate clause 4's second half is not hand-walkable, and that is a property of the design.**
+      A fresh instance is strict-E2EE and refuses plaintext, so "a sent message survives a
+      restart" cannot be demonstrated with curl — it needs the webapp's MLS/WASM client driving
+      it. The start / first-run / restart-persistence half passes, verified in a browser. This
+      clause needs an e2e spec against the built webapp, not a manual drill
+- [ ] **Docker Desktop usually holds `:8080` on a household Windows machine**, so the very first
+      run fails to bind for a reason that has nothing to do with Hamlaneh. The error now names
+      `HAMLANEH_HOME_ADDR` and a free port. Whether the default should move off 8080 entirely is
+      still open — it is the port most likely to be taken on exactly the machines home mode is for
 - [ ] Bare-IP mode polished; Tauri desktop app builds. *(The Caddy half is fixed: the files
       origin now has its own variable, because gluing `files.` onto a bare IP produced a name
       neither the internal CA nor any public CA could ever certify, and Caddy retried that

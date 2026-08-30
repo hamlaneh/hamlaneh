@@ -334,7 +334,7 @@ func start(ctx context.Context, m mode) error {
 		slog.Info("home mode ready", "open", m.publicURL, "data_dir", m.dataDir)
 	}
 
-	return serve(ctx, httpserver.New(m.addr, offboarding{db, media},
+	return serve(ctx, m.addrInUseRemedy(), httpserver.New(m.addr, offboarding{db, media},
 		httpserver.WithPasswordReset(reset),
 		httpserver.WithSSO(sso),
 		httpserver.WithCalls(media),
@@ -514,9 +514,33 @@ func openStorage(ctx context.Context) (*storage.Store, error) {
 	return store, nil
 }
 
+// isAddrInUse reports whether a listen failed because something already holds
+// the port.
+//
+// It checks two things rather than one because syscall.EADDRINUSE is NOT what
+// Windows returns: there the error is WSAEADDRINUSE, numerically 10048, which
+// errors.Is(err, syscall.EADDRINUSE) does not match and which the syscall
+// package does not export a constant for. Home mode's whole point is running
+// on a household machine, and on Windows that machine usually has Docker
+// Desktop already holding :8080 -- so the platform where this matters most is
+// exactly the one the portable-looking check silently fails on. A test on a
+// really-taken port is what caught it, and is what keeps it caught.
+func isAddrInUse(err error) bool {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	const wsaeAddrInUse = 10048
+	var errno syscall.Errno
+	return errors.As(err, &errno) && uintptr(errno) == wsaeAddrInUse
+}
+
 // serve runs srv until ctx is canceled, then shuts it down gracefully within
 // shutdownTimeout.
-func serve(ctx context.Context, srv *http.Server) error {
+//
+// addrInUse is what to tell the operator when the port is taken, and it is a
+// parameter because the way out differs by mode: home mode has an environment
+// variable, a compose deployment has a port mapping to edit instead.
+func serve(ctx context.Context, addrInUse string, srv *http.Server) error {
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- srv.ListenAndServe()
@@ -525,8 +549,14 @@ func serve(ctx context.Context, srv *http.Server) error {
 
 	select {
 	case err := <-serveErr:
-		// ListenAndServe failed before any shutdown was requested
-		// (e.g. the address is already in use).
+		// ListenAndServe failed before any shutdown was requested. The
+		// common one by far is the address already being in use, and on a
+		// household machine the usual holder of :8080 is Docker Desktop --
+		// so the person most likely to hit it is the one least likely to
+		// know that a bind error has a remedy at all.
+		if isAddrInUse(err) {
+			return fmt.Errorf("serve: %w (%s)", err, addrInUse)
+		}
 		return fmt.Errorf("serve: %w", err)
 	case <-ctx.Done():
 	}
