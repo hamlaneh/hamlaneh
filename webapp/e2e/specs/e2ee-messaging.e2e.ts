@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-import { createChannelApi, inviteApi, sendMessageApi, uniqueSlug } from "../support/chat";
+import { createChannelApi, inviteApi, uniqueSlug } from "../support/chat";
 import { expect, test } from "../support/fixtures";
 import { composeExec } from "../support/stack";
 
@@ -43,13 +43,19 @@ test.describe("end-to-end encryption", () => {
 
     // The vacuity control, following the key-leak scan's precedent: a dump in
     // which the canary is absent proves nothing unless the same dump is shown
-    // to carry plaintext where plaintext is expected. Same author, same
-    // instant, a plaintext channel.
-    const controlChannelId = await createChannelApi(authorApi, uniqueSlug("plain"));
+    // to carry plaintext where plaintext is expected.
+    //
+    // It is a channel TOPIC rather than a message in a plaintext channel,
+    // because since ADR 011 an instance is Strict and cannot create one — the
+    // control would have to ask the product to do the thing this whole slice
+    // exists to stop. A topic is better anyway: it is prose a person typed
+    // that this server stores in the clear BY DESIGN, so finding it proves
+    // the scan reads user-authored text out of the dump, which is exactly the
+    // claim the canary's absence needs propped up.
     const nonce = randomBytes(12).toString("hex");
     const canary = `canary-${nonce}`;
     const control = `control-${nonce}`;
-    await sendMessageApi(authorApi, controlChannelId, control);
+    await createChannelApi(authorApi, uniqueSlug("plain"), "private", { topic: control });
 
     // Reader first (see the header comment). Their app sees an encrypted
     // channel in the sidebar, starts MLS, registers its device and publishes
@@ -104,17 +110,17 @@ test.describe("end-to-end encryption", () => {
     expect(dump).toContain(control);
     expect(dump).not.toContain(canary);
 
-    // The accepted limitation, pinned the way the Persian-search one is so it
-    // is documented rather than discovered: MLS deletes a message key once
-    // used (forward secrecy), and no local plaintext store exists yet
-    // (ROADMAP Phase 3, "Own-message history after a reload" — received
-    // history shares the mechanism). After a reload the words are gone and
-    // the honest placeholder stands. When the local-store slice lands, this
-    // assertion flips and this comment goes with it.
+    // The limitation this used to pin is gone: MLS deletes a message key once
+    // used, so the sender could not reopen its own words after a reload, and
+    // this spec asserted that honestly. The local plaintext store (ROADMAP
+    // Phase 3) now keeps what this device sent, wrapped in the keystore under
+    // the same key as everything else, so the author's own history survives.
+    //
+    // What has NOT changed, and is asserted instead: the recipient's copy is
+    // still only openable by their own device, and the server still holds
+    // nothing but ciphertext — the dump above is the proof of that, and it ran
+    // before this reload.
     await app.page.reload();
-    await expect(app.page.getByText(t("chat.e2ee.cannotDecrypt")).first()).toBeVisible({
-      timeout: 30_000,
-    });
-    await expect(app.messageLog.getByText(canary)).toHaveCount(0);
+    await expect(app.messageBodies).toHaveText([canary], { timeout: 30_000 });
   });
 });

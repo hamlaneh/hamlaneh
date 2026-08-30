@@ -116,13 +116,16 @@ test.describe("key swap", () => {
     // nothing. Sending for real is what proves the decision actually restored
     // the thing it was blocking.
     await app.sendMessage("after the swap");
-    // Only the new message: the reload above threw away the keys that opened
-    // "before the swap", so it renders as the undecryptable placeholder and
-    // not as a body. That is the accepted own-history limitation the
-    // encryption suite pins in its own right (ROADMAP Phase 3, "Own-message
-    // history after a reload"), and asserting the pair here would be
-    // asserting it away.
-    await expect(app.messageBodies).toHaveText(["after the swap"], { timeout: 30_000 });
+    // Both, and the earlier one is the interesting half: it was sent before
+    // the reload, and MLS deleted the key that opened it the moment it was
+    // used. It is readable because the local plaintext store now keeps what
+    // this device sent (ROADMAP Phase 3), wrapped in the keystore under the
+    // same key as everything else. This spec asserted only the new message
+    // while that store did not exist, and the sentence explaining why is gone
+    // with the limitation it described.
+    await expect(app.messageBodies).toHaveText(["before the swap", "after the swap"], {
+      timeout: 30_000,
+    });
 
     // The acceptance is per key set, not a standing permission: a second
     // substitution has to be decided on its own. This is what stops one

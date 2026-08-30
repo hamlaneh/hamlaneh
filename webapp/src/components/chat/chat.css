@@ -1570,6 +1570,26 @@
  * background and a stacking order is none of those things. It stays visually
  * plain and awaits its artboard.
  */
+/*
+ * Account-level plumbing that floats, but beneath the dialogs.
+ *
+ * The backup surfaces are mounted at the shell root on purpose — a backup is
+ * an account-level thing, not a property of whichever conversation is open —
+ * so they cannot be put in the document flow the way a conversation banner
+ * can: at root, in flow, they collapse the chat's height and everything
+ * inside it becomes zero-size. They have to float.
+ *
+ * What they must NOT do is float over the menus and dialogs, which share
+ * `.hm-plumbing` and its `z-index: 5`; rendering later in the tree, the
+ * backup offer won that tie and swallowed clicks meant for the invite dialog.
+ * A lower stacking order is the fix, and it is structural rather than
+ * cosmetic: an account-level prompt is never the thing a person is currently
+ * acting on.
+ */
+.hm-plumbing--beneath {
+  z-index: 1;
+}
+
 .hm-plumbing--inline {
   position: static;
   z-index: auto;

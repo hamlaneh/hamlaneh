@@ -78,7 +78,7 @@ export function BackupSurfaces({
 
   if (showing === "offer") {
     return (
-      <section className="hm-plumbing" aria-label={t("chat.e2ee.backup.offerTitle")}>
+      <section className="hm-plumbing hm-plumbing--beneath" aria-label={t("chat.e2ee.backup.offerTitle")}>
         <h2>{t("chat.e2ee.backup.offerTitle")}</h2>
         <p>{t("chat.e2ee.backup.offerSaves")}</p>
         {/* Said plainly, because the opposite is what people assume: this is
@@ -133,7 +133,7 @@ export function BackupSurfaces({
 
   if (showing === "ceremony") {
     return (
-      <section className="hm-plumbing" aria-label={t("chat.e2ee.backup.ceremonyTitle")}>
+      <section className="hm-plumbing hm-plumbing--beneath" aria-label={t("chat.e2ee.backup.ceremonyTitle")}>
         <h2>{t("chat.e2ee.backup.ceremonyTitle")}</h2>
         <p>{t("chat.e2ee.backup.ceremonyBody")}</p>
         {/* Crockford base32 in groups of four, direction-pinned LTR: it is
@@ -163,7 +163,7 @@ export function BackupSurfaces({
 
   if (showing === "noKey") {
     return (
-      <section className="hm-plumbing" aria-label={t("chat.e2ee.backup.noKeyTitle")}>
+      <section className="hm-plumbing hm-plumbing--beneath" aria-label={t("chat.e2ee.backup.noKeyTitle")}>
         <h2>{t("chat.e2ee.backup.noKeyTitle")}</h2>
         {/* ADR 010, decision 2, near enough word for word. Every sentence is
             load-bearing and none of them may soften into "ask support". */}
@@ -182,7 +182,7 @@ export function BackupSurfaces({
 
   const pending = backup.pending;
   return (
-    <section className="hm-plumbing" aria-label={t("chat.e2ee.backup.restoreTitle")}>
+    <section className="hm-plumbing hm-plumbing--beneath" aria-label={t("chat.e2ee.backup.restoreTitle")}>
       <h2>{t("chat.e2ee.backup.restoreTitle")}</h2>
 
       {pending === null ? (
