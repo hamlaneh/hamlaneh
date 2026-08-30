@@ -662,8 +662,20 @@ Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measur
 - [ ] `install.sh` hardened: Ubuntu LTS, Debian, Fedora, RHEL-clone; idempotent re-runs; clear errors
 - [ ] Installer served from `get.hamlaneh.com` (redirect/proxy to repo raw) — the documented
       one-liner uses this URL so tutorials never break
-- [ ] Bare-IP mode polished; home mode: single binary with SQLite (storage suite now runs
-      against **both** drivers in CI, per CLAUDE.md); Tauri desktop app builds
+- [x] **The SQLite driver** — *2026-08-30*, `server/internal/sqlitestore`, 102 methods, the
+      same set as the PostgreSQL store. The seam is the **consumer-side** interfaces that
+      already existed, so nothing was invented for it and the compiler proves completeness:
+      `var _ testdb.Store = (*sqlitestore.Store)(nil)`. Three representation choices carry
+      what PostgreSQL got from its types — fixed-width UTC TEXT timestamps, canonical TEXT
+      uuids whose hex order matches uuid bytes, citext as a registered collation. The whole
+      module passes on both drivers, and `ci.yml` runs a full `-race` leg per driver because
+      the SQLite concurrency *shape* (one connection, a retrying busy handler) is its own.
+      Six PostgreSQL-mechanism tests are skipped under an allow-list whose gate was proved
+      to fail in **both** directions — a stale entry fails it, a missing one fails it too
+- [ ] Home mode's **boot path**: nothing selects the driver yet, so the binary still always
+      opens PostgreSQL. Mode selection, per-OS data directory, loopback bind, calls off,
+      compression on — and `hamlaneh-server --version`, which the updater needs
+- [ ] Bare-IP mode polished; Tauri desktop app builds
 - [ ] Response compression in the Go server, for home mode only. Caddy's `encode zstd gzip`
       covers the compose path, but home mode has no proxy in front of it and would otherwise
       serve the ~560 KB web bundle uncompressed over whatever link the household has

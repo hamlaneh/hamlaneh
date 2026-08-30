@@ -89,7 +89,9 @@ jobs:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.server == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 35, not 20: this job now runs the whole module under -race twice, once
+    # per storage driver.
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: server
@@ -142,6 +144,19 @@ jobs:
       - name: Test (race detector + storage integration)
         env:
           HAMLANEH_TEST_DSN: postgres://hamlaneh_test:ci-${{ github.run_id }}@localhost:5432/hamlaneh_test?sslmode=disable
+        run: go test -race ./...
+
+      # The second driver, per CLAUDE.md: from Phase 4 the storage-interface
+      # suite runs against both. It is a full -race pass and not a cheaper
+      # subset because the SQLite driver's concurrency SHAPE is its own — one
+      # connection, a busy handler that retries rather than queues — so a race
+      # in it is precisely what the PostgreSQL leg cannot reach.
+      #
+      # No service container: that is the point of home mode, and a leg that
+      # needed one would not be testing what ships.
+      - name: Test (race detector, SQLite driver)
+        env:
+          HAMLANEH_TEST_DRIVER: sqlite
         run: go test -race ./...
 
       - name: Coverage floors — security-critical packages ≥95% (CLAUDE.md)

@@ -464,7 +464,7 @@ which cannot know what was delivered after it was written.
 | `webapp/src-mls/` | Rust → WebAssembly (OpenMLS, ADR 006) | The MLS core the browser runs; Rust exists only in this client build stage — the server stays a single Go binary |
 | `desktop/` | Tauri v2 (planned, Phase 4) | Native desktop wrapper around the web UI |
 | `deploy/` | Docker Compose + Caddy + install.sh | The one-command install; Caddy owns TLS and HSTS only |
-| Database | PostgreSQL (server) / SQLite (home mode, Phase 4) | One storage interface, two drivers |
+| Database | PostgreSQL (server) / SQLite (home mode) | Two drivers behind the *consumer* interfaces; the whole suite runs against both |
 | Calls | LiveKit SFU + TURN (Phase 2) | Voice/video/screen share |
 | E2EE | MLS via OpenMLS → WASM in the browser client (ADR 006; transport shipped, phase in progress) | Compromised server sees only ciphertext |
 
