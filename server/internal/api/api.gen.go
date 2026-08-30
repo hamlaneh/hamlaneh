@@ -570,10 +570,13 @@ type HealthStatus struct {
 // HealthStatusStatus defines model for HealthStatus.Status.
 type HealthStatusStatus string
 
-// InstanceInfo What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere.
+// InstanceInfo What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere. encryption_mode is here rather than only on the admin settings document because every member's creation surfaces need it and that document answers 403 to them. It is not withheld as a secret: an instance's encryption posture is a product characteristic its own users are entitled to know before they type anything into it, and a client that had to guess would guess wrong somewhere.
 type InstanceInfo struct {
 	// Calls False when no media server is configured -- a development server without the stack, or an install that has not enabled calls. The UI omits call controls rather than offering a door that goes nowhere, the same discipline password_reset_available follows.
 	Calls *bool `json:"calls,omitempty"`
+
+	// EncryptionMode Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+	EncryptionMode EncryptionMode `json:"encryption_mode"`
 
 	// MaxFileSizeBytes The per-file upload cap, published so a client can refuse a file before spending the user's bandwidth on a doomed request. The server enforces it regardless; this is a courtesy, not the check.
 	MaxFileSizeBytes       int64      `json:"max_file_size_bytes"`
@@ -809,15 +812,18 @@ type OrgSettings struct {
 	// AccountsWithoutTotp How many accounts enforcement would affect. Read-only, and the reason the screen can say who it hits before it is turned on.
 	AccountsWithoutTotp *int `json:"accounts_without_totp,omitempty"`
 
-	// ConversationsOutsideMode How many conversations this instance holds whose encryption does not match the current mode — plaintext ones under `strict`, or encrypted ones under `compliance`. Read-only and permanent: they are never converted, so this number is the honest standing count of what the mode does not describe, and the settings screen shows it rather than implying the mode covers everything.
-	ConversationsOutsideMode *int `json:"conversations_outside_mode,omitempty"`
-
 	// DefaultLocale The locale a new account starts in.
 	DefaultLocale OrgSettingsDefaultLocale `json:"default_locale"`
+
+	// EncryptedConversations How many conversations this instance holds that are end-to-end encrypted.
+	EncryptedConversations *int `json:"encrypted_conversations,omitempty"`
 
 	// EncryptionMode Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
 	EncryptionMode EncryptionMode `json:"encryption_mode"`
 	OrgName        string         `json:"org_name"`
+
+	// PlaintextConversations How many are not. Both totals rather than one "outside the current mode" count, because the switch confirmation has to name what will be outside the mode being CHOSEN — which is the other set in each direction, so a single current-mode count would state the plaintext total as the encrypted one on a screen about encryption. Neither number ever moves on a switch: conversations are never converted, which is the whole of decision 2, so these are also the honest standing answer to "what does the mode not describe".
+	PlaintextConversations *int `json:"plaintext_conversations,omitempty"`
 
 	// RegistrationMode How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
 	RegistrationMode RegistrationMode `json:"registration_mode"`
