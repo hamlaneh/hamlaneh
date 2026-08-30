@@ -73,7 +73,16 @@ COPY server/ ./
 RUN rm -rf ./internal/webassets/dist
 COPY --from=webbuild /src/webapp/dist/ ./internal/webassets/dist/
 
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+# The release tag, stamped into the binary so `hamlaneh-server --version`
+# answers. deploy/hamlaneh-update.sh asks the RUNNING server what it is
+# (`compose exec server hamlaneh-server --version`) and fails the update when
+# the answer is not a version, because the installed version is the only input
+# to verify-release.sh's anti-rollback check. The release workflow passes
+# --build-arg VERSION; a local `docker compose build` gets "dev", which is
+# honest and which the updater refuses rather than guesses at.
+ARG VERSION=dev
+
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
       -o /out/hamlaneh-server ./cmd/hamlaneh-server
 
 # The data directory, created here because the runtime stage is distroless

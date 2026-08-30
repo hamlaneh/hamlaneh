@@ -2,8 +2,12 @@
 //
 // Usage:
 //
-//	hamlaneh-server              start the server on :8080
+//	hamlaneh-server              start in server mode on :8080 (PostgreSQL)
+//	hamlaneh-server home         start in home mode on 127.0.0.1:8080 (SQLite)
 //	hamlaneh-server healthcheck  probe /healthz of a local instance; exit 0 if healthy, 1 otherwise
+//	hamlaneh-server --version    print the version this binary was built as
+//
+// # Server mode
 //
 // The server needs PostgreSQL, configured via the standard libpq environment
 // variables (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, PGSSLMODE), and
@@ -47,12 +51,47 @@
 //
 // The server speaks plain HTTP; TLS termination is the reverse proxy's job.
 // It shuts down gracefully on SIGINT/SIGTERM.
+//
+// # Home mode
+//
+// `hamlaneh-server home` is PLAN §4's second deployment: one binary, one
+// machine, no Docker, no domain and no YAML (ADR 012). It differs from server
+// mode in four ways and no others — SQLite instead of PostgreSQL, a loopback
+// bind, no calls, and compression on because nothing is in front of it.
+//
+// Everything lives in one directory, which is therefore the whole backup
+// unit: the database (hamlaneh.db and its -wal/-shm siblings), the uploaded
+// bytes, and the two keys above, generated on first run instead of by an
+// installer. HAMLANEH_DATA_DIR chooses that directory; the default is
+// per-user and per-OS (%AppData%\hamlaneh on Windows, ~/Library/Application
+// Support/hamlaneh on macOS, ~/.config/hamlaneh on Linux).
+//
+// HAMLANEH_HOME_ADDR moves the bind off 127.0.0.1:8080, and doing so fails
+// closed rather than degrading: sessions are Secure cookies, which browsers
+// send over plain HTTP only to localhost, so a LAN-published home instance
+// visibly does not sign in until a reverse proxy terminates TLS in front of
+// it. HAMLANEH_COMPRESS_RESPONSES=0 turns compression back off.
+//
+// The origin the browser uses must be the one HAMLANEH_PUBLIC_URL names,
+// which defaults to http://<the bind address>: the WebSocket handshake's
+// Origin check compares against it, so opening the same instance as
+// http://localhost:8080 rather than http://127.0.0.1:8080 needs that variable
+// set to say so. Startup logs the URL it expects.
+//
+// Home mode has no media server, so the three HAMLANEH_LIVEKIT_* variables
+// must be unset; the instance document reports calls off and the UI omits the
+// controls, exactly as it does for a server-mode install without LiveKit.
+//
+// Mode selection is explicit and never falls back in either direction: a
+// server-mode instance whose database is unreachable stops, rather than
+// quietly opening an empty SQLite file and forking the organization's data.
 package main
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -93,9 +132,23 @@ const (
 // server. A var, not a const, so tests can point it at a test server.
 var healthcheckURL = "http://127.0.0.1:8080/healthz"
 
+// version is what --version prints. The release workflow stamps the tag in
+// with -ldflags="-X main.version=$VERSION"; a build that was not released
+// says so rather than claiming a version nobody can verify.
+//
+// It is what an updater reads to know what is installed — deploy/
+// verify-release.sh takes it as --installed and refuses a downgrade on it —
+// so the output is the tag and nothing else.
+var version = "dev"
+
+// stdout is where --version writes. A var so tests can read what it printed.
+var stdout io.Writer = os.Stdout
+
 const usage = `usage:
-  hamlaneh-server              start the server on ` + listenAddr + `
-  hamlaneh-server healthcheck  probe /healthz; exit 0 if healthy, 1 otherwise`
+  hamlaneh-server              start in server mode on ` + listenAddr + ` (PostgreSQL)
+  hamlaneh-server home         start in home mode on ` + defaultHomeAddr + ` (SQLite)
+  hamlaneh-server healthcheck  probe /healthz; exit 0 if healthy, 1 otherwise
+  hamlaneh-server --version    print the version this binary was built as`
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -111,139 +164,24 @@ func run(args []string) error {
 	case len(args) == 0:
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-
-		// Before the database, because this one is answerable without any
-		// network at all: the file-URL signing key is the credential every
-		// read of an uploaded file is checked against, and a server that
-		// invented one per boot would invalidate every URL it had ever
-		// minted on every restart.
-		signer, err := filesign.FromEnv()
+		return start(ctx, serverMode())
+	case args[0] == "home":
+		if len(args) > 1 {
+			return fmt.Errorf("home takes no arguments\n%s", usage)
+		}
+		m, err := homeMode()
 		if err != nil {
 			return err
 		}
-
-		// The audit chain's key, for the same reason and at the same point:
-		// it is what makes the log evidence rather than a table of rows, a
-		// key invented per boot would fail to verify everything recorded
-		// before the last restart, and a built-in default would let anybody
-		// who knows it rewrite the chain and re-seal it.
-		auditChain, err := audit.FromEnv()
-		if err != nil {
-			return err
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return start(ctx, m)
+	case args[0] == "--version":
+		if len(args) > 1 {
+			return fmt.Errorf("--version takes no arguments\n%s", usage)
 		}
-
-		// Where uploaded bytes live. Created at startup rather than on the
-		// first upload, so a data directory the process cannot write is a
-		// failure to start instead of a failure halfway through somebody's
-		// file (HAMLANEH_DATA_DIR; compose mounts a volume there).
-		blobs, err := blobstore.FromEnv()
-		if err != nil {
-			return err
-		}
-
-		store, err := openStorage(ctx)
-		if err != nil {
-			return err
-		}
-		defer store.Close()
-
-		adminCfg, present := bootstrap.AdminFromEnv()
-		if err = bootstrap.EnsureAdmin(ctx, store, adminCfg, present); err != nil {
-			return err
-		}
-
-		// A half-configured mail transport, or one with no public URL to build
-		// links from, stops startup: reset that silently mints tokens nobody
-		// can open is worse than reset that is honestly switched off.
-		reset, err := passwordreset.FromEnv(store)
-		if err != nil {
-			return fmt.Errorf("configure password reset: %w", err)
-		}
-
-		// Single sign-on follows the same rule: none of its variables set is
-		// a supported install (sso is nil and the endpoints say so), a
-		// half-configured set stops startup. Only configuration is checked
-		// here — provider discovery is lazy and retried, so an identity
-		// provider that is down cannot stop the chat server booting.
-		sso, err := oidc.FromEnv(os.Getenv(passwordreset.EnvPublicURL))
-		if err != nil {
-			return fmt.Errorf("configure single sign-on: %w", err)
-		}
-
-		// Calls follow the same rule again: all three LiveKit variables set
-		// turns the media plane on, none set is a supported install with
-		// calls off and the instance document says so, and a partial set
-		// stops startup rather than failing at somebody's first call.
-		media, err := calls.FromEnv()
-		if err != nil {
-			return fmt.Errorf("configure calls: %w", err)
-		}
-		// Drains the dispatch queue; the server has stopped accepting
-		// requests by the time serve returns.
-		defer reset.Close()
-
-		// The realtime gateway. Its Origin check is the CSWSH defense standing
-		// in for the CSRF header a browser cannot send on a handshake, so it
-		// needs the instance's public origin; without one it allows nothing
-		// and every upgrade is refused, which is the right way to fail.
-		gateway := wsgateway.New(store, os.Getenv(passwordreset.EnvPublicURL),
-			// Its message frames carry attachments and preview cards, whose
-			// URLs are minted per serialization like every other one.
-			wsgateway.WithURLSigner(attachmentURLs{signer}))
-		// Closed before serve returns, because http.Server.Shutdown does not
-		// wait for hijacked connections and a WebSocket is one. Without this,
-		// shutdown reports success while sockets are still being served.
-		//
-		// A failure here is logged rather than returned: the process is on
-		// its way out, and reporting a shutdown hiccup as the run's outcome
-		// would mask whatever actually stopped it.
-		defer func() {
-			if closeErr := gateway.Close(); closeErr != nil {
-				slog.Error("close realtime gateway", "error", closeErr)
-			}
-		}()
-
-		// Link previews: the guarded egress fetch, off the request path.
-		// The gateway is the announcer, so an arriving card reaches every
-		// open socket as message_updated (ws-protocol §4).
-		previews := linkpreview.New(egress.New(), store, previewBlobs{blobs}, gateway)
-		defer previews.Close()
-
-		return serve(ctx, httpserver.New(listenAddr, offboarding{store, media},
-			httpserver.WithPasswordReset(reset),
-			httpserver.WithSSO(sso),
-			httpserver.WithCalls(media),
-			// The same public origin the reset link and the socket's Origin
-			// check are built from; here it is what makes an invitation link
-			// something an admin can paste into a message.
-			httpserver.WithPublicURL(os.Getenv(passwordreset.EnvPublicURL)),
-			httpserver.WithRealtime(gateway),
-			// Response compression, off unless this install asked. The
-			// compose stack puts Caddy in front and Caddy already compresses;
-			// home mode has no proxy at all and is what this is for
-			// (internal/httpserver/compress.go).
-			httpserver.WithCompression(os.Getenv(httpserver.EnvCompressResponses) == "1"),
-			httpserver.WithFiles(httpserver.Files{
-				Signer:      signer,
-				Attachments: store,
-				Previews:    store,
-			}),
-			httpserver.WithUploads(blobs, attachmentURLs{signer}),
-			httpserver.WithLinkPreviews(previews),
-			httpserver.WithAudit(auditRecorder{audit.NewRecorder(auditChain, store)}),
-			httpserver.WithAuditChain(auditChain),
-			// SCIM provisioning. It needs no configuration and no
-			// environment variable: it is off until an administrator mints a
-			// token, and unauthenticated until one is presented, so mounting
-			// it unconditionally costs a zero-config install nothing.
-			//
-			// It takes the recorder directly rather than through
-			// auditRecorder: the actor of a provisioning action is a
-			// credential and never a person, so there is no "nobody" to
-			// translate.
-			httpserver.WithSCIM(scim.New(offboarding{store, media},
-				scim.WithAudit(audit.NewRecorder(auditChain, store)))),
-		))
+		_, err := fmt.Fprintln(stdout, version)
+		return err
 	case args[0] == "healthcheck":
 		if len(args) > 1 {
 			return fmt.Errorf("healthcheck takes no arguments\n%s", usage)
@@ -254,6 +192,159 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q\n%s", args[0], usage)
 	}
+}
+
+// start wires the whole server for m and serves until ctx is canceled.
+//
+// It is ONE function for both modes on purpose (ADR 012): everything below —
+// the keys, the bootstrap admin, sessions, authorization, the security
+// headers, the audit chain, provisioning — is the same code serving a
+// household and an organization, and the only differences are the five fields
+// of m. A second wiring function is how the smaller deployment would quietly
+// become the weaker one.
+func start(ctx context.Context, m mode) error {
+	// Home mode's data directory, before anything writes into it. A no-op in
+	// server mode, where blobstore owns the directory as it always has.
+	if err := m.prepare(); err != nil {
+		return err
+	}
+
+	// Before the database, because these are answerable without any network
+	// at all: the file-URL signing key is the credential every read of an
+	// uploaded file is checked against, and the audit chain's key is what
+	// makes the log evidence rather than a table of rows. A server that
+	// invented either per boot would invalidate every URL it had ever minted
+	// and fail to verify everything recorded before the last restart.
+	signer, auditChain, err := m.keys()
+	if err != nil {
+		return err
+	}
+
+	// Where uploaded bytes live. Created at startup rather than on the
+	// first upload, so a data directory the process cannot write is a
+	// failure to start instead of a failure halfway through somebody's
+	// file (HAMLANEH_DATA_DIR; compose mounts a volume there).
+	blobs, err := blobstore.New(m.dataDir)
+	if err != nil {
+		return err
+	}
+
+	// db rather than store, which is the type below.
+	db, err := m.openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	adminCfg, present := bootstrap.AdminFromEnv()
+	if err = bootstrap.EnsureAdmin(ctx, db, adminCfg, present); err != nil {
+		return err
+	}
+
+	// A half-configured mail transport, or one with no public URL to build
+	// links from, stops startup: reset that silently mints tokens nobody
+	// can open is worse than reset that is honestly switched off.
+	reset, err := passwordreset.FromEnv(db)
+	if err != nil {
+		return fmt.Errorf("configure password reset: %w", err)
+	}
+
+	// Single sign-on follows the same rule: none of its variables set is
+	// a supported install (sso is nil and the endpoints say so), a
+	// half-configured set stops startup. Only configuration is checked
+	// here — provider discovery is lazy and retried, so an identity
+	// provider that is down cannot stop the chat server booting.
+	sso, err := oidc.FromEnv(m.publicURL)
+	if err != nil {
+		return fmt.Errorf("configure single sign-on: %w", err)
+	}
+
+	// Calls follow the same rule again: all three LiveKit variables set
+	// turns the media plane on, none set is a supported install with
+	// calls off and the instance document says so, and a partial set
+	// stops startup rather than failing at somebody's first call. Home mode
+	// refused any of them before it got here, so media is nil there and the
+	// instance document reports calls off (ADR 012).
+	media, err := calls.FromEnv()
+	if err != nil {
+		return fmt.Errorf("configure calls: %w", err)
+	}
+	// Drains the dispatch queue; the server has stopped accepting
+	// requests by the time serve returns.
+	defer reset.Close()
+
+	// The realtime gateway. Its Origin check is the CSWSH defense standing
+	// in for the CSRF header a browser cannot send on a handshake, so it
+	// needs the instance's public origin; without one it allows nothing
+	// and every upgrade is refused, which is the right way to fail.
+	gateway := wsgateway.New(db, m.publicURL,
+		// Its message frames carry attachments and preview cards, whose
+		// URLs are minted per serialization like every other one.
+		wsgateway.WithURLSigner(attachmentURLs{signer}))
+	// Closed before serve returns, because http.Server.Shutdown does not
+	// wait for hijacked connections and a WebSocket is one. Without this,
+	// shutdown reports success while sockets are still being served.
+	//
+	// A failure here is logged rather than returned: the process is on
+	// its way out, and reporting a shutdown hiccup as the run's outcome
+	// would mask whatever actually stopped it.
+	defer func() {
+		if closeErr := gateway.Close(); closeErr != nil {
+			slog.Error("close realtime gateway", "error", closeErr)
+		}
+	}()
+
+	// Link previews: the guarded egress fetch, off the request path.
+	// The gateway is the announcer, so an arriving card reaches every
+	// open socket as message_updated (ws-protocol §4).
+	previews := linkpreview.New(egress.New(), db, previewBlobs{blobs}, gateway)
+	defer previews.Close()
+
+	if m.home {
+		// The URL to open, said once and exactly: the WebSocket handshake
+		// compares the browser's Origin against this string, so reaching the
+		// same instance as http://localhost:8080 instead of the address
+		// below is a different origin and its sockets are refused. Whoever
+		// wants that sets HAMLANEH_PUBLIC_URL to it. The data directory is
+		// logged beside it because it is the whole backup unit.
+		slog.Info("home mode ready", "open", m.publicURL, "data_dir", m.dataDir)
+	}
+
+	return serve(ctx, httpserver.New(m.addr, offboarding{db, media},
+		httpserver.WithPasswordReset(reset),
+		httpserver.WithSSO(sso),
+		httpserver.WithCalls(media),
+		// The same public origin the reset link and the socket's Origin
+		// check are built from; here it is what makes an invitation link
+		// something an admin can paste into a message.
+		httpserver.WithPublicURL(m.publicURL),
+		httpserver.WithRealtime(gateway),
+		// Response compression. Off unless a server-mode install asked, on
+		// unless a home-mode install refused: the compose stack puts Caddy
+		// in front and Caddy already compresses, home mode has no proxy at
+		// all and is what this is for (internal/httpserver/compress.go).
+		httpserver.WithCompression(m.compress),
+		httpserver.WithFiles(httpserver.Files{
+			Signer:      signer,
+			Attachments: db,
+			Previews:    db,
+		}),
+		httpserver.WithUploads(blobs, attachmentURLs{signer}),
+		httpserver.WithLinkPreviews(previews),
+		httpserver.WithAudit(auditRecorder{audit.NewRecorder(auditChain, db)}),
+		httpserver.WithAuditChain(auditChain),
+		// SCIM provisioning. It needs no configuration and no
+		// environment variable: it is off until an administrator mints a
+		// token, and unauthenticated until one is presented, so mounting
+		// it unconditionally costs a zero-config install nothing.
+		//
+		// It takes the recorder directly rather than through
+		// auditRecorder: the actor of a provisioning action is a
+		// credential and never a person, so there is no "nobody" to
+		// translate.
+		httpserver.WithSCIM(scim.New(offboarding{db, media},
+			scim.WithAudit(audit.NewRecorder(auditChain, db)))),
+	))
 }
 
 // offboarding is ADR 005's second removal hook: an account that is
@@ -286,8 +377,27 @@ type offboarding struct {
 // driver can be wired here too (ADR 012): the seam between the server and a
 // driver is the consumer's interface, and this is the consumer.
 type store interface {
+	// The interfaces the consumers this command wires already declare for
+	// themselves. Nothing is invented here: this is the union of what is
+	// handed to whom below, and the compiler is what checks a driver
+	// against it.
 	httpserver.Store
 	scim.Store
+	bootstrap.Store
+	passwordreset.Store
+	linkpreview.Store
+
+	// The residue: two reads the files origin needs that internal/httpserver
+	// names only through unexported interfaces (attachmentReader,
+	// previewImageReader in files_origin.go). Exporting those would widen
+	// that package's API to satisfy this one declaration.
+	AttachmentByID(ctx context.Context, id uuid.UUID) (storage.Attachment, error)
+	LinkPreviewImageExists(ctx context.Context, blobID uuid.UUID) (bool, error)
+
+	// Releases the driver's connections at shutdown. No consumer interface
+	// names it — a handler has no business closing the database — but the
+	// process that opened it does.
+	Close()
 }
 
 func (o offboarding) UpdateUserAdmin(ctx context.Context, userID uuid.UUID, upd storage.AdminUserUpdate) (storage.User, error) {

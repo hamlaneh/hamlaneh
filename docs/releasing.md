@@ -103,11 +103,17 @@ cosign verify-attestation --type spdxjson \
 
 ## What an operator (or the updater) runs
 
-The same script, plus the version already installed:
+The same script, plus the version already installed — which the installed binary now reports
+itself:
 
 ```sh
-deploy/verify-release.sh --version v1.4.0 --dir ./download --installed v1.3.2
+deploy/verify-release.sh --version v1.4.0 --dir ./download \
+  --installed "$(hamlaneh-server --version)"
 ```
+
+`hamlaneh-server --version` prints the release tag and nothing else. A binary built outside the
+release workflow prints `dev`, which is not a version and which `--installed` rejects as a usage
+error rather than treating as older or newer than anything.
 
 Exit codes are distinct so an updater can tell the two failures apart:
 
@@ -180,9 +186,10 @@ than it claims is worse than one that claims less.
 - **There is no auto-updater yet.** `verify-release.sh` is the gate an updater will call; the
   updater itself is unbuilt. The ROADMAP gate's "auto-update applies a signed release" half is
   not met by anything in this repository.
-- **The server does not report its own version.** `hamlaneh-server` has no `--version` flag, so
-  the installed version has to be supplied to the script by its caller. Wiring that is a change
-  in `server/`.
+- ~~**The server does not report its own version.**~~ Done: `hamlaneh-server --version` prints
+  the tag, stamped in by this workflow's `-ldflags="-X main.version=$VERSION"`. An updater reads
+  it and passes it as `--installed`. Untested against a real tag for the same reason everything
+  else here is: no tag has been pushed, so the only version ever printed so far is `dev`.
 - **The image is `linux/amd64` only.** Go cross-compiles the binaries for free; the image build
   runs Rust, Node and Go, and building it for arm64 under emulation is expensive enough to want
   a real decision rather than a default.

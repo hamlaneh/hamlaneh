@@ -131,8 +131,13 @@ jobs:
             out="hamlaneh-server"
             if [ "$goos" = "windows" ]; then out="hamlaneh-server.exe"; fi
             echo "building $goos/$goarch"
+            # -X main.version: what `hamlaneh-server --version` prints, and
+            # therefore what an updater passes to verify-release.sh as
+            # --installed. An unstamped build says "dev" rather than claiming
+            # a version nobody can verify, so this flag and that default are
+            # the same decision.
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-              go build -trimpath -ldflags="-s -w" \
+              go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
               -o "$RUNNER_TEMP/$out" ./cmd/hamlaneh-server
             base="hamlaneh-${VERSION}-${goos}-${goarch}"
             if [ "$goos" = "windows" ]; then
@@ -246,7 +251,10 @@ jobs:
         run: |
           set -euo pipefail
           image="ghcr.io/${GITHUB_REPOSITORY}/server"
-          docker build -f deploy/Dockerfile -t "${image}:${VERSION}" .
+          # --build-arg VERSION: the image's binary reports the tag too, which
+          # is what deploy/hamlaneh-update.sh asks the running server for
+          # before it will apply anything (see deploy/Dockerfile).
+          docker build -f deploy/Dockerfile --build-arg "VERSION=${VERSION}" -t "${image}:${VERSION}" .
           docker push "${image}:${VERSION}"
           # The registry digest, read back from the registry rather than from
           # the local image id: signing and attesting go against the digest, so

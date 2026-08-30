@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -56,6 +57,27 @@ func TestRunHealthcheckSubcommand(t *testing.T) {
 				t.Errorf("run(%v) error = %v, wantErr %v", tt.args, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestVersionFlag is what the updater reads to know what is installed, so the
+// output is one line and nothing else: the version, exactly as the release
+// tag spells it.
+func TestVersionFlag(t *testing.T) {
+	var out bytes.Buffer
+	original := stdout
+	stdout = &out
+	t.Cleanup(func() { stdout = original })
+
+	originalVersion := version
+	version = "v1.2.3"
+	t.Cleanup(func() { version = originalVersion })
+
+	if err := run([]string{"--version"}); err != nil {
+		t.Fatalf("run(--version) = %v, want nil", err)
+	}
+	if got := out.String(); got != "v1.2.3\n" {
+		t.Errorf("run(--version) printed %q, want %q", got, "v1.2.3\n")
 	}
 }
 
