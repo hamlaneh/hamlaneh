@@ -139,15 +139,20 @@ type previewImageReader interface {
 
 // routeFilesOrigin registers the two file routes on mux.
 //
+// The patterns come from filesign.RoutePattern rather than being written out
+// here, because filesign.Path is what every minted URL is built from: a path
+// spelled independently at the two ends is one edit away from serving 404 to
+// URLs this instance signed itself.
+//
 // They are registered unconditionally, even on a server with no Files
 // wired. A missing route would fall through to the bare 404 of the default
 // mux, which carries none of the headers above — and those headers are the
 // invariant the deploy check verifies on exactly such an install.
 func routeFilesOrigin(mux *http.ServeMux, s *apiServer) {
-	mux.HandleFunc("GET /files/{id}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+filesign.RoutePattern(blobstore.Original), func(w http.ResponseWriter, r *http.Request) {
 		s.serveAttachment(w, r, blobstore.Original)
 	})
-	mux.HandleFunc("GET /files/{id}/thumb", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+filesign.RoutePattern(blobstore.Thumbnail), func(w http.ResponseWriter, r *http.Request) {
 		s.serveAttachment(w, r, blobstore.Thumbnail)
 	})
 }

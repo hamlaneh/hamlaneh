@@ -142,13 +142,29 @@ func (s *Signer) Valid(id uuid.UUID, v blobstore.Variant, query url.Values) bool
 }
 
 // Path is the request path serving variant v of id, without the signature.
-// It is the shape files_origin.go registers its routes on; the two must
-// agree, and stating it once is what keeps them agreeing.
+// It is what FileURLAt mints against.
 func Path(id uuid.UUID, v blobstore.Variant) string {
+	return pathOf(id.String(), v)
+}
+
+// RoutePattern is the same path with the id left as the router's wildcard:
+// the pattern files_origin.go registers on.
+//
+// It exists so the minted URL and the route that serves it are ONE statement
+// rather than two that have to be kept equal by whoever edits either. Before
+// it, "/files/" was written out at both ends, and moving one of them would
+// have 404'd every URL this package had already signed while the whole test
+// suite stayed green — the routes were reached by literal in the tests too.
+func RoutePattern(v blobstore.Variant) string {
+	return pathOf("{id}", v)
+}
+
+// pathOf is the one place the files origin's path space is spelled.
+func pathOf(id string, v blobstore.Variant) string {
 	if v == blobstore.Thumbnail {
-		return "/files/" + id.String() + "/thumb"
+		return "/files/" + id + "/thumb"
 	}
-	return "/files/" + id.String()
+	return "/files/" + id
 }
 
 // mac authenticates the three fields joined by newlines. Neither a UUID's

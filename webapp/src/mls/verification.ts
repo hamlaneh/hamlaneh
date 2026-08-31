@@ -113,8 +113,11 @@ export function inspect(
  *
  * This cannot drift into reading the directory for the own set: doing so would
  * leave every function still returning plausible numbers, every test about
- * matching still passing, and the ceremony silently worthless. That is what
- * `safety numbers are non-circular` in the service tests exists to catch.
+ * matching still passing, and the ceremony silently worthless. The two tests
+ * that exist to catch it are in `service.test.ts`, under "safety numbers":
+ * `computes our own half from our own device key, never from the directory`
+ * and `mismatches exactly when a key is planted, where a circular one would
+ * match`.
  */
 export function acceptedKeys(
   userId: string,

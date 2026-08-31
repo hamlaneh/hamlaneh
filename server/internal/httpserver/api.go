@@ -373,6 +373,14 @@ type apiServer struct {
 	// are built (server.go), and reaches nothing under /api by design
 	// (compress.go).
 	compressAssets bool
+
+	// trustProxy says a reverse proxy sits in front of this listener and may
+	// name the client with X-Forwarded-For. False — the default — reads the
+	// direct peer and nothing else, which is the honest answer for any
+	// deployment with nothing forwarding: the single binary, and every test
+	// fixture. WithTrustedProxy is the only thing that sets it, and
+	// clientIP carries the whole argument.
+	trustProxy bool
 }
 
 var _ api.ServerInterface = (*apiServer)(nil)

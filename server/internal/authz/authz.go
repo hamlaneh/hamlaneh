@@ -15,8 +15,9 @@ import (
 // area:resource:verb.
 type Action string
 
-// Phase 1.1 actions. The admin dashboard is the only permissioned surface
-// so far; channels and messages arrive in Phase 1.2.
+// Phase 1.1 actions, the first surface that needed any: the admin dashboard.
+// Channels, messages, calls and conferences are all decided here too now,
+// each in its own block below.
 const (
 	// AdminUsersList is listing users from the admin dashboard.
 	AdminUsersList Action = "admin:users:list"
@@ -60,7 +61,11 @@ const (
 )
 
 // Can reports whether user may perform action on resource. resource is nil
-// for org-level actions; later phases pass channels, messages, and files.
+// for org-level actions, and otherwise one of the types the switch below
+// names: Channel, Message, Conference. There is no File resource and there
+// deliberately is not one — an uploaded file's permission is the permission
+// of the conversation it lands in, so FileUpload is decided against a
+// Channel.
 //
 // The default is deny: a nil user, an unknown action, or an action the user
 // lacks all deny. ctx is unused today but pinned in the signature so

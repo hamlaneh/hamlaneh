@@ -371,6 +371,17 @@ const KEYSTORE_LOCK = "hamlaneh.mls.keystore";
  * Runs `work` while holding the keystore lock, or plainly when the browser has
  * no Web Locks API.
  *
+ * **Every write in this file goes through here** — `putWrapped`, the wrapping
+ * key's first-run creation, `saveBackupKey`, `deleteBackupKey` and `clear` —
+ * which is what lets the claim be "serialized against every other writer in
+ * this profile" rather than "serialized against most of them". A write that
+ * reached `store.put` or `store.delete` directly would be the exception that
+ * makes the invariant untrue, so there is no such call.
+ *
+ * Reads deliberately do not take it: a torn record cannot be produced by a
+ * reader, and `readStoredState` already answers null for anything that is not
+ * a whole one.
+ *
  * The fallback is deliberate rather than a refusal: without the lock the only
  * loss is the cross-tab coordination this adds, and a browser that cannot
  * coordinate is not a reason to leave a single-tab user with no encryption at
@@ -450,13 +461,14 @@ export class Keystore {
       copyOf(bytes),
     );
     const record: StoredState = { iv, ciphertext: new Uint8Array(ciphertext) };
-    // Serialized against every other writer in this profile, so a write is
-    // never interleaved with another tab's. It does NOT make two tabs share
-    // one device: each still holds its own in wasm memory and the last one
-    // to save still wins the stored copy. What the lock buys is that the
-    // stored copy is always exactly one tab's state and never a torn mix of
-    // two. One device per profile needs a SharedWorker and is filed as its
-    // own roadmap item.
+    // Serialized against every other writer in this profile (see
+    // withKeystoreLock for why "every" holds), so a write is never
+    // interleaved with another tab's. It does NOT make two tabs share one
+    // device: each still holds its own in wasm memory and the last one to
+    // save still wins the stored copy. What the lock buys is that the stored
+    // copy is always exactly one tab's state and never a torn mix of two.
+    // One device per profile needs a SharedWorker and is filed as its own
+    // roadmap item.
     await withKeystoreLock(() => this.store.put(id, record));
   }
 
@@ -630,7 +642,9 @@ export class Keystore {
   /** Forgets the backup key handle — turning backup off, and signing out. */
   async deleteBackupKey(): Promise<void> {
     try {
-      await this.store.delete(BACKUP_KEY_ID);
+      // Under the lock like every other write: a delete racing another tab's
+      // save is the same interleaving a save racing a save is.
+      await withKeystoreLock(() => this.store.delete(BACKUP_KEY_ID));
     } catch (error) {
       console.warn("Could not drop the backup key:", error);
     }
@@ -661,29 +675,39 @@ export class Keystore {
     }
   }
 
-  /** Drops the stored state (a different user signing in on this profile). */
+  /**
+   * Drops the stored state (a different user signing in on this profile).
+   *
+   * The whole sequence runs inside ONE hold of the keystore lock, which is
+   * what makes it a clear rather than seven deletes another tab can write
+   * between: a save landing halfway through would leave the next person's
+   * profile holding the previous one's records with no state, or a floor with
+   * no key.
+   */
   async clear(): Promise<void> {
     try {
-      await this.store.delete(STATE_ID);
-      // The records go with it. They are one person's trust decisions, and
-      // leaving them for whoever signs in next would show that person a
-      // `verified` badge nobody on this device ever earned.
-      await this.store.delete(RECORDS_ID);
-      // And the sent history, for a blunter reason than the records: it is
-      // one person's own words in plaintext, and leaving it behind would hand
-      // whoever signs in next the previous user's messages.
-      await this.store.delete(SENT_ID);
-      // And the key-package count, because the device that replaces this one
-      // has published nothing. An inherited count would suppress its first
-      // publish and leave it unaddable until something else replenished.
-      await this.store.delete(KEY_PACKAGE_COUNT_ID);
-      // And the backup: the key handle is one person's, and so is the floor.
-      // Leaving the handle would let the next person's records be sealed under
-      // a recovery key only the previous one was ever shown — a backup nobody
-      // can open — and leaving the floor would have this profile refuse the
-      // new person's own real backup as a rollback.
-      await this.store.delete(BACKUP_KEY_ID);
-      await this.store.delete(BACKUP_STATE_ID);
+      await withKeystoreLock(async () => {
+        await this.store.delete(STATE_ID);
+        // The records go with it. They are one person's trust decisions, and
+        // leaving them for whoever signs in next would show that person a
+        // `verified` badge nobody on this device ever earned.
+        await this.store.delete(RECORDS_ID);
+        // And the sent history, for a blunter reason than the records: it is
+        // one person's own words in plaintext, and leaving it behind would hand
+        // whoever signs in next the previous user's messages.
+        await this.store.delete(SENT_ID);
+        // And the key-package count, because the device that replaces this one
+        // has published nothing. An inherited count would suppress its first
+        // publish and leave it unaddable until something else replenished.
+        await this.store.delete(KEY_PACKAGE_COUNT_ID);
+        // And the backup: the key handle is one person's, and so is the floor.
+        // Leaving the handle would let the next person's records be sealed under
+        // a recovery key only the previous one was ever shown — a backup nobody
+        // can open — and leaving the floor would have this profile refuse the
+        // new person's own real backup as a rollback.
+        await this.store.delete(BACKUP_KEY_ID);
+        await this.store.delete(BACKUP_STATE_ID);
+      });
     } catch (error) {
       console.warn("Could not clear the stored MLS device state:", error);
     }

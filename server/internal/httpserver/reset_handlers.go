@@ -52,7 +52,7 @@ func (s *apiServer) RequestPasswordReset(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_, ipKey := clientIP(r)
+	_, ipKey := s.clientIP(r)
 	err := s.reset.Request(r.Context(), ipKey, email)
 	var limited *passwordreset.RateLimitedError
 	switch {
@@ -106,7 +106,7 @@ func (s *apiServer) CompletePasswordReset(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	_, ipKey := clientIP(r)
+	_, ipKey := s.clientIP(r)
 	err := s.reset.Complete(r.Context(), ipKey, req.Token, req.NewPassword)
 	var limited *passwordreset.RateLimitedError
 	switch {

@@ -49,12 +49,17 @@ import (
 //
 // # Why it cannot double-compress behind Caddy
 //
-// It is off unless the install sets HAMLANEH_COMPRESS_RESPONSES=1, and the
-// compose stack never does: deploy/Caddyfile already runs `encode zstd gzip`
-// on both site blocks. Those installs keep zstd — a better ratio than gzip on
-// this bundle — and this process spends no CPU racing it. Home mode is a
-// single binary with nothing in front of it (CLAUDE.md, "Packaging"), and is
-// the install this exists for.
+// The two modes read HAMLANEH_COMPRESS_RESPONSES with opposite defaults, and
+// the defaults are the whole point (cmd/hamlaneh-server: serverMode reads
+// == "1", homeMode reads != "0"):
+//
+//   - Server mode is OFF unless the install sets it to "1", and the compose
+//     stack never does: deploy/Caddyfile already runs `encode zstd gzip` on
+//     both site blocks. Those installs keep zstd — a better ratio than gzip on
+//     this bundle — and this process spends no CPU racing it.
+//   - Home mode is ON unless the operator sets it to "0". It is a single
+//     binary with nothing in front of it (CLAUDE.md, "Packaging"), and is the
+//     install this exists for.
 //
 // Setting it behind a proxy anyway is a misconfiguration rather than a
 // hazard, and the reason belongs on the record: Caddy's encode handler skips
@@ -63,8 +68,10 @@ import (
 // refuses symmetrically — see compressible, which leaves an already-encoded
 // response alone.
 
-// EnvCompressResponses turns response compression on when set to "1". Home
-// mode sets it; anything with a compressing proxy in front leaves it unset.
+// EnvCompressResponses is the operator's override of the mode's default. It
+// is read by cmd/hamlaneh-server and never here: server mode compresses only
+// when it is "1", home mode compresses unless it is "0", and neither mode
+// sets the variable itself. See the section above for why the defaults differ.
 const EnvCompressResponses = "HAMLANEH_COMPRESS_RESPONSES"
 
 // minCompressSize is the smallest body worth compressing. Below it, gzip's

@@ -344,7 +344,7 @@ func (s *apiServer) completeOidcLogin(w http.ResponseWriter, r *http.Request, st
 		return
 	}
 
-	addr, _ := clientIP(r)
+	addr, _ := s.clientIP(r)
 	tokens, cookies := mintSessionTokens()
 	tokens.UserAgent = sanitizedUserAgent(r)
 	tokens.IP = ipParam(addr)

@@ -118,9 +118,6 @@ const MEMBER_DEVICE_PAGE_SIZE = 200;
  */
 const MEMBER_DEVICE_PAGES = 20;
 
-/** The single chain every MLS operation runs on — see {@link MlsService.runOn}. */
-const DEVICE_CHAIN = "device";
-
 /**
  * How much of this device's own outgoing plaintext survives a reload, and for
  * how long.
@@ -272,7 +269,8 @@ export class MlsService {
    */
   private backupChain: Promise<void> = Promise.resolve();
 
-  private readonly chains = new Map<string, Promise<unknown>>();
+  /** The device chain itself — see {@link MlsService.runOn}. */
+  private deviceChain: Promise<unknown> = Promise.resolve();
   private starting: Promise<boolean> | null = null;
 
   constructor(private readonly options: MlsServiceOptions) {
@@ -313,24 +311,19 @@ export class MlsService {
    * operation cannot strand every later one behind it, while the caller still
    * sees its own rejection.
    *
-   * One chain, not one per channel, and the key is kept only to name the
-   * caller in a stack trace. Per-channel chains would be enough if a channel
-   * owned its own state, but `this.device` is a single handle holding every
-   * group, and both `persist()` and `rollback()` read and replace the whole
-   * of it. With per-channel chains, a rollback in one channel could discard a
-   * ratchet advance another channel had already sent ciphertext for, or
-   * resurrect a group whose creation had just lost its race, and a caller
-   * that captured `this.device` could persist a handle it no longer held.
-   * Serializing everything makes the chain match what it protects.
+   * One chain, and it takes no key naming which channel is asking, because a
+   * key would imply there could be a second chain. Per-channel chains would be
+   * enough if a channel owned its own state, but `this.device` is a single
+   * handle holding every group, and both `persist()` and `rollback()` read and
+   * replace the whole of it. With per-channel chains, a rollback in one channel
+   * could discard a ratchet advance another channel had already sent
+   * ciphertext for, or resurrect a group whose creation had just lost its race,
+   * and a caller that captured `this.device` could persist a handle it no
+   * longer held. Serializing everything makes the chain match what it protects.
    */
-  private runOn<T>(_key: string, work: () => Promise<T>): Promise<T> {
-    const next = (this.chains.get(DEVICE_CHAIN) ?? Promise.resolve())
-      .catch(() => undefined)
-      .then(work);
-    this.chains.set(
-      DEVICE_CHAIN,
-      next.catch(() => undefined),
-    );
+  private runOn<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.deviceChain.catch(() => undefined).then(work);
+    this.deviceChain = next.catch(() => undefined);
     return next;
   }
 
@@ -589,7 +582,7 @@ export class MlsService {
    * members are not in it yet.
    */
   openChannel(channelId: string): Promise<void> {
-    return this.runOn(channelId, async () => {
+    return this.runOn(async () => {
       if (!(await this.start())) {
         return;
       }
@@ -1437,7 +1430,7 @@ export class MlsService {
 
   /** `mls_commit`, and every reconnect: catch up, then re-check membership. */
   syncChannel(channelId: string): Promise<void> {
-    return this.runOn(channelId, async () => {
+    return this.runOn(async () => {
       if (this.device === null || !this.groups.has(channelId)) {
         return;
       }
@@ -1456,7 +1449,7 @@ export class MlsService {
    * device, acknowledging each only after the join actually succeeded.
    */
   syncWelcomes(): Promise<void> {
-    return this.runOn("welcomes", async () => {
+    return this.runOn(async () => {
       if (!(await this.start())) {
         return;
       }
@@ -1648,7 +1641,7 @@ export class MlsService {
    * the warning — a send that merely failed would leave the user retyping.
    */
   encrypt(channelId: string, text: string): Promise<{ epoch: number; ciphertext: string } | null> {
-    return this.runOn(channelId, async () => {
+    return this.runOn(async () => {
       if (this.device === null || !this.groups.has(channelId)) {
         return null;
       }
@@ -1719,7 +1712,7 @@ export class MlsService {
     if (this.alreadyOpen(messageId, ciphertext)) {
       return Promise.resolve();
     }
-    return this.runOn(channelId, async () => {
+    return this.runOn(async () => {
       // Re-checked INSIDE the chain, not only at enqueue. `decryptAll` runs
       // again on every change to the message list, so the same message is
       // routinely enqueued twice before the first attempt has run. The real

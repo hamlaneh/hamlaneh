@@ -348,6 +348,10 @@ func start(ctx context.Context, m mode) error {
 		// in front and Caddy already compresses, home mode has no proxy at
 		// all and is what this is for (internal/httpserver/compress.go).
 		httpserver.WithCompression(m.compress),
+		// Whether X-Forwarded-For may name the client. Server mode has Caddy
+		// in front by construction; home mode has nothing forwarding, so the
+		// header there is just something the caller wrote (home.go).
+		httpserver.WithTrustedProxy(m.trustsForwardedFor()),
 		httpserver.WithFiles(httpserver.Files{
 			Signer:      signer,
 			Attachments: db,

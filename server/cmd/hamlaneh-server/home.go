@@ -206,6 +206,27 @@ func (m mode) gatewayOptions() []wsgateway.Option {
 	return []wsgateway.Option{wsgateway.WithLoopbackAlias()}
 }
 
+// trustsForwardedFor reports whether X-Forwarded-For may name the client on
+// this deployment — the second and last thing the two modes differ by in the
+// HTTP server's own configuration.
+//
+// Server mode is behind Caddy by construction: the compose stack is what
+// publishes the port, and Caddy strips client-supplied values before adding
+// its own. Home mode has nothing in front of it at all, so the header is
+// written by whoever sent the request — a local process, or the page's own
+// JavaScript, neither of which may be allowed to choose the rate-limit key
+// for sign-in or the address recorded in the audit log.
+//
+// A home instance published to a LAN behind an operator's own TLS terminator
+// therefore rate-limits every client onto that terminator's address. That is
+// the fail-CLOSED direction (one shared budget, not a spoofable one), and
+// docs/hardening.md already says there is no supported configuration for
+// honouring a forwarded header on a proxy this project did not ship.
+//
+// It is a method rather than an `if` at the call site so the difference is
+// something a test can hold — see TestServerModeStillTrustsItsProxy.
+func (m mode) trustsForwardedFor() bool { return !m.home }
+
 // prepare creates home mode's data directory, so the keys, the database and
 // the blob store all find it there rather than each discovering separately
 // that the path is unusable. Server mode's directory is blobstore's own job,
