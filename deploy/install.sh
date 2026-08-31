@@ -12,8 +12,10 @@
 #      generates the random secrets into deploy/.env (chmod 600) — the
 #      Postgres password, the key that signs file URLs, the audit-chain key
 #      and the LiveKit credential pair calls are authorized by —
-#      and writes the optional settings .env.example documents with empty
-#      values, so turning email on later is an edit rather than a search
+#      and writes the optional MAIL settings .env.example documents with
+#      empty values, so turning email on later is an edit rather than a
+#      search. The SSO block is not written: an install that wants OIDC
+#      copies those four keys out of .env.example
 #   4. pre-flights the things that make an install fail late and confusingly:
 #      a Docker daemon that is installed but not running, host ports already
 #      taken, a domain that resolves nowhere, too little RAM to build
@@ -25,7 +27,10 @@
 #
 # Idempotent: a second run keeps the existing deploy/.env untouched and
 # converges the already-running stack without destructive changes. It never
-# regenerates a live secret, never runs `down`, and never touches a volume.
+# runs `down` and never touches a volume, and the only secret it ever replaces
+# in place is a REPLACED_AT_INSTALL placeholder — a constant published in this
+# repository, which is a hole rather than a secret. See
+# scrub_placeholder_secrets for what that costs when the instance is live.
 #
 # Usage:
 #   sudo ./install.sh [--domain <domain-or-ip>] [--non-interactive]
@@ -317,7 +322,7 @@ ensure_docker_daemon() {
 #
 # deploy/verify-release.sh and deploy/hamlaneh-update.sh both shell out to
 # `cosign`, and this script enables the update timer that runs the second of
-# those daily. Without cosign on the host that timer fails on every single
+# those four times a day. Without cosign on the host that timer fails on every
 # fire, inside a systemd unit nobody reads — so "security patches install
 # themselves" would be false on every machine while looking true.
 #
@@ -411,7 +416,7 @@ enable_update_timer() {
     return 0
   fi
   if enable_companion hamlaneh-update.sh "automatic security updates" --install-timer; then
-    UPDATE_TIMER_STATE="enabled (hamlaneh-update.timer, daily)"
+    UPDATE_TIMER_STATE="enabled (hamlaneh-update.timer, four times a day)"
   fi
 }
 
@@ -446,11 +451,15 @@ validate_domain() {
 
 # What kind of address this is, which decides the entire TLS story:
 #   domain    -> a publicly trusted certificate, issued automatically by ACME
-#   ipv4/ipv6 -> no public CA will certify a bare IP over ACME; Caddy falls
-#                back to its own internal CA and every browser warns
+#   ipv4/ipv6 -> Caddy classifies every IP address as an internal name and
+#                issues from its own CA without asking a public one, so every
+#                browser warns. Let's Encrypt has issued IP-address
+#                certificates under its short-lived profile since January 2026,
+#                but Caddy 2.10 — the version deploy/Dockerfile.caddy pins —
+#                does not request them, and our Caddyfile selects no profile.
 #   localhost -> internal CA as well, but only this machine can reach it
 # No security default is softened to make the bare-IP case quieter; the only
-# things that vary are what the operator is TOLD, and the files hostname below,
+# things that vary are what the operator is TOLD and the files hostname below.
 domain_kind() {
   local d="$1"
   case "$d" in
@@ -570,11 +579,16 @@ write_env() {
 }
 
 # The value .env.example ships for every secret it cannot ship a real one
-# for. It is deliberately non-working, and two of the five keys that carry it
-# are short enough that the server refuses to boot (internal/filesign and
-# internal/audit both enforce a 32-byte floor) — which is the only reason a
-# `cp .env.example .env` install has never produced a running instance with
-# secrets printed in the repository.
+# for. Six keys carry it, and exactly two of them are short enough that the
+# server refuses to boot: HAMLANEH_FILE_URL_KEY and HAMLANEH_AUDIT_KEY, whose
+# 32-byte floor internal/filesign and internal/audit each enforce against this
+# 19-byte string. That is the only reason a wholesale `cp .env.example .env`
+# has never produced a running instance with secrets printed in the repository.
+#
+# The other four — POSTGRES_PASSWORD, the LiveKit pair and the admin password
+# — are values the stack accepts. An .env carrying one of those next to real
+# keys belongs to an instance that booted, and everything below that decides
+# whether something is safe to replace or delete turns on that distinction.
 PLACEHOLDER_VALUE="REPLACED_AT_INSTALL"
 
 # README's quick start says `cp .env.example .env`. An operator who did that
@@ -584,10 +598,18 @@ PLACEHOLDER_VALUE="REPLACED_AT_INSTALL"
 #
 # So: strip any required secret still holding the placeholder, and let the
 # ensure_* functions regenerate it exactly as they do for an .env that
-# predates the key. Regenerating these is safe precisely because the
-# placeholder means the server never booted: no file URL was ever minted
-# under that key, no audit entry sealed with it, no LiveKit token signed by
-# it, and no admin ever created.
+# predates the key.
+#
+# Replacing them is right in every case, but it is not free in every case, and
+# the difference is worth stating rather than assuming away. Only the file-URL
+# and audit placeholders prove the server never booted. The LiveKit secret and
+# the admin trio are values the stack accepts, so an .env carrying them beside
+# real keys can belong to a LIVE instance — one whose join tokens are signed
+# with a constant anybody can read in this repository, which is a hole and not
+# a secret. Replacing it closes the hole; what it costs is that a call in
+# progress ends and unused join tokens stop working. install_may_have_data is
+# what decides whether to say so, and nothing here is skipped on its answer:
+# leaving a published credential in place is never the safer option.
 #
 # Two groups are removed whole rather than per-key, for the same reason in
 # both cases — the ensure_* function that regenerates them keys off a
@@ -624,6 +646,9 @@ scrub_placeholder_secrets() {
   fi
 
   log "deploy/.env still holds ${PLACEHOLDER_VALUE} placeholders — replacing them with generated secrets: ${remove[*]}"
+  if install_may_have_data; then
+    warn "this instance has already run, so those placeholders were live, not dormant. Replacing them is still right — a value published in this repository is not a secret — but any call in progress ends and every unused join token stops working. Nothing stored is affected: no message, file or account is touched."
+  fi
   local tmp pattern
   pattern="^($(IFS='|'; printf '%s' "${remove[*]}"))="
   tmp="$(mktemp "${ENV_FILE}.XXXXXX")"
@@ -645,6 +670,33 @@ db_volume_exists() {
   docker volume inspect "${COMPOSE_PROJECT}_db_data" >/dev/null 2>&1
 }
 
+# The two placeholders that PROVE the server never started, as against the four
+# that prove nothing. internal/filesign and internal/audit each refuse a key
+# shorter than 32 bytes and the placeholder is 19, so either one of these in
+# place stops the process before it serves a request — no schema migrated, no
+# account created, no byte written. POSTGRES_PASSWORD, the LiveKit pair and the
+# admin password are all values the stack accepts, which is why not one of them
+# can stand in for this check.
+boot_blocked_by_placeholder() {
+  [ "$(env_value HAMLANEH_FILE_URL_KEY)" = "$PLACEHOLDER_VALUE" ] ||
+    [ "$(env_value HAMLANEH_AUDIT_KEY)" = "$PLACEHOLDER_VALUE" ]
+}
+
+# Whether this install may already hold real data.
+#
+# "May" is the whole point. Every caller uses this to decide whether to do
+# something that is irreversible if the answer is wrong, so it answers yes for
+# anything it cannot rule out, and it rules something out only from a fact —
+# a database volume that exists, and an .env that could have booted a server
+# to write to it — never from one variable's value standing in for the rest.
+#
+# It has to be asked BEFORE scrub_placeholder_secrets rewrites deploy/.env,
+# which is why main() calls ensure_postgres_password_env first; after the scrub
+# the placeholders it reads are gone and it would answer yes to everything.
+install_may_have_data() {
+  db_volume_exists && ! boot_blocked_by_placeholder
+}
+
 # POSTGRES_PASSWORD is the one secret that cannot simply be regenerated: it
 # is written into the database at initdb and never read from the environment
 # again. On a fresh host there is no database yet and generating it is right;
@@ -652,9 +704,11 @@ db_volume_exists() {
 # here would lock the server out of its own database with an authentication
 # error nobody would connect back to this script.
 #
-# So that case stops, and says the two things the operator needs: the install
-# has no data in it (the server cannot have booted — the file-URL key stopped
-# it), and one command clears it.
+# So that case stops. What it says depends on whether the install can have
+# data, and that is asked rather than inferred — an earlier version of this
+# function read POSTGRES_PASSWORD alone, concluded from it that the server had
+# never booted, and told an operator whose OTHER secrets were real, whose
+# instance was serving, and whose database was full to run `down -v`.
 ensure_postgres_password_env() {
   [ -f "$ENV_FILE" ] || return 0
   local value
@@ -663,11 +717,21 @@ ensure_postgres_password_env() {
     return 0
   fi
 
+  if install_may_have_data; then
+    fail "deploy/.env has POSTGRES_PASSWORD=${value:-<empty>}, and this install has both a database volume (${COMPOSE_PROJECT}_db_data) and secrets a server can boot on — so it may be holding real messages, files and accounts, and that value is the password its database was created with.
+       Do NOT clear the volume to get past this. That deletes the database, and this message deliberately does not give you the command for it.
+       Rotate the password instead, which loses nothing. Pick a new one, then:
+         docker compose -f ${COMPOSE_FILE} up -d db
+         docker compose -f ${COMPOSE_FILE} exec db psql -U hamlaneh -d hamlaneh -c \"ALTER USER hamlaneh PASSWORD 'the-new-password'\"
+       put that same value in POSTGRES_PASSWORD in deploy/.env, and re-run this script.
+       Do it rather than leave it: ${PLACEHOLDER_VALUE} is printed in this repository, so until you do, this database's password is public."
+  fi
+
   if db_volume_exists; then
     fail "deploy/.env has POSTGRES_PASSWORD=${value:-<empty>} but a database volume (${COMPOSE_PROJECT}_db_data) already exists, so the database is using that value as its real password and this script must not change it silently.
-       That state comes from copying .env.example and running docker compose by hand; the server cannot have started (it refuses the placeholder file-URL key), so the database is empty.
+       That state comes from copying .env.example and running docker compose by hand. This .env still carries the placeholder file-URL or audit key, which the server refuses to start on, so no server of ours ever wrote to that volume.
        Clear it and re-run:  docker compose -f ${COMPOSE_FILE} down -v && sudo ${0}
-       If you believe the database DOES hold data, do not run that — set POSTGRES_PASSWORD in deploy/.env to the password the database was created with instead."
+       If the volume predates this .env and you believe it DOES hold data, do not run that — set POSTGRES_PASSWORD in deploy/.env to the password the database was created with instead."
   fi
 
   log "generating POSTGRES_PASSWORD in deploy/.env"
@@ -679,10 +743,17 @@ ensure_postgres_password_env() {
   mv "$tmp" "$ENV_FILE"
 }
 
-# The optional settings .env.example documents, written into the generated
-# .env so an operator turning email on edits a key that is already there
-# instead of hunting for its name. .env.example points the reader at this
-# file as the generated one; leaving them out made that a dead end.
+# The optional MAIL settings .env.example documents, written into the
+# generated .env so an operator turning email on edits a key that is already
+# there instead of hunting for its name. .env.example points the reader at
+# this file as the generated one; leaving them out made that a dead end.
+#
+# Mail only. .env.example's other optional block, the four HAMLANEH_OIDC_*
+# keys, is not written here and no name in it appears anywhere in this script:
+# an install that wants single sign-on copies those four lines out of
+# .env.example by hand. Empty is empty either way — the server reads an absent
+# key and an empty one identically — so what is missing is the reminder, not
+# the capability.
 #
 # Every value is EMPTY, and that is what keeps zero-config zero-config:
 # compose reads each as ${VAR:-default}, which treats empty exactly like
@@ -1045,42 +1116,33 @@ print_tls_posture() {
       log "TLS: localhost has no public certificate authority, so Caddy issues from its own internal CA. Your browser warns until you trust that CA (it lives in the caddy_data volume). Reachable only from this machine."
       ;;
     ipv4|ipv6)
-      cat <<EOF
+      cat <<'EOF'
 
   ┌──────────────────────────────────────────────────────────────────────┐
   │  BARE-IP MODE — READ THIS, IT IS A REAL TRADE-OFF                    │
   │                                                                      │
-  │  You gave an IP address rather than a domain, so which certificate   │
-  │  you end up with is not certain, and the difference matters. Caddy    │
-  │  asks Let's Encrypt for a certificate for the address itself, which   │
-  │  it will issue ONLY for a public, routable IP that it can reach on    │
-  │  ports 80 and 443 from the internet.                                 │
+  │  You gave an IP address rather than a domain, so this instance has   │
+  │  no publicly trusted certificate. Caddy issues one from its own      │
+  │  internal CA instead, and every browser then shows a full-page       │
+  │  warning that every user has to click through. A user trained to     │
+  │  click through that warning cannot tell it apart from a real         │
+  │  interception. That is the actual cost.                              │
   │                                                                      │
-  │    - if that succeeds, the certificate is publicly trusted and no    │
-  │      browser warns. Good outcome, and nothing else to do.            │
-  │    - if it does not — a LAN address, or a cloud firewall still shut  │
-  │      — Caddy issues from its own internal CA instead. Then every     │
-  │      browser shows a full-page warning that every user must click    │
-  │      through, and a user trained to click through that warning       │
-  │      cannot tell it apart from a real interception. That is the      │
-  │      actual cost. HSTS is still sent but browsers ignore it over an  │
-  │      untrusted certificate, so it protects nothing there either.     │
+  │  HSTS is still sent, but browsers ignore it over an untrusted        │
+  │  certificate, so it protects nothing here either.                    │
   │                                                                      │
-  │  Which one you got:                                                  │
-  │    docker compose -f ${COMPOSE_FILE}
-  │      logs caddy | grep 'certificate obtained'                        │
-  │    issuer "local" means the internal CA and the warning; anything    │
-  │    else means a publicly trusted certificate.                        │
-  │                                                                      │
-  │  Either way Caddy will log repeated certificate failures for the     │
-  │  files.${DOMAIN} hostname it also serves.
-  │  No authority certifies an IP-suffixed name, so those never stop.    │
-  │  Harmless here — bare-IP installs serve uploads from the main        │
-  │  origin — but it is why that log is noisy.                           │
+  │  Let's Encrypt does issue certificates for IP addresses now, under   │
+  │  its short-lived profile. That does not reach you: Caddy 2.10, the   │
+  │  version this stack pins, treats every IP address as an internal     │
+  │  name and goes straight to its own CA without asking any public CA   │
+  │  for anything. No setting here changes that.                         │
   │                                                                      │
   │  What this does NOT cost you: nothing was weakened to make bare-IP   │
   │  work. Same security headers, same non-root read-only containers,    │
-  │  same closed database, traffic still encrypted in transit.           │
+  │  same closed database, traffic still encrypted in transit. Uploads   │
+  │  are served from the app origin with the identical headers, so       │
+  │  there is no second hostname here and no failing certificate order   │
+  │  for one.                                                            │
   │                                                                      │
   │  The fix is a domain name. Point any hostname at this address and    │
   │  re-run with --domain <that hostname>; the certificate becomes       │
@@ -1154,8 +1216,11 @@ main() {
   ensure_cosign
   resolve_domain
   write_env
-  scrub_placeholder_secrets
+  # Order is load-bearing: ensure_postgres_password_env asks
+  # install_may_have_data, which reads placeholders that the scrub then
+  # removes. Swap these two and it can only ever answer "may have data".
   ensure_postgres_password_env
+  scrub_placeholder_secrets
   ensure_admin_env
   ensure_mail_env
   ensure_file_url_key_env
