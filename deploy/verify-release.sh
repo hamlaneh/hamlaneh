@@ -104,16 +104,20 @@ note() {
 # release candidate would read as an upgrade.
 # ---------------------------------------------------------------------------
 
-# Rejects anything that is not MAJOR.MINOR.PATCH with optional pre-release and
-# build metadata. Validation at the boundary, so the arithmetic below can never
-# be handed something that is not a number.
-# The same shape hamlaneh-update.sh:197 enforces. Kept identical on purpose:
-# one script validating what the other does not is how a value becomes trusted
-# in one place and attacker-shaped in the next.
+# Rejects anything that is not OWNER/NAME. The repository reaches a URL, so it
+# is validated at the boundary like everything else that does.
 repo_is_valid() {
   [[ "$1" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]
 }
 
+# Rejects anything that is not MAJOR.MINOR.PATCH with optional pre-release and
+# build metadata. Validation at the boundary, so the arithmetic below can never
+# be handed something that is not a number.
+#
+# The same shape hamlaneh-update.sh's version_is_valid enforces — named rather
+# than cited by line, because the line moved and the reference rotted. Kept
+# identical on purpose: one script validating what the other does not is how a
+# value becomes trusted in one place and attacker-shaped in the next.
 version_is_valid() {
   [[ "${1#v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]
 }

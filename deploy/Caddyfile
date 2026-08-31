@@ -8,6 +8,12 @@
 #     via ACME, plus HTTP->HTTPS redirect
 # Switching between the two needs no edits here — only the env var.
 #
+# The bare-IP line is not out of date, so before "fixing" it: Let's Encrypt has
+# issued certificates for IP addresses since January 2026, but only under its
+# short-lived profile, and Caddy classifies every IP address as an internal
+# name and issues locally without asking a public CA at all. Caddy 2.10, which
+# Dockerfile.caddy pins, has no way to be talked out of that.
+#
 # Note: this file is baked into the proxy image (Dockerfile.caddy).
 # After editing it, re-run: docker compose up -d --build
 
