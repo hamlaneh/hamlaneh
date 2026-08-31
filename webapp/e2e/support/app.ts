@@ -228,6 +228,14 @@ export class App {
    * picker would still pass the second way, and that is the regression this
    * helper exists to catch. The wait is on the upload's own response, because
    * a file that is still in flight is deliberately not sendable.
+   *
+   * The response is CHECKED, not merely awaited. It used to be enough that one
+   * arrived, which made a refused upload indistinguishable from a stored one:
+   * the composer draws a tray card either way, so the spec sailed past the
+   * refusal and died sixty seconds later waiting for a send that could never
+   * happen, naming the composer instead of the upload. A helper that says
+   * "attached" has to mean it, and a test that fails should fail where the
+   * truth is — the same rule accounts.ts's `expectOk` follows.
    */
   async attachFile(file: { name: string; mimeType: string; buffer: Buffer }): Promise<void> {
     const uploaded = this.page.waitForResponse(
@@ -238,7 +246,12 @@ export class App {
     const chooser = this.page.waitForEvent("filechooser");
     await this.composerForm.getByRole("button", { name: this.t("chat.composer.attach") }).click();
     await (await chooser).setFiles([file]);
-    await uploaded;
+    const response = await uploaded;
+    if (!response.ok()) {
+      throw new Error(
+        `file upload (${file.name}): ${String(response.status())} ${await response.text()}`,
+      );
+    }
   }
 
   /** Inserts a `<@{user_id}>` mention token through the composer's picker. */
@@ -257,6 +270,31 @@ export class App {
   /* ── calls ───────────────────────────────────────────────────────── */
 
   /**
+   * Answers the recovery-key offer with "Not now".
+   *
+   * The offer is account-level and arrives at first MLS use (ADR 010), so
+   * since ADR 011 made every conversation encrypted it greets every new
+   * account in whichever conversation they open first. It is an undesigned
+   * floating surface anchored to the top of the shell, and it lies across the
+   * call strip: with it on screen the control that starts a call cannot be
+   * clicked, which is what a person meets too. Answering it is therefore
+   * arrangement rather than a workaround — but the placement is a real defect
+   * and is reported as one; when the design pipeline gives these surfaces
+   * their artboard this helper stays correct and stops being load-bearing.
+   *
+   * Deliberately strict: it waits for the offer instead of shrugging when it
+   * is absent. Every conversation is encrypted and every spec account is new,
+   * so the offer always comes — and an offer that stopped appearing would be a
+   * change worth a red test rather than a silently skipped click.
+   */
+  async declineBackupOffer(): Promise<void> {
+    await this.page
+      .getByRole("region", { name: this.t("chat.e2ee.backup.offerTitle") })
+      .getByRole("button", { name: this.t("chat.e2ee.backup.offerNotNow") })
+      .click();
+  }
+
+  /**
    * Clicks the one control in the call strip and waits for the tiles.
    *
    * Located by role rather than by label on purpose: the same control reads
@@ -265,8 +303,13 @@ export class App {
    * something a spec about media should depend on. The participant list
    * exists only once the session is connected, which is what makes waiting
    * for it the right "the call is up" signal.
+   *
+   * The offer is answered here rather than in each call spec: it covers the
+   * strip in every conversation now, so a guard repeated at every call site
+   * would be the same fix written three times.
    */
   async joinCall(): Promise<void> {
+    await this.declineBackupOffer();
     await this.page
       .getByRole("region", { name: this.t("calls.strip.label") })
       .getByRole("button")
