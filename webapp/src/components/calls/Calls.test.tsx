@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { HttpResponse, delay, http } from "msw";
 import { MemoryRouter } from "react-router";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
@@ -42,6 +43,46 @@ afterAll(() => {
 });
 
 const FAST_RETRY = { retryDelayMs: () => 5 };
+
+/**
+ * Resolves once the client has asked what is running in `channelId`.
+ *
+ * The one synchronisation point these tests actually need, and there is no
+ * substitute for it on screen: the strip looks identical before and after that
+ * read, so "the Start button is there" says only that the instance document
+ * landed. The read itself is what says the socket finished its handshake — it
+ * is gated on `online` — and it is the read that a test's own `call_started`
+ * has to arrive after, rather than into the middle of.
+ *
+ * Waiting on the server's own event stream rather than a handler override, so
+ * the case still exercises the same fixture read every other case does.
+ *
+ * Matched by request id, and started before the case renders anything: the
+ * previous case's tree can still have a read in flight when this one begins,
+ * and settling for the first answer that goes past would hand this case
+ * somebody else's — which is the very race this exists to remove.
+ */
+function callRead(channelId: string): Promise<void> {
+  const path = `/api/v1/channels/${channelId}/call`;
+  let mine: string | null = null;
+  return new Promise((resolve) => {
+    const asked = ({ request, requestId }: { request: Request; requestId: string }) => {
+      if (mine === null && new URL(request.url).pathname === path) {
+        mine = requestId;
+      }
+    };
+    const answered = ({ requestId }: { requestId: string }) => {
+      if (requestId !== mine) {
+        return;
+      }
+      server.events.removeListener("request:start", asked);
+      server.events.removeListener("response:mocked", answered);
+      resolve();
+    };
+    server.events.on("request:start", asked);
+    server.events.on("response:mocked", answered);
+  });
+}
 
 function tile(overrides: Pick<MediaParticipant, "identity" | "name"> & Partial<MediaParticipant>) {
   return {
@@ -213,10 +254,14 @@ describe("reconciliation", () => {
    */
   it("shows a call that was already running when the channel was opened, with no event involved", async () => {
     setMockCall(CHAT_CHANNELS.deploys, { active: true, participants: [NASRIN_IN_CALL] });
+    const read = callRead(CHAT_CHANNELS.deploys);
     renderChat(`/c/${CHAT_CHANNELS.deploys}`, fakeMedia().connect);
 
     // The strip is always mounted, so waiting for the region would prove
     // nothing: what has to arrive is the call it learned about from REST.
+    // Waiting for the read first keeps the whole cold start — instance
+    // document, socket, handshake — out of the assertion's own budget.
+    await read;
     expect(await screen.findByText(participantCount(1))).toBeInTheDocument();
     const banner = strip();
     expect(
@@ -225,9 +270,54 @@ describe("reconciliation", () => {
     expect(within(banner).getByRole("button", { name: en.calls.join })).toBeInTheDocument();
   });
 
+  /**
+   * The other half of the rule above, and the one that is easy to get wrong: a
+   * read is only the truth as of the moment it was asked. This one is asked
+   * first and answered second, so the event that landed in between is the
+   * newer of the two and the read has nothing left to correct.
+   *
+   * Without that, the banner a call_started painted is wiped by an answer
+   * taken before anybody joined — and there is no third reconciliation point,
+   * so it stays wiped until the reader changes channel or the socket drops.
+   */
+  it("does not let a read the socket overtook put the banner back to nothing", async () => {
+    let answer!: () => void;
+    const asked = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    server.use(
+      http.get("/api/v1/channels/:channelId/call", async () => {
+        answer();
+        await delay(50);
+        return HttpResponse.json({ active: false });
+      }),
+    );
+
+    renderChat(`/c/${CHAT_CHANNELS.deploys}`, fakeMedia().connect);
+    await screen.findByRole("button", { name: en.calls.start });
+    await asked; // in flight, and not yet answered
+
+    emitRealtime({
+      type: "call_started",
+      chan: CHAT_CHANNELS.deploys,
+      data: { started_by: CHAT_USERS.nasrin, participants: [NASRIN_IN_CALL] },
+    });
+    expect(await screen.findByText(participantCount(1))).toBeInTheDocument();
+
+    // The stale answer lands here. The banner has to survive it.
+    await act(async () => {
+      await delay(150);
+    });
+    expect(screen.getByText(participantCount(1))).toBeInTheDocument();
+  });
+
   it("corrects a stale hint: the read wins over the event that preceded it", async () => {
+    const read = callRead(CHAT_CHANNELS.designTokens);
     renderChat(`/c/${CHAT_CHANNELS.designTokens}`, fakeMedia().connect);
     await screen.findByRole("button", { name: en.calls.start });
+    // Emitting before the socket is up would lose the frame, and the case
+    // would then pass without ever having a stale hint to correct.
+    await read;
 
     // A call the client is told about, and which is over by the time it opens
     // the channel — the exact shape of a banner for a call nobody is in.
@@ -250,8 +340,12 @@ describe("reconciliation", () => {
 
 describe("the three events", () => {
   it("paints the banner on call_started and clears it on call_ended", async () => {
+    const read = callRead(CHAT_CHANNELS.deploys);
     renderChat(`/c/${CHAT_CHANNELS.deploys}`, fakeMedia().connect);
     await screen.findByRole("button", { name: en.calls.start });
+    // The read has already said "nobody is in one", so the banner below is the
+    // event's doing and nothing else — and the socket is up to carry it.
+    await read;
 
     emitRealtime({
       type: "call_started",
@@ -284,8 +378,10 @@ describe("the three events", () => {
 
 describe("the direct-message ring", () => {
   it("rings on a call in a direct message and dismisses", async () => {
+    const read = callRead(CHAT_CHANNELS.deploys);
     renderChat(`/c/${CHAT_CHANNELS.deploys}`, fakeMedia().connect);
     await screen.findByRole("button", { name: en.calls.start });
+    await read; // the socket is up, so the frame below has somewhere to land
 
     emitRealtime({
       type: "call_started",
@@ -309,8 +405,11 @@ describe("the direct-message ring", () => {
   });
 
   it("does not ring at somebody who is already in the call", async () => {
+    const read = callRead(CHAT_CHANNELS.deploys);
     renderChat(`/c/${CHAT_CHANNELS.deploys}`, fakeMedia().connect);
     await screen.findByRole("button", { name: en.calls.start });
+    // A lost frame would prove nothing here: the ring is absent either way.
+    await read;
 
     emitRealtime({
       type: "call_started",

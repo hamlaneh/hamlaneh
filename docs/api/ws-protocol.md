@@ -243,7 +243,11 @@ once per ordered event on that channel (the `seq: yes` rows in §4). Ephemeral e
 worthless, and a call event from five minutes ago is worse than worthless — it would paint a
 banner for a call nobody is in. Clients reconcile call state against
 `GET /api/v1/channels/{id}/call` on opening a channel and after a reconnect. The events say
-something changed; REST says what is true.
+something changed; REST says what is true — as of the moment it was asked. A read is a round
+trip, and a client that applies its answer unconditionally will undo any call event that arrived
+while it was in flight, with no reconciliation point left to put the banner back. So an answer
+the socket overtook is dropped rather than applied: whichever of the two spoke last wins, and an
+event that landed after the read was issued is the later of them.
 
 The server keeps a bounded per-channel **replay buffer**: the more recent of the last **256
 events** or the last **5 minutes**. It is memory only. It is not durable, not a queue, and not a
