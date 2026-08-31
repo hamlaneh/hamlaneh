@@ -196,7 +196,7 @@ would plan around a feature nobody can use.
   alive, and each confirm says which it is. The audit log is hash-chained with a key kept
   outside the database: that does not make it tamper-proof — anybody who can write to the
   database can rewrite rows — it makes a rewrite show.
-- **Files (Phase 1.3) — built, and reachable on no install that exists.** Two decisions that are
+- **Files (Phase 1.3) — built, and unreachable on every install.** Two decisions that are
   each right on their own close the door between them. Strict is the schema default
   (`0018_org_encryption_mode.up.sql`: `NOT NULL DEFAULT 'strict'`) and the only mode an
   administrator can select — `admin_handlers.go` refuses `compliance` outright, because the
@@ -205,14 +205,14 @@ would plan around a feature nobody can use.
   e2ee_attachments_unsupported`, since storing an unencrypted file in an encrypted conversation
   would be a lie about what the conversation is. Neither decision is wrong; together they mean
   there is no conversation anywhere into which any file can be uploaded. What records this rather
-  than letting it rot is `webapp/e2e/specs/chat-files.e2e.ts`, which keeps all four of its
-  assertions and carries `test.fail()`: the marker goes red the moment uploading starts working,
+  than letting it rot is `webapp/e2e/specs/chat-files.e2e.ts`, which keeps all four of its tests
+  and every assertion in them and carries `test.fail()`: it goes red the moment uploading works,
   so it cannot outlive the gap. Encrypted attachments are what close it — Phase 3 work that was
   missed, not Phase 4 polish. Everything in the rest of this bullet exists and is tested; it is
   the way in that is missing.
 
-  Upload is channel-scoped from birth, so a file is readable
-  exactly by its channel's members — the same one rule, the same 404 for everyone else. Bytes
+  What is behind that door: upload is channel-scoped from birth, so a file is readable exactly
+  by its channel's members — the same one rule, the same 404 for everyone else. Bytes
   are sniffed and labels are decoration: only proven images are ever served inline; everything
   else, SVG and HTML included, is a download with nosniff and a sandboxing CSP, so uploaded
   content can never run script. Images lose their metadata at ingest — a photo shared in a chat

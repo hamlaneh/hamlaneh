@@ -630,7 +630,7 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       signature key per client instance, keyed `(user_id, signature_public_key)`, because sharing
       a key across devices means exporting private key material between browsers and
       retrofitting device-ness later is a state migration inside every user's browser storage),
-      and **device verification** as slice 3.3 four lines below. Verification is where the
+      and **device verification** as slice 3.3, ticked below. Verification is where the
       residue of ADR 007 went: the sweep trusts the directory's key↔person mapping, and only two
       humans comparing key material out of band can close that — no server signature can, because
       under PLAN §6.1's adversary 3 the signer is the adversary
