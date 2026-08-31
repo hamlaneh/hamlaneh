@@ -114,6 +114,33 @@ Security is meaningless until we name the adversary. We defend against:
 
 **Explicit non-goals (stated publicly):** a nation-state with malware on the user's device (nobody survives the endpoint); full metadata invisibility (E2EE protects *content*; we minimize metadata but cannot make traffic patterns disappear). Publishing this threat model, as Signal and Mattermost do, is itself a trust signal.
 
+#### 6.1.1 What an encrypted conversation still tells the server
+
+"We minimize metadata" is worth nothing as a sentence and everything as a list, because only a
+list can be checked. This is that list: what a compromised or untrusted server (adversary 3)
+learns about a conversation whose *content* it cannot read. Every ADR that concedes something
+lands its concession here, and an ADR that concedes something new without adding a line to this
+register has not finished.
+
+| What it learns | Where it is conceded |
+|---|---|
+| Who is in a channel, and when they joined or left | membership is server-side by construction |
+| A channel's name and topic | plaintext columns — the encryption drill's control depends on this |
+| That a message exists: its author, channel, time, and ciphertext size | the message row |
+| How far each person has read | read positions |
+| Which members a message's sender **says** it names | [ADR 014](adr/014-mentions-under-e2ee.md) |
+| That a file exists: ciphertext size (plaintext + 28 bytes, so effectively the size), upload time, uploader, channel, which message claims it, and the count per message | [ADR 013](adr/013-encrypted-attachments.md) |
+| Who is in a call and their speaking patterns | [ADR 009](adr/009-media-e2ee.md) |
+| That a device keeps an encrypted backup, and its counter | [ADR 010](adr/010-encrypted-backups.md) |
+| Which devices a person has, and their public keys | the device directory MLS needs to add anyone |
+
+Two things this list is not. It is **not** a claim that each item is harmless — a social graph
+with timestamps is a real disclosure, and saying so plainly is the point. And it is **not**
+final: size padding for messages and files is refused today rather than absent by accident
+(ADRs 010 and 013 both price it and decline it), so a future audit that values the leak higher
+has a named place to start.
+
+
 ### 6.2 Application security — where breaches actually happen
 
 Products like this are almost never broken through cryptography; they're broken through boring application bugs. Chat-specific hot spots:
