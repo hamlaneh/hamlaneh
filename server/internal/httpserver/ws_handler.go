@@ -10,10 +10,9 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
 
-// The WebSocket upgrade endpoint. Split out of messaging_stubs.go so the
-// gateway and the REST messaging handlers can be built without sharing a
-// file; docs/api/ws-protocol.md is the contract everything above the upgrade
-// obeys.
+// The WebSocket upgrade endpoint, kept in its own file so the gateway and the
+// REST messaging handlers do not share one; docs/api/ws-protocol.md is the
+// contract everything above the upgrade obeys.
 
 // codeOriginNotAllowed answers a handshake whose Origin is missing, "null",
 // or not the instance's public origin. It is a 403 on the handshake

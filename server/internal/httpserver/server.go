@@ -108,27 +108,23 @@ func New(addr string, store Store, opts ...Option) *http.Server {
 	}
 }
 
-// Handler returns the root HTTP handler with every route registered:
+// Handler returns the root HTTP handler. What it serves, by owning file —
+// each of those files registers its own routes, so this is a map and not the
+// list (a list here would go stale the first time one of them added a path):
 //
-//	GET /, /reset, /c/*  the built React application (webapp.go)
-//	GET /assets/*        its content-hashed bundle
-//	GET /brand/*         its unhashed public files
-//	GET /files/{id}      the cookie-less files origin: signed, expiring
-//	                     URLs for uploaded bytes, outside the contract on
-//	                     purpose (files_origin.go)
-//	/scim/v2/*           the SCIM 2.0 provisioning surface, authenticated by
-//	                     bearer token alone and likewise outside the
-//	                     contract (internal/scim, docs/api/scim.md)
-//	POST /livekit/webhook the media server's webhook receiver, authenticated
-//	                     by verifying its signature over the request body and
-//	                     outside the contract for the same reason
-//	                     (call_handlers.go)
-//	GET /healthz         liveness probe, 200 {"status":"ok"}
-//	GET /readyz          readiness probe (database ping + schema version)
-//	/api/v1/*            contract endpoints (Phase 1.1 identity core; the
-//	                     Phase 1.2 messaging surface is routed and gated
-//	                     but still answers 501 — see messaging_stubs.go)
-//	/api/*               anything else under /api: the contract's JSON 404
+//	webapp.go       the built React application on every client-routed path,
+//	                its content-hashed bundle under /assets/, its unhashed
+//	                public files under /brand/, and the contract's JSON 404
+//	                for anything else under /api/
+//	files_origin.go the cookie-less files origin: signed, expiring URLs for
+//	                uploaded bytes, outside the contract on purpose
+//	server.go       /scim/v2/*, the SCIM 2.0 provisioning surface,
+//	                authenticated by bearer token alone and likewise outside
+//	                the contract (internal/scim, docs/api/scim.md)
+//	call_handlers.go the media server's webhook receiver, authenticated by
+//	                verifying its signature over the request body and outside
+//	                the contract for the same reason
+//	api (generated) /healthz, /readyz and every /api/v1 contract endpoint
 //
 // Contract routes are registered by the generated api package, so the router
 // can never drift from docs/api/openapi.yaml. Every contract route runs

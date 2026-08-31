@@ -105,7 +105,9 @@ import (
 //   - GET /api/v1/ws is budgeted by the gateway, not here. ws-protocol.md §8
 //     keys the connect budget per session family AND per IP, and requires it
 //     to be enforceable on an already-open socket (close code 4429), which
-//     nothing request-scoped can do. Still open — ROADMAP 1.2a.
+//     nothing request-scoped can do. It lives in
+//     internal/wsgateway/connectbudget.go, which is where the table below
+//     points as well.
 //
 // Moving any of those into this table would have made it tidier and the
 // control weaker, which is the wrong trade.
@@ -238,17 +240,17 @@ var budgetSpecs = map[budgetName]budgetSpec{
 	// what is being bounded here is server work, not disclosure.
 	budgetDirectory: {limit: 120, window: time.Minute},
 
-	// The two admin actions that mint a one-shot secret: a forced password
-	// reset and an invitation link. One window per admin across both,
-	// because an attacker holding an admin session picks whichever is
-	// cheaper for them and per-endpoint budgets would only multiply the
-	// total.
+	// The admin-only actions that mint a one-shot secret. One window per
+	// admin across all of them — grep this name in endpointBudgets for the
+	// current list — because an attacker holding an admin session picks
+	// whichever is cheapest for them and per-endpoint budgets would only
+	// multiply the total. Every endpoint that joins says so at its entry.
 	//
 	// What is bounded is server work, not guessing: the forced reset runs a
 	// full argon2id hash (64 MiB) per call, and every invitation is a row
 	// that stays live until it expires. 30 a minute is far past an admin
-	// clicking through a row-action menu and far below what either loop
-	// needs to hurt.
+	// clicking through a row-action menu and far below what any of those
+	// loops needs to hurt.
 	budgetAdminSecret: {limit: 30, window: time.Minute},
 
 	// The two public halves of the single sign-on flow share one per-IP
@@ -280,24 +282,26 @@ var budgetSpecs = map[budgetName]budgetSpec{
 	// above anyone's real reconfiguration and far below a useful loop.
 	budgetSSOSettings: {limit: 10, window: 5 * time.Minute},
 
-	// Minting a join ticket is the fourth endpoint in this server that hands
-	// back a credential, and the only one a plain member may ask for. What is
-	// bounded is repetition: a ticket is a two-minute bearer capability for
-	// one room, and a caller who can mint them without limit can keep an
-	// arbitrarily long queue of live tickets for a channel they may be
-	// removed from at any moment. Signing itself is cheap, so this is about
-	// the standing set of live tickets rather than about CPU.
+	// Minting a join ticket hands a credential back to a plain member, which
+	// is why it does not join budgetAdminSecret: that window's argument is
+	// about an administrator choosing the cheapest of the admin-only mints,
+	// and this is neither admin-only nor part of that choice.
+	//
+	// What is bounded is repetition: a ticket is a two-minute bearer
+	// capability for one room, and a caller who can mint them without limit
+	// can keep an arbitrarily long queue of live tickets for a channel they
+	// may be removed from at any moment. Signing itself is cheap, so this is
+	// about the standing set of live tickets rather than about CPU.
 	//
 	// 30 a minute is far above the real flow — a ticket is one click, and a
 	// media client re-mints only on a rejoin — and low enough that the live
 	// set stays roughly one minute's worth.
 	budgetCallToken: {limit: 30, window: time.Minute},
 
-	// Making a conference is the fourth endpoint that answers with a one-shot
-	// secret, and the first a plain member may ask for. It gets its own
-	// window rather than joining budgetAdminSecret: that budget's argument is
-	// about an administrator picking the cheapest of two admin-only
-	// endpoints, and this is neither admin-only nor part of that choice.
+	// Making a conference answers with a one-shot secret a plain member may
+	// ask for. It gets its own window rather than joining budgetAdminSecret,
+	// for the reason budgetCallToken does, and its own rather than joining
+	// budgetCallToken, because what the two bound is not the same thing.
 	//
 	// What is bounded is the standing set of live doors. A conference link
 	// does not expire by default (ADR 005), so every call leaves a row that
@@ -510,9 +514,9 @@ var endpointBudgets = map[string]budgetName{
 	// already holds the instance; the contract reserves no 429 on it.
 	"GET /api/v1/admin/audit": budgetNone,
 
-	// Phase 1.6 SCIM provisioning tokens. Minting one is the third admin
-	// action that answers with a one-shot secret, so it joins the window the
-	// other two share — an attacker holding an admin session would otherwise
+	// Phase 1.6 SCIM provisioning tokens. Minting one is an admin action that
+	// answers with a one-shot secret, so it joins the window every other one
+	// of those shares — an attacker holding an admin session would otherwise
 	// have a fresh budget to walk to. The list and the revocation are a read
 	// and an indexed update, and the contract reserves no 429 on either.
 	//
