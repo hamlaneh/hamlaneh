@@ -296,7 +296,8 @@ type AdminUserPage struct {
 	Users      []AdminUser `json:"users"`
 }
 
-// Attachment A file card in the message list. Read-only on Message: a file becomes an attachment by being uploaded first and named in the send's attachment_ids, never by being written here. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both.
+// Attachment A file card in the message list. Read-only on Message: a file becomes an attachment by being uploaded first and named in the send's attachment_ids, never by being written here.
+// On an e2ee channel these fields are placeholders, not description: `filename` is `encrypted`, `content_type` is `application/octet-stream`, `size_bytes` is the size of the ciphertext, and there are no dimensions — the server was never told the real ones. The card renders from metadata the client decrypts out of the message, so an unreadable message yields an unreadable card rather than a card that lies. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both.
 type Attachment struct {
 	// ContentType The card's short type label ("PDF", "PNG") is derived from this.
 	ContentType string             `json:"content_type"`
@@ -376,7 +377,8 @@ type Channel struct {
 	// DmPeer The other person. Present only when kind is dm.
 	DmPeer *UserSummary `json:"dm_peer,omitempty"`
 
-	// E2ee Fixed at creation, never toggled — flipping it either way on a live conversation is exactly the silent mode-switch the downgrade test forbids. In an e2ee channel every message carries the mls envelope and empty content, so the server holds nothing it can read. Three consequences a client renders honestly rather than papering over: no mention badges (mentions are parsed from content the server no longer sees), no link previews, and no server-side search — unread counts are row counts and survive. Attachments are refused in this slice (400 e2ee_attachments_unsupported) until encrypted attachments land; an unencrypted file in an encrypted conversation would be a lie.
+	// E2ee Fixed at creation, never toggled — flipping it either way on a live conversation is exactly the silent mode-switch the downgrade test forbids. In an e2ee channel every message carries the mls envelope and empty content, so the server holds nothing it can read. Two consequences a client renders honestly rather than papering over: no link previews, and no server-side search — unread counts are row counts and survive.
+	// Mentions do work, by a different route: the sender declares them in mls.mentions, because the server cannot parse content it cannot read (ADR 014). Attachments work too — the bytes are opaque and every key travels inside the ciphertext (ADR 013), so a file in an encrypted conversation is encrypted rather than a lie.
 	E2ee bool               `json:"e2ee"`
 	Id   openapi_types.UUID `json:"id"`
 
@@ -770,6 +772,12 @@ type MlsMessageEnvelope struct {
 
 	// Epoch The group epoch the sender encrypted at — a routing hint for receivers holding older state, never a server-verified claim.
 	Epoch int64 `json:"epoch"`
+
+	// Mentions Sender-declared notification routing for an encrypted message (ADR 014). The server cannot read the ciphertext, so it cannot derive mentions the way it does on a plaintext channel — the sender names them instead.
+	// Ids that are not current members of the channel are dropped silently, duplicates collapse, and order is irrelevant: the write joins this list against channel_members, which is what keeps a declaration from naming a stranger. Trusting the sender here therefore widens nothing the membership join did not already bound.
+	// Never echoed on reads. Recipients render mentions from the tokens in the decrypted content; this list exists only so the badge and any later notification can outlive the reader's ability to decrypt.
+	// PRIVACY: this list is visible to the server. It is the one content-derived fact an encrypted message discloses — a directed sender-to-member edge — and it is named in the threat model rather than left implicit.
+	Mentions *[]openapi_types.UUID `json:"mentions,omitempty"`
 }
 
 // MlsWelcome defines model for MlsWelcome.
@@ -992,7 +1000,8 @@ type SendMessageRequest struct {
 	// Content Markdown as authored. May be empty only when attachment_ids is non-empty — an image with no caption is an ordinary message, a message with neither text nor files is nothing (400). One extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name.
 	Content string `json:"content"`
 
-	// Mls Required on an e2ee channel, refused elsewhere — the write path enforces the boundary in both directions rather than trusting clients to keep it. On an e2ee channel content must be the empty string and attachment_ids must be absent (400 e2ee_required / e2ee_attachments_unsupported); on a plaintext channel this field is a 400 e2ee_not_enabled. Idempotency by client_msg_id is unchanged.
+	// Mls Required on an e2ee channel, refused elsewhere — the write path enforces the boundary in both directions rather than trusting clients to keep it. On an e2ee channel content must be the empty string (400 e2ee_required); on a plaintext channel this field is a 400 e2ee_not_enabled. Idempotency by client_msg_id is unchanged.
+	// attachment_ids is permitted beside this field (ADR 013). The ids must name opaque uploads to the same channel; every per-file key and the real filename, type and dimensions travel inside the ciphertext, so the server stores bytes it cannot open and metadata it was never given.
 	Mls *MlsMessageEnvelope `json:"mls,omitempty"`
 }
 

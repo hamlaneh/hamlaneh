@@ -1086,6 +1086,8 @@ export interface paths {
          * Upload one file into a channel.
          * @description Backs the composer's paperclip. One file per request — the composer uploads several as several requests, each with its own progress and its own failure. The file is scoped to this channel from birth: membership is checked here, the later message references it by id, and a file never attached to a message is swept after 24 hours. That one rule — a file is readable exactly by the members of its channel — keeps the authorization story identical to every other channel resource.
          *     The declared content type is kept as the card's label, but the server trusts the bytes, not the label: a declared image/* whose bytes do not sniff as that image type is refused (415, content_type_mismatch), because images are the one kind served inline. Everything else is stored as an opaque blob and always served as a download — Content-Disposition attachment, nosniff, sandboxing CSP — so an uploaded SVG, HTML page or anything else that can carry script is a file the reader saves, never a page their browser runs. Images have their metadata stripped at ingest: EXIF carries GPS coordinates, and a photo shared in a chat must not quietly say where its author lives.
+         *     ON AN E2EE CHANNEL the bytes are already ciphertext and none of the paragraph above can apply — the server cannot sniff what it cannot read (ADR 013). So the metadata must not arrive in the clear either: the `file` part must declare its filename as exactly `encrypted` and its content type as absent or `application/octet-stream`. Anything else is a 400 `e2ee_metadata_in_clear`, refused rather than stored, because a real filename beside an encrypted body would leak the one thing the encryption was for. The real name, type and dimensions travel inside the attaching message's ciphertext.
+         *     An optional second part named `thumb` may follow `file` on an e2ee channel: a client-derived, client-encrypted thumbnail, at most 1 MiB. It is a 400 `invalid_request` beyond that size or on a plaintext channel, where the server derives thumbnails itself. The effective request-body cap on an e2ee channel is therefore `max_file_size_bytes` + 1 MiB; `max_file_size_bytes` itself is unchanged and applies to the uploaded ciphertext, so a client budgets its plaintext at the cap minus 28 bytes of nonce and tag.
          */
         post: operations["uploadFile"];
         delete?: never;
@@ -1666,7 +1668,10 @@ export interface components {
             /** Format: uuid */
             id: string;
             kind: components["schemas"]["ChannelKind"];
-            /** @description Fixed at creation, never toggled — flipping it either way on a live conversation is exactly the silent mode-switch the downgrade test forbids. In an e2ee channel every message carries the mls envelope and empty content, so the server holds nothing it can read. Three consequences a client renders honestly rather than papering over: no mention badges (mentions are parsed from content the server no longer sees), no link previews, and no server-side search — unread counts are row counts and survive. Attachments are refused in this slice (400 e2ee_attachments_unsupported) until encrypted attachments land; an unencrypted file in an encrypted conversation would be a lie. */
+            /**
+             * @description Fixed at creation, never toggled — flipping it either way on a live conversation is exactly the silent mode-switch the downgrade test forbids. In an e2ee channel every message carries the mls envelope and empty content, so the server holds nothing it can read. Two consequences a client renders honestly rather than papering over: no link previews, and no server-side search — unread counts are row counts and survive.
+             *     Mentions do work, by a different route: the sender declares them in mls.mentions, because the server cannot parse content it cannot read (ADR 014). Attachments work too — the bytes are opaque and every key travels inside the ciphertext (ADR 013), so a file in an encrypted conversation is encrypted rather than a lie.
+             */
             e2ee: boolean;
             /** @description The name the sidebar renders after "#". Unique across non-DM channels; null for a direct message, which the client labels with dm_peer.display_name instead. */
             slug?: string | null;
@@ -1927,7 +1932,10 @@ export interface components {
             chain_valid: boolean;
             next_cursor?: string;
         };
-        /** @description A file card in the message list. Read-only on Message: a file becomes an attachment by being uploaded first and named in the send's attachment_ids, never by being written here. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both. */
+        /**
+         * @description A file card in the message list. Read-only on Message: a file becomes an attachment by being uploaded first and named in the send's attachment_ids, never by being written here.
+         *     On an e2ee channel these fields are placeholders, not description: `filename` is `encrypted`, `content_type` is `application/octet-stream`, `size_bytes` is the size of the ciphertext, and there are no dimensions — the server was never told the real ones. The card renders from metadata the client decrypts out of the message, so an unreadable message yields an unreadable card rather than a card that lies. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both.
+         */
         Attachment: {
             /** Format: uuid */
             id: string;
@@ -2005,7 +2013,10 @@ export interface components {
             client_msg_id: string;
             /** @description Markdown as authored. May be empty only when attachment_ids is non-empty — an image with no caption is an ordinary message, a message with neither text nor files is nothing (400). One extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name. */
             content: string;
-            /** @description Required on an e2ee channel, refused elsewhere — the write path enforces the boundary in both directions rather than trusting clients to keep it. On an e2ee channel content must be the empty string and attachment_ids must be absent (400 e2ee_required / e2ee_attachments_unsupported); on a plaintext channel this field is a 400 e2ee_not_enabled. Idempotency by client_msg_id is unchanged. */
+            /**
+             * @description Required on an e2ee channel, refused elsewhere — the write path enforces the boundary in both directions rather than trusting clients to keep it. On an e2ee channel content must be the empty string (400 e2ee_required); on a plaintext channel this field is a 400 e2ee_not_enabled. Idempotency by client_msg_id is unchanged.
+             *     attachment_ids is permitted beside this field (ADR 013). The ids must name opaque uploads to the same channel; every per-file key and the real filename, type and dimensions travel inside the ciphertext, so the server stores bytes it cannot open and metadata it was never given.
+             */
             mls?: components["schemas"]["MlsMessageEnvelope"];
         };
         EditMessageRequest: {
@@ -2168,6 +2179,13 @@ export interface components {
             epoch: number;
             /** @description Base64 MLSMessage (application message). Cap ~32 KiB raw: a 4000-character message plus MLS framing fits with room, and the resulting message_created frame stays far under the 64 KiB WebSocket cap. */
             ciphertext: string;
+            /**
+             * @description Sender-declared notification routing for an encrypted message (ADR 014). The server cannot read the ciphertext, so it cannot derive mentions the way it does on a plaintext channel — the sender names them instead.
+             *     Ids that are not current members of the channel are dropped silently, duplicates collapse, and order is irrelevant: the write joins this list against channel_members, which is what keeps a declaration from naming a stranger. Trusting the sender here therefore widens nothing the membership join did not already bound.
+             *     Never echoed on reads. Recipients render mentions from the tokens in the decrypted content; this list exists only so the badge and any later notification can outlive the reader's ability to decrypt.
+             *     PRIVACY: this list is visible to the server. It is the one content-derived fact an encrypted message discloses — a directed sender-to-member edge — and it is named in the threat model rather than left implicit.
+             */
+            mentions?: string[];
         };
         /**
          * @description The two tabs above the results. `files` searches filenames, scoped by channel membership exactly as messages are.

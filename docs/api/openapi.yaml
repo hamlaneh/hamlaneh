@@ -2207,6 +2207,25 @@ paths:
         file the reader saves, never a page their browser runs. Images have
         their metadata stripped at ingest: EXIF carries GPS coordinates, and
         a photo shared in a chat must not quietly say where its author lives.
+
+        ON AN E2EE CHANNEL the bytes are already ciphertext and none of the
+        paragraph above can apply — the server cannot sniff what it cannot
+        read (ADR 013). So the metadata must not arrive in the clear either:
+        the `file` part must declare its filename as exactly `encrypted` and
+        its content type as absent or `application/octet-stream`. Anything
+        else is a 400 `e2ee_metadata_in_clear`, refused rather than stored,
+        because a real filename beside an encrypted body would leak the one
+        thing the encryption was for. The real name, type and dimensions
+        travel inside the attaching message's ciphertext.
+
+        An optional second part named `thumb` may follow `file` on an e2ee
+        channel: a client-derived, client-encrypted thumbnail, at most 1 MiB.
+        It is a 400 `invalid_request` beyond that size or on a plaintext
+        channel, where the server derives thumbnails itself. The effective
+        request-body cap on an e2ee channel is therefore
+        `max_file_size_bytes` + 1 MiB; `max_file_size_bytes` itself is
+        unchanged and applies to the uploaded ciphertext, so a client budgets
+        its plaintext at the cap minus 28 bytes of nonce and tag.
       security:
         - sessionCookie: []
       parameters:
@@ -3619,13 +3638,17 @@ components:
             live conversation is exactly the silent mode-switch the
             downgrade test forbids. In an e2ee channel every message carries
             the mls envelope and empty content, so the server holds nothing
-            it can read. Three consequences a client renders honestly rather
-            than papering over: no mention badges (mentions are parsed from
-            content the server no longer sees), no link previews, and no
-            server-side search — unread counts are row counts and survive.
-            Attachments are refused in this slice (400
-            e2ee_attachments_unsupported) until encrypted attachments land;
-            an unencrypted file in an encrypted conversation would be a lie.
+            it can read.
+            Two consequences a client renders honestly rather
+            than papering over: no link previews, and no server-side search —
+            unread counts are row counts and survive.
+
+            Mentions do work, by a different route: the sender declares them
+            in mls.mentions, because the server cannot parse content it
+            cannot read (ADR 014). Attachments work too — the bytes are
+            opaque and every key travels inside the ciphertext (ADR 013), so
+            a file in an encrypted conversation is encrypted rather than a
+            lie.
         slug:
           type: string
           nullable: true
@@ -4167,7 +4190,15 @@ components:
       description: >
         A file card in the message list. Read-only on Message: a file becomes
         an attachment by being uploaded first and named in the send's
-        attachment_ids, never by being written here. Every field here is one
+        attachment_ids, never by being written here.
+
+        On an e2ee channel these fields are placeholders, not description:
+        `filename` is `encrypted`, `content_type` is
+        `application/octet-stream`, `size_bytes` is the size of the
+        ciphertext, and there are no dimensions — the server was never told
+        the real ones. The card renders from metadata the client decrypts
+        out of the message, so an unreadable message yields an unreadable
+        card rather than a card that lies. Every field here is one
         the design draws — name,
         type and size on the generic card; pixel dimensions and a thumbnail on
         the image card; a download control on both.
@@ -4367,10 +4398,15 @@ components:
             Required on an e2ee channel, refused elsewhere — the write path
             enforces the boundary in both directions rather than trusting
             clients to keep it. On an e2ee channel content must be the empty
-            string and attachment_ids must be absent (400 e2ee_required /
-            e2ee_attachments_unsupported); on a plaintext channel this field
-            is a 400 e2ee_not_enabled. Idempotency by client_msg_id is
+            string (400 e2ee_required); on a plaintext channel this field is
+            a 400 e2ee_not_enabled. Idempotency by client_msg_id is
             unchanged.
+
+            attachment_ids is permitted beside this field (ADR 013). The ids
+            must name opaque uploads to the same channel; every per-file key
+            and the real filename, type and dimensions travel inside the
+            ciphertext, so the server stores bytes it cannot open and
+            metadata it was never given.
 
     EditMessageRequest:
       type: object
@@ -4770,6 +4806,35 @@ components:
             4000-character message plus MLS framing fits with room, and the
             resulting message_created frame stays far under the 64 KiB
             WebSocket cap.
+        mentions:
+          type: array
+          writeOnly: true
+          maxItems: 50
+          items:
+            type: string
+            format: uuid
+          description: >
+            Sender-declared notification routing for an encrypted message
+            (ADR 014). The server cannot read the ciphertext, so it cannot
+            derive mentions the way it does on a plaintext channel — the
+            sender names them instead.
+
+            Ids that are not current members of the channel are dropped
+            silently, duplicates collapse, and order is irrelevant: the
+            write joins this list against channel_members, which is what
+            keeps a declaration from naming a stranger. Trusting the sender
+            here therefore widens nothing the membership join did not
+            already bound.
+
+            Never echoed on reads. Recipients render mentions from the
+            tokens in the decrypted content; this list exists only so the
+            badge and any later notification can outlive the reader's
+            ability to decrypt.
+
+            PRIVACY: this list is visible to the server. It is the one
+            content-derived fact an encrypted message discloses — a
+            directed sender-to-member edge — and it is named in the threat
+            model rather than left implicit.
 
     SearchKind:
       type: string
