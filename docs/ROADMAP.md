@@ -680,9 +680,9 @@ distinction worth being able to see at a glance:
 | Gate item | Status |
 |---|---|
 | 1(a) message canary → ciphertext only | **met**, automated rather than drilled — `webapp/e2e/specs/e2ee-messaging.e2e.ts` asserts the row shape and scans a real `pg_dump` from inside the database container, with a plaintext control so a clean scan cannot be vacuous |
-| 1(b) a no-key subscriber cannot decode a `chan-` call | **not met** — slice 3.4. The item was reworded because its old form was unmeasurable; see the note under the gate |
-| 2 key-loss / recovery drill | **not met** — needs encrypted backups and a recovery key, neither built |
-| 3 mode choice irreversible-safe | **not met** — no Strict/Compliance mode exists yet |
+| 1(b) a no-key subscriber cannot decode a `chan-` call | **buildable, not run.** Slice 3.4 landed, so the code the drill needs exists and `webapp/e2e/specs/e2ee-call-rotation.e2e.ts` covers the rotation. The drill in `docs/drills/e2ee-drill.md` has never been executed, and it is the item that proves the claim |
+| 2 key-loss / recovery drill | **buildable, not run.** This row said "needs encrypted backups and a recovery key, neither built" — both were built ([ADR 010](adr/010-encrypted-backups.md)), so the row was stale in the direction of understating progress. What remains is running the drill: a real device loss, a real recovery, and the documented non-lying failure for a user who never kept a key |
+| 3 mode choice irreversible-safe | **met by construction.** This row said "no Strict/Compliance mode exists yet"; [ADR 011](adr/011-org-encryption-mode.md) shipped it. Nothing converts in either direction — the per-conversation flag is fixed at creation — so the property holds because there is no conversion path, not because a check forbids one |
 
 [`docs/drills/e2ee-drill.md`](drills/e2ee-drill.md) now exists and covers both halves: the
 message half as the automated test that meets 1(a), the media half as the manual procedure that
