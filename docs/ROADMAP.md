@@ -774,7 +774,9 @@ Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measur
       variable, because gluing `files.` onto a bare IP produced a name neither the internal CA
       nor any public CA could ever certify, and Caddy retried that impossible order for a month
       on an otherwise-working install.)*
-- [ ] Response compression in the Go server, for home mode only. Caddy's `encode zstd gzip`
+- [x] **Response compression in the Go server, for home mode only** — *2026-08-30*,
+      `server/internal/httpserver/compress.go`, off unless asked for and on by default in home
+      mode, which is the mode with no proxy in front of it. Caddy's `encode zstd gzip`
       covers the compose path, but home mode has no proxy in front of it and would otherwise
       serve the ~560 KB web bundle uncompressed over whatever link the household has
 - [x] **Signed releases (Sigstore/cosign) + SPDX SBOM + the anti-rollback refusal** —
@@ -797,8 +799,9 @@ Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measur
       anything is stopped or written, so a wrong key or a tampered archive leaves the instance
       untouched rather than half-restored — asserted by comparing checksums before and after,
       not by inspection
-- [ ] Publish `docs/hardening.md` (defaults already carry the load; guide covers optional
-      extras: IP allow-lists, reverse-proxy variants, backup key custody)
+- [x] **Publish [`docs/hardening.md`](hardening.md)** — *2026-08-30*. Defaults carry the load;
+      the guide covers the optional extras (IP allow-lists, reverse-proxy variants, backup key
+      custody) and now also home mode beyond the machine it runs on
 - [ ] Start pre-selling Managed to interested orgs (validates pricing, near-zero build cost)
 - Tests: install matrix in **real VMs, not containers** (installer touches Docker + systemd —
   containers test nothing; use nested-virt CI runners or scheduled cloud VMs): Ubuntu LTS,
