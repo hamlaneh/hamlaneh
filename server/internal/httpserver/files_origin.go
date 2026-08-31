@@ -251,15 +251,38 @@ func inlineType(att storage.Attachment, variant blobstore.Variant) (string, bool
 }
 
 // setOpaqueBlobHeaders writes the posture every file response starts from:
-// an unnamed download of unnamed bytes, in a sandbox, with sniffing off.
-// Only a proven image relaxes any of it, and only after its metadata has
-// been read.
+// an unnamed download of unnamed bytes, in a sandbox, with sniffing off,
+// readable by a script that holds the URL. Only a proven image relaxes any
+// of it, and only after its metadata has been read.
 func setOpaqueBlobHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("Content-Type", opaqueContentType)
 	h.Set("Content-Disposition", "attachment")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Content-Security-Policy", blobCSP)
+	// ADR 013. An encrypted attachment is decrypted by the app's own
+	// JavaScript, which must fetch() these bytes to do it — and without a
+	// CORS header the app origin can navigate to a blob but never read one.
+	//
+	// `*` gives away nothing, for the same reason this origin exists: it is
+	// deliberately cookie-less, registered outside securityMiddleware, so no
+	// request here carries ambient authority for CORS to launder. The signed
+	// URL is the entire credential, and a script holding one could already
+	// fetch what it names; what changes is only that it may now read the
+	// answer. Two things must therefore stay true, or the reasoning stops
+	// holding:
+	//
+	//   - Access-Control-Allow-Credentials is never set. `*` and credentials
+	//     are incompatible by specification anyway, but the header is also
+	//     the thing that would make a cookie meaningful here.
+	//   - No response on this origin ever varies by anything but the signed
+	//     URL. The moment one did, `*` would be caching somebody's answer
+	//     for everybody.
+	//
+	// A configured app origin instead of `*` was refused deliberately: there
+	// is no credentialed state to scope it to, and it would be one more
+	// deploy-time string to get wrong in bare-IP and home-mode installs.
+	h.Set("Access-Control-Allow-Origin", "*")
 }
 
 // disposition formats a Content-Disposition value, encoding a non-ASCII

@@ -30,14 +30,16 @@ import (
 // under.
 
 // messageBody is the half of a send or an edit that the boundary decides on.
+//
+// Attachments are deliberately absent. They used to be refused here; ADR 013
+// legalized them, and there is nothing left for this check to decide about
+// them — an id names opaque bytes whose key and real name are inside the
+// ciphertext, so a file in an encrypted conversation is as encrypted as the
+// words beside it. The claim of each id stays where it always was: inside
+// the send's own transaction, against the channel the row was born in.
 type messageBody struct {
 	content string
 	mls     *api.MlsMessageEnvelope
-	// hasAttachments reports that the request named files. On an e2ee
-	// channel that is refused whether the list is one id or ten: an
-	// unencrypted file in an encrypted conversation would be a lie, and the
-	// count does not change that.
-	hasAttachments bool
 }
 
 // e2eeBody enforces the channel's mode on one message write and returns what
@@ -45,17 +47,14 @@ type messageBody struct {
 // one. On a violation it answers 400 with the contract's code and reports
 // false.
 //
-// Three refusals, three codes, because they ask for three different things
-// from a client:
+// Two refusals, two codes, because they ask for two different things from a
+// client:
 //
 //   - e2ee_required — this conversation is encrypted and this write is not.
 //     It covers a missing envelope AND non-empty content, which are the same
 //     mistake seen from two sides: the searchable column must hold nothing
 //     the server can read, so plaintext arriving beside a ciphertext is as
 //     much a downgrade as plaintext arriving alone.
-//   - e2ee_attachments_unsupported — encrypted attachments are not built
-//     yet. Refused rather than stored in the clear, and said plainly so a
-//     client can render "not yet" instead of a generic failure.
 //   - e2ee_not_enabled — this conversation is not encrypted and this write
 //     is. Storing the ciphertext would be the mode ambiguity above.
 func (s *apiServer) e2eeBody(w http.ResponseWriter, r *http.Request, e2ee bool, body messageBody) (*storage.MessageMls, bool) {
@@ -75,10 +74,6 @@ func (s *apiServer) e2eeBody(w http.ResponseWriter, r *http.Request, e2ee bool, 
 	if body.content != "" {
 		writeError(w, r, http.StatusBadRequest, codeE2EERequired,
 			"this channel is end-to-end encrypted; content must be empty")
-		return nil, false
-	}
-	if body.hasAttachments {
-		writeE2EEAttachmentsUnsupported(w, r)
 		return nil, false
 	}
 	if body.mls.Epoch < 0 {
@@ -129,13 +124,4 @@ func (s *apiServer) e2eeAtBirth(w http.ResponseWriter, r *http.Request, store St
 			"this organisation creates only conversations it can retain and export")
 	}
 	return false, false
-}
-
-// writeE2EEAttachmentsUnsupported is the single answer to a file in an
-// encrypted conversation, written from the send path, the edit path and the
-// upload route alike. One call site is what keeps the three from drifting
-// into an upload that succeeds and a send that cannot use it.
-func writeE2EEAttachmentsUnsupported(w http.ResponseWriter, r *http.Request) {
-	writeError(w, r, http.StatusBadRequest, codeE2EEAttachmentsUnsupported,
-		"attachments are not supported in an end-to-end encrypted channel yet")
 }
