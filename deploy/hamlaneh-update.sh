@@ -407,8 +407,13 @@ apply_compose() {
   # if that convention or the project name changes.
   local_tag="$("$docker_bin" inspect --format '{{.Config.Image}}' "$cid")"
   previous_id="$("$docker_bin" inspect --format '{{.Image}}' "$cid")"
-  [ -n "$local_tag" ] && [ -n "$previous_id" ] ||
+  # Spelled as an if rather than `A && B || fail`: on this path C running when
+  # A is true is exactly what has to happen, but that is the one case the
+  # `&& ||` shape does not say out loud, and it is a rollback anchor — reading
+  # it wrong once means rolling back to nothing.
+  if [ -z "$local_tag" ] || [ -z "$previous_id" ]; then
     fail "could not read the running server container's image — refusing to swap something this script cannot roll back"
+  fi
 
   log "pulling ${image}"
   "$docker_bin" pull "$image" >/dev/null ||
