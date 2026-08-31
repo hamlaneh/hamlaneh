@@ -123,8 +123,14 @@ retrofit is how security fails.
 - [x] Password reset **backend**: email-delivered, single-use, time-limited (30m) tokens;
       rate-limited per address and per client; uniform responses (no account enumeration);
       completing a reset revokes every session family and sets no cookies — *slice 1.1b*
-- [ ] Password reset **UI**: build the `reset-request`, `reset-request-confirmation` and
-      `reset-new-password` artboards plus the `BackLink` component (design/LOGIN_HANDOFF.md)
+- [x] Password reset **UI**: the `reset-request`, `reset-request-confirmation` and
+      `reset-new-password` artboards plus the `BackLink` component (design/LOGIN_HANDOFF.md) —
+      *slice 1.1b, 2026-08-22*. `ResetRequestScreen` carries the request form and its
+      confirmation as two states of one screen rather than two routes, because the confirmation
+      must be identical for every address the contract accepts and a distinct URL would be one
+      more thing that could differ; `ResetPasswordScreen` reads the token from the URL
+      **fragment** and scrubs it from the address bar, so it never reaches the access logs of
+      the server it unlocks
 - [x] Mail infrastructure the reset depends on: a `Mailer` interface with a recording fake for
       tests and an SMTP implementation wired in `cmd/`, dispatching asynchronously so SMTP
       latency never sits on a response; SMTP settings plus a public base URL in `.env.example`
@@ -133,10 +139,16 @@ retrofit is how security fails.
 - [x] Server-side bilingual email templates need a language-policy amendment: the Persian
       exception in CLAUDE.md currently covers only `webapp/**/locales/fa/**` — widened to any
       localized user-facing template wherever it lives — *slice 1.1b*
-- [ ] **Recovery codes have no sign-in entry point.** `login-totp` is six numeric cells; a
-      `XXXX-XXXX` recovery code cannot be typed into it, so codes that exist entirely for
-      account recovery are unreachable at the moment they are needed. The endpoint accepts them;
-      the screen needs a design addendum before the feature is real
+- [x] **Recovery codes have a sign-in entry point** — *slice 1.1b, 2026-08-22*. This box read
+      "have none": `login-totp` was six numeric cells, and a `XXXX-XXXX` code could not be typed
+      into any of them, so codes that exist entirely for account recovery were unreachable at
+      the moment they are needed. `TotpChallengeScreen` now carries a `Method` of `authenticator`
+      or `recovery` and swaps the cells for one plain field, normalising what is typed to the
+      form the contract describes. Both halves post the same field to the same endpoint — the
+      server always accepted either — so nothing on the write path changed. The recovery half is
+      **undesigned**: no artboard draws it, it borrows delivered components unchanged, and
+      `docs/design/STATUS.md` marks it `awaiting-design` so the artboard lands as a reskin
+      rather than a rebuild. Shipping it unstyled beat leaving the codes unreachable
 - [x] Sessions core: short-lived access (15m) + rotating refresh (30d) **with reuse detection
       (family revocation)**, opaque tokens stored as SHA-256; HttpOnly+Secure+SameSite=Strict
       cookies; CSRF double-submit via `X-Hamlaneh-CSRF`; change-password revokes all other
@@ -144,10 +156,26 @@ retrofit is how security fails.
 - [x] Session management **endpoints**: one row per live session family (device), current
       first; sign one device out or all the others; another account's family answers 404 so a
       guessed id confirms nothing — *slice 1.1b*
-- [ ] Sessions remainder: device list UI; new-device login notification (email infra now
-      exists); expired-row cleanup sweep; client reacts to an unrecoverable 401 mid-use by
-      returning to sign-in; decide a short server-side grace window for concurrent refresh
-      (two tabs racing trips family revocation) — before 1.2
+- [x] Sessions remainder, the half that shipped — *slice 1.1b, 2026-08-22*. The device list UI
+      is `components/settings/SessionsSection.tsx`, one row per live family with remote sign-out
+      behind a confirm dialog. A session that dies mid-use returns to sign-in rather than sitting
+      on a dead shell: the gateway closes with 4401, and `ChatShell` calls `onLogout` on that
+      close (ws-protocol.md §7 — a revoked family cannot be retried, so retrying would only be
+      rate-limited). On the REST side `api/client.ts` refreshes once and retries once, straight
+      to `fetch` rather than back through the client, so a second 401 propagates instead of
+      looping
+- [ ] Sessions remainder, the half that did not. **New-device login notification** — the mail
+      infrastructure exists (`internal/mailer` has the transport, the async queue and bilingual
+      templates), and the only template in the tree is `password_reset`. **Expired-row cleanup
+      sweep** — nothing deletes an expired session row; `storage/sessions.go` has no delete path
+      that is not a revocation, so the table grows for the life of the instance.
+      **The concurrent-refresh race is still open, and the client-side single-flight is not the
+      fix.** `client.ts` shares one in-flight refresh, which covers concurrent requests *within
+      one document*; two tabs are two module instances with no lock between them, and
+      `RotateSession` is explicit that the second presentation of a rotated token trips reuse
+      detection and revokes the family. Two tabs waking together still sign the user out of
+      everything. It wants either a cross-tab lock or the short server-side grace window this
+      line has been asking for — the decision has not been made
 - [x] `Retry-After` declared in the contract and emitted on the login, two-step and
       account-security 429s, so the sign-in form can show a real countdown instead of clearing
       its rate-limited state on the next edit — *slice 1.1b*
@@ -587,10 +615,23 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
       fixed in 3.2: the fix is one more entry in the same five-second timer, and that timer is
       already carrying two unbounded polls the slice-3.1 review flagged for backoff. Doing both
       together is one coherent change; adding a third poll first is two
-- [ ] Multi-device: per-device keys, device verification, key sync. Verification is where the
-      residue of ADR 007 goes: the sweep trusts the directory's key↔person mapping, and only two
+- [x] Multi-device, the two thirds that shipped: **per-device keys** with the transport itself
+      (migration 0017 — "a leaf is a device, not a user, from the first group ever created", one
+      signature key per client instance, keyed `(user_id, signature_public_key)`, because sharing
+      a key across devices means exporting private key material between browsers and
+      retrofitting device-ness later is a state migration inside every user's browser storage),
+      and **device verification** as slice 3.3 four lines below. Verification is where the
+      residue of ADR 007 went: the sweep trusts the directory's key↔person mapping, and only two
       humans comparing key material out of band can close that — no server signature can, because
       under PLAN §6.1's adversary 3 the signer is the adversary
+- [ ] Multi-device, the third that did not: **key sync**. Nothing carries a person's device
+      state from one of their devices to another, so each browser profile enrols as a separate
+      device and starts with no history and no verification records. Encrypted backups
+      ([ADR 010](adr/010-encrypted-backups.md)) restore the trust decisions onto a new profile
+      and are the closest thing that exists, but a restore is a deliberate act with a key typed
+      by hand, not a sync. It also sits behind the one-device-per-browser-profile item above:
+      until a SharedWorker owns the device, two tabs are not reliably one device, and syncing
+      between profiles would be building the harder case on top of an unsettled easier one
 - [x] **Slice 3.3 — key verification** ([ADR 008](adr/008-key-verification.md)) — *2026-08-30*: client-local
       records in the wrapped keystore (never server-stored — a server that can *set* a verified
       flag marks its own planted key safe), a safety number over a person's whole device-key set
@@ -609,8 +650,12 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
 - [ ] **The recovery UX drills**, which are the gate rather than the slice: back up, destroy the
       profile, recover with the key; then the same loss with no key, landing on the documented
       non-lying failure path. Two browser contexts, and phase gate item 2 is not met until they run
-- [ ] **Slice 3.4 — media E2EE** ([ADR 009](adr/009-media-e2ee.md)) via LiveKit insertable
-      streams. The key is MLS exporter output at the current epoch, so nothing distributes it and
+- [x] **Slice 3.4 — media E2EE** ([ADR 009](adr/009-media-e2ee.md)) — *2026-08-30*, via LiveKit
+      insertable streams. `webapp/src/calls/e2ee.ts` derives the key, `calls/livekit.ts` wraps the
+      key provider, and `webapp/e2e/specs/e2ee-call-rotation.e2e.ts` drives a membership change
+      under a live encrypted call — which is the assertion worth having, since a key that never
+      rotates would pass every static check.
+      The key is MLS exporter output at the current epoch, so nothing distributes it and
       every member derives the same bytes independently; it rotates when the epoch does, into
       keyring slot `epoch % 16`, which needs no signalling at all. A fixed per-call key was
       refused because it would let a member removed mid-call keep listening — exactly the
@@ -685,9 +730,10 @@ distinction worth being able to see at a glance:
 | 3 mode choice irreversible-safe | **met by construction.** This row said "no Strict/Compliance mode exists yet"; [ADR 011](adr/011-org-encryption-mode.md) shipped it. Nothing converts in either direction — the per-conversation flag is fixed at creation — so the property holds because there is no conversion path, not because a check forbids one |
 
 [`docs/drills/e2ee-drill.md`](drills/e2ee-drill.md) now exists and covers both halves: the
-message half as the automated test that meets 1(a), the media half as the manual procedure that
-will meet 1(b) once slice 3.4 lands. It also records why the packet-capture form was rejected, so
-the shorter version is not reinvented by somebody who never saw this note.
+message half as the automated test that meets 1(a), the media half as the manual procedure for
+1(b). Slice 3.4 has landed, so that procedure is runnable rather than waiting on code — what
+stands between it and a met gate is somebody running it. It also records why the packet-capture
+form was rejected, so the shorter version is not reinvented by somebody who never saw this note.
 
 ---
 
@@ -863,10 +909,13 @@ security *marketing*, not launch.
       into a supported default — and note the trap the guide had to correct: `/admin` is a
       client-side route served the same index.html as everything else, so blocking it protects
       nothing. The surfaces with power are `/api/v1/admin/*` and `/scim/v2/*`
-- [ ] **No operator backup tooling exists at all** — the only backup code in the tree is the
-      per-user MLS key backup (ADR 010), which is a different thing entirely. This is the Phase
-      4 automated-backups box; the hardening guide deliberately did not paper over it with a
-      cron recipe, because that is how a missing feature turns into folklore
+- [x] **Operator backup tooling** — *2026-08-30*, the same work the Phase 4 automated-backups
+      box ticks: `deploy/hamlaneh-backup.sh`, its own test suite beside it, a `backup-tooling`
+      job in `ci.yml`, and the restore runbook in [`docs/backups.md`](backups.md). This line
+      read "no operator backup tooling exists at all", which was true when the hardening guide
+      was written and was left behind by the Phase 4 slice that closed it — one piece of work
+      tracked in two places, and only one of them updated. It is the reason the guide could stop
+      declining to offer a cron recipe: there is a supported path to point at instead
 - [ ] External pentest → fix findings → publish report
 - [ ] Cryptography audit of the E2EE integration → fix → publish
 
