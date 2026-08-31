@@ -213,8 +213,19 @@ test.describe("an encrypted call across a membership change", () => {
       // The seam the slice surfaced for exactly this: whatever else is true,
       // this call claims to be end-to-end encrypted. Everything below is
       // about that claim surviving a commit.
+      //
+      // `exact` because two DIFFERENT claims are on this screen and both
+      // belong there. The call's own notice says "End-to-end encrypted" about
+      // the media; the conversation's notice says "This conversation is
+      // end-to-end encrypted…" about the messages, and adds the metadata
+      // caveat the media claim needs (CallView, E2eeNotice). A default
+      // `getByText` is a case-insensitive SUBSTRING match, so the sentence
+      // swallows the label and the locator resolves to both — strict mode,
+      // correctly, refuses to guess which one was meant. Matching the label
+      // in full is narrower than what was written here, not wider: nothing
+      // else in the product draws that sentence on its own.
       await expect(
-        app.page.getByText(t("calls.encrypted.label")),
+        app.page.getByText(t("calls.encrypted.label"), { exact: true }),
         `${who}'s call is not keyed`,
       ).toBeVisible();
     }
@@ -261,7 +272,7 @@ test.describe("an encrypted call across a membership change", () => {
         `${who}'s call did not survive the membership change`,
       ).toHaveCount(2);
       await expect(
-        app.page.getByText(t("calls.encrypted.label")),
+        app.page.getByText(t("calls.encrypted.label"), { exact: true }),
         `${who}'s call stopped claiming to be encrypted`,
       ).toBeVisible();
     }
