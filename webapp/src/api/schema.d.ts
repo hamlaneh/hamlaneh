@@ -1927,7 +1927,7 @@ export interface components {
             chain_valid: boolean;
             next_cursor?: string;
         };
-        /** @description A file card in the message list. Read-only on Message: attachments are created by the Phase 1.3 upload pipeline, so until that slice lands the array is always empty. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both. */
+        /** @description A file card in the message list. Read-only on Message: a file becomes an attachment by being uploaded first and named in the send's attachment_ids, never by being written here. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both. */
         Attachment: {
             /** Format: uuid */
             id: string;
@@ -1977,7 +1977,7 @@ export interface components {
              * @description Non-null renders the dashed "Message removed" placeholder. The row keeps its place in history so the conversation never reshapes.
              */
             deleted_at?: string | null;
-            /** @description Always empty until the Phase 1.3 upload pipeline lands. */
+            /** @description The message's file cards, in the order the sender listed them in attachment_ids. Empty when the message carries no files. */
             attachments: components["schemas"]["Attachment"][];
             /** @description Absent until the Phase 1.3 preview proxy lands. */
             link_preview?: components["schemas"]["LinkPreview"];
@@ -1993,7 +1993,10 @@ export interface components {
             after_cursor?: string;
         };
         SendMessageRequest: {
-            /** @description Files previously uploaded to this channel by this caller and not yet attached to any message, attached atomically with the send. An id that names anything else — another channel's file, another person's, one already attached — answers 404 attachment_not_found, one code for every miss so nothing about other people's uploads leaks. Duplicates in the list are a 400. */
+            /**
+             * @description Files previously uploaded to this channel by this caller and not yet attached to any message, attached atomically with the send. An id that names anything else — another channel's file, another person's, one already attached — answers 404 attachment_not_found, one code for every miss so nothing about other people's uploads leaks. Duplicates in the list are a 400.
+             *     The ORDER of this list is significant and is preserved: a message's cards come back in it, on the send response and on every later read. It is the order the person arranged their files in, which is not the order the uploads finished — one request per file goes out concurrently, so completion order is a property of the network.
+             */
             attachment_ids?: string[];
             /**
              * Format: uuid
