@@ -136,12 +136,17 @@ func messageCursor(w http.ResponseWriter, r *http.Request, encoded string) (*sto
 // same key is 200 with the message that already exists, unmodified and not
 // announced a second time — the first send already delivered it.
 //
-// Mentions are not parsed here. The contract has the client send a mention as
-// the literal token <@{user_id}> inside the content, and storage.CreateMessage
-// derives the message_mentions rows from that content in the same statement
-// that stores the message — so the rows the sidebar's "@" badge counts can
-// never disagree with the message they came from, whatever calls it. Nothing
-// in this handler needs to know, and nothing here should start guessing.
+// Mentions are not parsed here, on either kind of channel. On a plaintext one
+// the contract has the client send a mention as the literal token
+// <@{user_id}> inside the content, and storage.CreateMessage derives the
+// message_mentions rows from that content in the same statement that stores
+// the message — so the rows the sidebar's "@" badge counts can never disagree
+// with the message they came from, whatever calls it. On an encrypted one
+// there is no content to derive from, so the sender declares the list in the
+// envelope and e2eeBody carries it through (ADR 014); which of the two sources
+// a write uses is storage.MentionsOf's decision, made in one place for both
+// drivers. Nothing in this handler needs to know, and nothing here should
+// start guessing.
 func (s *apiServer) SendMessage(w http.ResponseWriter, r *http.Request, channelID api.ChannelId) {
 	sc, ok := s.resolveChannel(w, r, channelID)
 	if !ok {

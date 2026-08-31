@@ -50,6 +50,11 @@ const (
 	maxCiphertextB64     = 45000
 	maxCommitPageLimit   = 50
 
+	// The declared mention list (ADR 014). The plaintext path's own ceiling is
+	// about a hundred tokens in a 4000-character message; 50 is past real use
+	// and short of abuse.
+	maxDeclaredMentions = 50
+
 	// The roster page. The contract's default IS its maximum (openapi.yaml):
 	// a client assembling an allow-list has to read every page regardless, so
 	// a smaller default would only buy it more round trips to reach the same

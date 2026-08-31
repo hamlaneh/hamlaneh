@@ -182,12 +182,15 @@ const sendAttempts = 3
 // A channel or author that does not exist (deleted between the authorization
 // check and the send) is storage.ErrNotFound, not a constraint error.
 //
-// Mentions are derived from the content rather than taken from the caller, and
-// are written inside the same transaction as the message. Deriving them here
-// means the rows the sidebar's "@" badge counts can never disagree with the
-// message they came from, whatever calls this; the shared transaction means
-// they are atomic with it, and a resend — which reaches nothing but the lookup
-// below — cannot write them a second time.
+// Mentions come from whichever source the channel's mode leaves available —
+// the content on a plaintext message, the envelope's declaration on an
+// encrypted one, decided by storage.MentionsOf so both drivers make the same
+// choice — and are written inside the same transaction as the message.
+// Choosing here rather than at the caller means the rows the sidebar's "@"
+// badge counts can never disagree with the message they came from, whatever
+// calls this; the shared transaction means they are atomic with it, and a
+// resend — which reaches nothing but the lookup below — cannot write them a
+// second time.
 //
 // Only members of the channel get a mention row. A token naming somebody who is
 // not in the conversation — a stale paste, a hand-typed id, a person since
@@ -219,7 +222,7 @@ func (s *Store) CreateMessage(ctx context.Context, nm storage.NewMessage) (stora
 	if nm.Content == "" && len(nm.AttachmentIDs) == 0 && nm.Mls == nil {
 		return storage.Message{}, false, storage.ErrEmptyMessage
 	}
-	mentioned := storage.ParseMentions(nm.Content)
+	mentioned := storage.MentionsOf(nm.Mls, nm.Content)
 
 	for range sendAttempts {
 		msg, err := s.insertMessage(ctx, nm, mentioned)
@@ -306,7 +309,10 @@ func (s *Store) insertMessage(ctx context.Context, nm storage.NewMessage, mentio
 	return msg, nil
 }
 
-// insertMessageMentions writes the mention rows a message's content names.
+// insertMessageMentions writes a message's mention rows from the ids its
+// caller resolved — parsed from content, or declared in the envelope
+// (storage.MentionsOf). Like the PostgreSQL statements it mirrors, it cannot
+// tell the two apart and does not need to.
 //
 // PostgreSQL writes them as the `mentioned` arm of its send CTE and as the
 // `added` arm of its edit CTE, both selecting from the arm that wrote the
@@ -345,9 +351,9 @@ func insertMessageMentions(ctx context.Context, tx *sql.Tx, messageID, channelID
 	return nil
 }
 
-// rewriteMessageMentions makes a message's mention rows agree with its edited
-// content: the ones the new content no longer names are dropped, the ones it
-// adds are written, and the ones it kept are left where they are.
+// rewriteMessageMentions makes a message's mention rows agree with its edit:
+// the ones the edit no longer names are dropped, the ones it adds are written,
+// and the ones it kept are left where they are.
 //
 // PostgreSQL coalesces the id list in its DELETE, because an edit that names
 // nobody sends an empty array which arrives as SQL NULL — and "not one of NULL"
@@ -408,11 +414,14 @@ func (s *Store) MessageByID(ctx context.Context, channelID, messageID uuid.UUID)
 // returns the message as it now stands.
 //
 // The message keeps its id and its created_at, so it keeps its place in
-// history: an edit is not a resend. Mentions are re-derived from the new
-// content and rewritten inside the same transaction as the edit — migration
-// 0003 says the rows are written "when a message is sent or edited", and
-// CreateMessage's guarantee that the "@" badge can never disagree with the
-// message it came from would otherwise last only until somebody edited.
+// history: an edit is not a resend. Mentions are taken again from the edit's
+// own source (storage.MentionsOf: the new content, or the new envelope's
+// declaration) and rewritten inside the same transaction as the edit —
+// migration 0003 says the rows are written "when a message is sent or edited",
+// and CreateMessage's guarantee that the "@" badge can never disagree with the
+// message it came from would otherwise last only until somebody edited. An
+// edit replaces the set rather than adding to it, so an author who drops
+// somebody stops ringing them, in both modes.
 //
 // mls replaces the ciphertext, and a nil one clears it. Both columns move
 // together on every edit, so an edit can neither leave stale ciphertext under
@@ -426,7 +435,7 @@ func (s *Store) MessageByID(ctx context.Context, channelID, messageID uuid.UUID)
 // landed in between is simply the answer a moment later. Content bounds are the
 // caller's to enforce; the messages_content_shape constraint is the backstop.
 func (s *Store) UpdateMessageContent(ctx context.Context, channelID, messageID uuid.UUID, content string, mls *storage.MessageMls) (storage.Message, error) {
-	mentioned := storage.ParseMentions(content)
+	mentioned := storage.MentionsOf(mls, content)
 
 	var msg storage.Message
 	err := s.withTx(ctx, func(tx *sql.Tx) error {

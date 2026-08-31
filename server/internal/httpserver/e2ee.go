@@ -1,7 +1,10 @@
 package httpserver
 
 import (
+	"fmt"
 	"net/http"
+
+	"github.com/google/uuid"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
@@ -84,7 +87,41 @@ func (s *apiServer) e2eeBody(w http.ResponseWriter, r *http.Request, e2ee bool, 
 	if !ok {
 		return nil, false
 	}
-	return &storage.MessageMls{Epoch: body.mls.Epoch, Ciphertext: ciphertext}, true
+	mentions, ok := declaredMentions(w, r, body.mls.Mentions)
+	if !ok {
+		return nil, false
+	}
+	return &storage.MessageMls{Epoch: body.mls.Epoch, Ciphertext: ciphertext, Mentions: mentions}, true
+}
+
+// declaredMentions takes ADR 014's sender-declared notification routing off
+// the envelope, bounded by the contract's maxItems.
+//
+// The length is the only thing this can refuse, and refusing it is the only
+// reason the function exists. Everything else a declaration can get wrong —
+// naming somebody who left the channel, somebody who was never in it, no user
+// at all, or the same person twice — is dropped by the channel_members join
+// inside the write's own statement, which is where it has to be decided: a
+// handler that checked membership here would be checking it against a roster
+// that can change before the insert lands. An unbounded list is different in
+// kind: nothing downstream bounds it, and a hundred thousand ids would be a
+// hundred thousand parameters on the hottest write path.
+//
+// What it deliberately does not do is validate the declaration against the
+// message. The server holds no plaintext to check it against (ADR 006), so
+// the list is advisory routing, not a claim about content — the trust framing
+// ADR 014 fixes so nobody re-derives a stricter one here and finds they cannot
+// implement it.
+func declaredMentions(w http.ResponseWriter, r *http.Request, declared *[]uuid.UUID) ([]uuid.UUID, bool) {
+	if declared == nil {
+		return nil, true
+	}
+	if len(*declared) > maxDeclaredMentions {
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+			fmt.Sprintf("mls.mentions must name at most %d members", maxDeclaredMentions))
+		return nil, false
+	}
+	return *declared, true
 }
 
 // e2eeAtBirth decides the encryption a conversation created now must carry,

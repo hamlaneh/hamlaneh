@@ -18,6 +18,33 @@ const (
 	MentionTokenLen = len(mentionPrefix) + 36 + 1
 )
 
+// MentionsOf returns the ids a write's mention rows should name: the two
+// sources, one per channel mode, chosen in the one place both drivers call so
+// they cannot diverge on which.
+//
+// A plaintext message is parsed, as it always was. An encrypted one is taken
+// from the envelope's declaration (ADR 014), because content is the empty
+// string by contract there and parsing it derives nobody — the defect this
+// closes was exactly that silence: the
+// composer offered the picker, the recipient rendered the name, and the badge
+// that reaches somebody not looking at the channel never fired.
+//
+// The envelope's presence, not the content's emptiness, is the switch. That
+// matters: it means a message can never have two sources of mention truth, so
+// an envelope arriving beside readable content — which the write path refuses
+// upstream anyway — could not smuggle a second set of rows in behind the
+// declaration.
+//
+// Neither source is trusted with membership. Both feed the same array
+// parameter of the same statements, whose channel_members join drops an id
+// that is not in the conversation and whose primary key collapses repeats.
+func MentionsOf(mls *MessageMls, content string) []uuid.UUID {
+	if mls != nil {
+		return mls.Mentions
+	}
+	return ParseMentions(content)
+}
+
 // ParseMentions returns the user ids a message's content mentions, in the
 // order they first appear and without repeats.
 //

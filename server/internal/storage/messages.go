@@ -71,6 +71,18 @@ type Message struct {
 type MessageMls struct {
 	Epoch      int64
 	Ciphertext []byte
+	// Mentions is whom the sender says this message names (ADR 014). It is
+	// write-only in the contract's sense and write-only here: a write takes it
+	// in place of a content parse the server cannot perform, and no read ever
+	// fills it — scanMessage builds this struct from the two columns alone, so
+	// a message read back always carries a nil one.
+	//
+	// It is a declaration, not a fact. The server holds no plaintext to check
+	// it against and must not pretend otherwise; what bounds it is the same
+	// channel_members join the parsed path always used, which is why trusting
+	// the sender here widens nothing. Recipients render mentions from the
+	// tokens in the decrypted content, never from this.
+	Mentions []uuid.UUID
 }
 
 // NewMessage carries the fields for sending a message. ClientMsgID is the
@@ -160,9 +172,14 @@ const messageReturning = `id, channel_id, author_id, client_msg_id, content, cre
 // The mentions of the message go in with it. Their insert selects from the
 // message's own RETURNING, so it writes exactly when a message row is created
 // and nothing when the key was taken; the join against channel_members is
-// what keeps a token naming a stranger — or nobody at all — from becoming a
-// row (see CreateMessage). $5 is the parsed ids, and repeats among them
+// what keeps an id naming a stranger — or nobody at all — from becoming a
+// row (see CreateMessage). $5 is the mentioned ids, and repeats among them
 // collapse against the channel_members primary key.
+//
+// The statement does not care where $5 came from: a content parse on a
+// plaintext channel, the sender's declaration on an encrypted one (ADR 014).
+// That is why the e2ee mention fix needed no SQL — only a different source
+// for the same parameter, and the same join still bounding it.
 const insertMessageQuery = `WITH inserted AS (
 	    INSERT INTO messages (channel_id, author_id, client_msg_id, content, mls_epoch, mls_ciphertext)
 	    VALUES ($1, $2, $3, $4, $6, $7)
@@ -197,12 +214,13 @@ const messageByIDQuery = `SELECT ` + messageColumns + `
 // says the rows are written "when a message is sent or edited" and because
 // CreateMessage's guarantee — the rows the sidebar's "@" badge counts can
 // never disagree with the message they came from — would otherwise last only
-// until somebody edited. $4 is the ids parsed from the new content: the
-// DELETE drops the rows it no longer names, and the INSERT adds the ones it
-// does, joined against channel_members exactly as a send is, so an edit can
-// no more mention a stranger to the channel than a send can. The two touch
-// disjoint sets of rows, so they cannot race each other inside the one
-// statement.
+// until somebody edited. $4 is the edit's mentioned ids — parsed from the new
+// content, or declared in the new envelope (ADR 014), which this statement
+// cannot tell apart and does not need to: the DELETE drops the rows it no
+// longer names, and the INSERT adds the ones it does, joined against
+// channel_members exactly as a send is, so an edit can no more mention a
+// stranger to the channel than a send can. The two touch disjoint sets of
+// rows, so they cannot race each other inside the one statement.
 //
 // $4 is coalesced in the DELETE because an edit that names nobody sends an
 // empty list, which arrives as SQL NULL: "not one of NULL" is NULL rather
@@ -327,12 +345,14 @@ const sendAttempts = 3
 // A channel or author that does not exist (deleted between the
 // authorization check and the send) is ErrNotFound, not a constraint error.
 //
-// Mentions are derived from the content rather than taken from the caller,
-// and are written by the same statement as the message. Deriving them here
-// means the rows the sidebar's "@" badge counts can never disagree with the
-// message they came from, whatever calls this; one statement means no
-// transaction is needed for them to be atomic with it, and a resend — which
-// reaches nothing but the lookup below — cannot write them a second time.
+// Mentions come from whichever source the channel's mode leaves available —
+// the content on a plaintext message, the envelope's declaration on an
+// encrypted one, decided by MentionsOf — and are written by the same statement
+// as the message. Choosing here rather than at the caller means the rows the
+// sidebar's "@" badge counts can never disagree with the message they came
+// from, whatever calls this; one statement means no transaction is needed for
+// them to be atomic with it, and a resend — which reaches nothing but the
+// lookup below — cannot write them a second time.
 //
 // Only members of the channel get a mention row. A token naming somebody who
 // is not in the conversation — a stale paste, a hand-typed id, a person since
@@ -364,7 +384,7 @@ func (s *Store) CreateMessage(ctx context.Context, nm NewMessage) (Message, bool
 	if nm.Content == "" && len(nm.AttachmentIDs) == 0 && nm.Mls == nil {
 		return Message{}, false, ErrEmptyMessage
 	}
-	mentioned := ParseMentions(nm.Content)
+	mentioned := MentionsOf(nm.Mls, nm.Content)
 
 	for range sendAttempts {
 		msg, err := s.insertMessage(ctx, nm, mentioned)
@@ -520,8 +540,11 @@ func (s *Store) MessageByID(ctx context.Context, channelID, messageID uuid.UUID)
 // returns the message as it now stands.
 //
 // The message keeps its id and its created_at, so it keeps its place in
-// history: an edit is not a resend. Mentions are re-derived from the new
-// content by the same statement (see updateMessageQuery).
+// history: an edit is not a resend. Mentions are taken again from the edit's
+// own source (MentionsOf: the new content, or the new envelope's declaration)
+// and rewritten by the same statement — see updateMessageQuery. An edit
+// therefore replaces the mention set rather than adding to it, so an author
+// who drops somebody stops ringing them, in both modes.
 //
 // mls replaces the ciphertext, and a nil one clears it. Both columns move
 // together on every edit, so an edit can neither leave stale ciphertext under
@@ -536,7 +559,7 @@ func (s *Store) MessageByID(ctx context.Context, channelID, messageID uuid.UUID)
 // the caller's to enforce; the messages_content_shape constraint is the
 // backstop.
 func (s *Store) UpdateMessageContent(ctx context.Context, channelID, messageID uuid.UUID, content string, mls *MessageMls) (Message, error) {
-	row := s.pool.QueryRow(ctx, updateMessageQuery, channelID, messageID, content, ParseMentions(content),
+	row := s.pool.QueryRow(ctx, updateMessageQuery, channelID, messageID, content, MentionsOf(mls, content),
 		mlsEpochArg(mls), mlsCiphertextArg(mls))
 	msg, err := scanMessage(row)
 	if err != nil {
