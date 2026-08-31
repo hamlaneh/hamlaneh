@@ -24,6 +24,31 @@ import { CallEncryptionUnsupportedError } from "./media";
  */
 
 /**
+ * How many slots the media keyring has, and therefore what an epoch is
+ * reduced modulo to name one.
+ *
+ * **This is a wire constant, not a local setting.** Every participant computes
+ * its slot from its own copy of this number, and nothing is ever signalled, so
+ * two clients that disagree about it seal and open different slots. That
+ * failure is silent by design — `failureTolerance: -1` never throws, and the
+ * symptom is a tile that stays frozen, which ADR 009 case (a) teaches people
+ * to read as "they have not merged the commit yet". So it is pinned here
+ * rather than inherited from `livekit-client` (whose own default is 16 in the
+ * pinned 2.22.1, and is theirs to change), and **changing it breaks every
+ * open tab on the old value**: it is a release-boundary change, not an edit.
+ *
+ * ADR 009, decision 3 schedules a rise to 256 for the day sixteen epochs can
+ * pass inside one frame's flight time. That day still needs the paragraph
+ * above answered before the number moves.
+ */
+export const MEDIA_KEYRING_SIZE = 16;
+
+/** The keyring slot an epoch names — the whole of the rotation protocol. */
+export function mediaKeySlot(epoch: number): number {
+  return epoch % MEDIA_KEYRING_SIZE;
+}
+
+/**
  * The keyring, driven by MLS epochs (ADR 009, decision 4).
  *
  * Everything cryptographic here is the library's: its worker, its AES-GCM
@@ -45,7 +70,7 @@ import { CallEncryptionUnsupportedError } from "./media";
  * desynchronize exactly that. `ratchetWindowSize: 0` and shared-key mode are
  * the library's own way of saying so.
  */
-class MlsKeyProvider extends BaseKeyProvider {
+export class MlsKeyProvider extends BaseKeyProvider {
   constructor() {
     super({
       sharedKey: true,
@@ -57,24 +82,27 @@ class MlsKeyProvider extends BaseKeyProvider {
       failureTolerance: -1,
       // Matches the MLS ciphersuite's AES-128-GCM strength.
       keySize: 128,
+      // Stated, not inherited. Both ends of a call divide by this number and
+      // nobody tells anybody which one they used — see MEDIA_KEYRING_SIZE.
+      keyringSize: MEDIA_KEYRING_SIZE,
     });
   }
 
   /**
    * Fills the slot this epoch names, and makes it the one we send under.
    *
-   * `epoch mod keyringSize` is the whole of the rotation protocol: every
-   * member computes the same slot from the same epoch, so nothing is ever
-   * signalled and no member is a keying authority. The old slot keeps its key
-   * until the ring index comes round again, which is what lets frames already
-   * in flight decode.
+   * `mediaKeySlot` is the whole of the rotation protocol: every member
+   * computes the same slot from the same epoch, so nothing is ever signalled
+   * and no member is a keying authority. The old slot keeps its key until the
+   * ring index comes round again, which is what lets frames already in flight
+   * decode.
    */
   async useEpoch(key: MediaKey): Promise<void> {
     // Copied into an exact-size buffer: the bytes arrive as a view from wasm,
     // and `crypto.subtle.importKey` takes the whole buffer, not the view.
     const bytes = new Uint8Array(key.secret);
     const material = await createKeyMaterialFromBuffer(bytes.buffer);
-    this.onSetEncryptionKey(material, undefined, key.epoch % this.getOptions().keyringSize);
+    this.onSetEncryptionKey(material, undefined, mediaKeySlot(key.epoch));
   }
 }
 

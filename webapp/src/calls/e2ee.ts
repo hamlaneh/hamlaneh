@@ -3,16 +3,17 @@ import type { MediaKey, MlsState } from "../mls/types";
 import { needsAttention } from "../mls/types";
 
 /**
- * The join gates of ADR 009, decision 2, as one pure function.
+ * Two of ADR 009 decision 2's three join gates, as one pure function: gate 1
+ * (room kind) and gate 3 (group state).
  *
- * They are here rather than inside the call hook because all three are
- * decisions about *this client's own state* — which conversation it is
- * entering, whether it holds that conversation's group, whether a human still
- * owes a decision about somebody's keys — and none of them may ever be
- * answered by something the server said. Keeping them in a function that takes
- * no session, no socket and no fetch is what makes that checkable.
+ * They are here rather than inside the call hook because both are decisions
+ * about *this client's own state* — which conversation it is entering, whether
+ * it holds that conversation's group, whether a human still owes a decision
+ * about somebody's keys — and neither may ever be answered by something the
+ * server said. Keeping them in a function that takes no session, no socket and
+ * no fetch is what makes that checkable.
  *
- * The fourth gate, `isE2EESupported()`, is deliberately NOT here: it needs
+ * Gate 2, `isE2EESupported()`, is deliberately NOT here: it needs
  * `livekit-client`, which is a megabyte loaded on the first join, so it lives
  * behind that dynamic import in `livekit.ts` and refuses there.
  */
