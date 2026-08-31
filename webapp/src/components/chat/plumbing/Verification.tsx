@@ -74,7 +74,7 @@ export function VerificationSheet({
 
   return (
     <section
-      className="hm-plumbing"
+      className="hm-plumbing hm-plumbing--overlay"
       role="dialog"
       aria-modal="false"
       aria-label={t("chat.e2ee.verification.sheetTitle", { name })}
@@ -179,7 +179,7 @@ export function VerificationWarning({
   const title = headline ?? t("chat.e2ee.verification.blockedTitle");
 
   return (
-    <section className="hm-plumbing hm-plumbing--inline" aria-label={title}>
+    <section className="hm-plumbing" aria-label={title}>
       <p>{title}</p>
 
       {/* The reader's own account first: it is the loudest thing in the slice,

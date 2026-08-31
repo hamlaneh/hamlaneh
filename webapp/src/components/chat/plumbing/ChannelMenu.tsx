@@ -33,7 +33,7 @@ export function ChannelMenu({
   if (channel.kind === "dm") {
     return (
       <section
-        className="hm-plumbing"
+        className="hm-plumbing hm-plumbing--overlay"
         role="dialog"
         aria-modal="false"
         aria-label={t("chat.header.channelActions")}
@@ -56,7 +56,7 @@ export function ChannelMenu({
 
   return (
     <section
-      className="hm-plumbing"
+      className="hm-plumbing hm-plumbing--overlay"
       role="dialog"
       aria-modal="false"
       aria-label={t("chat.header.channelActions")}

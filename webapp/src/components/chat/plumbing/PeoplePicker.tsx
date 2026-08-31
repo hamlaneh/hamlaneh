@@ -78,7 +78,7 @@ export function PeoplePicker({
 
   return (
     <section
-      className="hm-plumbing"
+      className="hm-plumbing hm-plumbing--overlay"
       role="dialog"
       aria-modal="true"
       aria-label={title}

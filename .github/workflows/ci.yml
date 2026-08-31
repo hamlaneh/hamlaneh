@@ -259,6 +259,33 @@ jobs:
       - name: Locale key parity (en/fa)
         run: npm run i18n:check
 
+      # The layout tier: a real browser over Vite's dev server and the contract
+      # mocks, with no stack behind it. It lives in THIS job rather than in the
+      # e2e one on purpose — the whole point is a check that needs no Docker,
+      # so it runs on every webapp change and on any developer's machine
+      # (`npm run e2e:layout`), including the Windows and macOS hosts where the
+      # media specs skip.
+      #
+      # It exists because three separate slices shipped an undesigned surface
+      # lying across a control nobody could then click, and nothing caught any
+      # of them: no unit test lays anything out, and the two specs that would
+      # have seen it are Linux-only. Chromium is ~120 MB and a few seconds.
+      - name: Install the browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Layout checks (Playwright, no stack)
+        run: npm run e2e:layout
+
+      - name: Upload the layout report on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: layout-report
+          path: |
+            webapp/playwright-report/
+            webapp/test-results/
+          retention-days: 7
+
       - name: Build
         run: npm run build
 

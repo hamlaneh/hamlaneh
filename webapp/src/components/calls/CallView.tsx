@@ -228,7 +228,7 @@ export function CallView({
           alone, is read by most people as a claim about who it cannot see —
           which is the overclaim §2.4 forbids and the SFU cannot honour. */}
       {encrypted ? (
-        <div className="hm-plumbing hm-plumbing--inline" aria-label={t("calls.encrypted.label")}>
+        <div className="hm-plumbing" aria-label={t("calls.encrypted.label")}>
           <p>{t("calls.encrypted.label")}</p>
           <p>{t("calls.encrypted.detail")}</p>
           <p>{t("calls.encrypted.metadata")}</p>
