@@ -76,8 +76,19 @@ type socket struct {
 // serve upgrades the connection and runs the socket to completion.
 func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, user storage.User, familyID uuid.UUID) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// The caller already refused every Origin but these; the library's own
-		// check is set to the same set so the two can never disagree.
+		// The caller has ALREADY refused every Origin but these, and that
+		// ordering is what makes this safe -- not agreement between the two
+		// checks, which is what this comment used to claim.
+		//
+		// They genuinely disagree. OriginPatterns are matched with
+		// filepath.Match, so the home-mode loopback alias "http://[::1]:8080"
+		// reads as a character class and this check also admits
+		// "http://1:8080" and "http://::8080". OriginAllowed, in ws_handler.go,
+		// is whole-string EqualFold with no wildcard at all, so it refuses
+		// those first and the looser second check never sees them.
+		//
+		// Anything that moves the gateway's own check after this one, or drops
+		// it, hands over a wildcard nobody wrote.
 		OriginPatterns: g.origins,
 		// §1: no permessage-deflate. A shared compression context mixing one
 		// user's text with another's is a length side-channel this protocol
