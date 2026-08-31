@@ -328,8 +328,8 @@ func buildRequest(entry Entry, principal Principal, c cell) *http.Request {
 	// authorization, not budgets, and hundreds of cells sharing httptest's
 	// one default RemoteAddr would let a per-IP rate limit on message send or
 	// channel creation turn the grid red for a reason that is not permission.
-	// The address is documentation-range and public, so the trusted-proxy
-	// path that reads X-Forwarded-For never applies to it.
+	// The address is documentation-range and public, and the harness passes
+	// no WithTrustedProxy, so nothing here reads X-Forwarded-For at all.
 	req.RemoteAddr = fmt.Sprintf("[2001:db8::%x]:443", c.seq)
 
 	if principal == Anonymous {

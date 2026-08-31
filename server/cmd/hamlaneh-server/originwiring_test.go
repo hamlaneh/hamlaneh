@@ -96,3 +96,31 @@ func TestServerModeGetsNoOriginAllowance(t *testing.T) {
 		}
 	}
 }
+
+// TestServerModeStillTrustsItsProxy and its home-mode sibling below are the
+// wiring half of the X-Forwarded-For fix. The behaviour they stand for lives
+// in internal/httpserver (TestLoginRateLimitTrustsForwardedForBehindAProxy,
+// TestLoginRateLimitIgnoresForwardedForWithNoProxy); what these pin is that
+// each mode actually asks for the one it needs, so neither of those proves
+// something no deployment uses.
+func TestServerModeStillTrustsItsProxy(t *testing.T) {
+	if !serverMode().trustsForwardedFor() {
+		t.Error("server mode stopped trusting X-Forwarded-For; " +
+			"Caddy is the only thing that sets it there and per-IP limits now collapse onto Caddy's address")
+	}
+}
+
+// TestHomeModeTrustsNoForwardedFor: nothing forwards in home mode, so the
+// header is written by whoever sent the request. Trusting it would let any
+// local process choose its own sign-in budget and its own audit-log address.
+func TestHomeModeTrustsNoForwardedFor(t *testing.T) {
+	homeTestEnv(t)
+
+	m, err := homeMode()
+	if err != nil {
+		t.Fatalf("homeMode() error = %v", err)
+	}
+	if m.trustsForwardedFor() {
+		t.Error("home mode trusts X-Forwarded-For; there is no proxy there to have written it")
+	}
+}

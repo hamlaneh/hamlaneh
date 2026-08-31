@@ -95,7 +95,7 @@ func (s *apiServer) record(r *http.Request, ev AuditEvent) {
 	if prin, ok := principalFrom(r.Context()); ok {
 		ev.ActorID = prin.user.ID
 	}
-	ev.IP, _ = clientIP(r)
+	ev.IP, _ = s.clientIP(r)
 	s.audit.Record(r.Context(), ev)
 }
 

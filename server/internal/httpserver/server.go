@@ -80,6 +80,19 @@ func WithCompression(enabled bool) Option {
 	return func(s *apiServer) { s.compressAssets = enabled }
 }
 
+// WithTrustedProxy declares that a reverse proxy terminates connections in
+// front of this listener and may name the real client with X-Forwarded-For.
+//
+// It is off by default and must stay off by default: the header is writable
+// by anything that can open a socket to this process, so honouring it on a
+// deployment with nothing in front hands every caller the choice of its own
+// rate-limit key and its own address in the audit log. The compose stack sets
+// it because Caddy is there by construction; the single binary does not
+// (cmd/hamlaneh-server/home.go). middleware.go clientIP is the whole model.
+func WithTrustedProxy(trusted bool) Option {
+	return func(s *apiServer) { s.trustProxy = trusted }
+}
+
 // New returns an *http.Server bound to addr with the Hamlaneh router and
 // hardened timeouts configured. store backs everything stateful and may be
 // nil in unit tests (readyz then reports degraded and authenticated routes

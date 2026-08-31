@@ -88,8 +88,9 @@ func (s *apiServer) ConnectWebSocket(w http.ResponseWriter, r *http.Request) {
 	//
 	// The address comes from clientIP, the same derivation every other
 	// per-address budget here uses, trust model included: the leftmost
-	// X-Forwarded-For value only when the direct peer is the reverse proxy.
-	_, ip := clientIP(r)
+	// X-Forwarded-For value only on a server told it has a proxy in front,
+	// and only from a peer where that proxy sits.
+	_, ip := s.clientIP(r)
 	if retryAfter, allowed := gw.ConnectAllowed(prin.session.FamilyID, ip); !allowed {
 		writeRateLimited(w, r, retryAfter)
 		return

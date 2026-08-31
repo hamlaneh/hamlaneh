@@ -673,7 +673,7 @@ func (s *apiServer) rateLimitMiddleware(next http.Handler) http.Handler {
 // silently drop the budget instead.
 func (s *apiServer) budgetKey(w http.ResponseWriter, r *http.Request, name budgetName) (string, bool) {
 	if budgetSpecs[name].perIP {
-		_, ipKey := clientIP(r)
+		_, ipKey := s.clientIP(r)
 		return ipKey, true
 	}
 	prin, ok := principalFrom(r.Context())

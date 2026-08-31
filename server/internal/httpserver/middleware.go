@@ -404,14 +404,35 @@ func (s *apiServer) requireSession(w http.ResponseWriter, r *http.Request) (prin
 // records. It returns the address (invalid when unparseable) and a
 // non-empty rate-limit key.
 //
-// Trust model: the server sits behind Caddy on a private compose network,
-// so X-Forwarded-For is consulted ONLY when the direct peer is a private,
-// loopback, or link-local address. Caddy (v2.5+) drops client-supplied
-// X-Forwarded-For values from untrusted sources by default, so the first
-// hop of the header is the real client address as Caddy saw it. Any peer
-// reaching the server directly is identified by its own address and its
-// headers are ignored.
-func clientIP(r *http.Request) (netip.Addr, string) {
+// # Trust model
+//
+// X-Forwarded-For is a header anybody who can open a socket to this process
+// can write, so it names the client only where something is actually
+// forwarding. That is a fact about the DEPLOYMENT, and this server is told it
+// rather than guessing: WithTrustedProxy, which the compose stack sets and
+// the single binary does not (cmd/hamlaneh-server/home.go trustsForwardedFor).
+// Unset — the default, and what every test fixture and every future
+// deployment shape gets until somebody decides otherwise — the direct peer is
+// the client and the header is not read at all.
+//
+// Where the option IS set, the peer must still look like the proxy: private
+// (RFC 1918 / ULA), loopback, or link-local, the compose network Caddy lives
+// on. Caddy (v2.5+) drops client-supplied X-Forwarded-For values from
+// untrusted sources by default, so the first hop of the header is the real
+// client address as Caddy saw it.
+//
+// This deliberately does NOT infer trust from the peer's address shape alone.
+// It used to, and the inference was false in home mode: that deployment binds
+// loopback with no proxy in front of it, so every local process was a
+// "trusted proxy" and could pick its own rate-limit key for sign-in, password
+// reset, invite redemption, the SSO flow and the WebSocket connect budget,
+// plus the address written into session records and the audit log.
+//
+// Known and NOT closed by this: inside the compose network, any container
+// that can reach server:8080 still passes the address-shape check. Closing
+// that needs the proxy identified by something it holds rather than by where
+// it sits, which is a deploy-side change and an ADR, not an edit here.
+func (s *apiServer) clientIP(r *http.Request) (netip.Addr, string) {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
@@ -425,7 +446,7 @@ func clientIP(r *http.Request) (netip.Addr, string) {
 	}
 	peer = peer.Unmap()
 
-	if isTrustedProxy(peer) {
+	if s.trustProxy && isProxyShaped(peer) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			first, _, _ := strings.Cut(xff, ",")
 			if fwd, fwdErr := netip.ParseAddr(strings.TrimSpace(first)); fwdErr == nil {
@@ -437,9 +458,9 @@ func clientIP(r *http.Request) (netip.Addr, string) {
 	return peer, peer.String()
 }
 
-// isTrustedProxy reports whether the direct peer may speak for the client
-// via X-Forwarded-For: private (RFC 1918 / ULA), loopback, or link-local
-// addresses — the compose network Caddy lives on.
-func isTrustedProxy(a netip.Addr) bool {
+// isProxyShaped reports whether the direct peer sits where the reverse proxy
+// sits: private (RFC 1918 / ULA), loopback, or link-local. It is the second
+// half of the check, never the whole of it — see clientIP.
+func isProxyShaped(a netip.Addr) bool {
 	return a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast()
 }

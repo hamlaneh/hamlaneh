@@ -141,6 +141,14 @@ client-supplied `X-Forwarded-For` and forwards only the true peer address.** The
 the leftmost `X-Forwarded-For` value as the client IP on exactly that basis, and that value is
 what rate-limits sign-in, password reset, invite redemption and the SSO flow.
 
+Reading that header at all is a **server-mode** behaviour and nothing infers it: the compose
+stack tells the server a proxy is in front of it, because Caddy is there by construction. The
+single binary (home mode) tells it nothing is, so there the direct peer is the client and the
+header is not read — otherwise any process on that machine could pick its own sign-in budget and
+its own address in the audit log. A home instance published to a LAN behind your own TLS
+terminator therefore rate-limits every client onto that terminator's address; that is the
+fail-closed direction, and the paragraph below is why there is no switch for it.
+
 Put a CDN or another proxy in front without changing anything, and every request arrives from
 one address, so per-IP rate limiting collapses onto that address. Configure `trusted_proxies` so
 the forwarded header is honored, and a client can now supply its own header — sign-in rate
