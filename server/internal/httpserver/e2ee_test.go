@@ -47,6 +47,25 @@ func mlsEnvelope(epoch int, ciphertext string) string {
 	return fmt.Sprintf(`"mls":{"epoch":%d,"ciphertext":%q}`, epoch, ciphertext)
 }
 
+// mlsEnvelopeMentioning is the same fragment with ADR 014's declared list.
+func mlsEnvelopeMentioning(epoch int, ciphertext string, mentions ...uuid.UUID) string {
+	quoted := make([]string, 0, len(mentions))
+	for _, id := range mentions {
+		quoted = append(quoted, `"`+id.String()+`"`)
+	}
+	return fmt.Sprintf(`"mls":{"epoch":%d,"ciphertext":%q,"mentions":[%s]}`,
+		epoch, ciphertext, strings.Join(quoted, ","))
+}
+
+// overCapMentions is one more id than the contract's maxItems.
+func overCapMentions() []uuid.UUID {
+	ids := make([]uuid.UUID, 51)
+	for i := range ids {
+		ids[i] = uuid.New()
+	}
+	return ids
+}
+
 func sendBody(parts ...string) string {
 	return "{" + `"client_msg_id":"` + testClientMsgID + `",` + strings.Join(parts, ",") + "}"
 }
@@ -122,6 +141,16 @@ func TestSendMessageE2EEBoundary(t *testing.T) {
 			body:      sendBody(`"content":""`, mlsEnvelope(1, strings.Repeat("A", 45004))),
 			wantCode:  "invalid_request",
 		},
+		{
+			// ADR 014's one refusal. Everything else about a declared list is
+			// dropped silently by the membership join; the length is the one
+			// thing no join bounds, so the handler does.
+			name:      "more declared mentions than the contract's cap",
+			encrypted: true,
+			body: sendBody(`"content":""`,
+				mlsEnvelopeMentioning(1, e2eeCiphertext, overCapMentions()...)),
+			wantCode: "invalid_request",
+		},
 	}
 
 	for _, tt := range tests {
@@ -172,6 +201,42 @@ func TestSendMessageEncryptedIsStored(t *testing.T) {
 	// have to be the same alphabet or a blob does not round-trip.
 	if !strings.Contains(rec.Body.String(), e2eeCiphertext) {
 		t.Errorf("response %s does not echo the ciphertext", rec.Body.String())
+	}
+}
+
+// TestSendMessageEncryptedDeclaresMentions is ADR 014's write path: the
+// envelope's list reaches storage, which uses it in place of a content parse
+// that would derive nobody.
+//
+// It also pins the half that must NOT happen — the response never echoes the
+// list back. The field is write-only because a recipient renders mentions from
+// the tokens it decrypted; echoing the declaration would hand clients a second,
+// sender-controlled source of truth about words the server cannot read.
+func TestSendMessageEncryptedDeclaresMentions(t *testing.T) {
+	t.Parallel()
+
+	mentioned := uuid.New()
+	store := encryptedMemberStore()
+	var got storage.NewMessage
+	store.createMessage = func(_ context.Context, nm storage.NewMessage) (storage.Message, bool, error) {
+		got = nm
+		msg := fixtureMessage()
+		msg.Content = ""
+		msg.Mls = nm.Mls
+		return msg, true, nil
+	}
+
+	rec := do(t, store, request(http.MethodPost, channelPath("/messages"),
+		sendBody(`"content":""`, mlsEnvelopeMentioning(4, e2eeCiphertext, mentioned)),
+		withSessionCookie("tok"), withCSRF()))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got.Mls == nil || len(got.Mls.Mentions) != 1 || got.Mls.Mentions[0] != mentioned {
+		t.Fatalf("storage got mentions %v, want the declared %s", got.Mls, mentioned)
+	}
+	if strings.Contains(rec.Body.String(), mentioned.String()) {
+		t.Errorf("response %s echoes the declared list; the field is write-only", rec.Body.String())
 	}
 }
 
@@ -246,6 +311,15 @@ func TestEditMessageE2EEBoundary(t *testing.T) {
 			body:      `{"content":""}`,
 			wantCode:  "invalid_request",
 		},
+		{
+			// The cap is the boundary's, so it holds on both writes: send and
+			// edit reach it through the same function.
+			name:      "more declared mentions than the contract's cap",
+			encrypted: true,
+			body: `{"content":"",` +
+				mlsEnvelopeMentioning(2, e2eeCiphertext, overCapMentions()...) + `}`,
+			wantCode: "invalid_request",
+		},
 	}
 
 	for _, tt := range tests {
@@ -291,8 +365,10 @@ func TestEditMessageEncryptedReplacesCiphertext(t *testing.T) {
 		},
 	}
 
+	mentioned := uuid.New()
 	rec := do(t, store, request(http.MethodPatch, channelPath("/messages/"+testMessageID),
-		`{"content":"",`+mlsEnvelope(9, e2eeCiphertext)+`}`, withSessionCookie("tok"), withCSRF()))
+		`{"content":"",`+mlsEnvelopeMentioning(9, e2eeCiphertext, mentioned)+`}`,
+		withSessionCookie("tok"), withCSRF()))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -300,7 +376,13 @@ func TestEditMessageEncryptedReplacesCiphertext(t *testing.T) {
 		t.Errorf("storage got content %q, want empty", gotContent)
 	}
 	if gotMls == nil || gotMls.Epoch != 9 {
-		t.Errorf("storage got envelope %+v, want the replacement at epoch 9", gotMls)
+		t.Fatalf("storage got envelope %+v, want the replacement at epoch 9", gotMls)
+	}
+	// An edit re-declares (ADR 014). The rewrite itself is storage's; what the
+	// handler owes is carrying the new list at all, because an edit whose
+	// declaration never arrived would silently keep the old rows.
+	if len(gotMls.Mentions) != 1 || gotMls.Mentions[0] != mentioned {
+		t.Errorf("storage got mentions %v, want the re-declared %s", gotMls.Mentions, mentioned)
 	}
 }
 

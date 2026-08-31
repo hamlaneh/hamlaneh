@@ -18,10 +18,13 @@ import (
 // search ever held them in the first place.
 
 // e2eeMessageWorld provisions a store, an author, and a channel they are in.
-func e2eeMessageWorld(ctx context.Context, t *testing.T, slug string) (testdb.Store, storage.User, uuid.UUID) {
+// The raw handle comes back with them because the mention rows below are
+// asserted straight from SQL — the table the badge counts, not whatever a
+// write reported back.
+func e2eeMessageWorld(ctx context.Context, t *testing.T, slug string) (testdb.Store, *testdb.Raw, storage.User, uuid.UUID) {
 	t.Helper()
 
-	store, _ := testdb.New(t)
+	store, conn := testdb.New(t)
 	author := mustCreateUser(ctx, t, store, newUser(slug+"author"))
 	ch := mustCreateChannel(ctx, t, store, storage.NewChannel{
 		Kind:      storage.ChannelKindPrivate,
@@ -29,13 +32,13 @@ func e2eeMessageWorld(ctx context.Context, t *testing.T, slug string) (testdb.St
 		E2EE:      true,
 		CreatedBy: author.ID,
 	})
-	return store, author, ch.ID
+	return store, conn, author, ch.ID
 }
 
 func TestEncryptedMessageRoundTripIntegration(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	store, author, channelID := e2eeMessageWorld(ctx, t, "e2eeround")
+	store, _, author, channelID := e2eeMessageWorld(ctx, t, "e2eeround")
 
 	sent, created, err := store.CreateMessage(ctx, storage.NewMessage{
 		ChannelID:   channelID,
@@ -89,7 +92,7 @@ func TestEncryptedMessageRoundTripIntegration(t *testing.T) {
 func TestSoftDeleteErasesCiphertextIntegration(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	store, author, channelID := e2eeMessageWorld(ctx, t, "e2eedelete")
+	store, _, author, channelID := e2eeMessageWorld(ctx, t, "e2eedelete")
 
 	sent, _, err := store.CreateMessage(ctx, storage.NewMessage{
 		ChannelID:   channelID,
@@ -139,6 +142,113 @@ func TestSoftDeleteErasesCiphertextIntegration(t *testing.T) {
 	}
 }
 
+// TestEncryptedMentionsAreDeclaredIntegration is ADR 014: on an encrypted
+// channel the mention rows come from the sender's declaration instead of from
+// a content parse, because there is no content to parse.
+//
+// What it pins is that the declaration buys a sender nothing the parse did not
+// already give them. The same channel_members join drops a stranger, the same
+// primary key collapses a repeat, and an edit rewrites the set — so the one
+// guarantee the plaintext path had survives the switch: no mention row can name
+// somebody who was not entitled to read the message it points at.
+func TestEncryptedMentionsAreDeclaredIntegration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, conn, author, channelID := e2eeMessageWorld(ctx, t, "e2eementions")
+
+	member := mustCreateUser(ctx, t, store, newUser("e2eementionmember"))
+	stranger := mustCreateUser(ctx, t, store, newUser("e2eementionstranger"))
+	seedMembership(ctx, t, conn, channelID, author.ID)
+	seedMembership(ctx, t, conn, channelID, member.ID)
+
+	send := func(t *testing.T, mentions []uuid.UUID) storage.Message {
+		t.Helper()
+		msg, _, err := store.CreateMessage(ctx, storage.NewMessage{
+			ChannelID: channelID, AuthorID: author.ID, ClientMsgID: uuid.New(),
+			Mls: &storage.MessageMls{Epoch: 1, Ciphertext: []byte("opaque"), Mentions: mentions},
+		})
+		if err != nil {
+			t.Fatalf("CreateMessage: %v", err)
+		}
+		return msg
+	}
+
+	t.Run("a declared member gets a row", func(t *testing.T) {
+		msg := send(t, []uuid.UUID{member.ID})
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), []uuid.UUID{member.ID})
+	})
+
+	t.Run("a declared stranger is dropped, and does not fail the message", func(t *testing.T) {
+		// The whole reason the declaration is safe to trust: the join, not the
+		// sender, decides who can end up in the table.
+		msg := send(t, []uuid.UUID{stranger.ID, member.ID})
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), []uuid.UUID{member.ID})
+	})
+
+	t.Run("an id naming nobody is dropped rather than erroring", func(t *testing.T) {
+		msg := send(t, []uuid.UUID{uuid.New()})
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), nil)
+	})
+
+	t.Run("a name declared twice writes one row", func(t *testing.T) {
+		msg := send(t, []uuid.UUID{member.ID, member.ID})
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), []uuid.UUID{member.ID})
+	})
+
+	t.Run("declaring nobody writes nothing", func(t *testing.T) {
+		msg := send(t, nil)
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), nil)
+	})
+
+	// An edit re-declares, exactly as a plaintext edit re-parses: the rows the
+	// new declaration keeps stay, the ones it drops go. Omission is not "leave
+	// them alone" — it is "this message now mentions nobody", or an author could
+	// never take back a ping.
+	t.Run("an edit rewrites the declared set", func(t *testing.T) {
+		msg := send(t, []uuid.UUID{member.ID})
+
+		if _, err := store.UpdateMessageContent(ctx, channelID, msg.ID, "",
+			&storage.MessageMls{Epoch: 2, Ciphertext: []byte("edited"), Mentions: []uuid.UUID{author.ID}}); err != nil {
+			t.Fatalf("UpdateMessageContent: %v", err)
+		}
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), []uuid.UUID{author.ID})
+
+		if _, err := store.UpdateMessageContent(ctx, channelID, msg.ID, "",
+			&storage.MessageMls{Epoch: 3, Ciphertext: []byte("edited again")}); err != nil {
+			t.Fatalf("UpdateMessageContent (clearing): %v", err)
+		}
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), nil)
+	})
+
+	// The defect this closes, stated as the person experiences it: the badge.
+	t.Run("the sidebar badge the rows feed moves", func(t *testing.T) {
+		badged := mustCreateChannel(ctx, t, store, storage.NewChannel{
+			Kind: storage.ChannelKindPrivate, Slug: "e2eementionbadge",
+			E2EE: true, CreatedBy: author.ID,
+		})
+		seedMembership(ctx, t, conn, badged.ID, author.ID)
+		seedMembership(ctx, t, conn, badged.ID, member.ID)
+
+		for _, mentions := range [][]uuid.UUID{nil, {member.ID}} {
+			if _, _, err := store.CreateMessage(ctx, storage.NewMessage{
+				ChannelID: badged.ID, AuthorID: author.ID, ClientMsgID: uuid.New(),
+				Mls: &storage.MessageMls{Epoch: 1, Ciphertext: []byte("opaque"), Mentions: mentions},
+			}); err != nil {
+				t.Fatalf("CreateMessage: %v", err)
+			}
+		}
+
+		seen, err := store.ChannelForUser(ctx, badged.ID, member.ID)
+		if err != nil {
+			t.Fatalf("ChannelForUser: %v", err)
+		}
+		if seen.UnreadCount != 2 || seen.MentionCount != 1 {
+			t.Errorf("unread=%d mention=%d, want 2/1; the badge is the whole defect",
+				seen.UnreadCount, seen.MentionCount)
+		}
+	})
+}
+
 // TestSearchCannotSeeEncryptedContentIntegration pins the invariant the whole
 // e2ee boundary exists to produce: nothing the server can search ever held
 // the words.
@@ -151,7 +261,7 @@ func TestSoftDeleteErasesCiphertextIntegration(t *testing.T) {
 func TestSearchCannotSeeEncryptedContentIntegration(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	store, author, channelID := e2eeMessageWorld(ctx, t, "e2eesearch")
+	store, _, author, channelID := e2eeMessageWorld(ctx, t, "e2eesearch")
 
 	// The "plaintext" the client encrypted. It never reaches the server, and
 	// this test's job is to prove that stays true.
