@@ -667,7 +667,17 @@ export function useChat({
         // Encrypted inside the chain, not before it: the ratchet advances per
         // message, so the order messages are sealed in has to be the order
         // they are sent in.
-        const encrypted = isE2ee(target) ? await mlsRef.current.encrypt(target, content) : null;
+        // The attachment ids travel with the text because the per-file keys
+        // ride inside this ciphertext (ADR 013). They come from attemptSend's
+        // own parameter, so a message replayed from the offline queue seals
+        // the same files rather than a message whose cards cannot open.
+        const encrypted = isE2ee(target)
+          ? await mlsRef.current.encrypt(
+              target,
+              content,
+              attachments.map((entry) => entry.id),
+            )
+          : null;
         if (isE2ee(target) && encrypted === null) {
           // No ciphertext, no send. Falling back to plaintext in a channel
           // the user was told is encrypted is the one thing this path must
@@ -821,7 +831,12 @@ export function useChat({
         return false;
       }
       try {
-        const encrypted = isE2ee(target) ? await mlsRef.current.encrypt(target, trimmed) : null;
+        // An edit re-seals the whole envelope, so it has to re-carry the
+        // attachment keys it is replacing. Omitting them would leave the
+        // message readable and every one of its files permanently shut.
+        const encrypted = isE2ee(target)
+          ? await mlsRef.current.encrypt(target, trimmed, mlsRef.current.attachmentIdsOf(messageId))
+          : null;
         if (isE2ee(target) && encrypted === null) {
           return false;
         }
