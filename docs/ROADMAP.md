@@ -57,6 +57,11 @@ that later phases depend on already exists and can turn red.
 - [ ] Weekend recon (user + Claude): deploy Mattermost, Rocket.Chat, Element+Jitsi; write
       `docs/recon-notes.md` — every friction point becomes install-experience spec
 
+- [ ] **Nine e2e specs are red on the working branch**, and the cause is Strict mode rather than
+      any one change: the suite's arrangement helpers create channels over the REST API and then
+      post plaintext into them, which an encrypted channel refuses by design. `main` stays green
+      is a rule, so this blocks the merge rather than the phase
+
 ### Test gate ✅
 
 1. Fresh VM/VPS: `docker compose up` → `https://<domain>/` shows the login page with a valid
@@ -700,11 +705,17 @@ Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measur
       when the configured origin is already loopback, same scheme and port. Proven in a real
       browser, and proven not to widen — a page on a *different* loopback port is still refused,
       and server mode's origin table is asserted byte-identical with the option forced on
-- [ ] **Gate clause 4's second half is not hand-walkable, and that is a property of the design.**
-      A fresh instance is strict-E2EE and refuses plaintext, so "a sent message survives a
-      restart" cannot be demonstrated with curl — it needs the webapp's MLS/WASM client driving
-      it. The start / first-run / restart-persistence half passes, verified in a browser. This
-      clause needs an e2e spec against the built webapp, not a manual drill
+- [x] **Gate clause 4's second half** — *2026-08-31*,
+      `webapp/e2e/specs/home-mode-restart.e2e.ts`. It could never be a manual drill: a fresh
+      instance is Strict, so a message exists only if the browser's MLS client put it there.
+      Proven to fail as well as pass — pointed at a fresh data directory it goes red on the
+      substantive assertion, not only on its console control.
+      **What it proves is the server's half.** The database keeps the ciphertext, the session row
+      and the channel, and never holds the words or any key that opens them; the MLS keystore and
+      this device's own copy of what it sent live in the browser profile the restart does not
+      touch. So a different device, or the same browser with its profile cleared, cannot read
+      that history — MLS working, not persistence failing. Device-side durability is the backup
+      path and a separate claim
 - [ ] **Docker Desktop usually holds `:8080` on a household Windows machine**, so the very first
       run fails to bind for a reason that has nothing to do with Hamlaneh. The error now names
       `HAMLANEH_HOME_ADDR` and a free port. Whether the default should move off 8080 entirely is
