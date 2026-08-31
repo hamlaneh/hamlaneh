@@ -40,6 +40,21 @@ import type { Translate } from "../support/i18n";
  * Linux browser instead of the local one with HAMLANEH_E2E_LINUX_BROWSER;
  * support/linux-browser.mjs is one, and carries the command that starts it.
  *
+ * "Linux" is not fine enough, though, and the four images below were taken
+ * from a CI run for that reason. Two elements on the admin screen ask for
+ * `--hm-mono`, which names no self-hosted face and resolves to whatever the
+ * renderer calls `monospace`: the Playwright image that linux-browser.mjs
+ * starts and the ubuntu-latest runner do not agree about which font that is,
+ * and Persian in a monospaced Arabic face keeps its letterforms but loses its
+ * joins. The admin baseline recorded through the container never matched CI —
+ * 158 pixels, on the very first run of the commit that recorded it, with no
+ * product change in between. Everything drawn in the self-hosted Inter and
+ * Vazirmatn matches to the pixel either way, which is what leaves those two
+ * elements as the whole of the disagreement. So: re-record from a CI
+ * artefact's `*-actual.png` when the run that produced it failed only on the
+ * change you meant to make. The container is still the way to LOOK at a diff
+ * from a Windows or macOS host; it is not the way to write these four files.
+ *
  * # What is pinned, and what could not be
  *
  * Everything that varies between two identical runs is pinned in the DATA
@@ -55,22 +70,37 @@ import type { Translate } from "../support/i18n";
  * price of a slug a committed baseline can name; a fresh stack, which is what
  * CI and a plain `npm run e2e` both give, has no such problem.
  *
- * # The committed baselines are STALE and have not been regenerated
+ * # What the four re-recorded baselines caught up with
  *
- * ADR 011 made every conversation end-to-end encrypted, so the two screens
- * that open one — `channel-list` and `message-view` — now draw an encryption
- * notice that was not there when their PNGs were taken. The images below will
- * therefore differ from the product until somebody re-records them, and that
- * difference is correct rather than a regression: the screens really did
- * change, and a baseline that still matched would mean the notice was missing.
+ * `sign-in` is unchanged since the set was first taken. The other four were
+ * re-recorded from the CI artefacts of run 33391272595, against a diff read
+ * region by region rather than accepted on trust:
  *
- * They were deliberately NOT regenerated here. The baselines are Linux
- * renderings (see above) and the branch was worked on a Windows host, where
- * the comparison skips and `--update-snapshots` would write Windows pixels
- * under a Linux name — a baseline that is wrong everywhere it actually runs.
- * Re-record them on Linux, or through HAMLANEH_E2E_LINUX_BROWSER, and read the
- * diff before accepting it: an encryption notice appearing is the expected
- * change, anything else in the same diff is not.
+ *   channel-list   Three rows arrive between the header and the hero — the
+ *   message-view    backup indicator, the call strip, and the encryption
+ *                   notice ADR 011 makes universal. None of them existed when
+ *                   the first PNGs were taken. Below them, both screens are
+ *                   identical to the pixel once shifted by the height the
+ *                   three rows add, and the sidebar, header and composer
+ *                   never move at all.
+ *
+ *   message-view   The "new messages" divider is also gone, and that is this
+ *                  file's own doing: the three messages used to be seeded over
+ *                  the API before the author signed in, so two of them were
+ *                  unread when the screen first drew. An encrypted channel
+ *                  takes messages only from an MLS client in a browser, so the
+ *                  author now types them in the session being photographed and
+ *                  has read everything by construction.
+ *
+ *   user-settings  One new row in the settings rail: Meetings.
+ *
+ *   admin-panel    One new row in the admin rail: SCIM. Plus the two
+ *                  `--hm-mono` elements described above, which is the CI
+ *                  renderer's monospace rather than the container's and the
+ *                  reason this file is now recorded from CI.
+ *
+ * A baseline that still matched after any of that would mean the feature was
+ * missing. Read the next diff the same way before accepting it.
  */
 
 /** A Linux Playwright server to render against; see the header. */

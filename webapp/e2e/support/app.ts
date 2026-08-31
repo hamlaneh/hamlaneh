@@ -11,7 +11,7 @@
  * means the suite also fails when a control stops being reachable to a
  * screen reader.
  */
-import type { Locator, Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 import type { Translate } from "./i18n";
 
@@ -312,9 +312,27 @@ export class App {
    * every conversation now, and a call spec's screenshots and traces are
    * easier to read without a banner nobody in the test is answering. It is no
    * longer required for the click to land — see `declineBackupOffer`.
+   *
+   * The wait for the composer is the call's own precondition, borrowed. Every
+   * conversation is encrypted (ADR 011) and a call in one is refused outright
+   * until this device holds the group's key — "a call here is never placed
+   * unencrypted", which is the design and not a bug to route around. The
+   * composer is withheld by the very same condition (ChatShell:
+   * `encryptionNotReady`), so an enabled message field is the on-screen fact
+   * that says the click can land. Waiting for it here rather than in each
+   * spec is where it belongs: every caller needs it, and a spec that forgets
+   * does not fail at the click — it hangs on participants that were never
+   * going to appear, naming the wrong thing sixty seconds later.
+   *
+   * Generous, because this waits on a group commit across two browsers and a
+   * server under a loaded runner, not on a render.
    */
   async joinCall(): Promise<void> {
     await this.declineBackupOffer();
+    await expect(
+      this.composerField,
+      "the conversation's encryption never became ready on this device, so no call could be placed",
+    ).toBeEnabled({ timeout: 60_000 });
     await this.page
       .getByRole("region", { name: this.t("calls.strip.label") })
       .getByRole("button")

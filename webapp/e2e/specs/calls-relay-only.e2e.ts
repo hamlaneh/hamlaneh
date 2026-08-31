@@ -260,8 +260,15 @@ test.describe("relay-only calls", () => {
     const channelId = await createChannelApi(aliceApi, uniqueSlug("relay"));
     await inviteApi(aliceApi, channelId, bob.id);
 
-    const aliceApp = await openApp(alice, `/c/${channelId}`, installRelayShim);
+    // Bob's browser FIRST, and not for convenience. Every conversation is
+    // encrypted now (ADR 011), and a device that has never opened the app has
+    // published no key package for the creator's client to claim: open Alice
+    // first and she bootstraps a group Bob cannot be added to, he sits at
+    // "waiting to join", and his call is refused rather than downgraded — the
+    // product behaving exactly as designed, against a spec that had raced it.
+    // The encryption suite explains the ordering; the protocol requires it.
     const bobApp = await openApp(bob, `/c/${channelId}`, installRelayShim);
+    const aliceApp = await openApp(alice, `/c/${channelId}`, installRelayShim);
 
     await aliceApp.joinCall();
     await bobApp.joinCall();
