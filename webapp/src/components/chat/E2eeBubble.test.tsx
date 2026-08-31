@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 // Initialises i18next so the components' own copy resolves.
 import "../../i18n";
 import type { Message } from "../../chat/types";
+import en from "../../locales/en/common.json";
 import { MessageBodyProvider } from "../../mls/MessageBodyContext";
 import type { MessageBody } from "../../mls/types";
 import { MessageBubble } from "./MessageBubble";
@@ -62,6 +63,30 @@ describe("an encrypted message", () => {
     expect(container.querySelector(".hm-md")).toBeNull();
   });
 
+  it("says the same about the files of a message it cannot read", () => {
+    // The join boundary applying to files (ADR 013): the key rides inside the
+    // message, so a message that will not open takes its attachments with it.
+    // The row is visible to the server and therefore to the reader, so
+    // drawing nothing at all would leave them guessing.
+    const withFile = {
+      ...encrypted(),
+      attachments: [
+        {
+          id: "a-1",
+          filename: "encrypted",
+          content_type: "application/octet-stream",
+          size_bytes: 4096,
+          url: "/files/a-1?sig=x",
+        },
+      ],
+    };
+    renderBubble(withFile, { kind: "undecryptable" });
+
+    expect(screen.getByText(en.chat.messages.fileNeedsMessage)).toBeInTheDocument();
+    // Nothing to press: there is no key, so there is nothing to fetch.
+    expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
+  });
+
   it("draws a placeholder while the decryption is in flight", () => {
     renderBubble(encrypted(), { kind: "pending" });
     expect(screen.getByText(/decrypting/i)).toBeInTheDocument();
@@ -77,6 +102,7 @@ describe("an encrypted message", () => {
   it("renders decrypted text through the same markdown path as plaintext", () => {
     const { container } = renderBubble(encrypted(), {
       kind: "decrypted",
+      attachments: [],
       text: "**bold** and a [link](https://example.invalid/x)",
     });
 
@@ -90,6 +116,7 @@ describe("an encrypted message", () => {
   it("sanitizes decrypted content exactly as it sanitizes plaintext", () => {
     const { container } = renderBubble(encrypted(), {
       kind: "decrypted",
+      attachments: [],
       text: "<img src=x onerror=alert(1)> and [click](javascript:alert(1))",
     });
 
