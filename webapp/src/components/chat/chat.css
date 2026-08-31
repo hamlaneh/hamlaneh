@@ -1560,7 +1560,7 @@
  * handful of surfaces that really are popovers, and a surface that forgets to
  * ask for it lays out harmlessly instead of eating a click.
  *
- * `webapp/e2e-layout/plumbing-overlap.layout.ts` holds that line in a real
+ * `webapp/e2e/layout/plumbing-overlap.layout.ts` holds that line in a real
  * browser, which is the other half of why this kept coming back: no unit test
  * lays anything out, so nothing failed any of the three times.
  */
