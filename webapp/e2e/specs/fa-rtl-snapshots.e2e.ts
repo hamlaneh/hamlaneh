@@ -6,7 +6,7 @@ import type { Page } from "@playwright/test";
 
 import type { AccountFactory, TestAccount } from "../support/accounts";
 import type { App } from "../support/app";
-import { createChannelApi, inviteApi, sendMessageApi, uniqueSlug } from "../support/chat";
+import { createChannelApi, inviteApi, uniqueSlug } from "../support/chat";
 import { expect, test } from "../support/fixtures";
 import type { Translate } from "../support/i18n";
 
@@ -54,6 +54,23 @@ import type { Translate } from "../support/i18n";
  * stack (HAMLANEH_E2E_REUSE_STACK=1) fails at channel creation. That is the
  * price of a slug a committed baseline can name; a fresh stack, which is what
  * CI and a plain `npm run e2e` both give, has no such problem.
+ *
+ * # The committed baselines are STALE and have not been regenerated
+ *
+ * ADR 011 made every conversation end-to-end encrypted, so the two screens
+ * that open one — `channel-list` and `message-view` — now draw an encryption
+ * notice that was not there when their PNGs were taken. The images below will
+ * therefore differ from the product until somebody re-records them, and that
+ * difference is correct rather than a regression: the screens really did
+ * change, and a baseline that still matched would mean the notice was missing.
+ *
+ * They were deliberately NOT regenerated here. The baselines are Linux
+ * renderings (see above) and the branch was worked on a Windows host, where
+ * the comparison skips and `--update-snapshots` would write Windows pixels
+ * under a Linux name — a baseline that is wrong everywhere it actually runs.
+ * Re-record them on Linux, or through HAMLANEH_E2E_LINUX_BROWSER, and read the
+ * diff before accepting it: an encryption notice appearing is the expected
+ * change, anything else in the same diff is not.
  */
 
 /** A Linux Playwright server to render against; see the header. */
@@ -167,11 +184,12 @@ async function seedChannelList(
 
 test.describe("Persian right-to-left baseline", () => {
   test("@fa-smoke every core screen declares rtl and fa", async ({ app, accounts, page, t }) => {
+    test.setTimeout(120_000);
+
     const account = await accounts.createReady("e2ertldir", { isAdmin: true });
     const session = await accounts.open(account.username, account.password);
     const slug = uniqueSlug("rtldir");
-    const channelId = await createChannelApi(session, slug);
-    await sendMessageApi(session, channelId, MESSAGES[0]);
+    await createChannelApi(session, slug);
 
     await app.gotoSignIn();
     await expectRightToLeftDocument(page, "sign-in");
@@ -180,8 +198,13 @@ test.describe("Persian right-to-left baseline", () => {
     await expect(app.chatSidebar).toBeVisible();
     await expectRightToLeftDocument(page, "channel list");
 
+    // The message is typed here rather than seeded over the API: the channel
+    // is encrypted (ADR 011), so the only thing that can produce one is the
+    // MLS client in this very browser. One person in their own channel needs
+    // nobody else's device, which is why this screen can still arrange itself.
     await app.conversationRow(slug).click();
-    await expect(app.messageBodies).toHaveText([MESSAGES[0]]);
+    await app.sendMessage(MESSAGES[0]);
+    await expect(app.messageBodies).toHaveText([MESSAGES[0]], { timeout: 30_000 });
     await expectRightToLeftDocument(page, "message view");
 
     const dialog = await app.openSettings();
@@ -215,11 +238,14 @@ test.describe("Persian right-to-left screenshots", () => {
     // conversation the sidebar happens to list first.
     await signInAndSettle(app, account, t, `/c/${first}`);
     await expect(app.chatSidebar.getByRole("link")).toHaveCount(LIST_SLUGS.length);
+    await app.declineBackupOffer();
 
     await expectBaseline(page, "channel-list");
   });
 
-  test("@fa-smoke message view", async ({ app, accounts, page, t }) => {
+  test("@fa-smoke message view", async ({ app, accounts, openApp, page, t }) => {
+    test.setTimeout(180_000);
+
     const author = await accounts.createReady("e2ertlmsg", { displayName: AUTHOR_NAME });
     const peer = await accounts.createReady("e2ertlpeer", { displayName: PEER_NAME });
 
@@ -227,15 +253,27 @@ test.describe("Persian right-to-left screenshots", () => {
     const channelId = await createChannelApi(authorSession, MESSAGE_SLUG);
     await inviteApi(authorSession, channelId, peer.id);
 
-    // One from each side, then a second from the author: the own bubble, the
-    // other person's bubble, and a continuation group all in one frame.
-    const peerSession = await accounts.open(peer.username, peer.password);
-    await sendMessageApi(authorSession, channelId, MESSAGES[0]);
-    await sendMessageApi(peerSession, channelId, MESSAGES[1]);
-    await sendMessageApi(authorSession, channelId, MESSAGES[2]);
+    // The peer's browser first, and not for convenience: the channel is
+    // encrypted, and a device that has never opened the app has published no
+    // key packages for the author's client to claim. Opening them in this
+    // order is what makes the peer a member of the group at all.
+    const peerApp = await openApp(peer, `/c/${channelId}`);
+    await expect(peerApp.page.getByText(t("chat.e2ee.indicator"))).toBeVisible({
+      timeout: 30_000,
+    });
 
     await signInAndSettle(app, author, t, `/c/${channelId}`);
-    await expect(app.messageBodies).toHaveText([...MESSAGES]);
+
+    // One from each side, then a second from the author: the own bubble, the
+    // other person's bubble, and a continuation group all in one frame. Each
+    // is typed into its own composer, because that is the only thing that
+    // produces a message an encrypted channel will take.
+    await app.sendMessage(MESSAGES[0]);
+    await peerApp.sendMessage(MESSAGES[1]);
+    await app.sendMessage(MESSAGES[2]);
+
+    await expect(app.messageBodies).toHaveText([...MESSAGES], { timeout: 60_000 });
+    await app.declineBackupOffer();
 
     await expectBaseline(page, "message-view");
   });

@@ -18,6 +18,31 @@ const PNG_1X1 = Buffer.from(
 );
 
 test.describe("files", () => {
+  /**
+   * EXPECTED TO FAIL — the product cannot do this right now, and the whole of
+   * file sharing is what it cannot do.
+   *
+   * ADR 011 made Strict the default and the only selectable mode, so every
+   * conversation an instance creates is end-to-end encrypted. Encrypted
+   * attachments are not built: the upload route, the send path and the edit
+   * path all answer `400 e2ee_attachments_unsupported`, deliberately and in
+   * one place (server/internal/httpserver/e2ee.go). The two facts together
+   * mean there is no conversation on a fresh install into which any file can
+   * be uploaded — file sharing, one of the four features the project leads
+   * with, is unreachable rather than degraded.
+   *
+   * Nothing below is weakened, skipped or re-aimed at something easier. Every
+   * assertion these four tests ever made is still here and still runs; they
+   * fail at their first upload, which is the honest place to fail. `test.fail`
+   * rather than `test.fixme` for the reason this file already documents from
+   * the last time it was used: a test marked this way goes RED the moment it
+   * starts passing, so the marker cannot outlive the gap it records.
+   *
+   * What closes it is encrypted attachments, not a change here. When they
+   * land, this marker comes off and Playwright will insist on it.
+   */
+  test.fail();
+
   test("an image attached in the composer is stored and comes back as a card", async ({
     app,
     accounts,

@@ -263,6 +263,12 @@ test.describe("LiveKit credential leak scan", () => {
 
     const app = await openApp(user, `/c/${channelId}`, record);
     await app.sendMessage("Checking what goes over the wire.");
+    // The recovery-key offer greets every new account in its first encrypted
+    // conversation, and it lies across the call strip — so it is answered
+    // before the strip is reached, exactly as a person has to. See
+    // support/app.ts: the placement is a defect, not something this spec
+    // depends on, and the helper stays correct once it is fixed.
+    await app.declineBackupOffer();
 
     // The only flow that mints a token. The connection itself is not waited
     // for: the token response and the signal socket are what carry credentials
