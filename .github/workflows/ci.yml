@@ -585,6 +585,13 @@ jobs:
       - name: Generate throwaway environment file
         # Every secret is random per run, exists only in the runner temp
         # directory, and is never printed. Nothing is hard-coded.
+        #
+        # This block must carry a value for EVERY `${VAR:?...}` in
+        # deploy/docker-compose.yml. Compose refuses to interpolate a missing
+        # one, so a variable added to the stack without a line here fails this
+        # job in seconds, before a single image is built — which is what the
+        # LiveKit pair did. `grep -oE '[A-Z_]+:[?]' deploy/docker-compose.yml`
+        # lists the set this has to cover.
         run: |
           umask 077
           env_file="$RUNNER_TEMP/compose-smoke.env"
@@ -593,6 +600,10 @@ jobs:
             echo "POSTGRES_PASSWORD=$(openssl rand -hex 32)"
             echo "HAMLANEH_FILE_URL_KEY=$(openssl rand -hex 32)"
             echo "HAMLANEH_AUDIT_KEY=$(openssl rand -hex 32)"
+            # Same shapes install.sh generates (new_livekit_api_key /
+            # new_livekit_api_secret): 16 bytes of key, 32 of secret.
+            echo "HAMLANEH_LIVEKIT_API_KEY=$(openssl rand -hex 16)"
+            echo "HAMLANEH_LIVEKIT_API_SECRET=$(openssl rand -hex 32)"
           } > "$env_file"
           echo "COMPOSE=docker compose -f deploy/docker-compose.yml --env-file $env_file" >> "$GITHUB_ENV"
 
