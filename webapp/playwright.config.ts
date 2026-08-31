@@ -64,6 +64,10 @@ const LOCALE_AGNOSTIC_SPECS = [
   // Audio bytes, decoder energy and an MLS epoch. Nothing in what it measures
   // has a language in it, and it is one of the most expensive specs there is.
   "**/e2ee-call-rotation.e2e.ts",
+  // A SQLite row read back after a process restart. It drives a whole second
+  // deployment of its own (webapp/e2e/support/homestack.ts), so running it
+  // twice would boot two more servers to measure the same database.
+  "**/home-mode-restart.e2e.ts",
 ];
 
 /**
