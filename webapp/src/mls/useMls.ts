@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 
 import type { Message } from "../chat/types";
+import { decodeBody } from "./attachments";
 import { MlsService } from "./service";
 import type { MediaKey, MessageBody, MlsState, OpenBackupOutcome } from "./types";
 import { initialMlsState } from "./types";
@@ -16,11 +17,23 @@ export interface MlsController {
   memberAdded: (channelId: string) => void;
   /** Takes no user id: the directory's roster decides who leaves the tree. */
   memberRemoved: (channelId: string) => void;
-  /** Null when nothing can be sent — the caller must not fall back to text. */
+  /**
+   * Null when nothing can be sent — the caller must not fall back to text.
+   *
+   * `attachmentIds` names the files this message shares; their keys and real
+   * metadata are sealed inside the ciphertext, which is what makes a file
+   * readable exactly when its message is (ADR 013). An EDIT passes
+   * {@link MlsController.attachmentIdsOf} for the message being edited: the
+   * stored ciphertext is replaced whole, so entries that are not re-carried
+   * are gone for every reader.
+   */
   encrypt: (
     channelId: string,
     text: string,
+    attachmentIds?: readonly string[],
   ) => Promise<{ epoch: number; ciphertext: string } | null>;
+  /** The files a readable message carries — what an edit must re-carry. */
+  attachmentIdsOf: (messageId: string) => string[];
   /**
    * Keeps the plaintext of a message this device sent, on the screen and in
    * the wrapped keystore, so a reload still shows the author their own words
@@ -106,7 +119,13 @@ export function useMls(currentUserId: string): MlsController {
   );
 
   const encrypt = useCallback(
-    (channelId: string, text: string) => service.encrypt(channelId, text),
+    (channelId: string, text: string, attachmentIds?: readonly string[]) =>
+      service.encrypt(channelId, text, attachmentIds),
+    [service],
+  );
+
+  const attachmentIdsOf = useCallback(
+    (messageId: string) => service.attachmentIdsOf(messageId),
     [service],
   );
 
@@ -159,11 +178,20 @@ export function useMls(currentUserId: string): MlsController {
       if (message.mls === undefined) {
         return { kind: "plaintext", text: message.content };
       }
-      const text = decrypted[message.id];
-      if (text === undefined) {
+      const body = decrypted[message.id];
+      if (body === undefined) {
         return { kind: "pending" };
       }
-      return text === null ? { kind: "undecryptable" } : { kind: "decrypted", text };
+      if (body === null) {
+        return { kind: "undecryptable" };
+      }
+      // A body that claims the envelope sentinel and does not parse is not
+      // shown as text: it decodes to null, and the bubble says it cannot be
+      // displayed (ADR 013).
+      const decoded = decodeBody(body);
+      return decoded === null
+        ? { kind: "undecryptable" }
+        : { kind: "decrypted", text: decoded.text, attachments: decoded.attachments };
     },
     [decrypted],
   );
@@ -183,6 +211,7 @@ export function useMls(currentUserId: string): MlsController {
       memberAdded,
       memberRemoved,
       encrypt,
+      attachmentIdsOf,
       rememberSent,
       mediaKey,
       decryptAll,
@@ -205,6 +234,7 @@ export function useMls(currentUserId: string): MlsController {
       memberAdded,
       memberRemoved,
       encrypt,
+      attachmentIdsOf,
       rememberSent,
       mediaKey,
       decryptAll,

@@ -8,6 +8,7 @@ import {
   sealBackup,
   unsealBackup,
 } from "./backup";
+import { decodeBody, encodeBody, entryFor, rememberEntry } from "./attachments";
 import { fromBase64, packFrames, toBase64, unpackFrames, unpackStrings } from "./bytes";
 import { Keystore, openKeystore } from "./keystore";
 import { safetyNumber } from "./safetyNumber";
@@ -269,6 +270,17 @@ export class MlsService {
    */
   private backupChain: Promise<void> = Promise.resolve();
 
+  /**
+   * The body this device sealed, by the ciphertext it sealed it into.
+   *
+   * A sender cannot decrypt its own application message, so when that
+   * ciphertext comes back from the server this is what it is opened with.
+   * Text alone would not do: the file entries live in the body, and a message
+   * whose own author could not open its files would be the first thing to
+   * break the invariant this design is built on.
+   */
+  private readonly sealedBodies = new Map<string, string>();
+
   /** The device chain itself — see {@link MlsService.runOn}. */
   private deviceChain: Promise<unknown> = Promise.resolve();
   private starting: Promise<boolean> | null = null;
@@ -294,6 +306,14 @@ export class MlsService {
   private setDecrypted(messageId: string, text: string | null): void {
     if (messageId in this.state.decrypted && this.state.decrypted[messageId] === text) {
       return;
+    }
+    if (text !== null) {
+      // A readable body's file entries join the session's table as the body
+      // becomes readable. That is what lets an EDIT of this message re-carry
+      // them (ADR 013) without any caller having to hold them somewhere.
+      for (const entry of decodeBody(text)?.attachments ?? []) {
+        rememberEntry(entry);
+      }
     }
     this.publish({ decrypted: { ...this.state.decrypted, [messageId]: text } });
   }
@@ -1640,7 +1660,11 @@ export class MlsService {
    * rather than in a return code is what lets the composer be *replaced* by
    * the warning — a send that merely failed would leave the user retyping.
    */
-  encrypt(channelId: string, text: string): Promise<{ epoch: number; ciphertext: string } | null> {
+  encrypt(
+    channelId: string,
+    text: string,
+    attachmentIds: readonly string[] = [],
+  ): Promise<{ epoch: number; ciphertext: string } | null> {
     return this.runOn(async () => {
       if (this.device === null || !this.groups.has(channelId)) {
         return null;
@@ -1657,18 +1681,51 @@ export class MlsService {
       }
 
       const groupId = this.requireGroup(channelId);
+      // The envelope (ADR 013): every named file's key and real metadata are
+      // sealed into this message and nowhere else, so a file is openable
+      // exactly when the message that shares it is readable. An id this
+      // session knows nothing about contributes no entry rather than an
+      // unopenable card.
+      const body = encodeBody(
+        text,
+        attachmentIds.flatMap((id) => {
+          const entry = entryFor(id);
+          return entry === undefined ? [] : [entry];
+        }),
+      );
       try {
-        const message = this.device.encrypt(groupId, text);
+        const message = this.device.encrypt(groupId, body);
         await this.persist();
-        return {
-          epoch: Number(message.epoch),
-          ciphertext: toBase64(message.ciphertext),
-        };
+        const ciphertext = toBase64(message.ciphertext);
+        // MLS gives a sender no way to open its own application message, so
+        // what this device sealed is the only copy of it that will ever
+        // exist. Keyed on the ciphertext because that is unambiguous: the
+        // message id does not exist yet, and the text is not unique.
+        this.sealedBodies.set(ciphertext, body);
+        return { epoch: Number(message.epoch), ciphertext };
       } catch (error) {
         console.warn("Could not encrypt the message:", error);
         return null;
       }
     });
+  }
+
+  /**
+   * The files a readable message carries, by id — what an edit of it has to
+   * re-carry.
+   *
+   * An e2ee edit replaces the stored ciphertext whole, so a re-encryption
+   * that dropped the entries would leave every reader of the edited message
+   * holding cards with no keys (ADR 013). Empty for a message this device
+   * cannot read, which is also the only correct answer: it cannot be edited
+   * either.
+   */
+  attachmentIdsOf(messageId: string): string[] {
+    const body = this.state.decrypted[messageId];
+    if (typeof body !== "string") {
+      return [];
+    }
+    return decodeBody(body)?.attachments.map((entry) => entry.id) ?? [];
   }
 
   /**
@@ -1690,6 +1747,14 @@ export class MlsService {
    * with the result still discard it explicitly.
    */
   async rememberSent(messageId: string, text: string): Promise<void> {
+    // A body never regresses to the bare text it wraps. The send path records
+    // the words it typed and `decrypt` records the envelope those words were
+    // sealed into; whichever lands second, the envelope is the one that keeps
+    // the file keys, so the poorer form is refused rather than raced.
+    const held = this.state.decrypted[messageId];
+    if (typeof held === "string" && held !== text && decodeBody(held)?.text === text) {
+      return;
+    }
     this.setDecrypted(messageId, text);
     const now = Date.now();
     // Keyed on the id so an edit replaces its own entry rather than
@@ -1709,6 +1774,17 @@ export class MlsService {
    * state honestly.
    */
   decrypt(channelId: string, messageId: string, ciphertext: string): Promise<void> {
+    // This device sealed these exact bytes, so there is nothing to decrypt:
+    // the body is recovered from what went in. Checked before `alreadyOpen`
+    // because the send path has usually already recorded the bare text, and
+    // that check would then stop the envelope — and its file keys — from ever
+    // reaching the author's own screen.
+    const sealed = this.sealedBodies.get(ciphertext);
+    if (sealed !== undefined) {
+      return this.state.decrypted[messageId] === sealed
+        ? Promise.resolve()
+        : this.rememberSent(messageId, sealed);
+    }
     if (this.alreadyOpen(messageId, ciphertext)) {
       return Promise.resolve();
     }

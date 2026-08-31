@@ -3,7 +3,13 @@ import { useTranslation } from "react-i18next";
 
 import { formatFileSize } from "../../chat/format";
 import type { Attachment } from "../../chat/types";
-import { MAX_ATTACHMENTS, uploadAttachment, type UploadFailure } from "../../chat/uploads";
+import {
+  MAX_ATTACHMENTS,
+  plaintextBudget,
+  uploadAttachment,
+  type UploadFailure,
+} from "../../chat/uploads";
+import { entriesFor } from "../../mls/attachments";
 import { useInstance } from "../../instance/instanceInfo";
 import { CircleAlertIcon, FileTextIcon, PaperclipIcon, SendIcon, XIcon } from "../icons";
 import { AttachmentList } from "./AttachmentCards";
@@ -11,6 +17,12 @@ import { MentionPicker } from "./plumbing/MentionPicker";
 
 interface ComposerProps {
   channelId: string;
+  /**
+   * Whether this conversation is encrypted. It changes what an upload is: the
+   * file is sealed on this device first, so the budget is a little smaller
+   * and the card is drawn from what only this device knows (ADR 013).
+   */
+  e2ee: boolean;
   /** "#deploys" or a person's name — the placeholder names where this goes. */
   target: string;
   disabled: boolean;
@@ -38,9 +50,19 @@ type PendingUpload =
 
 let uploadKeySeed = 0;
 
-export function Composer({ channelId, target, disabled, disabledReason, onSend }: ComposerProps) {
+export function Composer({
+  channelId,
+  e2ee,
+  target,
+  disabled,
+  disabledReason,
+  onSend,
+}: ComposerProps) {
   const { t, i18n } = useTranslation();
   const { info } = useInstance();
+  // Sealing costs a nonce and a tag, and the cap the server enforces applies
+  // to the bytes it receives, which on an encrypted channel are ciphertext.
+  const budget = plaintextBudget(info.max_file_size_bytes, e2ee);
   const [draft, setDraft] = useState("");
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
   /** The one refusal that belongs to the pick rather than to any one file. */
@@ -69,7 +91,7 @@ export function Composer({ channelId, target, disabled, disabledReason, onSend }
   const failureText = (reason: UploadFailure): string => {
     switch (reason) {
       case "tooLarge": {
-        const limit = formatFileSize(info.max_file_size_bytes, i18n.language);
+        const limit = formatFileSize(budget, i18n.language);
         return t("chat.composer.uploadTooLarge", {
           limit: t(limit.unitKey, { value: limit.value }),
         });
@@ -91,7 +113,7 @@ export function Composer({ channelId, target, disabled, disabledReason, onSend }
     const started: PendingUpload[] = accepted.map((file) => {
       uploadKeySeed += 1;
       const key = `upload-${String(uploadKeySeed)}`;
-      return file.size > info.max_file_size_bytes
+      return file.size > budget
         ? // The server enforces the cap regardless (openapi.yaml: "a
           // courtesy, not the check"); refusing here only saves the person's
           // bandwidth on a request that cannot succeed.
@@ -107,7 +129,7 @@ export function Composer({ channelId, target, disabled, disabledReason, onSend }
       }
       // One request per file, so each has its own outcome (openapi.yaml ->
       // uploadFile). A slow one never holds up the others.
-      void uploadAttachment(channelId, file).then((result) => {
+      void uploadAttachment(channelId, file, e2ee).then((result) => {
         setUploads((current) =>
           current.map((other) =>
             other.key !== entry.key
@@ -144,7 +166,10 @@ export function Composer({ channelId, target, disabled, disabledReason, onSend }
           {uploads.map((entry) => (
             <li key={entry.key} className="hm-composer__attachment">
               {entry.status === "ready" ? (
-                <AttachmentList attachments={[entry.attachment]} />
+                <AttachmentList
+                  attachments={[entry.attachment]}
+                  entries={e2ee ? entriesFor([entry.attachment.id]) : undefined}
+                />
               ) : (
                 <div className="hm-card">
                   <span className="hm-card__glyph">

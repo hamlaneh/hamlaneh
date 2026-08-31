@@ -6,6 +6,12 @@ import { CHAT_USERS, setMockEncryptionMode } from "../mocks/chat";
 import { resetMockAuth } from "../mocks/handlers";
 import { mockMlsDevices, mockMlsGroup, mockMlsWelcomes, seedMockMlsDevice } from "../mocks/mls";
 import { server } from "../mocks/node";
+import {
+  decodeBody,
+  forgetEntries,
+  rememberEntry,
+  type AttachmentEntry,
+} from "./attachments";
 import { fromBase64, toBase64, unpackStrings } from "./bytes";
 import { fakeKeyPackage, fakeMlsModule, fakeSignatureKey, fakeWorld } from "./fakeModule";
 import { memoryStore, Keystore } from "./keystore";
@@ -125,7 +131,21 @@ async function createE2eeChannel(slug: string): Promise<string> {
 beforeEach(() => {
   world = fakeWorld();
   setMlsModule(fakeMlsModule(world));
+  forgetEntries();
 });
+
+/** One file as its uploader knows it, before any message has claimed it. */
+function uploadedFile(id: string, name = "budget.pdf"): AttachmentEntry {
+  const entry: AttachmentEntry = {
+    id,
+    key: toBase64(new Uint8Array(16).fill(7)),
+    name,
+    type: "application/pdf",
+    size: 4096,
+  };
+  rememberEntry(entry);
+  return entry;
+}
 
 /** A fresh encrypted direct message, opened through the contract. */
 async function openE2eeDm(userId: string): Promise<string> {
@@ -424,6 +444,98 @@ describe("messages", () => {
 
     await service.rememberSent("m-2", "what I said");
     expect(latest().decrypted["m-2"]).toBe("what I said");
+  });
+});
+
+describe("attachments (ADR 013)", () => {
+  it("seals a file's key into the message that shares it, and nowhere else", async () => {
+    seedDevice(CHAT_USERS.nasrin.id);
+    const channelId = await createE2eeChannel("files");
+    const service = newService();
+    await service.openChannel(channelId);
+    const file = uploadedFile("a-1");
+
+    const sealed = await service.encrypt(channelId, "here it is", [file.id]);
+    // The ciphertext is the only place the key exists server-side, so the
+    // one thing that must never appear in what is uploaded is the key.
+    expect(sealed?.ciphertext).not.toContain(file.key);
+
+    await service.decrypt(channelId, "m-file", sealed?.ciphertext ?? "");
+    expect(decodeBody(latest().decrypted["m-file"] ?? "")).toEqual({
+      text: "here it is",
+      attachments: [file],
+    });
+  });
+
+  it("carries no envelope at all for a message with no files", async () => {
+    seedDevice(CHAT_USERS.nasrin.id);
+    const channelId = await createE2eeChannel("plain");
+    const service = newService();
+    await service.openChannel(channelId);
+
+    const sealed = await service.encrypt(channelId, "just words");
+    await service.decrypt(channelId, "m-plain", sealed?.ciphertext ?? "");
+    // Bare, exactly as before this slice: no flag day for existing messages.
+    expect(latest().decrypted["m-plain"]).toBe("just words");
+  });
+
+  it("names a file it has no entry for rather than promising a card", async () => {
+    seedDevice(CHAT_USERS.nasrin.id);
+    const channelId = await createE2eeChannel("stale");
+    const service = newService();
+    await service.openChannel(channelId);
+
+    const sealed = await service.encrypt(channelId, "hm", ["a-unknown"]);
+    await service.decrypt(channelId, "m-unknown", sealed?.ciphertext ?? "");
+    expect(latest().decrypted["m-unknown"]).toBe("hm");
+  });
+
+  it("lets the author open the files of its own message", async () => {
+    seedDevice(CHAT_USERS.nasrin.id);
+    const channelId = await createE2eeChannel("mine");
+    const service = newService();
+    await service.openChannel(channelId);
+    const file = uploadedFile("a-2");
+
+    const sealed = await service.encrypt(channelId, "mine", [file.id]);
+    // The send path records the words it typed; the envelope must survive it,
+    // because a sender cannot decrypt its own message and the keys are in
+    // the envelope.
+    await service.rememberSent("m-mine", "mine");
+    await service.decrypt(channelId, "m-mine", sealed?.ciphertext ?? "");
+    expect(decodeBody(latest().decrypted["m-mine"] ?? "")?.attachments).toEqual([file]);
+
+    // And it survives the two landing in the other order.
+    await service.rememberSent("m-mine", "mine");
+    expect(decodeBody(latest().decrypted["m-mine"] ?? "")?.attachments).toEqual([file]);
+  });
+
+  it("hands an edit the ids it has to re-carry", async () => {
+    seedDevice(CHAT_USERS.nasrin.id);
+    const channelId = await createE2eeChannel("edited");
+    const service = newService();
+    await service.openChannel(channelId);
+    const file = uploadedFile("a-3");
+
+    const first = await service.encrypt(channelId, "typo", [file.id]);
+    await service.decrypt(channelId, "m-edit", first?.ciphertext ?? "");
+
+    // An e2ee edit replaces the stored ciphertext whole, so an edit that
+    // dropped the entries would leave every reader holding a card with no key.
+    const ids = service.attachmentIdsOf("m-edit");
+    expect(ids).toEqual([file.id]);
+    const second = await service.encrypt(channelId, "fixed", ids);
+    await service.decrypt(channelId, "m-edit", second?.ciphertext ?? "");
+    expect(decodeBody(latest().decrypted["m-edit"] ?? "")).toEqual({
+      text: "fixed",
+      attachments: [file],
+    });
+  });
+
+  it("has nothing for an edit of a message it cannot read", async () => {
+    const service = newService();
+    await service.start();
+    expect(service.attachmentIdsOf("m-never-seen")).toEqual([]);
   });
 });
 

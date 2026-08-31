@@ -6,7 +6,7 @@ import type { MentionResolver } from "../../chat/mentions";
 import type { Message, PendingMessage } from "../../chat/types";
 import { useMessageBody } from "../../mls/MessageBodyContext";
 import { LinkIcon, PencilIcon, TrashIcon } from "../icons";
-import { AttachmentCards, AttachmentList } from "./AttachmentCards";
+import { AttachmentCards, AttachmentList, UnreadableAttachments } from "./AttachmentCards";
 import { MessageContent } from "./MessageContent";
 
 interface MessageBubbleProps {
@@ -116,8 +116,13 @@ export const MessageBubble = memo(function MessageBubble({
         ) : body.kind === "undecryptable" ? (
           // A real MLS condition, not a failure to report: a message sent
           // before this device joined the group cannot be opened by it, and
-          // never will be. Saying so is the honest rendering.
-          <span className="hm-msg__undecryptable">{t("chat.e2ee.cannotDecrypt")}</span>
+          // never will be. Saying so is the honest rendering — and its files
+          // go with it, because the key that opens one rides inside the
+          // message (ADR 013).
+          <>
+            <span className="hm-msg__undecryptable">{t("chat.e2ee.cannotDecrypt")}</span>
+            <UnreadableAttachments message={message} />
+          </>
         ) : (
           <>
             {/* Decrypted text goes through the same sanitizing markdown path
@@ -127,7 +132,12 @@ export const MessageBubble = memo(function MessageBubble({
             {edited ? (
               <span className="hm-msg__edited">{t("chat.messages.edited")}</span>
             ) : null}
-            <AttachmentCards message={message} />
+            {/* An encrypted message's cards are drawn from the envelope it
+                carried; a plaintext one's from the server's own row. */}
+            <AttachmentCards
+              message={message}
+              entries={body.kind === "decrypted" ? body.attachments : undefined}
+            />
           </>
         )}
       </div>

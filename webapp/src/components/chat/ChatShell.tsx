@@ -561,6 +561,7 @@ export function ChatShell({
         ) : (
           <Composer
             channelId={activeChannel.id}
+            e2ee={activeChannel.e2ee}
             target={composerTarget}
             disabled={disconnected || encryptionNotReady}
             disabledReason={
