@@ -32,15 +32,33 @@ func seedAttachment(
 
 	// A nil *uuid.UUID is not a NULL either driver recognises, so the
 	// optional message is unwrapped to an untyped nil here.
-	var message any
+	//
+	// message_position goes with it: migration 0020 pairs the two, NULL for an
+	// orphan and a slot on the message otherwise. The next free slot is the
+	// count of what is already there — these callers seed a message's files
+	// one at a time — and the unique index behind the column would refuse it
+	// if that ever stopped being true.
+	var message, position any
 	if messageID != nil {
 		message = *messageID
+		position = attachmentCount(ctx, t, raw, *messageID)
 	}
 	raw.Exec(ctx, t,
 		`INSERT INTO attachments
-		     (id, channel_id, uploader_id, message_id, filename, content_type, size_bytes, created_at)
-		 VALUES (?, ?, ?, ?, ?, 'application/pdf', 1024, ?)`,
-		uuid.New(), channelID, uploaderID, message, filename, time.Now().UTC())
+		     (id, channel_id, uploader_id, message_id, filename, content_type, size_bytes, created_at, message_position)
+		 VALUES (?, ?, ?, ?, ?, 'application/pdf', 1024, ?, ?)`,
+		uuid.New(), channelID, uploaderID, message, filename, time.Now().UTC(), position)
+}
+
+// attachmentCount is how many files a message already carries.
+func attachmentCount(ctx context.Context, t *testing.T, raw *testdb.Raw, messageID uuid.UUID) int {
+	t.Helper()
+
+	var n int
+	if err := raw.QueryRow(ctx, `SELECT count(*) FROM attachments WHERE message_id = ?`, messageID).Scan(&n); err != nil {
+		t.Fatalf("count the attachments of %s: %v", messageID, err)
+	}
+	return n
 }
 
 // mustSearchFiles runs one page of filename search for a caller.

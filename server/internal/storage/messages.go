@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -467,15 +466,17 @@ func claimAttachments(ctx context.Context, tx pgx.Tx, messageID uuid.UUID, nm Ne
 		return nil, ErrAttachmentNotFound
 	}
 
-	// Oldest upload first, matching attachmentsByMessagesQuery, so a message
-	// renders its cards in the same order however it was read. The id breaks
-	// ties: two files uploaded in the same instant share a created_at, and
-	// without it the order would differ between the send and the reload.
-	slices.SortFunc(claimed, func(a, b Attachment) int {
-		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
-			return c
-		}
-		return bytes.Compare(a.ID[:], b.ID[:])
+	// The order the sender listed the files in, matching what
+	// attachmentsByMessagesQuery reads back out of message_position, so a
+	// message renders its cards the same way however it was read. It is sorted
+	// here rather than in the statement because RETURNING takes no ORDER BY.
+	//
+	// slices.Index cannot miss: the statement filtered on this same list, so
+	// every claimed id is in it, and the count check above makes the two a
+	// bijection. Ten attachments is the contract's ceiling, so the quadratic
+	// shape is a hundred comparisons at worst.
+	slices.SortFunc(claimed, func(x, y Attachment) int {
+		return slices.Index(nm.AttachmentIDs, x.ID) - slices.Index(nm.AttachmentIDs, y.ID)
 	})
 	return claimed, nil
 }
