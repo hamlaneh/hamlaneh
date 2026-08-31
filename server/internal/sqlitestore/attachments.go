@@ -1,11 +1,11 @@
 package sqlitestore
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -78,6 +78,12 @@ func (s *Store) AttachmentByID(ctx context.Context, id uuid.UUID) (storage.Attac
 // needs no database at all. The list is bounded — a page is at most fifty
 // messages, far below SQLite's 32766 bound parameters (msgUUIDList).
 //
+// The order is the sender's, per message. No tiebreak follows it and none is
+// needed: 0020's attachments_message_order_idx is UNIQUE on exactly this pair,
+// so two cards of one message cannot share a position. The leading message_id
+// is not for the caller — the rows are grouped by it in Go — but for that
+// index, which then answers the filter and the sort together.
+//
 // Access control is not its job — the caller has already decided who may see
 // the messages it is asked about.
 func (s *Store) AttachmentsByMessages(ctx context.Context, messageIDs []uuid.UUID) (map[uuid.UUID][]storage.Attachment, error) {
@@ -90,7 +96,7 @@ func (s *Store) AttachmentsByMessages(ctx context.Context, messageIDs []uuid.UUI
 	query := `SELECT ` + attachmentColumns + `
 		FROM attachments
 		WHERE message_id IN (` + list + `)
-		ORDER BY created_at, id`
+		ORDER BY message_id, message_position`
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -178,6 +184,11 @@ func (s *Store) SweepOrphanAttachments(ctx context.Context, age time.Duration) (
 //
 // The ids become an IN list because SQLite has no arrays; it is bounded by the
 // attachments one message may carry, so the parameter limit is not in reach.
+// message_position is each id's index in that same list — the order the sender
+// listed the files, which is what their cards render in (migration 0020). It
+// arrives as a CASE rather than PostgreSQL's array_position because there is no
+// array to ask; the ids are therefore bound twice, once for the CASE and once
+// for the IN list.
 func claimAttachments(ctx context.Context, tx *sql.Tx, messageID uuid.UUID, nm storage.NewMessage) ([]storage.Attachment, error) {
 	if len(nm.AttachmentIDs) == 0 {
 		// A send with no files claims nothing, and its Attachments stay nil
@@ -188,16 +199,18 @@ func claimAttachments(ctx context.Context, tx *sql.Tx, messageID uuid.UUID, nm s
 
 	list, ids := msgUUIDList(nm.AttachmentIDs)
 	query := `UPDATE attachments
-		SET message_id = ?
+		SET message_id = ?,
+		    message_position = ` + positionCase(len(ids)) + `
 		WHERE id IN (` + list + `)
 		  AND channel_id = ?
 		  AND uploader_id = ?
 		  AND message_id IS NULL
 		RETURNING ` + attachmentColumns
 
-	args := make([]any, 0, len(ids)+3)
+	args := make([]any, 0, 2*len(ids)+3)
 	args = append(args, messageID)
-	args = append(args, ids...)
+	args = append(args, ids...) // the CASE arms
+	args = append(args, ids...) // the IN list
 	args = append(args, nm.ChannelID, nm.AuthorID)
 
 	rows, err := tx.QueryContext(ctx, query, args...)
@@ -221,18 +234,36 @@ func claimAttachments(ctx context.Context, tx *sql.Tx, messageID uuid.UUID, nm s
 		return nil, storage.ErrAttachmentNotFound
 	}
 
-	// Oldest upload first, matching AttachmentsByMessages, so a message renders
-	// its cards in the same order however it was read. The id breaks ties: two
-	// files uploaded in the same instant share a created_at, and without it the
-	// order would differ between the send and the reload. It is sorted here
+	// The order the sender listed the files in, matching what
+	// AttachmentsByMessages reads back out of message_position, so a message
+	// renders its cards the same way however it was read. It is sorted here
 	// rather than in the statement because RETURNING takes no ORDER BY.
-	slices.SortFunc(claimed, func(a, b storage.Attachment) int {
-		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
-			return c
-		}
-		return bytes.Compare(a.ID[:], b.ID[:])
+	//
+	// slices.Index cannot miss: the statement filtered on this same list, so
+	// every claimed id is in it, and the count check above makes the two a
+	// bijection. Ten attachments is the contract's ceiling, so the quadratic
+	// shape is a hundred comparisons at worst.
+	slices.SortFunc(claimed, func(x, y storage.Attachment) int {
+		return slices.Index(nm.AttachmentIDs, x.ID) - slices.Index(nm.AttachmentIDs, y.ID)
 	})
 	return claimed, nil
+}
+
+// positionCase maps the id of the row being updated to its index in the
+// caller's list: CASE id WHEN ? THEN 0 WHEN ? THEN 1 … END. The indexes are
+// generated integers; only the ids are bound, in the caller's order.
+//
+// It is the SQLite counterpart of PostgreSQL's array_position over the claim's
+// id array, and like it, it cannot yield NULL for a row this statement
+// updates — the same ids are the WHERE clause's IN list.
+func positionCase(n int) string {
+	var b strings.Builder
+	b.WriteString("CASE id")
+	for i := range n {
+		fmt.Fprintf(&b, " WHEN ? THEN %d", i)
+	}
+	b.WriteString(" END")
+	return b.String()
 }
 
 // loadMessageCards fills everything a client-serving read owes beyond the
