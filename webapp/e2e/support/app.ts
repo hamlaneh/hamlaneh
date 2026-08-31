@@ -228,6 +228,14 @@ export class App {
    * picker would still pass the second way, and that is the regression this
    * helper exists to catch. The wait is on the upload's own response, because
    * a file that is still in flight is deliberately not sendable.
+   *
+   * The response is CHECKED, not merely awaited. It used to be enough that one
+   * arrived, which made a refused upload indistinguishable from a stored one:
+   * the composer draws a tray card either way, so the spec sailed past the
+   * refusal and died sixty seconds later waiting for a send that could never
+   * happen, naming the composer instead of the upload. A helper that says
+   * "attached" has to mean it, and a test that fails should fail where the
+   * truth is — the same rule accounts.ts's `expectOk` follows.
    */
   async attachFile(file: { name: string; mimeType: string; buffer: Buffer }): Promise<void> {
     const uploaded = this.page.waitForResponse(
@@ -238,7 +246,12 @@ export class App {
     const chooser = this.page.waitForEvent("filechooser");
     await this.composerForm.getByRole("button", { name: this.t("chat.composer.attach") }).click();
     await (await chooser).setFiles([file]);
-    await uploaded;
+    const response = await uploaded;
+    if (!response.ok()) {
+      throw new Error(
+        `file upload (${file.name}): ${String(response.status())} ${await response.text()}`,
+      );
+    }
   }
 
   /** Inserts a `<@{user_id}>` mention token through the composer's picker. */
