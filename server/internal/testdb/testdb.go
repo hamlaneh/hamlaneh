@@ -39,6 +39,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,6 +139,16 @@ func Driver() string {
 	return DriverSQLite
 }
 
+// announce prints the driver once per test binary.
+//
+// Without it a run is silent about which database it used, and the two
+// commands a person types to cover both drivers differ by one environment
+// variable. Running the second one without the first is indistinguishable
+// from running the first one twice -- both print the same passing output --
+// so "green on both drivers" is a claim nothing in the output can support.
+// That is not hypothetical: it happened during the audit that added this.
+var announce sync.Once
+
 // New creates a throwaway database, opens a migrated store on it, and returns
 // the store plus a driver-neutral raw connection to the same database.
 //
@@ -149,7 +160,12 @@ func Driver() string {
 func New(t *testing.T) (Store, *Raw) {
 	t.Helper()
 
-	switch driver := Driver(); driver {
+	driver := Driver()
+	announce.Do(func() {
+		fmt.Fprintf(os.Stderr, "testdb: running against %s\n", driver)
+	})
+
+	switch driver {
 	case DriverSQLite:
 		return newSQLite(t)
 	case DriverPostgres:

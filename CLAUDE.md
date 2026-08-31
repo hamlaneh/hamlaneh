@@ -71,6 +71,17 @@ Filled/updated by the Phase 0 scaffold PR — keep this section current; every a
 - Go: latest stable, pinned via `toolchain` in `go.mod`. Module: `github.com/hamlaneh/hamlaneh/server`
 - Node: current LTS + npm (lockfile committed, `npm ci` in CI)
 - Server: `go build ./...` · `go test -race ./...` · `golangci-lint run` (from `server/`)
+- **Covering both storage drivers takes two commands, and neither one is the pair.** A bare
+  `go test ./...` runs **SQLite** — that is the default so the suite needs no container. The
+  PostgreSQL leg needs `HAMLANEH_TEST_DSN` pointing at a real database; setting it is what
+  selects PostgreSQL, and `HAMLANEH_TEST_DRIVER` overrides both. So running once with
+  `HAMLANEH_TEST_DRIVER=sqlite` and once without it is **SQLite twice**, and the two runs are
+  indistinguishable from the output. Write both commands down when reporting a both-driver
+  pass, or the claim cannot be checked:
+  ```
+  HAMLANEH_TEST_DRIVER=sqlite go test ./...
+  HAMLANEH_TEST_DSN='postgres://...' go test ./...
+  ```
 - Webapp: `npm run dev` · `npm test` · `npm run lint` · `npm run typecheck` · `npm run i18n:check` · `npm run e2e` (all from `webapp/`)
 - E2e drives the **real stack**: `npm run e2e` builds and starts the compose stack under its own
   project name and runs Playwright against it over HTTPS. It never touches a running instance's
