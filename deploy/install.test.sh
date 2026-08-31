@@ -348,27 +348,34 @@ $(diff <(printf '%s' "$before") <(printf '%s' "$after") || true)"
   done
 }
 
-# Changing the domain must rewrite exactly one line.
+# Changing the domain must rewrite the two lines derived from it and nothing
+# else. HAMLANEH_FILES_DOMAIN is the second of those: it is files.<domain> for
+# a real domain, so leaving it behind would point the files origin at the
+# hostname the install just stopped using.
 test_domain_change_keeps_secrets() {
   local env_file="${WORK}/env/domain.env" before after
+  local derived='^HAMLANEH_DOMAIN=\|^HAMLANEH_FILES_DOMAIN='
   rm -f "$env_file"
   TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=old.example.com; write_env' >/dev/null
-  before="$(grep -v '^HAMLANEH_DOMAIN=' "$env_file")"
+  before="$(grep -v "$derived" "$env_file")"
   TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=new.example.com; write_env' >/dev/null
-  after="$(grep -v '^HAMLANEH_DOMAIN=' "$env_file")"
+  after="$(grep -v "$derived" "$env_file")"
 
   check_eq "domain change updates HAMLANEH_DOMAIN" "HAMLANEH_DOMAIN=new.example.com" \
     "$(grep '^HAMLANEH_DOMAIN=' "$env_file")"
+  check_eq "domain change updates the files hostname with it" \
+    "HAMLANEH_FILES_DOMAIN=files.new.example.com" \
+    "$(grep '^HAMLANEH_FILES_DOMAIN=' "$env_file")"
   if [ "$before" = "$after" ]; then
     ok "domain change leaves every other line untouched"
   else
-    bad "domain change altered lines other than HAMLANEH_DOMAIN"
+    bad "domain change altered lines other than the two derived from the domain"
   fi
 }
 
 # README's quick start says `cp .env.example .env`. Doing that and then
 # running the installer must not leave a single repository-published value in
-# place. Two of these placeholders stop the server booting; the other three
+# place. Two of these six placeholders stop the server booting; the other four
 # would not have.
 test_placeholder_scrub() {
   local env_file="${WORK}/env/placeholder.env" out key value
@@ -422,6 +429,88 @@ test_postgres_placeholder_with_existing_volume() {
   check_contains "it names the volume" "hamlaneh_db_data" "$out"
   check_contains "it gives the command that fixes it" "down -v" "$out"
   check_contains "it warns against running that with real data" "do not run that" "$out"
+  # It may only say that because it looked: this .env carries the two
+  # placeholders the server refuses to boot on, so nothing can have written
+  # to that volume.
+  check_contains "it says what makes the volume provably empty" "refuses to start on" "$out"
+}
+
+# An .env with a real deploy/.env's boot keys and only POSTGRES_PASSWORD left
+# on the placeholder. Neither 32-byte floor is in the way, so a server HAS
+# booted here: this volume holds messages, files and accounts. The install
+# still has to stop — the database's password is a published constant — but
+# the one thing it must never do is tell this operator to delete the volume.
+#
+# The bug this replaces: ensure_postgres_password_env branched on
+# POSTGRES_PASSWORD alone and concluded from it that the server had never
+# started, so this exact .env got "docker compose down -v".
+test_postgres_placeholder_on_a_live_install() {
+  local env_file="${WORK}/env/live.env" out status
+  {
+    printf 'HAMLANEH_DOMAIN=chat.example.com\n'
+    printf 'POSTGRES_PASSWORD=REPLACED_AT_INSTALL\n'
+    printf 'HAMLANEH_FILE_URL_KEY=%s\n' "$(openssl rand -base64 32)"
+    printf 'HAMLANEH_AUDIT_KEY=%s\n' "$(openssl rand -base64 32)"
+  } > "$env_file"
+  chmod 600 "$env_file"
+
+  out="$(TEST_ENV_FILE="$env_file" STUB_DB_VOLUME=1 run_in_subshell ensure_postgres_password_env)"
+  status="$(TEST_ENV_FILE="$env_file" STUB_DB_VOLUME=1 status_in_subshell ensure_postgres_password_env)"
+
+  check_eq "a live install with a placeholder password stops the install" "1" "$status"
+  if [[ "$out" == *"down -v"* ]]; then
+    bad "an install that may hold data was told to run 'down -v': ${out}"
+  else
+    ok "an install that may hold data is never told to run 'down -v'"
+  fi
+  check_contains "it says the data may be real" "may be holding real messages" "$out"
+  check_contains "it gives a fix that keeps the data" "ALTER USER hamlaneh PASSWORD" "$out"
+  check_contains "it says why rotating is not optional" "password is public" "$out"
+
+  # The same .env on a host with no database volume is just a fresh install.
+  out="$(TEST_ENV_FILE="$env_file" STUB_DB_VOLUME=0 run_in_subshell ensure_postgres_password_env)"
+  check_contains "with no db volume the password is simply generated" "generating POSTGRES_PASSWORD" "$out"
+}
+
+# The same root cause, the other function. scrub_placeholder_secrets used to
+# justify replacing the LiveKit pair and the admin trio with "no LiveKit token
+# signed by it, and no admin ever created" — true only while the server cannot
+# boot. Both are values the stack accepts, so beside real boot keys they were
+# live. Replacing them is still right; doing it silently is what was wrong.
+test_scrub_on_a_live_install_says_what_it_costs() {
+  local env_file="${WORK}/env/livescrub.env" out
+  {
+    printf 'HAMLANEH_DOMAIN=chat.example.com\n'
+    printf 'HAMLANEH_FILE_URL_KEY=%s\n' "$(openssl rand -base64 32)"
+    printf 'HAMLANEH_AUDIT_KEY=%s\n' "$(openssl rand -base64 32)"
+    printf 'HAMLANEH_LIVEKIT_API_KEY=REPLACED_AT_INSTALL\n'
+    printf 'HAMLANEH_LIVEKIT_API_SECRET=REPLACED_AT_INSTALL\n'
+  } > "$env_file"
+  chmod 600 "$env_file"
+
+  out="$(TEST_ENV_FILE="$env_file" STUB_DB_VOLUME=1 run_in_subshell eval '
+    scrub_placeholder_secrets
+    ensure_livekit_env')"
+
+  check_contains "a live placeholder is still replaced" "generating the LiveKit credential pair" "$out"
+  check_contains "and the run says what that costs" "any call in progress ends" "$out"
+  if grep -q 'REPLACED_AT_INSTALL' "$env_file"; then
+    bad "a published LiveKit secret survived on a live install"
+  else
+    ok "a published LiveKit secret is replaced even on a live install"
+  fi
+
+  # On an install that provably never booted there is nothing to warn about,
+  # and a warning that fires either way teaches operators to ignore it.
+  local fresh="${WORK}/env/freshscrub.env"
+  cp "${SCRIPT_DIR}/.env.example" "$fresh"
+  chmod 600 "$fresh"
+  out="$(TEST_ENV_FILE="$fresh" STUB_DB_VOLUME=1 run_in_subshell scrub_placeholder_secrets)"
+  if [[ "$out" == *"any call in progress ends"* ]]; then
+    bad "an install that cannot have booted was warned about live calls"
+  else
+    ok "an install that cannot have booted gets no live-call warning"
+  fi
 }
 
 # A half-configured LiveKit pair is exactly what compose refuses; the
@@ -466,18 +555,30 @@ test_bare_ip_posture() {
   # shellcheck disable=SC2016
   out="$(run_in_subshell eval 'DOMAIN=203.0.113.5; print_tls_posture')"
   check_contains "bare IP names the mode" "BARE-IP MODE" "$out"
-  # Verified against caddy:2.10 (the version deploy/Dockerfile.caddy pins):
-  # a public IP goes to Let's Encrypt, which does issue IP certificates; a
-  # private one falls back to issuer "local". The message must not promise
-  # either outcome, and must say how to find out which one happened.
-  check_contains "bare IP says the outcome is not certain" "not certain" "$out"
-  check_contains "bare IP names the ACME attempt" "Let's Encrypt" "$out"
-  check_contains "bare IP admits the internal-CA outcome warns" "full-page warning" "$out"
+  # There is one outcome here, not two. Caddy classifies every IP address as an
+  # internal name and issues from its own CA without asking a public CA for
+  # anything — caddyserver.com/docs/automatic-https, "hostnames qualify for
+  # publicly-trusted certificates if they ... are not an IP address". Let's
+  # Encrypt has issued IP certificates under its short-lived profile since
+  # 2026-01-15, and caddyserver/caddy#7399 is an operator who configured that
+  # profile explicitly and still got "cannot have public IP certificate". The
+  # message must state the warning as the outcome, not offer it as a coin flip.
+  check_contains "bare IP states there is no public certificate" "no publicly trusted certificate" "$out"
+  check_contains "bare IP states the browser warning as the outcome" "full-page" "$out"
   check_contains "bare IP admits HSTS is not honoured" "browsers ignore it" "$out"
-  check_contains "bare IP tells the operator how to check which one" "certificate obtained" "$out"
-  check_contains "bare IP explains the files.<ip> failure loop" "IP-suffixed name" "$out"
+  check_contains "bare IP says why LE's IP certificates do not reach it" "Caddy 2.10" "$out"
   check_contains "bare IP states no default was weakened" "nothing was weakened" "$out"
   check_contains "bare IP names the fix" "The fix is a domain name" "$out"
+  # files_domain() sends bare-IP installs to files.localhost, which Caddy
+  # certifies internally. The box used to promise a month of failing ACME
+  # orders for a hostname this installer stopped configuring.
+  for stale in "not certain" "files.203.0.113.5" "IP-suffixed name" "certificate obtained"; do
+    if [[ "$out" == *"$stale"* ]]; then
+      bad "the bare-IP box still says '${stale}', which is no longer true"
+    else
+      ok "the bare-IP box no longer says '${stale}'"
+    fi
+  done
 
   # shellcheck disable=SC2016
   out="$(run_in_subshell eval 'DOMAIN=chat.example.com; print_tls_posture')"
@@ -555,7 +656,7 @@ test_background_jobs_summary() {
   # shellcheck disable=SC2016
   out="$(run_in_subshell eval '
     COSIGN_STATE="v3.0.6 (installed by this script)"
-    UPDATE_TIMER_STATE="enabled (hamlaneh-update.timer, daily)"
+    UPDATE_TIMER_STATE="enabled (hamlaneh-update.timer, four times a day)"
     BACKUP_TIMER_STATE="enabled, daily (see the line above for systemd or cron)"
     print_background_jobs')"
   check_contains "summary reports cosign" "cosign v3.0.6" "$out"
@@ -663,6 +764,8 @@ main() {
   test_domain_change_keeps_secrets
   test_placeholder_scrub
   test_postgres_placeholder_with_existing_volume
+  test_postgres_placeholder_on_a_live_install
+  test_scrub_on_a_live_install_says_what_it_costs
   test_livekit_half_pair
   test_upgrade_from_older_env
   test_bare_ip_posture
