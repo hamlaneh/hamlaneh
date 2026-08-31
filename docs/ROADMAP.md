@@ -57,10 +57,33 @@ that later phases depend on already exists and can turn red.
 - [ ] Weekend recon (user + Claude): deploy Mattermost, Rocket.Chat, Element+Jitsi; write
       `docs/recon-notes.md` — every friction point becomes install-experience spec
 
-- [ ] **Nine e2e specs are red on the working branch**, and the cause is Strict mode rather than
-      any one change: the suite's arrangement helpers create channels over the REST API and then
-      post plaintext into them, which an encrypted channel refuses by design. `main` stays green
-      is a rule, so this blocks the merge rather than the phase
+- [x] **The e2e suite arranges conversations the way Strict makes people arrange them** —
+      *2026-08-31*. `sendMessageApi` could not be repaired, because under Strict no REST call
+      produces a legal message; it is replaced by a helper that drives a real browser's MLS
+      composer. `attachFile` now checks the upload status rather than accepting any response,
+      which is what turned a silent 400 into a visible failure.
+
+- [ ] **File sharing is unreachable on a fresh install — a headline feature, absent rather than
+      degraded.** Two individually-correct decisions meet badly: Strict is the schema default
+      (`0018_org_encryption_mode.up.sql` — `NOT NULL DEFAULT 'strict'`) and the only selectable
+      mode, so every channel and DM is born encrypted; and an encrypted conversation refuses
+      attachments (`e2ee_attachments_unsupported`) because encrypted attachments were never
+      built, refusing rather than storing in the clear — which is the right call in isolation.
+      Together they mean **there is no conversation on any install into which any file can be
+      uploaded**, while `README.md` and `CLAUDE.md` both lead with file sharing. This needs
+      encrypted attachments, and it is Phase 3 work that was missed rather than Phase 4 polish
+- [ ] **Mentions notify nobody in an encrypted conversation.** `storage/messages.go` derives them
+      with `ParseMentions(nm.Content)`, and on an encrypted message `content` is `""` by
+      construction, so no `message_mentions` row is ever written. The composer still offers the
+      picker, the recipient's client still renders `@Name` after decryption — so both people see
+      a mention that happened, and only the badge meant to carry it is missing. Silent, and the
+      fix is a design decision rather than a patch: the server cannot read the message, so either
+      the client declares the mention list (metadata the server would then hold) or notification
+      moves client-side. That is an ADR, not a bug fix
+- [ ] **The backup offer covers the call button** — the third recurrence of a class `chat.css`
+      already documents twice. Because every conversation is now encrypted, it greets every new
+      account and blocks the call control until answered. The two specs that would have caught it
+      skip on non-Linux hosts, which is why it reached a third occurrence
 
 ### Test gate ✅
 
