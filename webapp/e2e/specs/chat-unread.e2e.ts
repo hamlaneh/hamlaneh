@@ -66,6 +66,10 @@ async function stage(
   await app.gotoSignIn(`/c/${openId}`);
   await app.signIn(reader.username, reader.password);
   await expect(app.identityButton).toContainText(t("chat.presence.online"));
+  // Encryption running, not merely signed in: this is the observable that the
+  // reader's device has registered and published the key packages the writer's
+  // client has to claim before it can add them to the group.
+  await expect(app.page.getByText(t("chat.e2ee.indicator"))).toBeVisible({ timeout: 30_000 });
 
   const quietRow = app.conversationRow(quietSlug);
   await expect(quietRow).toHaveAttribute("data-unread", "false");
