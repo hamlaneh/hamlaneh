@@ -44,7 +44,7 @@ export function CreateChannelDialog({ mode, onCreate, onClose }: CreateChannelDi
 
   return (
     <section
-      className="hm-plumbing"
+      className="hm-plumbing hm-plumbing--overlay"
       role="dialog"
       aria-modal="true"
       aria-label={t("chat.createChannel.title")}

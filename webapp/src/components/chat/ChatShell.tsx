@@ -371,6 +371,38 @@ export function ChatShell({
           onSettled={chat.settleConnection}
         />
 
+        {/* The recovery surfaces (ADR 010). A backup is an account-level thing
+            rather than a property of whichever conversation is open, and these
+            used to sit at the shell root to say so — floating, because the
+            root is the sidebar/conversation ROW and an in-flow child there is
+            a third column, not a banner. Floating is what put the offer on top
+            of the call button for every new account once encryption became the
+            default.
+
+            The conversation column is the only vertical stack in the shell, so
+            it is where a banner goes whatever the banner is about; the
+            connection banner directly above says nothing about the open
+            conversation either. In flow here it takes real height, the message
+            list gives it up (`flex: 1; min-block-size: 0`), and it covers
+            nothing.
+
+            The slot is fixed rather than conditional so the component is never
+            remounted by a sibling appearing or a channel switching: the
+            ceremony holds the one copy of the recovery key in component state,
+            and a remount mid-ceremony would lose it for good. */}
+        <BackupSurfaces
+          backup={mls.state.backup}
+          deviceReady={mls.state.device.status === "ready"}
+          onEnable={mls.enableBackup}
+          onDecline={() => {
+            void mls.declineBackup();
+          }}
+          onOpen={mls.openBackup}
+          onApply={mls.applyRestore}
+          onDiscard={mls.discardRestore}
+        />
+        <BackupIndicator backup={mls.state.backup} />
+
         {/* The strip is for people not looking at the call: it is absent once
             this channel's call is the one drawn below, and it takes the
             collapsed form once the call is somewhere else. It outlives
@@ -600,23 +632,6 @@ export function ChatShell({
           onClose={closeOverlay}
         />
       ) : null}
-
-      {/* The recovery surfaces (ADR 010). Outside the channel pane on
-          purpose: a backup is an account-level thing, and the offer arrives at
-          first MLS use rather than in whichever conversation happened to be
-          open. */}
-      <BackupSurfaces
-        backup={mls.state.backup}
-        deviceReady={mls.state.device.status === "ready"}
-        onEnable={mls.enableBackup}
-        onDecline={() => {
-          void mls.declineBackup();
-        }}
-        onOpen={mls.openBackup}
-        onApply={mls.applyRestore}
-        onDiscard={mls.discardRestore}
-      />
-      <BackupIndicator backup={mls.state.backup} />
 
       {verifyFor === null ? null : (
         <VerificationSheet

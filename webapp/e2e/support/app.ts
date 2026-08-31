@@ -274,13 +274,17 @@ export class App {
    *
    * The offer is account-level and arrives at first MLS use (ADR 010), so
    * since ADR 011 made every conversation encrypted it greets every new
-   * account in whichever conversation they open first. It is an undesigned
-   * floating surface anchored to the top of the shell, and it lies across the
-   * call strip: with it on screen the control that starts a call cannot be
-   * clicked, which is what a person meets too. Answering it is therefore
-   * arrangement rather than a workaround — but the placement is a real defect
-   * and is reported as one; when the design pipeline gives these surfaces
-   * their artboard this helper stays correct and stops being load-bearing.
+   * account in whichever conversation they open first.
+   *
+   * It used to float, and it lay across the call strip: with it on screen the
+   * control that starts a call could not be clicked at all, and this helper
+   * was the thing standing between the media specs and that defect. It no
+   * longer floats — an undesigned surface is a banner in the document flow
+   * (chat.css), and `e2e/layout/plumbing-overlap.layout.ts` holds that in a
+   * browser on any host, Docker or no Docker. So this is now what it says it
+   * is: getting a banner out of the way of a screenshot, not working around a
+   * dead button. Nothing here depends on it any more, and a spec that wants
+   * the offer on screen is free to leave it there.
    *
    * Deliberately strict: it waits for the offer instead of shrugging when it
    * is absent. Every conversation is encrypted and every spec account is new,
@@ -304,9 +308,10 @@ export class App {
    * exists only once the session is connected, which is what makes waiting
    * for it the right "the call is up" signal.
    *
-   * The offer is answered here rather than in each call spec: it covers the
-   * strip in every conversation now, so a guard repeated at every call site
-   * would be the same fix written three times.
+   * The offer is dismissed here rather than in each call spec: it arrives in
+   * every conversation now, and a call spec's screenshots and traces are
+   * easier to read without a banner nobody in the test is answering. It is no
+   * longer required for the click to land — see `declineBackupOffer`.
    */
   async joinCall(): Promise<void> {
     await this.declineBackupOffer();

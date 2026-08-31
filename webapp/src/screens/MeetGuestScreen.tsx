@@ -350,7 +350,7 @@ export function MeetGuestScreen({ token, media }: MeetGuestScreenProps) {
               and saying "encrypted" without saying which kind is exactly the
               overclaim PLAN §2.4 forbids. The second sentence exists so a
               working, deliberate feature does not read as a broken one. */}
-          <div className="hm-plumbing hm-plumbing--inline">
+          <div className="hm-plumbing">
             <p>{t("meet.mediaLabel")}</p>
             <p>{t("meet.mediaWhy")}</p>
           </div>
