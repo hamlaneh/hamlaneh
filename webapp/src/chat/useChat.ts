@@ -227,19 +227,40 @@ export function useChat({
   /* ── calls ──────────────────────────────────────────────────────── */
 
   /**
+   * Call events applied since this client started, counted per channel.
+   *
+   * A read is only the truth as of the moment it was taken, and it takes a
+   * round trip to come back. Anything that happened to the call in that window
+   * arrived over the socket, and is therefore newer than the answer in hand.
+   */
+  const callNews = useRef(new Map<string, number>());
+  const noteCallNews = useCallback((target: string) => {
+    callNews.current.set(target, (callNews.current.get(target) ?? 0) + 1);
+  }, []);
+
+  /**
    * Reads what is actually happening in a channel's call.
    *
    * ws-protocol.md §5: `call_started`, `call_updated` and `call_ended` carry
    * no sequence number and are never replayed, so a client that trusted them
    * would paint a banner for a call that ended while it was disconnected. The
    * events say something changed; this says what is true.
+   *
+   * True *when it was asked*, though, which is why the count is taken first
+   * and checked after. A call that starts while this read is in flight paints
+   * the banner from the event, and the answer that comes back — taken before
+   * anybody joined — would put it straight back to nothing, with no further
+   * reconciliation point until the reader changes channel or the socket drops.
+   * So a read the socket has overtaken is dropped rather than applied: the
+   * newer of the two is whichever spoke last, and here that is the event.
    */
   const reconcileCall = useCallback(async (target: string) => {
+    const asked = callNews.current.get(target) ?? 0;
     try {
       const { data } = await api.GET("/api/v1/channels/{channelId}/call", {
         params: { path: { channelId: target } },
       });
-      if (data !== undefined) {
+      if (data !== undefined && (callNews.current.get(target) ?? 0) === asked) {
         dispatch({ type: "call/state", channelId: target, call: data });
       }
     } catch (error) {
@@ -333,6 +354,7 @@ export function useChat({
           dispatch({ type: "presence/set", userId: frame.userId, state: frame.state });
           break;
         case "call_started":
+          noteCallNews(frame.chan);
           dispatch({
             type: "call/started",
             channelId: frame.chan,
@@ -342,6 +364,7 @@ export function useChat({
           });
           break;
         case "call_updated":
+          noteCallNews(frame.chan);
           dispatch({
             type: "call/state",
             channelId: frame.chan,
@@ -349,6 +372,7 @@ export function useChat({
           });
           break;
         case "call_ended":
+          noteCallNews(frame.chan);
           // `active: false` and nothing else — the contract says the other
           // fields are absent rather than stale.
           dispatch({ type: "call/state", channelId: frame.chan, call: { active: false } });
@@ -387,7 +411,7 @@ export function useChat({
           break;
       }
     },
-    [currentUserId, isE2ee, mlsRef, nudgeMlsRetry],
+    [currentUserId, isE2ee, mlsRef, noteCallNews, nudgeMlsRetry],
   );
 
   const handleFrameRef = useLatest(handleFrame);
