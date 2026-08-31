@@ -53,11 +53,11 @@ const (
 // it is an admin decision like every other one on this list.
 const (
 	// AdminScimTokensList is reading the live provisioning tokens.
-	AdminScimTokensList Action = "admin:scim-tokens:list"
+	AdminScimTokensList Action = "admin:scim-tokens:list" // #nosec G101 -- the NAME of a permission, matched only because it says "tokens"; it authenticates nothing
 	// AdminScimTokensCreate is minting a provisioning token.
-	AdminScimTokensCreate Action = "admin:scim-tokens:create"
+	AdminScimTokensCreate Action = "admin:scim-tokens:create" // #nosec G101 -- as above: a permission name, not a credential
 	// AdminScimTokensRevoke is killing a provisioning token.
-	AdminScimTokensRevoke Action = "admin:scim-tokens:revoke"
+	AdminScimTokensRevoke Action = "admin:scim-tokens:revoke" // #nosec G101 -- as above: a permission name, not a credential
 )
 
 // Can reports whether user may perform action on resource. resource is nil

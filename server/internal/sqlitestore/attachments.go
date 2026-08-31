@@ -93,6 +93,7 @@ func (s *Store) AttachmentsByMessages(ctx context.Context, messageIDs []uuid.UUI
 	}
 
 	list, args := msgUUIDList(messageIDs)
+	// #nosec G202 -- list is placeholders only (see msgUUIDList); the ids travel in args
 	query := `SELECT ` + attachmentColumns + `
 		FROM attachments
 		WHERE message_id IN (` + list + `)
@@ -198,6 +199,7 @@ func claimAttachments(ctx context.Context, tx *sql.Tx, messageID uuid.UUID, nm s
 	}
 
 	list, ids := msgUUIDList(nm.AttachmentIDs)
+	// #nosec G202 -- list and positionCase are placeholders and loop indices only (see msgUUIDList); the ids travel in args
 	query := `UPDATE attachments
 		SET message_id = ?,
 		    message_position = ` + positionCase(len(ids)) + `

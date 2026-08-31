@@ -49,7 +49,7 @@ import (
 // calls on; none at all is a supported install with calls off; a partial set
 // stops startup (FromEnv), exactly as a half-configured mail transport does.
 const (
-	EnvAPIKey    = "HAMLANEH_LIVEKIT_API_KEY"
+	EnvAPIKey    = "HAMLANEH_LIVEKIT_API_KEY"    // #nosec G101 -- the variable's name, not a key
 	EnvAPISecret = "HAMLANEH_LIVEKIT_API_SECRET" // #nosec G101 -- the variable's name, not a secret
 	EnvURL       = "HAMLANEH_LIVEKIT_URL"
 )
