@@ -268,7 +268,27 @@ implementation agent spawns.
    and content-type CHECKs; no column is added in either driver.
 3. **Files origin** (outside openapi.yaml by ADR 003's design, changed at its code and its
    checks): blob responses gain `Access-Control-Allow-Origin: *`; `deploy/verify-defaults.sh`
-   probes it; the app origin's CSP `connect-src` gains the files origin.
+   probes it; the CSP is unchanged, resolved below.
+
+   **Resolved during implementation, 2026-08-31 — no CSP change ships.** This item assumed
+   the client addresses the files origin absolutely. It does not: `filesign.FileURL` returns
+   an origin-relative path (`/files/<id>?…`) and the webapp uses it verbatim, which is why
+   `img-src 'self'` already covers today's image cards. The decrypt-time `fetch()` is
+   therefore same-origin, `connect-src 'self'` already admits it, and CORS is never consulted
+   for it.
+
+   Making the CSP change *necessary* would mean the client switching to `files.<domain>`,
+   which would require the server to learn a hostname it has no access to — `HAMLANEH_FILES_DOMAIN`
+   is a Caddy variable — so it is a new env var and new wiring rather than an edit.
+   **Decision: keep the relative URL.** The separate origin was always documented as defense in
+   depth and never as the defense; what actually carries the load is the layered treatment on
+   the blob responses, which is unaffected either way.
+
+   The honest consequence, recorded rather than left for someone to rediscover: the separate
+   files origin declared in `deploy/Caddyfile` is **not on the path any browser takes today**,
+   so `Cross-Origin-Resource-Policy: cross-origin` there is inert and ADR 003's description of
+   a cookie-less origin is aspirational rather than deployed. Correcting ADR 003 to say so is
+   its own follow-up; this ADR does not depend on it either way.
 4. **Search:** the files-search query excludes attachments of e2ee channels, both drivers.
 5. **Authz matrix: no new rows** — no new endpoint or WS type; the existing upload and send
    rows cover the changed behavior. `/security-review` is mandatory regardless: the slice
