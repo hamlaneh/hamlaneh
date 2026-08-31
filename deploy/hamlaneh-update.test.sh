@@ -60,9 +60,11 @@ COSIGN_REAL="$(command -v "$COSIGN")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# The updater's own lock lives under TMPDIR. Giving it one inside $WORK keeps a
-# test run from colliding with an updater running for real on this host.
+# Keep this run off the host's real lock, and off its real TMPDIR. Both are
+# needed: HAMLANEH_UPDATE_LOCK_DIR is where the updater locks, TMPDIR is where
+# its mktemp scratch goes.
 export TMPDIR="$WORK"
+export HAMLANEH_UPDATE_LOCK_DIR="$WORK/hamlaneh-update.lock"
 
 failures=0
 checks=0
@@ -537,6 +539,35 @@ check "a malformed --version is refused before anything is fetched" 1 \
   "is not a semantic version" \
   home_update "$REL_141" "latest"
 assert_installed v1.4.0 "a malformed --version changed nothing"
+
+# --- one updater at a time --------------------------------------------------
+
+# The lock excludes, and it excludes BEFORE anything is fetched or swapped.
+install_home v1.4.0
+mkdir "$HAMLANEH_UPDATE_LOCK_DIR"
+check "a second updater refuses while the lock is held" 1 \
+  "another update is already running" \
+  home_update "$REL_141" v1.4.1
+assert_installed v1.4.0 "a locked-out run swapped nothing"
+rmdir "$HAMLANEH_UPDATE_LOCK_DIR"
+
+# And it has to exclude across the case it is named for: a timer firing while
+# an operator runs the script by hand. Those two do not share a /tmp — the unit
+# hamlaneh-update.sh itself writes sets PrivateTmp=true — so a lock under
+# $TMPDIR is a different directory for each of them, both mkdir calls succeed,
+# and both processes swap the same binary. That is what this asserts, and it
+# has to assert it against the source: seeing the timer's private /tmp would
+# mean booting systemd, which this suite does not do. Two settings written by
+# one file agreeing with each other is the whole invariant.
+checks=$((checks + 1))
+if grep -q '^PrivateTmp=true' "$UPDATE" &&
+  ! grep -q 'LOCK_DIR="/run/hamlaneh-update.lock"' "$UPDATE"; then
+  fail_check "the unit sets PrivateTmp=true but the lock does not prefer /run" \
+    "A lock under TMPDIR is invisible across that boundary, so the timer and an" \
+    "operator would each take their own and both would swap the binary."
+else
+  pass_check "the lock lives outside the /tmp the unit's PrivateTmp namespaces"
+fi
 
 # ---------------------------------------------------------------------------
 

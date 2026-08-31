@@ -113,7 +113,19 @@ SERVER_BIN_IN_IMAGE="/usr/local/bin/hamlaneh-server"
 HEALTH_TIMEOUT=120
 HEALTH_INTERVAL=3
 
-LOCK_DIR="${TMPDIR:-/tmp}/hamlaneh-update.lock"
+# Where "one updater at a time" is enforced. See take_lock for why this is
+# /run and deliberately NOT under TMPDIR.
+#
+# HAMLANEH_UPDATE_LOCK_DIR overrides the whole path and is the only test seam
+# in this script; deploy/hamlaneh-update.test.sh uses it so a test run cannot
+# contend with an updater running for real on the same host.
+if [ -n "${HAMLANEH_UPDATE_LOCK_DIR:-}" ]; then
+  LOCK_DIR="$HAMLANEH_UPDATE_LOCK_DIR"
+elif [ -d /run ] && [ -w /run ]; then
+  LOCK_DIR="/run/hamlaneh-update.lock"
+else
+  LOCK_DIR="${TMPDIR:-/tmp}/hamlaneh-update.lock"
+fi
 
 mode=""
 channel="security"
@@ -167,6 +179,20 @@ trap cleanup EXIT
 # would otherwise have two processes swapping the same binary. mkdir is the
 # lock rather than flock because home mode is not only Linux (ADR 012) and
 # mkdir is atomic everywhere.
+#
+# The lock lives in /run and NOT under TMPDIR, and that is the whole point
+# rather than a preference. install_timer below writes a unit with
+# PrivateTmp=true, which hands the timer a /tmp of its own. Under TMPDIR the
+# timer's lock and the operator's are then two different directories in two
+# namespaces neither can see: both mkdir calls succeed, both processes swap
+# the same binary, and the timer-versus-operator race this lock is named for
+# is exactly the one it fails to cover. PrivateTmp namespaces /tmp and
+# /var/tmp and nothing else, so /run is one directory for both — and both are
+# root here, since the update writes /usr/local/bin or drives docker.
+#
+# A host with no writable /run falls back to TMPDIR. That host has no systemd
+# and therefore no timer, so the only race left there is manual against
+# manual, which TMPDIR does cover.
 take_lock() {
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     fail "another update is already running (lock: $LOCK_DIR). Remove it by hand only if no updater is running."
@@ -543,6 +569,9 @@ ExecStart=${SCRIPT_PATH}
 # below can be tightened into ProtectSystem=full or =strict, because that is
 # precisely the write this unit exists to perform.
 NoNewPrivileges=true
+# PrivateTmp gives this unit its own /tmp. That is why the lock at the top of
+# this script is in /run: a lock under TMPDIR would be invisible across this
+# boundary, and the timer would happily run alongside a manual invocation.
 PrivateTmp=true
 ProtectHome=read-only
 ProtectKernelTunables=true
