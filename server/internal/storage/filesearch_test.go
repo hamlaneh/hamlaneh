@@ -346,6 +346,58 @@ func explainPlan(ctx context.Context, t *testing.T, conn *pgx.Conn, query string
 // The membership lookup is asserted in the real statement's plan, because
 // "the fold is indexable" and "the scope is joined" are the two facts this
 // query has to keep at once.
+// TestFileSearchExcludesEncryptedChannelsIntegration is ADR 013 decision 3's
+// third point, and it is a correctness rule before it is a privacy one.
+//
+// An encrypted upload is stored under the literal placeholder `encrypted`,
+// because the real name rides inside the attaching message's ciphertext and
+// migration 0007 will not take an empty one. Indexed alongside plaintext
+// files that would mean one query — the placeholder itself — matching every
+// encrypted file on the instance, and every other query matching none of
+// them anyway. So the statement excludes them: e2ee files are absent from
+// server-side search, exactly as the words beside them always were.
+//
+// Alice is in both conversations, so membership excludes nothing here; the
+// only thing that can keep the encrypted rows out of the page and out of the
+// total is the channel's own flag, joined inside the statement.
+func TestFileSearchExcludesEncryptedChannelsIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, conn := testdb.New(t)
+	ctx := context.Background()
+
+	alice := mustCreateUser(ctx, t, store, newUser("alice"))
+	plain := mustCreateChannel(ctx, t, store, newChannel("plain", storage.ChannelKindPrivate, alice.ID))
+	secret := mustCreateChannel(ctx, t, store, storage.NewChannel{
+		Kind: storage.ChannelKindPrivate, Slug: "secret", CreatedBy: alice.ID, E2EE: true,
+	})
+
+	at := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	plainMsg := searchSeedMessage(ctx, t, conn, plain.ID, alice.ID, "here it is", at)
+	secretMsg := searchSeedMessage(ctx, t, conn, secret.ID, alice.ID, "", at)
+
+	// Both carry the same needle, so matching excludes neither.
+	seedAttachment(ctx, t, conn, plain.ID, alice.ID, &plainMsg, "zqxjkv-encrypted.pdf")
+	seedAttachment(ctx, t, conn, secret.ID, alice.ID, &secretMsg, "encrypted")
+
+	page := mustSearchFiles(ctx, t, store, alice.ID, "zqxjkv", 50, nil)
+	if got := fileNames(page); !slices.Equal(got, []string{"zqxjkv-encrypted.pdf"}) {
+		t.Errorf("results = %v, want the plaintext channel's file alone", got)
+	}
+	if page.Total != 1 {
+		t.Errorf("total = %d, want 1: an encrypted file must not be counted either", page.Total)
+	}
+
+	// And the query that would otherwise match every encrypted file at once.
+	placeholder := mustSearchFiles(ctx, t, store, alice.ID, "encrypted", 50, nil)
+	if got := fileNames(placeholder); !slices.Equal(got, []string{"zqxjkv-encrypted.pdf"}) {
+		t.Errorf("searching for the placeholder returned %v, want only the plaintext file whose name contains it", got)
+	}
+	if placeholder.Total != 1 {
+		t.Errorf("total = %d, want 1", placeholder.Total)
+	}
+}
+
 func TestFileSearchUsesTrigramIndexIntegration(t *testing.T) {
 	testdb.RequiresPostgres(t, "EXPLAIN against migration 0007's GIN pg_trgm index, which the SQLite tree deliberately does not build")
 	t.Parallel()
