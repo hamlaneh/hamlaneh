@@ -709,10 +709,29 @@ Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measur
       run fails to bind for a reason that has nothing to do with Hamlaneh. The error now names
       `HAMLANEH_HOME_ADDR` and a free port. Whether the default should move off 8080 entirely is
       still open — it is the port most likely to be taken on exactly the machines home mode is for
-- [ ] Bare-IP mode polished; Tauri desktop app builds. *(The Caddy half is fixed: the files
-      origin now has its own variable, because gluing `files.` onto a bare IP produced a name
-      neither the internal CA nor any public CA could ever certify, and Caddy retried that
-      impossible order for a month on an otherwise-working install.)*
+- [x] **Tauri desktop app builds** — *2026-08-31*, three OSes in CI. The shell does not embed
+      the web application and cannot: the client builds its base URL from
+      `window.location.origin`, the session is an HttpOnly cookie and CSRF is a double-submit
+      cookie, so a copy served from `tauri://localhost` would sit on an origin with no server
+      and could hold none of them. It navigates to the instance instead. That makes its address
+      field a trust boundary — the value reaches `location.assign` in the shell's own privileged
+      origin — so it refuses `javascript:`, `data:`, `file:`, `tauri:`, `vbscript:` and `ws:`,
+      with tests. Verified by driving the real Linux binary under Xvfb: the instance logged the
+      request and the window displayed content that exists only on the remote origin.
+      Two gaps written into the workflow rather than left implicit: the macOS leg is arm64 only,
+      so an Intel Mac is uncovered, and **every bundle is unsigned**, so Gatekeeper and
+      SmartScreen will both object
+- [ ] **Clause 4's desktop smoke e2e**, which does not split the way I assumed when scoping it.
+      Strict E2EE is *not* the blocker — the shell loads the instance's own webapp, MLS client
+      included. The blockers are that **Tauri's WebDriver support is Linux and Windows only**, so
+      a third of the matrix could never run this test whatever we write, and that the e2e stack's
+      internal-CA certificate is refused by the system webview, with no in-app override by design
+      (trusting a CA is the machine owner's decision). It needs the CA in each runner's trust
+      store, or a home-mode HTTP instance for the desktop leg
+- [ ] Bare-IP mode polished. *(The Caddy half is fixed: the files origin now has its own
+      variable, because gluing `files.` onto a bare IP produced a name neither the internal CA
+      nor any public CA could ever certify, and Caddy retried that impossible order for a month
+      on an otherwise-working install.)*
 - [ ] Response compression in the Go server, for home mode only. Caddy's `encode zstd gzip`
       covers the compose path, but home mode has no proxy in front of it and would otherwise
       serve the ~560 KB web bundle uncompressed over whatever link the household has
