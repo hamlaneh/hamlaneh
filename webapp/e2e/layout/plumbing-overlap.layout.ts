@@ -140,17 +140,18 @@ test("the conversation column still fills the shell with the offer in flow", asy
   expect(composer.y + composer.height).toBeLessThanOrEqual(shell.y + shell.height + 1);
 });
 
-test("an undesigned surface stays in flow unless it opts into the overlay", async ({ page }) => {
-  await conversationWithBackupOffer(page);
-
-  // Every `.hm-plumbing` the shell can show at once, stated as the rule rather
-  // than as a list of controls: the moment the base class positions anything
-  // again, or a notice is given the popover treatment, this names the offender
-  // instead of leaving the next slice to discover it through a dead button.
-  await page.getByRole("button", { name: t("chat.empty.invite") }).click();
-  await expect(page.getByRole("dialog", { name: t("chat.empty.invite") })).toBeVisible();
-
-  const floating = await page.locator(".hm-plumbing").evaluateAll((nodes) =>
+/**
+ * Every `.hm-plumbing` currently on screen that disagrees with the rule, named
+ * with the position it actually resolved to.
+ *
+ * The rule, both ways round: `--overlay` is positioned, everything else is in
+ * the document flow. Stated like this rather than as a list of controls, so the
+ * moment the base class positions anything again — or a notice is handed the
+ * popover treatment — this names the offender instead of leaving the next slice
+ * to discover it through a button that does nothing.
+ */
+function surfacesBreakingTheRule(page: Page): Promise<string[]> {
+  return page.locator(".hm-plumbing").evaluateAll((nodes) =>
     nodes
       .filter((node) => {
         const positioned = getComputedStyle(node).position !== "static";
@@ -158,6 +159,21 @@ test("an undesigned surface stays in flow unless it opts into the overlay", asyn
       })
       .map((node) => `${node.getAttribute("class") ?? ""} => ${getComputedStyle(node).position}`),
   );
+}
 
-  expect(floating).toEqual([]);
+test("an undesigned surface stays in flow unless it opts into the overlay", async ({ page }) => {
+  await conversationWithBackupOffer(page);
+
+  // The encryption notice and the backup offer are already up; the picker adds
+  // a plain `--overlay`, and the account menu the `--overlay --footer` pair,
+  // whose modifier has to keep winning the tie it shares with `--overlay`.
+  // Opening the account menu closes the picker (one overlay at a time in the
+  // shell), so the rule is asked twice rather than once.
+  await page.getByRole("button", { name: t("chat.empty.invite") }).click();
+  await expect(page.getByRole("dialog", { name: t("chat.empty.invite") })).toBeVisible();
+  expect(await surfacesBreakingTheRule(page)).toEqual([]);
+
+  await page.getByRole("button", { name: t("account.title") }).click();
+  await expect(page.getByRole("dialog", { name: t("account.title") })).toBeVisible();
+  expect(await surfacesBreakingTheRule(page)).toEqual([]);
 });
