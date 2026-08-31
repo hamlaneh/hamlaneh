@@ -254,10 +254,15 @@ keeps its place with its content erased, which is what the design's "Message rem
 placeholder renders, and a permalink resolves through a cursor that centres the page on the
 message it names.
 
-**Not yet built:** the rest of Phase 3 — multi-device and device verification, key verification
-UX and encrypted backups with a recovery key. Four slices have shipped — the MLS transport,
-eviction by key, key verification, media encryption — and the organisation's encryption mode.
-The sections below say what each covers and, more usefully, what it does not.
+**Five Phase 3 slices have shipped** — the MLS transport, eviction by leaf key, key verification,
+encrypted backups with a user-held recovery key, and media encryption — plus the organisation's
+encryption mode. **What is not built** is the multi-device half and two consequences of shipping
+encryption before the things that live next to it: one browser profile is still one MLS device
+(the tabs share a stored slot, and making them one device needs a SharedWorker owning it), a
+person's devices do not sync keys, encrypted attachments do not exist — which is what puts file
+sharing out of reach above — and Compliance mode has no server-side half to select, so encryption
+at rest, retention and export are all still absent. The sections below say what each shipped
+slice covers and, more usefully, what it does not.
 
 A DM now carries its peer, resolved by a join in the same query that draws the sidebar rather
 than a lookup per row; mentions are parsed from the contract's `<@{id}>` token when a message is
@@ -424,14 +429,17 @@ was not entitled to read the message it points at.
   Its three negatives run on every pull request against a real cosign binary with locally
   generated keys. **What has never run is the keyless half** — Fulcio, Rekor, and the identity
   matching — because no tag has ever been pushed. The workflow verifies its own output with the
-  same script, so the first real tag is where a wrong identity pattern fails. There is also no
-  auto-updater yet: this is the gate one will call, not the updater itself.
+  same script, so the first real tag is where a wrong identity pattern fails. This is the gate
+  the updater calls rather than the updater itself; `deploy/hamlaneh-update.sh` is the caller,
+  described under *Signed releases and the updater that applies them* below.
 
 ## What's next
 
-**Phase 4 — packaging polish, and the gate public launch waits on.** Phases 0 through 3 are
-code-complete; what remains is everything that turns a working codebase into something a
-stranger can install. Landed since Phase 3 closed:
+**Phase 4 — packaging polish, and the gate public launch waits on.** Everything through Phase 2
+is code-complete, and Phase 3 is most of the way there: five slices and the encryption mode
+shipped, with the multi-device half, encrypted attachments and Compliance mode's server-side
+half still missing (the paragraph above says which is which). Phase 4 is running in parallel
+rather than after it, which is why the two lists overlap. Landed on the Phase 4 side:
 
 - **A second storage driver.** `internal/sqlitestore` implements the same 102 methods as the
   PostgreSQL store, behind the *consumer-side* interfaces that already existed rather than a
@@ -479,11 +487,20 @@ stranger can install. Landed since Phase 3 closed:
   offline, so the first real tag is where a wrong identity pattern would surface. The pipeline
   now verifies both halves of its own output, which is what makes that a CI failure rather than
   an operator's.
-- The desktop app does not build in CI yet, the install matrix has never run on real VMs
-  (containers have no systemd and no Docker of their own, so they prove detection and
-  idempotency and nothing about installing), and `get.hamlaneh.com` does not serve.
+- **The desktop app builds in CI on all three platforms and is smoke-tested on none of them.**
+  `ci.yml`'s `desktop` job compiles the Tauri shell on Linux, macOS and Windows, so the gate's
+  build clause is met; the login-and-send e2e beside it is not, and cannot be written as scoped.
+  Tauri's WebDriver support is Linux and Windows only, so a third of the matrix could not run
+  such a test whatever we wrote, and the e2e stack's internal-CA certificate is refused by the
+  system webview with no in-app override — trusting a CA is the machine owner's decision, not an
+  application's. It needs the CA in each runner's trust store, or a home-mode HTTP instance for
+  the desktop leg. Two gaps are written into the workflow rather than left implicit: the macOS
+  leg is arm64 only, and every bundle is unsigned.
+- The install matrix has never run on real VMs (containers have no systemd and no Docker of
+  their own, so they prove detection and idempotency and nothing about installing), and
+  `get.hamlaneh.com` does not serve.
 
-**Everything through Phase 2 is code-complete**, each proven by a Playwright suite against the
+Phase 0 through Phase 2 are proven, not merely written: each by a Playwright suite against the
 real stack rather than against mocks — two browsers, two accounts, a message crossing live; and
 in Persian, committed screenshots that fail on an unapproved pixel.
 
@@ -529,7 +546,7 @@ which cannot know what was delivered after it was written.
 | `server/` | Go (stdlib-first, pgx, golang-migrate) | Single static binary: API, WebSockets, auth, and the embedded web UI |
 | `webapp/` | React + TypeScript + Vite + Tailwind + i18next | Web UI, bilingual en/fa with RTL; built into the server binary at image build |
 | `webapp/src-mls/` | Rust → WebAssembly (OpenMLS, ADR 006) | The MLS core the browser runs; Rust exists only in this client build stage — the server stays a single Go binary |
-| `desktop/` | Tauri v2 (planned, Phase 4) | Native desktop wrapper around the web UI |
+| `desktop/` | Tauri v2 (built, three-OS CI job) | Shell that navigates to the instance — it embeds no copy of the web UI, because a bundle served from `tauri://localhost` would sit on an origin that can hold neither the session cookie nor the CSRF cookie |
 | `deploy/` | Docker Compose + Caddy + install.sh | The one-command install; Caddy owns TLS and HSTS only |
 | Database | PostgreSQL (server) / SQLite (home mode) | Two drivers behind the *consumer* interfaces; the whole suite runs against both |
 | Calls | LiveKit SFU + TURN (Phase 2) | Voice/video/screen share |

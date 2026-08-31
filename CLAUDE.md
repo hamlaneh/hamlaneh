@@ -10,12 +10,14 @@ sharing, voice/video calls, screen share, and conferencing. One-line install, se
 - `docs/PLAN.md` — master plan: vision, architecture, security plan, business model. Strategy lives there.
 - `docs/ROADMAP.md` — executable phases with test gates. Execution lives there.
 
-**Current status:** Phase 0 through Phase 2 are code-complete — install stack, identity, chat,
-files, admin dashboard, bilingual UI, enterprise identity, and calls/conferences on LiveKit.
-Next: Phase 3 (end-to-end encryption with MLS), which opens with an ADR rather than code.
-Two gates are outstanding and are the user's to run, not code tasks: Phase 2's manual NAT drill
-and Phase 1's two weeks of daily-driving.
-`docs/OVERVIEW.md` always carries the current picture — read it, not this line, for detail.
+**Current status:** Phase 0 through Phase 2 are code-complete. Phase 3 (MLS end-to-end
+encryption) has shipped five slices and the organisation's encryption mode, and Phase 4
+(packaging) is running alongside it rather than after it. Phase 3's open half is multi-device,
+encrypted attachments, and Compliance mode's server side — and the first two are why file
+sharing, though built, is unreachable on a fresh install. Two gates are outstanding and are the
+user's to run, not code tasks: Phase 2's manual NAT drill and Phase 1's two weeks of
+daily-driving. This paragraph is a signpost and goes stale by design; `docs/OVERVIEW.md` is
+updated per slice by the Definition of Done below, so read it, not this line, for detail.
 
 ## Tech stack (decided — see "Changing a decision" below for the only way to relitigate)
 
