@@ -329,6 +329,7 @@ func insertMessageMentions(ctx context.Context, tx *sql.Tx, messageID, channelID
 		return nil
 	}
 	list, ids := msgUUIDList(mentioned)
+	// #nosec G202 -- list is placeholders only (see msgUUIDList); the ids travel in args
 	query := `INSERT INTO message_mentions (message_id, mentioned_user_id)
 		SELECT ?, cm.user_id
 		FROM channel_members cm
@@ -359,7 +360,7 @@ func rewriteMessageMentions(ctx context.Context, tx *sql.Tx, messageID, channelI
 	args := []any{messageID}
 	if len(mentioned) > 0 {
 		list, ids := msgUUIDList(mentioned)
-		query += ` AND mentioned_user_id NOT IN (` + list + `)`
+		query += ` AND mentioned_user_id NOT IN (` + list + `)` // #nosec G202 -- list is placeholders only (see msgUUIDList); the ids travel in args
 		args = append(args, ids...)
 	}
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
@@ -774,6 +775,13 @@ func mlsCiphertextArg(mls *storage.MessageMls) any {
 // default limit of 32766 bound parameters: a history page is at most fifty
 // messages, and a message's mentions are bounded by its 4000-character content
 // against a 39-byte token, so fewer than 103 of them.
+//
+// The returned string is a function of len(ids) and NOTHING else — it is
+// "?, ?, ?", never a value. That is what makes it safe to concatenate into a
+// statement, and it is why every caller that does so carries a `#nosec G202`:
+// gosec sees a non-constant operand joined into SQL and cannot see that the
+// operand contains no data. TestMsgUUIDListIsPlaceholdersOnly pins it, so the
+// suppressions stay honest if this function is ever changed to interpolate.
 func msgUUIDList(ids []uuid.UUID) (string, []any) {
 	args := make([]any, len(ids))
 	for i, id := range ids {

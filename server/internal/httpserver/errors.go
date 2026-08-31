@@ -38,7 +38,7 @@ const (
 	codeSSOUnavailable      errorCode = "sso_unavailable"
 	codeSSOAlreadyLinked    errorCode = "sso_already_linked"
 	codeSSONotLinked        errorCode = "sso_not_linked"
-	codeSSOUnlinkNoPassword errorCode = "sso_unlink_no_password"
+	codeSSOUnlinkNoPassword errorCode = "sso_unlink_no_password" // #nosec G101 -- a stable error code in the API contract, not a credential
 	codeSSOFailed           errorCode = "sso_failed"
 	codeSSOAccountExists    errorCode = "sso_account_exists"
 	codeSSOAccountUnknown   errorCode = "sso_account_unknown"
@@ -101,7 +101,7 @@ const (
 	// invitation revocation, which is idempotent, the contract reserves a
 	// 404 here — an administrator cutting a credential off needs to know
 	// when they named the wrong one.
-	codeScimTokenNotFound errorCode = "scim_token_not_found"
+	codeScimTokenNotFound errorCode = "scim_token_not_found" // #nosec G101 -- a stable error code in the API contract, not a credential
 	// Phase 2: calls. The instance has no media server configured, so there
 	// is no ticket to mint. Chat is unaffected, which is why this is a 503 on
 	// one endpoint rather than a degraded instance — the same shape

@@ -100,6 +100,7 @@ func (s *Store) LinkPreviewsByMessage(ctx context.Context, messageIDs []uuid.UUI
 	}
 
 	list, args := msgUUIDList(messageIDs)
+	// #nosec G202 -- list is placeholders only (see msgUUIDList); the ids travel in args
 	query := `SELECT message_id, url, title, description, image_blob_id, fetched_at
 		FROM link_previews
 		WHERE message_id IN (` + list + `)`
