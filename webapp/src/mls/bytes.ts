@@ -11,7 +11,11 @@
  * supports and in Node, and the framing is twenty lines.
  */
 
-/** Bytes to standard base64, as the contract's `*_b64` fields carry them. */
+/**
+ * Bytes to standard base64 — the encoding every MLS payload in the contract is
+ * described as carrying (`signature_public_key`, `key_packages`, the commit
+ * and welcome bodies), none of which spells the encoding in its field name.
+ */
 export function toBase64(bytes: Uint8Array): string {
   // Chunked: `String.fromCharCode(...bytes)` on a 256 KiB commit overflows the
   // argument limit, which is exactly the size the contract permits.
