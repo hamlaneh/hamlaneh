@@ -438,6 +438,13 @@ stranger can install. Landed since Phase 3 closed:
   cosign the other two depend on — without which "auto-update on by default" would have failed
   on every fire of every stock install.
 
+- **A Docker-free layout test tier** (`npm run e2e:layout`), added because the same UI defect
+  reached its third occurrence: an undesigned surface covering an interactive control. The full
+  e2e suite needs the runner to be the Docker host, so on a developer's machine the specs that
+  would have caught it skip. This tier runs against `vite dev` and the MSW mocks in about twenty
+  seconds, and it asserts the *rule* — a surface whose computed position disagrees with whether
+  it opted into overlaying is named — rather than the symptom.
+
 **What is honestly not done in Phase 4:**
 
 - **The sub-5-minute install is at structural risk.** `install.sh` runs `compose up -d --build`,

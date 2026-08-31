@@ -80,10 +80,18 @@ that later phases depend on already exists and can turn red.
       fix is a design decision rather than a patch: the server cannot read the message, so either
       the client declares the mention list (metadata the server would then hold) or notification
       moves client-side. That is an ADR, not a bug fix
-- [ ] **The backup offer covers the call button** — the third recurrence of a class `chat.css`
-      already documents twice. Because every conversation is now encrypted, it greets every new
-      account and blocks the call control until answered. The two specs that would have caught it
-      skip on non-Linux hosts, which is why it reached a third occurrence
+- [x] **The backup offer covering the call button** — *2026-08-31*, fixed at the cause rather
+      than patched a third time. `.hm-plumbing` meant both "this has no design yet" and "this
+      floats", so every undesigned surface inherited popover positioning whether or not it was a
+      popover, and each earlier fix added another opt-out to the floating class instead of
+      inverting the default. The base class no longer positions; `--overlay` is opted into by the
+      six real popovers. The objection recorded against putting these in flow was real and
+      misdiagnosed — `.hm-chat` is the sidebar/conversation *row*, so an in-flow child there
+      becomes a third column. What stops a fourth recurrence is a Docker-free layout tier
+      (`npm run e2e:layout`, ~20s) in which a reintroduced `absolute` fails **by class name**
+      rather than by whichever control it happens to land on: the two specs that should have
+      caught this need the runner to be the Docker host, which is why they never saw any of the
+      three
 
 ### Test gate ✅
 
