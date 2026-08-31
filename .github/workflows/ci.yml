@@ -42,6 +42,7 @@ jobs:
       deploy: ${{ steps.filter.outputs.deploy }}
       e2e: ${{ steps.filter.outputs.e2e }}
       release: ${{ steps.filter.outputs.release }}
+      desktop: ${{ steps.filter.outputs.desktop }}
     steps:
       - name: Filter changed paths
         id: filter
@@ -82,6 +83,23 @@ jobs:
             release:
               - 'deploy/*.sh'
               - '.github/workflows/release.yml'
+              - '.github/workflows/ci.yml'
+            # `desktop/**` and NOT `webapp/**`, which is narrower than it
+            # looks and is a property of the design rather than a saving.
+            # The Tauri shell bundles no copy of the web application: it
+            # ships one local page that validates an address and hands the
+            # window to that instance's own origin, so the bundle's contents
+            # do not move when webapp/ does. See desktop/ui/connect.js for
+            # why loading the real origin is forced (the client's base URL is
+            # window.location.origin and the session is an HttpOnly cookie,
+            # neither of which survives a copy served from tauri://localhost).
+            #
+            # This matters: `webapp/**` here would put three cold Rust builds
+            # on every frontend commit, which is the most expensive wrong
+            # trigger available in this repository. Add it in the same commit
+            # as any change that makes frontendDist point at webapp/dist.
+            desktop:
+              - 'desktop/**'
               - '.github/workflows/ci.yml'
 
   server:
@@ -387,6 +405,110 @@ jobs:
       # reporting a green run that tested nothing.
       - name: Run the backup and restore drill
         run: bash deploy/hamlaneh-backup.test.sh
+
+  # ROADMAP Phase 4 test gate clause 4: "Tauri app builds for all three OSes
+  # in CI". Three runners, three real bundles, uploaded so a human can install
+  # one — a job that only typechecked the Rust would not prove the clause, and
+  # the failures this catches (a missing icon format, an unresolvable
+  # frontendDist, a bundler prerequisite) all live in bundling rather than in
+  # compilation.
+  #
+  # What each leg does and does not prove is written on its own matrix row.
+  #
+  # Rust comes from the runner image rather than from a pinned toolchain
+  # action, and it is the one unpinned input in this workflow. That is a
+  # deliberate trade, not an oversight: the shell is a dozen lines of Rust
+  # with no MSRV surface of its own, and adding a third-party action to a
+  # repository that pins every one of them by SHA costs more supply chain than
+  # it buys here. It stops being the right trade the day these bundles are
+  # released rather than merely built — a shipped artifact wants a pinned
+  # toolchain, and release.yml is where that belongs.
+  desktop:
+    name: Desktop app (Tauri, ${{ matrix.label }})
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true'
+    runs-on: ${{ matrix.os }}
+    # 45, not 25: every leg is a cold compile of Tauri's dependency tree
+    # (measured at 5m35s on Linux from an empty registry) and no build cache
+    # is configured — a job that runs this rarely would mostly miss one.
+    timeout-minutes: 45
+    strategy:
+      # One platform breaking must not cancel the evidence from the other
+      # two: which of the three broke is the entire content of this gate.
+      fail-fast: false
+      matrix:
+        include:
+          # Proves the WebKitGTK path and both Linux bundle formats. The
+          # AppImage leg also proves the network fetch of linuxdeploy, which
+          # is the flakiest step in the job and the first one to suspect.
+          - os: ubuntu-latest
+            label: Linux
+            bundles: deb,appimage
+          # Proves the WKWebView path. Apple silicon ONLY — the runner is
+          # arm64, so this is aarch64-apple-darwin and not a universal
+          # binary; an Intel Mac is not covered by this leg. The bundle is
+          # also unsigned and unnotarised, so Gatekeeper will quarantine it:
+          # that needs an Apple Developer identity the project does not have.
+          - os: macos-latest
+            label: macOS
+            bundles: app,dmg
+          # Proves the WebView2 path and the NSIS installer. Unsigned, so
+          # SmartScreen warns on it. MSI is one word away if an operator ever
+          # needs Group Policy deployment; NSIS alone keeps the leg cheap.
+          - os: windows-latest
+            label: Windows
+            bundles: nsis
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install the WebKitGTK toolchain
+        if: runner.os == 'Linux'
+        # Tauri v2's Linux prerequisites. macOS and Windows need none:
+        # WKWebView ships with the OS, and WebView2 is preinstalled on the
+        # runner image and evergreen on Windows 10 and 11.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test the connect page
+        # `node --test`, no framework. Cheap enough to run on all three legs
+        # rather than nominate one, and what it covers is the guard deciding
+        # which addresses the shell will navigate its own window to.
+        run: npm test
+
+      - name: Build the bundles
+        run: npx tauri build --bundles ${{ matrix.bundles }}
+
+      - name: Upload the bundles
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-${{ matrix.label }}
+          path: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+          # This IS the assertion that something was bundled. `tauri build`
+          # exits 0 having emitted nothing for a target it decided to skip,
+          # so without this a green leg would prove only that Rust compiled.
+          if-no-files-found: error
+          retention-days: 7
 
   gitleaks:
     name: Secret scan (gitleaks)

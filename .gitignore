@@ -53,6 +53,11 @@ webapp/e2e/.stack/
 
 # Tauri / Rust
 desktop/src-tauri/target/
+# Permission schemas that tauri-build regenerates on every build. They are
+# editor autocomplete for capabilities/*.json and nothing else — a fresh
+# clone just loses the hints until it builds once. Cargo.lock IS committed,
+# and is what actually pins the dependency tree.
+desktop/src-tauri/gen/
 # MLS wrapper: compiled wasm and its generated JS glue. Build output, not
 # source — `webapp/src-mls/build.sh` regenerates both. Cargo.lock IS
 # committed: cargo audit runs over it (ADR 006).
