@@ -166,9 +166,14 @@ would plan around a feature nobody can use.
   `direction: rtl` and the sidebar actually on the right — not merely that Persian text appears.
   Per-PR runs `en` in full plus the `fa` smoke subset; a nightly workflow runs both in full.
   Failures upload traces, screenshots, video and the container logs.
-- CI pipeline (GitHub Actions, SHA-pinned): Go build/vet/lint/race-tests/gosec/govulncheck,
-  webapp typecheck/lint/tests/build, Playwright e2e, gitleaks, codegen drift checks, compose smoke
-  test. Activates when the GitHub remote exists.
+- CI pipeline (GitHub Actions, SHA-pinned), running against `github.com/hamlaneh/hamlaneh` since
+  the repository was created: `ci.yml` carries jobs for the Go server
+  (build/vet/lint/race-tests/gosec/govulncheck), the webapp (typecheck/lint/tests/build),
+  Playwright e2e, the release, backup and desktop tooling, gitleaks, codegen drift checks and a
+  compose smoke test, with a nightly workflow for the full bilingual e2e suite. Dependabot is
+  open against it. This line used to say "activates when the GitHub remote exists"; what has not
+  happened is branch protection on `main`, which GitHub does not offer on a private repository
+  outside a paid plan — so the ROADMAP box stays open for that reason and not for this one.
 
 - **Conversations, and a socket that carries them (Phase 1.2a).** Channels, private channels
   and 1:1 DMs, with membership as the only visibility rule: a non-member — an org admin

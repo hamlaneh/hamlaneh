@@ -24,7 +24,11 @@ that later phases depend on already exists and can turn red.
 
 ### Tasks
 
-- [ ] Namespace grabs (user): GitHub org `hamlaneh`, Docker Hub, social handles. Domain: done.
+- [ ] Namespace grabs (user), partly done. **GitHub org `hamlaneh`: taken** — it owns
+      `github.com/hamlaneh/hamlaneh`, created 2026-08-20, so that half is checkable from here
+      and checked. **Docker Hub and the social handles are still open, or at least unknown**:
+      nothing in this tree records them and nothing here can, which is why this box stays
+      unticked rather than being ticked on the strength of the half that is visible. Domain: done.
 - [x] Repo hygiene: `LICENSE` (AGPL-3.0), `README.md` (pitch + "How Hamlaneh makes money"),
       `SECURITY.md` (disclosure policy **+ published threat model incl. explicit non-goals per
       PLAN.md §6.1**), `CONTRIBUTING.md`, `CODEOWNERS`, issue/PR templates, `.gitignore`, `.env.example`
@@ -51,7 +55,13 @@ that later phases depend on already exists and can turn red.
       (written + shellcheck-clean; real-VM smoke = gate 3)
 - [ ] CI (GitHub Actions): everything in CLAUDE.md "CI gates" incl. **compose-smoke** job and
       CI hygiene rules (SHA-pinned actions, minimal permissions); branch protection on `main`
-      — *workflow files written and validated; activates once the GitHub remote exists*
+      — *the workflows run: `github.com/hamlaneh/hamlaneh` exists, `ci.yml` and the nightly
+      e2e workflow have both been firing on push since the repository was created, and
+      Dependabot is open against it. This line used to say "activates once the GitHub remote
+      exists", which stopped being the blocker on 2026-08-20. What is left is **branch
+      protection**, which GitHub does not offer on a private repository outside a paid plan —
+      so it is blocked on the repository going public or on a plan, not on anything in the
+      tree, and the box stays open because the rule `main` stays green depends on it*
 - [x] Walking skeleton: Go server serves a static login page (no real auth yet) + `/healthz`
       (booted locally via compose: TLS + all security headers + healthz verified, 2026-08-20)
 - [ ] Weekend recon (user + Claude): deploy Mattermost, Rocket.Chat, Element+Jitsi; write
