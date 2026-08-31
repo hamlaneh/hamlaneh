@@ -304,6 +304,39 @@ expect_identity reject "our release workflow at a different tag" \
 expect_identity reject "a lookalike path exploiting an unescaped dot" \
   "https://github.com/hamlaneh/hamlaneh/Xgithub/workflows/release.yml@refs/tags/v1.2.3"
 
+# Build metadata is legal semver and version_is_valid admits it, so a '+'
+# reaches the pattern from tag_name -- which hamlaneh-update.sh reads off the
+# GitHub API. Unescaped it is a quantifier: v1.2.3+build would make the '3'
+# repeatable and v1.2.33 would satisfy a pattern built for v1.2.3. Anchoring
+# confines that to the tag segment, so it was never exploitable; it is escaped
+# anyway, because this function's safety should not depend on that argument.
+plus_identity="$(bash "$VERIFY" --version v1.2.3+build --print-identity)"
+checks=$((checks + 1))
+if printf '%s' "https://github.com/hamlaneh/hamlaneh/.github/workflows/release.yml@refs/tags/v1.2.33" |
+    grep -qE "$plus_identity"; then
+  printf 'FAIL  identity built from v1.2.3+build treats + as a quantifier
+       %s
+' "$plus_identity"
+  failures=$((failures + 1))
+else
+  printf 'PASS  identity (reject) a repeated digit, so + is not a quantifier
+'
+fi
+
+# --repo reaches the pattern too, and this script -- unlike the updater -- used
+# to accept it unvalidated, so '.*/.*' widened the identity to any repository's
+# release workflow. An operator would have had to type it, which is why it was
+# not a finding; it is refused now so the pattern cannot be widened at all.
+checks=$((checks + 1))
+if bash "$VERIFY" --version v1.2.3 --repo '.*/.*' --print-identity >/dev/null 2>&1; then
+  printf 'FAIL  --repo accepted a regex wildcard instead of an OWNER/NAME
+'
+  failures=$((failures + 1))
+else
+  printf 'PASS  a --repo that is a regex wildcard is a usage error
+'
+fi
+
 # Anchoring: without ^ and $ an attacker just prefixes or suffixes the identity.
 expect_identity reject "the genuine identity with a prefix" \
   "https://github.com/evil/x?=${GENUINE}"

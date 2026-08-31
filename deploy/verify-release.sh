@@ -107,6 +107,13 @@ note() {
 # Rejects anything that is not MAJOR.MINOR.PATCH with optional pre-release and
 # build metadata. Validation at the boundary, so the arithmetic below can never
 # be handed something that is not a number.
+# The same shape hamlaneh-update.sh:197 enforces. Kept identical on purpose:
+# one script validating what the other does not is how a value becomes trusted
+# in one place and attacker-shaped in the next.
+repo_is_valid() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]
+}
+
 version_is_valid() {
   [[ "${1#v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]
 }
@@ -192,11 +199,27 @@ semver_cmp() {
 # replacement text, then printf, and getting that count wrong is silent in
 # both directions. [.] needs no backslash at all, so there is nothing to
 # miscount.
+# Wraps the characters a regex would read as syntax so they can only match
+# themselves. Written as [x] rather than with a backslash for the reason the
+# dots already were: a backslash here has to survive double quotes, a
+# substitution's replacement text and printf, and miscounting it is silent in
+# both directions.
+#
+# Only . and + can reach here -- version_is_valid and repo_is_valid between
+# them admit no other metacharacter -- and that is the point: the pattern's
+# safety is a property of what can arrive rather than an argument about
+# whether widening happens to be harmless. It was harmless. This function has
+# failed open once, so 'harmless' is not the standard it gets held to.
+regex_literal() {
+  local out="${1//./[.]}"
+  printf '%s' "${out//+/[+]}"
+}
+
 signing_identity() {
-  local workflow_re="${SIGNING_WORKFLOW//./[.]}"
-  local version_re="${version//./[.]}"
   printf '^https://github[.]com/%s/%s@refs/tags/%s$' \
-    "$repo" "$workflow_re" "$version_re"
+    "$(regex_literal "$repo")" \
+    "$(regex_literal "$SIGNING_WORKFLOW")" \
+    "$(regex_literal "$version")"
 }
 
 # ---------------------------------------------------------------------------
@@ -346,6 +369,9 @@ done
 [ -n "$version" ] || usage_error "--version is required"
 version_is_valid "$version" ||
   usage_error "--version '$version' is not a semantic version (expected vX.Y.Z)"
+
+repo_is_valid "$repo" ||
+  usage_error "--repo '$repo' is not an OWNER/NAME repository"
 
 if [ "$print_identity" -eq 1 ]; then
   signing_identity
