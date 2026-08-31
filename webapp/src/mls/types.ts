@@ -1,3 +1,5 @@
+import type { AttachmentEntry } from "./attachments";
+
 /** The states the E2EE surfaces render. Deliberately small and honest. */
 
 /**
@@ -279,9 +281,18 @@ export interface MediaKey {
 /** What a bubble draws: plaintext, decrypted text, or the honest refusal. */
 export type MessageBody =
   | { kind: "plaintext"; text: string }
-  /** Decrypted here, in this browser. Rendered exactly like plaintext. */
-  | { kind: "decrypted"; text: string }
-  /** Encrypted, and this device holds no key that opens it. */
+  /**
+   * Decrypted here, in this browser. Rendered exactly like plaintext, plus
+   * the file entries the envelope carried — the per-file keys and the real
+   * metadata the server never saw (ADR 013). Empty for a message with no
+   * files, which is every message that was sent as a bare string.
+   */
+  | { kind: "decrypted"; text: string; attachments: readonly AttachmentEntry[] }
+  /**
+   * Encrypted, and this device holds no key that opens it — or it opened and
+   * claimed the envelope sentinel without being an envelope, which is the
+   * same honest answer: nothing here can be shown.
+   */
   | { kind: "undecryptable" }
   /** Encrypted, and the decryption has not come back yet. */
   | { kind: "pending" };
