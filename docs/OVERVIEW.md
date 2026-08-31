@@ -5,7 +5,7 @@
 > commit (enforced via the Definition of Done in CLAUDE.md). Strategy lives in
 > [PLAN.md](PLAN.md); task-level execution lives in [ROADMAP.md](ROADMAP.md).
 >
-> **Last updated:** 2026-08-29
+> **Last updated:** 2026-08-31
 
 ## What is Hamlaneh?
 
@@ -50,15 +50,19 @@ would plan around a feature nobody can use.
   CSP is ANDed by browsers, and a proxy-only policy would not exist in home mode.
 - The Go server also serves `/healthz` (liveness) and `/readyz`
   (DB + schema readiness), connects to Postgres via pgx, and **runs embedded migrations
-  automatically at startup** (0001 users, 0002 sessions, 0003 channels/messages,
-  0004 password reset + TOTP).
-- The API contract lives in [`docs/api/openapi.yaml`](api/openapi.yaml) — health, auth
-  (login/logout/refresh/reset/two-step), current user, account security (TOTP, sessions),
-  the public instance document, and admin user-management endpoints. Both sides generate
-  code from it (oapi-codegen for Go, openapi-typescript for the webapp); CI fails if
-  generated code drifts. The realtime half is [`docs/api/ws-protocol.md`](api/ws-protocol.md),
-  which OpenAPI cannot describe; its operation table is machine-read by the same completeness
-  gate. Every operation in the contract now has a handler behind it — nothing answers 501.
+  automatically at startup** — the series now runs from `0001_create_users` to
+  `0019_mls_backups`. `server/internal/storage/migrations/` is the list; naming them here
+  would be a copy that goes stale on the next slice, and the reason to look is usually a
+  specific one anyway (0006 records why search matches substrings, 0017 why an MLS leaf is a
+  device rather than a user, 0018 why Strict is the default).
+- The API contract lives in [`docs/api/openapi.yaml`](api/openapi.yaml) — 79 operations, from
+  health and auth through channels, messages, search, files, invites, admin, conferences, calls
+  and the MLS transport. Both sides generate code from it (oapi-codegen for Go,
+  openapi-typescript for the webapp); CI fails if generated code drifts. The realtime half is
+  [`docs/api/ws-protocol.md`](api/ws-protocol.md), which OpenAPI cannot describe; its operation
+  table is machine-read by the same completeness gate, and `docs/api/scim.md` is a third
+  machine-checked contract for the same reason. Every operation in the contract has a handler
+  behind it — nothing answers 501.
 - **Real authentication (Phase 1.1a identity core):** argon2id passwords; opaque
   access/refresh tokens in HttpOnly+Secure+SameSite=Strict cookies with rotation and
   reuse detection (a replayed refresh token revokes its whole session family); CSRF
@@ -92,10 +96,10 @@ would plan around a feature nobody can use.
     inline as SVG — no external image service).
 - **The auth screens carry their delivered design** ("Quiet Nest", delivered 2026-08-21):
   sign-in, credential-error, rate-limited and forced-password-change states, in light and dark
-  themes and in a true RTL Persian mirror. Built from eleven design components (`AuthShell`,
+  themes and in a true RTL Persian mirror. Built from twelve design components — `AuthShell`,
   `InstanceIdentity`, `OrganizationLogoSlot`, `ProductWordmark`, `LanguageSwitcher`, `AuthForm`,
-  `TextField`, `PasswordField`, `PrimaryButton`, `NoticeBanner`, `PasswordRequirements`,
-  `PasswordStrengthMeter`) over
+  `TextField`, `PasswordField`, `PrimaryButton`, `NoticeBanner`, `PasswordRequirements` and
+  `PasswordStrengthMeter`, all but the switcher under `webapp/src/components/auth/` — over
   the token sheet in `webapp/src/tokens.css`. Fonts (Inter, Vazirmatn) are self-hosted via
   `@fontsource` — no CDN, as the strict CSP requires. Mockup and handoff are mirrored into
   `docs/design/`.
@@ -136,8 +140,14 @@ would plan around a feature nobody can use.
   not the browser: `PATCH /api/v1/users/me` stores it, and localStorage answers only for the
   screens before sign-in.
 - `deploy/install.sh` v0 (OS detect, Docker install, secret generation) and
-  `deploy/verify-defaults.sh` (22 secure-default checks, all passing — including that the
-  served page is the real bundle and not a placeholder).
+  `deploy/verify-defaults.sh`, which prints 41 passes against a stack whose `HAMLANEH_DOMAIN`
+  is a DNS name — three fewer on a bare IP or an IPv6 literal, where there is no separate
+  `files.` origin to check and the script says it skipped rather than passing silently. The
+  count is a consequence of the eight check functions rather than a target: several of them
+  loop (four containers for a non-root UID, five LiveKit admin paths that must not answer
+  through the proxy, three signup paths that must not exist), so adding a service or an
+  endpoint moves the number without anybody editing it. Among what it asserts is that the
+  served page is the real bundle and not a placeholder.
 - **End-to-end tests (Playwright) against the real stack.** `npm run e2e` builds and starts the
   compose stack under its own project name — real Caddy, the real Go binary with the embedded
   bundle, a real PostgreSQL — and drives a browser over HTTPS. Nothing is mocked, and a developer's
@@ -243,8 +253,14 @@ would plan around a feature nobody can use.
   not find `deploy`. Rate limited per account, because a short needle cannot use the index and
   scans instead.
 - The **authorization matrix** now asks the question this phase turns on: *member of which
-  channel?* 263 cells over ten principals, private and DM channels alike, plus a WebSocket
-  registry whose completeness is checked against the protocol document. Designed in
+  channel?* Thirteen principals (`authztest.Principals`) — the six instance columns that decide
+  a route gate, plus the channel relations ADR 002 requires and the author and conference-owner
+  refinements on top of them. The cell count is deliberately not written down here: the
+  completeness gate parses `openapi.yaml` and fails on any operation with no entry, and it
+  demands every `{channelId}` operation in both a private channel and a DM, so the total is a
+  function of the contract's size and moves with every slice. What is worth knowing is that it
+  cannot be short by accident. A WebSocket registry checked against the protocol document and a
+  SCIM registry checked against `docs/api/scim.md` run the same way. Designed in
   [ADR 002](adr/002-channel-scoped-authz-matrix.md).
 
 Messages can be edited and deleted. Editing is the author's alone, admins included, because
