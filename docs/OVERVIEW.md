@@ -13,6 +13,13 @@ Hamlaneh (هم‌لانه, "shared nest") is a self-hosted team communication pl
 DMs, file sharing, 1:1 and group voice/video calls, screen sharing, and conferences. A company
 installs it on its own server with one command and owns its communication completely.
 
+One item on that list is a promise rather than a description today: **file sharing is built and
+unreachable on every install**, because the encryption mode a fresh instance comes up in refuses
+the only conversations there are to upload into. The mechanism is written out under *Files*
+below, where the code that causes it lives. It is named here rather than only there because this
+file is what external tools are handed, and a reader who takes the sentence above at face value
+would plan around a feature nobody can use.
+
 **The four promises:**
 1. **Installation is the product** — fresh VPS to working instance in under 5 minutes, one command.
 2. **Secure by default** — the defaults carry the security load; nothing to harden manually.
@@ -174,7 +181,22 @@ installs it on its own server with one command and owns its communication comple
   alive, and each confirm says which it is. The audit log is hash-chained with a key kept
   outside the database: that does not make it tamper-proof — anybody who can write to the
   database can rewrite rows — it makes a rewrite show.
-- **Files (Phase 1.3 server half).** Upload is channel-scoped from birth, so a file is readable
+- **Files (Phase 1.3) — built, and reachable on no install that exists.** Two decisions that are
+  each right on their own close the door between them. Strict is the schema default
+  (`0018_org_encryption_mode.up.sql`: `NOT NULL DEFAULT 'strict'`) and the only mode an
+  administrator can select — `admin_handlers.go` refuses `compliance` outright, because the
+  server-side half it promises is not built — so every channel and every DM is born encrypted.
+  And an encrypted conversation refuses attachments: `httpserver/e2ee.go` answers `400
+  e2ee_attachments_unsupported`, since storing an unencrypted file in an encrypted conversation
+  would be a lie about what the conversation is. Neither decision is wrong; together they mean
+  there is no conversation anywhere into which any file can be uploaded. What records this rather
+  than letting it rot is `webapp/e2e/specs/chat-files.e2e.ts`, which keeps all four of its
+  assertions and carries `test.fail()`: the marker goes red the moment uploading starts working,
+  so it cannot outlive the gap. Encrypted attachments are what close it — Phase 3 work that was
+  missed, not Phase 4 polish. Everything in the rest of this bullet exists and is tested; it is
+  the way in that is missing.
+
+  Upload is channel-scoped from birth, so a file is readable
   exactly by its channel's members — the same one rule, the same 404 for everyone else. Bytes
   are sniffed and labels are decoration: only proven images are ever served inline; everything
   else, SVG and HTML included, is a download with nosniff and a sandboxing CSP, so uploaded
