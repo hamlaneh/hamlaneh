@@ -174,11 +174,7 @@ func (s *apiServer) SendMessage(w http.ResponseWriter, r *http.Request, channelI
 	if !ok {
 		return
 	}
-	mls, ok := s.e2eeBody(w, r, sc.channel.E2EE, messageBody{
-		content:        req.Content,
-		mls:            req.Mls,
-		hasAttachments: len(attachmentIDs) > 0,
-	})
+	mls, ok := s.e2eeBody(w, r, sc.channel.E2EE, messageBody{content: req.Content, mls: req.Mls})
 	if !ok {
 		return
 	}

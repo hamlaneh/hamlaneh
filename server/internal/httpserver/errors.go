@@ -116,15 +116,17 @@ const (
 	codeConferenceNotFound errorCode = "conference_not_found"
 	// Phase 3 slice 1: the E2EE transport (ADR 006).
 	//
-	// The first three are the anti-downgrade boundary, and they are three
-	// codes rather than one because they ask for three different things from
-	// a client: encrypt this, stop encrypting this, and this cannot be
-	// encrypted yet. Collapsing them would leave a client unable to tell a
-	// mode mismatch from a feature that does not exist, which is precisely
-	// the confusion a downgrade attempt would hide in.
-	codeE2EERequired               errorCode = "e2ee_required"
-	codeE2EENotEnabled             errorCode = "e2ee_not_enabled"
-	codeE2EEAttachmentsUnsupported errorCode = "e2ee_attachments_unsupported"
+	// The first two are the anti-downgrade boundary, and they are two codes
+	// rather than one because they ask for opposite things from a client:
+	// encrypt this, and stop encrypting this. Collapsing them would leave a
+	// client unable to tell which side of the boundary it fell off, which is
+	// precisely the confusion a downgrade attempt would hide in.
+	//
+	// A third once said encrypted attachments do not exist yet
+	// (e2ee_attachments_unsupported). ADR 013 built them and retired it; the
+	// code below replaced it, and it says something narrower and permanent.
+	codeE2EERequired   errorCode = "e2ee_required"
+	codeE2EENotEnabled errorCode = "e2ee_not_enabled"
 	// The group lifecycle: no group yet (create one), a group already there
 	// (you lost the create race), and an epoch that has moved on (refetch the
 	// log and rebuild).
@@ -173,6 +175,16 @@ const (
 	// what teaches the client the real mode.
 	codeE2EERequiredByOrg  errorCode = "e2ee_required_by_org"
 	codeE2EEForbiddenByOrg errorCode = "e2ee_forbidden_by_org"
+
+	// Phase 3: encrypted attachments (ADR 013). An upload to an encrypted
+	// channel that declared a real filename or a real content type — the
+	// metadata the ciphertext beside it exists to hide.
+	//
+	// A refusal rather than a scrub, for e2eeAtBirth's reason: a client that
+	// sent salary-review.pdf is leaking by bug, and quietly storing
+	// "encrypted" instead would hide the bug while the leak — already in
+	// transit — recurred on every upload after it.
+	codeE2EEMetadataInClear errorCode = "e2ee_metadata_in_clear"
 	// codeEncryptionModeLocked answers an attempt to select compliance. The
 	// mode is defined from the first day and selectable only once the
 	// server-side half it promises — encryption at rest, retention, export —
