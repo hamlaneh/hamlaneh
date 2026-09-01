@@ -1,0 +1,939 @@
+/* The call surfaces: tiles, the control bar, the channel banner and the DM
+ * ring. Artboards on docs/design/mockups/Hamlaneh Chat Calls.dc.html; the
+ * reasoning is in docs/design/CALLS_HANDOFF.md.
+ *
+ * Logical properties only. The Persian mirror is a real artboard in this set
+ * (call-rtl-fa) and it settles control-bar order and share-rail side, so a
+ * physical `left` here would contradict a decision that has already been made.
+ * There is not one [dir="rtl"] rule in this file, and there must never be one:
+ * the mirror comes from logical properties and grid line numbers alone.
+ *
+ * THE STAGE IS DARK IN BOTH THEMES. `call-states` draws every tile, control
+ * and call-level state twice, and the light column carries the same ink as the
+ * dark one — only the stage's own ground darkens, and brand, danger and
+ * on-brand follow the page's tokens. So the stage ink is pinned below as local
+ * custom properties (all of them values the delivered dark token block already
+ * carries) and everything that must track the theme keeps referencing
+ * tokens.css. No token, font or typography step is added anywhere in this file.
+ *
+ * Artboard values that fall between the delivered scales are written as
+ * literals and marked "off-scale", the convention chat.css set.
+ */
+
+.hm-call {
+  /* Pinned stage palette — the dark token block's values, used at both
+     themes. Only --hm-call-ground and --hm-call-edge differ between themes. */
+  --hm-call-ground: #1c2724; /* light column (artboard) */
+  --hm-call-edge: #2a3733;
+  --hm-call-ink: #f2f5f4; /* --color-text-primary (dark) */
+  --hm-call-ink-soft: #8e9c97;
+  --hm-call-ink-disabled: #9ba8a3;
+  --hm-call-plate: linear-gradient(to top, rgb(28 39 36 / 0.86), rgb(28 39 36 / 0));
+  --hm-call-chip: rgb(28 39 36 / 0.72);
+  --hm-call-chip-danger: #ffb4ab; /* --color-danger (dark) */
+  --hm-call-chip-warning: #ebcb7a; /* --color-warning (dark) */
+  --hm-call-level: #9adacf; /* --color-focus (dark) */
+  --hm-call-ghost: rgb(242 245 244 / 0.08);
+  --hm-call-ghost-hover: rgb(242 245 244 / 0.15);
+  --hm-call-ghost-pressed: rgb(242 245 244 / 0.26);
+  --hm-call-ghost-edge: rgb(242 245 244 / 0.16);
+  --hm-call-tile-radius: var(--radius-lg);
+  /* The leak warning's own band — the one surface in this set that is neither
+     stage ink nor a page token, and the same values at both themes. */
+  --hm-call-share-ground: #2e1e14; /* artboard */
+  --hm-call-share-edge: #6b4526;
+  --hm-call-share-accent: #e3a17e;
+  --hm-call-share-ink: #f2d9c8;
+  --hm-call-share-ink-soft: #c79e80;
+
+  /* Layout-neutral on its own: the guest page gives this surface the whole
+     page, and the channel pane gives it the upper region (below). */
+  flex: 1 1 0;
+  min-inline-size: 0;
+  /* A floor, not a drawn value: the guest page mounts this surface in a plain
+     <main> with no height of its own, and a grid of `minmax(0, 1fr)` rows in a
+     zero-height column draws nothing at all. */
+  min-block-size: 420px;
+  display: flex;
+  flex-direction: column;
+  background: var(--hm-call-ground);
+  color: var(--hm-call-ink);
+}
+
+/* THE CALL IS A SIBLING OF THE MESSAGE COLUMN, NEVER AN OVERLAY. It takes the
+   upper region of the channel pane and the conversation continues beneath it,
+   so people talk and type at once and nothing is hidden behind a call.
+   496px is the artboard's own. The ceiling and the dropped floor are guards
+   rather than drawn values: without them a short window pushes the composer
+   off the bottom of a pane it cannot scroll. */
+.hm-chat__main > .hm-call {
+  flex: 0 0 auto;
+  block-size: 496px; /* off-scale (artboard) */
+  min-block-size: 0;
+  max-block-size: 60%;
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+:root[data-theme="dark"] .hm-call {
+  --hm-call-ground: #0b0e0d; /* dark column (artboard) */
+  --hm-call-edge: #232d2a;
+}
+
+/* ── the stage header ──────────────────────────────────────────────── */
+
+.hm-call__header {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding: 11px 20px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: 10px; /* off-scale (artboard) */
+  border-block-end: 1px solid var(--hm-call-edge);
+}
+
+/* Live, and not a control: the dot says the room is up. */
+.hm-call__live {
+  inline-size: var(--spacing-2);
+  block-size: var(--spacing-2);
+  flex: 0 0 var(--spacing-2);
+  border-radius: 50%;
+  background: #75d0a4; /* --color-success (dark) */
+}
+
+.hm-call__heading {
+  margin: 0;
+  font: 600 13px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--hm-call-ink);
+}
+
+.hm-call__heading:lang(fa) {
+  line-height: 1.7;
+}
+
+/* ── the leak warning ──────────────────────────────────────────────── */
+
+/* Persistent while sharing, never a toast: this is the state people forget,
+   and a message that has already disappeared cannot remind anybody. It sits
+   between the header and the stage, so it is the first thing in the call the
+   eye reaches and it never moves the tiles it warns about. */
+.hm-call-share {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding: 11px 20px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: 11px; /* off-scale (artboard) */
+  background: var(--hm-call-share-ground);
+  border-block-end: 1px solid var(--hm-call-share-edge);
+}
+
+.hm-call-share__glyph {
+  flex: 0 0 17px; /* off-scale (artboard) */
+  color: var(--hm-call-share-accent);
+}
+
+.hm-call-share__warning {
+  margin: 0;
+  flex: 0 0 auto;
+  font: 600 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--hm-call-share-ink);
+}
+
+.hm-call-share__detail {
+  margin: 0;
+  flex: 1;
+  min-inline-size: 0;
+  font: 400 12.5px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+  color: var(--hm-call-share-ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-call-share__warning:lang(fa),
+.hm-call-share__detail:lang(fa) {
+  line-height: 1.7;
+}
+
+/* The warning's own way out, at the full target height: whoever needs this
+   sentence is not looking at the control bar. */
+.hm-call-share__stop {
+  flex: 0 0 auto;
+  block-size: var(--size-target);
+  padding-inline: 15px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  box-sizing: border-box;
+  background: var(--hm-call-share-accent);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--hm-call-share-ground);
+  font: 600 13px / 1 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hm-call-share__stop:lang(fa) {
+  line-height: 1.7;
+}
+
+/* ── the stage ─────────────────────────────────────────────────────── */
+
+.hm-call__stage {
+  flex: 1;
+  min-block-size: 0;
+  box-sizing: border-box;
+  padding: var(--spacing-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  overflow: hidden;
+}
+
+/* Connecting, and the call that ended without this person's help. Both are
+   centred on the stage with the sentence and nothing else: no tiles yet, and
+   the control bar is already there and disabled rather than arriving late. */
+.hm-call__status {
+  flex: 1;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-3);
+  text-align: center;
+  font: 600 13.5px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13.5px off-scale (artboard) */
+  color: var(--hm-call-ink);
+}
+
+.hm-call__status:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-call__status--alert {
+  color: var(--hm-call-chip-danger);
+}
+
+/* ── the grid ──────────────────────────────────────────────────────── */
+
+/* The ladder the artboard draws: 2 -> two cells in one row; 3 -> two columns
+   with the third at single-column width flush to the logical inline-start;
+   5 -> three columns, two rows, last cell empty; 12 -> four columns, three
+   rows. The grid keeps whole rows rather than resizing tiles to fill, so a
+   person joining never resizes everybody. Column 1 is the inline-start column,
+   so the whole ladder mirrors without a rule of its own. */
+.hm-call__grid {
+  flex: 1;
+  min-block-size: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: minmax(0, 1fr);
+  gap: var(--spacing-3);
+}
+
+.hm-call__grid:has(> :nth-child(2)) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hm-call__grid:has(> :nth-child(5)) {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.hm-call__grid:has(> :nth-child(10)) {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* call-screenshare: the share goes large at the logical inline-start and the
+   faces become a 212 rail at the logical inline-end, because the subject
+   leads. Grid line 1 is the inline-start column, so this mirrors as drawn. */
+.hm-call__grid:has(> [data-sharing="true"]) {
+  grid-template-columns: minmax(0, 1fr) 212px; /* off-scale (artboard) */
+  grid-template-rows: repeat(4, minmax(0, 1fr));
+}
+
+.hm-call__grid:has(> [data-sharing="true"]) > [data-sharing="true"] {
+  grid-column: 1;
+  grid-row: 1 / -1;
+}
+
+/* ── the tile ──────────────────────────────────────────────────────── */
+
+.hm-call-tile {
+  position: relative;
+  min-block-size: 0;
+  background: var(--hm-call-ground);
+  border: 1px solid var(--hm-call-edge);
+  border-radius: var(--hm-call-tile-radius);
+  overflow: hidden;
+}
+
+/* Speaking is a ring on all four sides plus name weight plus a level meter —
+   direction-neutral, and never colour alone. The 2px ring replaces the 1px
+   boundary rather than adding to it, so the tile does not move. */
+.hm-call-tile[data-speaking="true"] {
+  border: 2px solid var(--color-brand-primary);
+}
+
+.hm-call-tile[data-speaking="true"] .hm-call-tile__name {
+  font-weight: 600;
+}
+
+.hm-call-tile__off {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px; /* off-scale (artboard) */
+}
+
+.hm-call-tile__off-label {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px; /* off-scale (artboard) */
+  font: 400 11px / 1 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+  color: var(--hm-call-ink-soft);
+}
+
+.hm-call-tile__off-label:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-call-tile__video {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+  background: var(--hm-call-ground);
+}
+
+.hm-call-tile__plate {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 0;
+  box-sizing: border-box;
+  padding: var(--spacing-2) 10px; /* 10px off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  background: var(--hm-call-plate);
+}
+
+.hm-call-tile__name {
+  flex: 1;
+  min-inline-size: 0;
+  margin: 0;
+  font: 500 12.5px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+  color: var(--hm-call-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-call-tile__name:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-call-tile__chips {
+  margin: 0;
+  display: flex;
+  gap: 5px; /* off-scale (artboard) */
+}
+
+.hm-call-chip {
+  block-size: 22px; /* off-scale (artboard) */
+  padding-inline: 7px; /* off-scale (artboard) */
+  display: inline-flex;
+  align-items: center;
+  gap: 5px; /* off-scale (artboard) */
+  background: var(--hm-call-chip);
+  border-radius: 6px; /* off-scale (artboard) */
+  color: var(--hm-call-ink);
+  font: 600 10.5px / 1 var(--hm-font-ui, var(--font-ui)); /* 10.5px off-scale (artboard) */
+  white-space: nowrap;
+}
+
+.hm-call-chip:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-call-chip--muted {
+  color: var(--hm-call-chip-danger);
+}
+
+/* The word alone: speaking already carries the ring, the weight and the meter,
+   so the chip stays quiet rather than adding a fourth signal in colour. */
+.hm-call-chip--speaking {
+  color: var(--hm-call-ink-soft);
+}
+
+.hm-call-tile__level {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px; /* off-scale (artboard) */
+  block-size: var(--spacing-3);
+}
+
+.hm-call-tile__level > span {
+  inline-size: 2.5px; /* off-scale (artboard) */
+  block-size: var(--spacing-3);
+  border-radius: 1.5px; /* off-scale (artboard) */
+  background: var(--hm-call-level);
+  transform-origin: bottom;
+  animation: hm-call-level 900ms ease-in-out infinite;
+}
+
+.hm-call-tile__level > span:nth-child(2) {
+  animation-delay: 140ms;
+}
+
+.hm-call-tile__level > span:nth-child(3) {
+  animation-delay: 280ms;
+}
+
+@keyframes hm-call-level {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* ── the count cell ────────────────────────────────────────────────── */
+
+/* Beyond twelve the grid stops growing: eleven tiles carry people and the
+   twelfth is a count. No avatar, no plate, no border of a tile — it must not
+   read as a person, and role="presentation" on the element keeps it out of the
+   participant list as well. */
+.hm-call-tile--count {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px; /* off-scale (artboard) */
+  padding: 10px; /* off-scale (artboard) */
+  border-style: dashed;
+  text-align: center;
+}
+
+.hm-call-tile__count {
+  margin: 0;
+  font: 500 var(--text-caption) / 1 var(--hm-mono, ui-monospace, "SFMono-Regular", Menlo, monospace);
+  color: var(--hm-call-ink);
+}
+
+.hm-call-tile__count-names {
+  margin: 0;
+  font: 400 11px / 1.5 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+  color: var(--hm-call-ink-soft);
+  overflow: hidden;
+}
+
+.hm-call-tile__count-names:lang(fa) {
+  line-height: 1.7;
+}
+
+/* ── the control bar ───────────────────────────────────────────────── */
+
+.hm-call__bar {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding: var(--spacing-3) 20px; /* 20px off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: 10px; /* off-scale (artboard) */
+  border-block-start: 1px solid var(--hm-call-edge);
+}
+
+.hm-call__toggles {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.hm-call__rule {
+  inline-size: 1px;
+  block-size: 28px; /* off-scale (artboard) */
+  flex: 0 0 1px;
+  background: var(--hm-call-edge);
+}
+
+.hm-call__count {
+  /* The gap that protects Leave: everything before this is the toggle cluster,
+     everything after is Leave. An auto inline-end margin is logical, so the
+     distance survives the mirror without a rule of its own. */
+  margin: 0;
+  margin-inline-end: auto;
+  block-size: var(--size-target);
+  padding-inline: 13px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  box-sizing: border-box;
+  background: var(--hm-call-ghost);
+  border: 1px solid var(--hm-call-ghost-edge);
+  border-radius: var(--radius-md);
+  color: var(--hm-call-ink);
+  font: 600 13px / 1 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+}
+
+.hm-call-control {
+  inline-size: 52px; /* off-scale (artboard) */
+  block-size: var(--size-target);
+  flex: 0 0 52px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--hm-call-ghost);
+  border: 1px solid var(--hm-call-ghost-edge);
+  border-radius: var(--radius-md);
+  color: var(--hm-call-ink);
+  cursor: pointer;
+  transition: background-color var(--duration-press) var(--ease-out);
+}
+
+/* One step of the same fill on hover and two on press: pressed is felt, not
+   recoloured. */
+.hm-call-control:hover:not(:disabled) {
+  background: var(--hm-call-ghost-hover);
+}
+
+.hm-call-control:active:not(:disabled) {
+  background: var(--hm-call-ghost-pressed);
+}
+
+/* The package's 3px ring, tuned for the dark stage. */
+.hm-call-control:focus-visible,
+.hm-call-leave:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgb(154 218 207 / 0.5);
+}
+
+/* Dashed boundary plus a dropped glyph — never opacity alone. */
+.hm-call-control:disabled {
+  background: rgb(242 245 244 / 0.06);
+  border: 1px dashed var(--hm-call-ink-disabled);
+  color: var(--hm-call-ink-disabled);
+  cursor: not-allowed;
+}
+
+/* Off is the danger fill and the slashed glyph, because muted is a state worth
+   seeing across the room. Camera off is the common case, so it is the same
+   pair and not treated as a fault. */
+.hm-call-control[aria-pressed="false"]:not(:disabled) {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  color: var(--color-on-brand);
+}
+
+/* Share is the one toggle whose "on" is brand-filled: it is the state people
+   forget they are in. Its "off" is the ordinary ghost, not danger. */
+.hm-call-control--share[aria-pressed="false"]:not(:disabled) {
+  background: var(--hm-call-ghost);
+  border-color: var(--hm-call-ghost-edge);
+  color: var(--hm-call-ink);
+}
+
+.hm-call-control--share[aria-pressed="true"]:not(:disabled) {
+  background: var(--color-brand-primary);
+  border-color: var(--color-brand-primary);
+  color: var(--color-on-brand);
+}
+
+/* Leave: solid danger fill, the phone-off glyph and the full words, at the
+   logical inline-end behind a 22px gap and its own vertical rule. */
+.hm-call-leave {
+  block-size: var(--size-target);
+  margin-inline-start: 22px; /* off-scale (artboard) */
+  padding-inline: 18px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: 9px; /* off-scale (artboard) */
+  background: var(--color-danger);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  color: var(--color-on-brand);
+  font: 600 13.5px / 1 var(--hm-font-ui, var(--font-ui)); /* 13.5px off-scale (artboard) */
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hm-call-leave:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-call__actions {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding: var(--spacing-3) 20px; /* 20px off-scale (artboard) */
+  display: flex;
+  justify-content: center;
+  gap: var(--spacing-2);
+  border-block-start: 1px solid var(--hm-call-edge);
+}
+
+/* The quiet control on the dark stage — Dismiss on a call that ended. */
+.hm-call-button {
+  block-size: var(--size-target);
+  padding-inline: var(--spacing-4);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  box-sizing: border-box;
+  background: transparent;
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font: 600 12.5px / 1 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+  cursor: pointer;
+}
+
+.hm-call-button:lang(fa) {
+  line-height: 1.7;
+}
+
+/* Inside the dark stage the same control takes the stage's own ink. */
+.hm-call .hm-call-button {
+  border-color: rgb(242 245 244 / 0.2);
+  color: var(--hm-call-ink);
+}
+
+/* ── the banner ────────────────────────────────────────────────────── */
+
+/* One strip, two states, one permanent 60px slot: going live changes the
+   content and never the layout, so nothing shoves the message list. */
+.hm-call-strip {
+  block-size: 60px;
+  flex: 0 0 60px;
+  box-sizing: border-box;
+  padding-inline: 20px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  background: var(--color-surface);
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+.hm-call-strip[data-live="true"] {
+  background: var(--color-brand-soft);
+  border-block-end-color: var(--color-brand-primary);
+}
+
+/* The collapsed call carries one sentence and the way back, so the action goes
+   to the far end on its own rather than behind the names line the live state
+   uses to push it there. */
+.hm-call-strip[data-away="true"] .hm-call-strip__action {
+  margin-inline-start: auto;
+}
+
+/* Entry is opacity and a 2px rise on the contents alone — never on position,
+   and never on the strip itself. Under prefers-reduced-motion the global rule
+   in tokens.css makes it a single-frame swap. */
+.hm-call-strip__dot,
+.hm-call-strip__glyph,
+.hm-call-strip__avatars,
+.hm-call-strip__count,
+.hm-call-strip__hint,
+.hm-call-strip__names {
+  animation: hm-call-strip-enter var(--duration-state) var(--ease-out) both;
+}
+
+@keyframes hm-call-strip-enter {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+
+.hm-call-strip__dot {
+  inline-size: var(--spacing-2);
+  block-size: var(--spacing-2);
+  flex: 0 0 var(--spacing-2);
+  border-radius: 50%;
+  background: var(--color-success);
+  /* It pulses because the call is live; the settings table's dot deliberately
+     does not, because nothing feeds that screen. */
+  animation:
+    hm-call-strip-enter var(--duration-state) var(--ease-out) both,
+    hm-pulse 1.8s ease-in-out infinite;
+}
+
+.hm-call-strip__glyph {
+  flex: 0 0 17px; /* off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-call-strip__avatars {
+  display: flex;
+  overflow: hidden;
+}
+
+.hm-call-strip__avatars > * {
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--color-surface);
+}
+
+.hm-call-strip__avatars > * + * {
+  margin-inline-start: -8px; /* off-scale (artboard) */
+}
+
+.hm-call-strip__count {
+  margin: 0;
+  flex: 0 0 auto;
+  font: 600 13.5px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13.5px off-scale (artboard) */
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+
+.hm-call-strip__count:lang(fa) {
+  line-height: 1.7;
+}
+
+/* The names line: one row that truncates, not a stack that would grow the
+   permanent slot. */
+.hm-call-strip__hint,
+.hm-call-strip__names {
+  flex: 1;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  gap: var(--spacing-2);
+  font: 400 12.5px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.hm-call-strip__hint:lang(fa),
+.hm-call-strip__names:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-call-strip__names > li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hm-call-strip__action {
+  block-size: var(--size-target);
+  flex: 0 0 auto;
+  padding-inline: var(--spacing-4);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  box-sizing: border-box;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font: 600 13px / 1 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hm-call-strip__action:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-call-strip[data-live="true"] .hm-call-strip__action {
+  background: var(--color-brand-primary);
+  border-color: var(--color-brand-primary);
+  color: var(--color-on-brand);
+}
+
+.hm-call-strip__action:disabled {
+  border-style: dashed;
+  cursor: not-allowed;
+}
+
+/* ── the ring ──────────────────────────────────────────────────────── */
+
+/* It sits at the logical inline-start above the composer — clear of the
+   composer's own controls, and nowhere near where a reply is being typed. The
+   shell mounts it outside the chat container so it stays answerable, so the
+   inset is measured from the viewport and has to clear the sidebar itself;
+   280px is the sidebar's own width, from chat.css. */
+.hm-call-ring {
+  --hm-call-ring-inset: 304px;
+
+  position: fixed;
+  inset-inline-start: var(--hm-call-ring-inset);
+  inset-block-end: 96px; /* off-scale (artboard) */
+  z-index: 3;
+  inline-size: 376px; /* off-scale (artboard) */
+  max-inline-size: calc(100vw - 2 * var(--spacing-6));
+  box-sizing: border-box;
+  padding: var(--spacing-4);
+  display: flex;
+  flex-direction: column;
+  gap: 14px; /* off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 14px; /* off-scale (artboard) */
+  box-shadow: var(--shadow-overlay);
+}
+
+.hm-call-ring__caller {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.hm-call-ring__from {
+  flex: 1;
+  min-inline-size: 0;
+  margin: 0;
+  font: 600 15px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 15px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-call-ring__from:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-call-ring__actions {
+  display: flex;
+  gap: 9px; /* off-scale (artboard) */
+}
+
+.hm-call-ring__answer {
+  flex: 1;
+  block-size: var(--size-target);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-2);
+  box-sizing: border-box;
+  background: var(--color-brand-primary);
+  border: 1px solid var(--color-brand-primary);
+  border-radius: var(--radius-md);
+  color: var(--color-on-brand);
+  font: 600 13.5px / 1 var(--hm-font-ui, var(--font-ui)); /* 13.5px off-scale (artboard) */
+  cursor: pointer;
+}
+
+.hm-call-ring__answer:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-call-ring__answer:hover {
+  background: var(--color-brand-hover);
+  border-color: var(--color-brand-hover);
+}
+
+.hm-call-ring__note {
+  margin: 0;
+  font: 400 11.5px / 1.55 var(--hm-font-ui, var(--font-ui)); /* 11.5px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-call-ring__note:lang(fa) {
+  line-height: 1.75;
+}
+
+/* ── phone width ───────────────────────────────────────────────────── */
+
+/* A separate layout, not a shrink. The stage becomes a single scrolling column
+   of 16:9 tiles with the active speaker pinned to the top, and the control bar
+   is a fixed 56px bottom row carrying the same five controls at full size. */
+@media (max-width: 899px) {
+  .hm-call {
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+  }
+
+  /* The upper region is a desk layout: at phone width the call is the screen,
+     so the drawn height and its guards come back off. */
+  .hm-chat__main > .hm-call {
+    block-size: auto;
+    max-block-size: none;
+    border-block-end: 0;
+  }
+
+  /* Two sentences do not fit a 375 row beside a 44px control, and the first
+     one is the warning. */
+  .hm-call-share__detail {
+    display: none;
+  }
+
+  .hm-call__stage {
+    padding: var(--spacing-3);
+    overflow-y: auto;
+  }
+
+  .hm-call__grid,
+  .hm-call__grid:has(> :nth-child(2)),
+  .hm-call__grid:has(> :nth-child(5)),
+  .hm-call__grid:has(> :nth-child(10)),
+  .hm-call__grid:has(> [data-sharing="true"]) {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+  }
+
+  .hm-call-tile {
+    flex: 0 0 auto;
+    aspect-ratio: 16 / 9;
+  }
+
+  /* Visual order only: the DOM order, and so the tab order, is untouched. */
+  .hm-call-tile[data-speaking="true"] {
+    order: -1;
+  }
+
+  .hm-call__bar {
+    block-size: calc(56px + env(safe-area-inset-bottom));
+    flex: 0 0 auto;
+    padding-inline: var(--spacing-3);
+    padding-block-end: env(safe-area-inset-bottom);
+    gap: 6px; /* off-scale (artboard) */
+  }
+
+  /* The count is what yields when five full-size controls and Leave will not
+     fit; the protecting gap before Leave is what must not. */
+  .hm-call__count,
+  .hm-call__rule:not(.hm-call__rule--leave) {
+    display: none;
+  }
+
+  .hm-call__rule--leave {
+    margin-inline-start: auto;
+  }
+
+  .hm-call-leave {
+    padding-inline: var(--spacing-3);
+  }
+
+  .hm-call-strip {
+    padding-inline: var(--spacing-3);
+  }
+
+  /* At phone width the avatar row drops and the names truncate to the count;
+     the action keeps its 44px height and its full label. */
+  .hm-call-strip__avatars,
+  .hm-call-strip__names,
+  .hm-call-strip__hint {
+    display: none;
+  }
+
+  .hm-call-ring {
+    --hm-call-ring-inset: var(--spacing-4);
+
+    inset-inline-end: var(--spacing-4);
+    inline-size: auto;
+  }
+}

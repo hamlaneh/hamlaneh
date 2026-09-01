@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
@@ -26,7 +25,7 @@ func newUser(name string) storage.NewUser {
 	}
 }
 
-func mustCreateUser(ctx context.Context, t *testing.T, store *storage.Store, nu storage.NewUser) storage.User {
+func mustCreateUser(ctx context.Context, t *testing.T, store testdb.Store, nu storage.NewUser) storage.User {
 	t.Helper()
 	u, err := store.CreateUser(ctx, nu)
 	if err != nil {
@@ -154,6 +153,57 @@ func TestUsersIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("UpdateUserProfile changes only the fields the patch names", func(t *testing.T) {
+		created := mustCreateUser(ctx, t, store, newUser("ivan"))
+		if created.Locale != "en" {
+			t.Fatalf("fixture locale = %q, want en", created.Locale)
+		}
+
+		// A language change: the display name must survive it untouched.
+		locale := "fa"
+		updated, err := store.UpdateUserProfile(ctx, created.ID,
+			storage.UserProfileUpdate{Locale: &locale})
+		if err != nil {
+			t.Fatalf("UpdateUserProfile(locale): %v", err)
+		}
+		if updated.Locale != "fa" {
+			t.Errorf("locale = %q, want fa", updated.Locale)
+		}
+		if updated.DisplayName != created.DisplayName {
+			t.Errorf("display_name = %q, want the untouched %q", updated.DisplayName, created.DisplayName)
+		}
+
+		// And the mirror image: a rename must not send the reader back to
+		// English.
+		name := "ایوان"
+		updated, err = store.UpdateUserProfile(ctx, created.ID,
+			storage.UserProfileUpdate{DisplayName: &name})
+		if err != nil {
+			t.Fatalf("UpdateUserProfile(display_name): %v", err)
+		}
+		if updated.DisplayName != name {
+			t.Errorf("display_name = %q, want %q", updated.DisplayName, name)
+		}
+		if updated.Locale != "fa" {
+			t.Errorf("locale = %q, want the untouched fa", updated.Locale)
+		}
+
+		// Nothing else moved: this patch owns two columns and no more.
+		if updated.Username != created.Username || updated.IsAdmin != created.IsAdmin ||
+			updated.MustChangePassword != created.MustChangePassword ||
+			updated.PasswordHash != created.PasswordHash {
+			t.Errorf("patch reached beyond its two columns: %+v", updated)
+		}
+	})
+
+	t.Run("UpdateUserProfile of an unknown user is ErrNotFound", func(t *testing.T) {
+		locale := "fa"
+		_, err := store.UpdateUserProfile(ctx, uuid.New(), storage.UserProfileUpdate{Locale: &locale})
+		if !errors.Is(err, storage.ErrNotFound) {
+			t.Errorf("got %v, want ErrNotFound", err)
+		}
+	})
+
 	t.Run("CountUsers counts", func(t *testing.T) {
 		before, err := store.CountUsers(ctx)
 		if err != nil {
@@ -235,33 +285,16 @@ func TestListUsersKeysetIntegration(t *testing.T) {
 func TestListUsersEqualCreatedAtIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
-
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect for raw inserts: %v", err)
-	}
-	defer func() {
-		if closeErr := conn.Close(context.Background()); closeErr != nil {
-			t.Errorf("close raw connection: %v", closeErr)
-		}
-	}()
-	// The raw connection needs the citext type registered to bind the
-	// username parameter, exactly like the pool's connections.
-	if err := storage.RegisterCitext(ctx, conn); err != nil {
-		t.Fatalf("register citext on raw connection: %v", err)
-	}
 
 	shared := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	insert := func(name string, createdAt time.Time) {
 		t.Helper()
-		if _, execErr := conn.Exec(ctx,
-			`INSERT INTO users (username, password_hash, created_at, updated_at) VALUES ($1, $2, $3, $3)`,
-			name, "fake-hash-"+name, createdAt,
-		); execErr != nil {
-			t.Fatalf("insert %s: %v", name, execErr)
-		}
+		raw.Exec(ctx, t,
+			`INSERT INTO users (id, username, password_hash, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?)`,
+			uuid.New(), name, "fake-hash-"+name, createdAt, createdAt)
 	}
 
 	const tied = 5

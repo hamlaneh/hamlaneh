@@ -51,7 +51,18 @@
       "rateLimitedSeconds_other": "Too many attempts. Try again in {{count, number}} seconds.",
       "networkError": "We could not reach the server. Try again.",
       "unexpected": "Something went wrong. Try again."
+    },
+    "sso": {
+      "continueWith": "Continue with {{provider}}",
+      "error": {
+        "sso_account_exists": "An account with that email address already exists here and signs in with a password. Sign in with it, then connect single sign-on from Settings, under Security.",
+        "sso_account_unknown": "Your provider signed you in, but no account here is linked to that identity. An administrator has to set one up — there is nothing to correct at your end.",
+        "sso_failed": "Single sign-on did not complete. Try again, or sign in with your password."
+      }
     }
+  },
+  "sso": {
+    "provider": "single sign-on"
   },
   "totp": {
     "title": "Two-step verification",
@@ -89,6 +100,10 @@
     "error": {
       "invalidEmail": "Enter a valid email address.",
       "rateLimited": "Too many requests. Try again in a few minutes.",
+      "rateLimitedMinutes_one": "Too many requests. Try again in {{count, number}} minute.",
+      "rateLimitedMinutes_other": "Too many requests. Try again in {{count, number}} minutes.",
+      "rateLimitedSeconds_one": "Too many requests. Try again in {{count, number}} second.",
+      "rateLimitedSeconds_other": "Too many requests. Try again in {{count, number}} seconds.",
       "networkError": "We could not reach the server. Try again.",
       "unexpected": "Something went wrong. Try again."
     }
@@ -130,10 +145,335 @@
       "unexpected": "The password could not be changed. Try again."
     }
   },
+  "totpRequired": {
+    "title": "Set up two-step verification",
+    "body": "Your organization now asks every account for a second step at sign-in, so the rest of Hamlaneh waits until this is done. You will need an authenticator app on a phone or computer — the first step below says which ones work and what to do with them.",
+    "signOut": "Sign out instead"
+  },
   "account": {
     "title": "Account",
     "signedInAs": "Signed in as {{name}}",
-    "logout": "Log out"
+    "logout": "Log out",
+    "adminDashboard": "Administration"
+  },
+  "admin": {
+    "kicker": "ADMINISTRATION",
+    "backToChat": "Back to chat",
+    "nav": {
+      "label": "Administration",
+      "users": "Users",
+      "invites": "Invites",
+      "org": "Org settings",
+      "audit": "Audit log",
+      "scim": "Provisioning"
+    },
+    "role": {
+      "admin": "Admin",
+      "member": "Member"
+    },
+    "status": {
+      "active": "Active",
+      "inactive": "Deactivated",
+      "saving": "Saving…"
+    },
+    "error": {
+      "loadBody": "The server did not answer. Nothing has been changed.",
+      "retry": "Try again",
+      "actionFailed": "That did not go through. Try again."
+    },
+    "users": {
+      "title": "Users",
+      "subtitle": "Every account on this instance. New ones are born here, or from an invite link.",
+      "create": "Create user",
+      "searchLabel": "Search accounts",
+      "searchPlaceholder": "Username, name or email",
+      "roleFilter": "Filter by role",
+      "roleFilter.all": "Any role",
+      "statusFilter": "Filter by status",
+      "statusFilter.all": "Any status",
+      "tally": "{{shown}} of {{total}} shown",
+      "you": "You",
+      "actionsFor": "Actions for {{name}}",
+      "loadFailed": "We could not load the accounts.",
+      "column": {
+        "user": "User",
+        "displayName": "Display name",
+        "email": "Email",
+        "role": "Role",
+        "status": "Status",
+        "created": "Created",
+        "actions": "Actions"
+      },
+      "action": {
+        "changeRole": "Change role",
+        "forceReset": "Force a password reset",
+        "deactivate": "Deactivate",
+        "reactivate": "Reactivate"
+      },
+      "empty": {
+        "title": "Yours is the only account",
+        "body": "Create the accounts your team needs, or send an invite link and let people choose their own username and password.",
+        "createFirst": "Create the first account",
+        "createInvite": "Create an invite link"
+      },
+      "filteredEmpty": {
+        "title": "No account matches",
+        "body": "Nothing here matches the search and filters you have set. This instance has {{total}} accounts.",
+        "clear": "Clear search and filters"
+      },
+      "promote": {
+        "title": "Make {{name}} an administrator?",
+        "body": "Administrators create and deactivate accounts, change every setting on this instance, and read the audit log.",
+        "confirm": "Make administrator"
+      },
+      "demote": {
+        "title": "Remove {{name}}'s administrator role?",
+        "body": "They keep their account, their messages and their channels, and lose this dashboard.",
+        "confirm": "Make member"
+      },
+      "reset": {
+        "title": "Force a password reset?",
+        "body": "{{name}} gets a temporary password and is asked to replace it at the next sign-in. The sessions they already have open are not ended — they stay signed in on those devices. Use Deactivate if the intent is to shut the account.",
+        "confirm": "Issue a temporary password"
+      },
+      "deactivate": {
+        "title": "Deactivate {{name}}?",
+        "body": "{{name}} cannot sign in again until an administrator reactivates the account, and every session they have open ends now — on every device, including the desktop app. Nothing they have written is removed."
+      },
+      "reactivate": {
+        "title": "Reactivate {{name}}?",
+        "body": "They can sign in again with the password they had. The sessions that ended when the account was deactivated do not come back — they sign in fresh."
+      },
+      "blocked": {
+        "lastAdmin": {
+          "title": "The last administrator cannot be removed",
+          "body": "This instance would be left with nobody who can administer it, so the change is refused. Give another active account the administrator role first, then come back to this one."
+        },
+        "selfDeactivate": {
+          "title": "You cannot deactivate your own account",
+          "body": "Deactivating an account ends every session it holds, so this one would sign you out of the dashboard mid-action. Ask another administrator to do it."
+        }
+      }
+    },
+    "createUser": {
+      "title": "Create user",
+      "subtitle": "The account works straight away. The temporary password below is replaced the first time they sign in.",
+      "usernameLabel": "Username",
+      "usernameHint": "Lowercase letters, digits, dots, dashes and underscores. This is how people find them.",
+      "displayNameLabel": "Display name",
+      "emailLabel": "Email address",
+      "emailHint": "Optional. Without one, this account cannot reset its own password by email.",
+      "passwordLabel": "Temporary password",
+      "passwordHint": "At least {{min}} characters, generated in your browser. You see it once, on the next step.",
+      "generate": "Generate again",
+      "roleLabel": "Role",
+      "languageLabel": "Language",
+      "submit": "Create account",
+      "submitBusy": "Creating…",
+      "error": {
+        "username": "Use 3 to 32 characters: lowercase letters, digits, dots, dashes and underscores, starting with a letter or a digit.",
+        "taken": "That username is already taken on this instance.",
+        "invalid": "The server refused these details. Check what you entered and try again.",
+        "unexpected": "The account could not be created. Try again."
+      }
+    },
+    "credentials": {
+      "warning": "This is the only time it is shown. The server keeps a hash of it and nothing else, so it cannot show it to you again — copy or download it before you close this.",
+      "created": "Account created",
+      "createdLede": "{{name}} can sign in with these.",
+      "resetDone": "Temporary password issued",
+      "resetLede": "{{name}} signs in with this and is asked to replace it.",
+      "usernameLabel": "Username",
+      "passwordLabel": "Temporary password",
+      "copy": "Copy",
+      "copied": "Copied.",
+      "copyFailed": "Could not copy. Select the values above and copy them by hand.",
+      "download": "Download as text",
+      "note": "They must replace this password the first time they sign in.",
+      "acknowledge": "I have saved these",
+      "createAnother": "Create another account"
+    },
+    "invites": {
+      "title": "Invites",
+      "subtitle": "Links that can still be redeemed. Each one creates a single account and then stops working.",
+      "create": "Create invite link",
+      "createSubtitle": "One link, one account. It stops working when it is used, or when it expires — whichever comes first.",
+      "createSubmit": "Create link",
+      "expiryLabel": "Valid for",
+      "expiry": {
+        "24": "1 day",
+        "168": "7 days",
+        "720": "30 days"
+      },
+      "noteLabel": "Note",
+      "noteHint": "Optional. Only administrators see it — it is there so you remember who a link was for.",
+      "noNote": "No note",
+      "singleUse": "Once",
+      "revoke": "Revoke",
+      "tally": "{{open}} still open",
+      "note": "Used, expired and revoked links leave this table. Their history stays in the audit log.",
+      "loadFailed": "We could not load the invite links.",
+      "column": {
+        "note": "Note",
+        "createdBy": "Created by",
+        "created": "Created",
+        "expires": "Expires",
+        "uses": "Uses",
+        "actions": "Actions"
+      },
+      "empty": {
+        "title": "No open invite links",
+        "body": "Create one and send it to somebody. They choose their own username and password, and the link works once."
+      },
+      "link": {
+        "title": "Invite link created",
+        "lede": "Anyone who opens it can create one account. Valid until {{when}}.",
+        "warning": "This is the only time the link is shown. The server keeps a hash of it and nothing else, so it cannot show it to you again — copy or download it before you close this.",
+        "label": "Invite link",
+        "note": "Send it over a channel you trust. Anybody holding the link can use it — once."
+      },
+      "revokeConfirm": {
+        "title": "Revoke this invite link?",
+        "body": "The link stops working immediately. Anybody still holding it will need a new one."
+      }
+    },
+    "org": {
+      "title": "Org settings",
+      "subtitle": "Every change here saves the moment you make it. There is no Save button to forget.",
+      "organization": "Organization",
+      "nameLabel": "Organization name",
+      "nameHint": "Shown on the sign-in page and above this nav. Saves when you leave the field.",
+      "localeLabel": "Default language",
+      "localeHint": "What a new account starts in. Everyone can change their own afterwards.",
+      "registration": "How accounts are created",
+      "registrationMode": {
+        "invite": "By invitation",
+        "open": "Open"
+      },
+      "registrationHint": {
+        "invite": "Only an administrator brings an account into existence — here, or with an invite link.",
+        "open": "Anybody who reaches this instance can create their own account."
+      },
+      "openWarning": "With open registration, anybody who reaches this instance's address can create an account without an invitation.",
+      "ssoJitLabel": "Create accounts on first single sign-on",
+      "ssoJitHint": "On, anybody your identity provider will authenticate gets an account here on their first sign-in. Off, single sign-on signs in only accounts that already exist — made by an administrator, by an invitation, or by SCIM.",
+      "ssoJitNote": "Not the same switch as registration above: that one is the password door people open themselves, this one is the identity provider. Turning either on leaves the other where it is. An organization provisioning through SCIM does not need this.",
+      "ssoJitUnconfigured": "No identity provider is configured on this instance yet, so this setting governs nothing until one is.",
+      "security": "Security",
+      "requireTotpLabel": "Require two-step verification",
+      "requireTotpHint": "Enforced at the next sign-in, never mid-session — turning it on cannot lock out the session you are in.",
+      "accountsWithoutTotp": "Accounts with no authenticator set up yet: {{accounts}}.",
+      "sessionLifetimeLabel": "Session lifetime",
+      "lifetime": {
+        "24": "1 day",
+        "168": "7 days",
+        "720": "30 days",
+        "2160": "90 days",
+        "custom": "Custom — {{hours}} hours"
+      },
+      "passwordMinLabel": "Minimum password length",
+      "passwordMinNote": "Set on the server, not here. It applies to every password screen: the forced change after a temporary password, resets by email, and self-service changes.",
+      "loadFailed": "We could not load the organization settings.",
+      "saveFailed": "That setting was not saved. The instance still holds the previous value.",
+      "encryption": {
+        "title": "Encryption mode",
+        "intro": "Which kind of conversation this instance creates from now on. It decides what new channels and direct messages are born as, and changes nothing that already exists.",
+        "current": {
+          "strict": "This instance is in Strict end-to-end encryption. Every channel and direct message created here is end-to-end encrypted, and asking for a server-readable one is refused.",
+          "compliance": "This instance is in Compliance mode. Every channel and direct message created here is stored server-readable, so that search, retention and export can cover it."
+        },
+        "outside": {
+          "none": "Every conversation this instance holds matches the current mode.",
+          "strict": "{{conversations}} conversations this instance holds are not end-to-end encrypted. They were created before this mode or under another one, they are never converted, and this server can read them.",
+          "compliance": "{{conversations}} conversations this instance holds are end-to-end encrypted. They are never converted, so search, retention and export do not reach them and never will."
+        },
+        "chooseLabel": "Mode for conversations created from now on",
+        "mode": {
+          "strict": "Strict end-to-end encryption",
+          "compliance": "Compliance"
+        },
+        "modeHint": {
+          "strict": "New conversations are encrypted on their members' devices. This server stores ciphertext and holds no key, so server-side search, retention and export cannot reach them.",
+          "compliance": "New conversations are stored so this server can read them, which is what lets search, retention and export exist."
+        },
+        "complianceLocked": "Compliance is not selectable yet. It is honest only once this instance has encryption at rest, a retention policy and compliance export, and none of the three are built. Choosing it today would remove end-to-end encryption and deliver none of what it promises, which is a label rather than a compliance regime.",
+        "switchFailed": "The encryption mode was not changed. The instance still creates conversations the way it did before.",
+        "switch": {
+          "compliance": {
+            "title": "Switch to Compliance mode?",
+            "unchanged": "Nothing already encrypted becomes readable. This server holds no keys, so it cannot decrypt the conversations that are already end-to-end encrypted. They stay encrypted, and permanently outside search, retention and export.",
+            "begins": "Compliance coverage begins with conversations created after this switch. Nothing created before it is converted, moved or re-encrypted.",
+            "exportImpossible": "A complete export of the past is impossible. That impossibility is what end-to-end encryption is, not a gap in this feature.",
+            "confirm": "Switch to Compliance"
+          },
+          "strict": {
+            "title": "Switch to Strict end-to-end encryption?",
+            "unchanged": "Nothing already stored becomes end-to-end encrypted. The conversations this instance already holds were stored where this server could read them, and their history stays that way. Encryption applied now cannot un-read what has already been read.",
+            "begins": "End-to-end encryption begins with conversations created after this switch. Nothing created before it is converted.",
+            "confirm": "Switch to Strict"
+          }
+        }
+      }
+    },
+    "audit": {
+      "title": "Audit log",
+      "subtitle": "Every administrative action, newest first. Read-only — nothing on this page can be edited or deleted.",
+      "export": "Export CSV",
+      "actorFilter": "Filter by actor",
+      "actorAny": "Anyone",
+      "actionFilter": "Filter by action",
+      "actionAll": "Every action",
+      "system": "System",
+      "pageLabel": "Newest first",
+      "newer": "Newer",
+      "older": "Older",
+      "loadFailed": "We could not load the audit log.",
+      "column": {
+        "time": "Time",
+        "actor": "Actor",
+        "action": "Action",
+        "target": "Target",
+        "ip": "Source IP"
+      },
+      "empty": {
+        "title": "Nothing recorded yet",
+        "body": "Administrative actions land here as they happen. If you have set a filter, it may be hiding them."
+      },
+      "chainBroken": "The signature chain over the entries on this page does not verify. The log is tamper-evident, not tamper-proof, and this is it showing: somebody has reached the database directly and changed or removed a row. Treat what is below as unreliable and look at the server.",
+      "footnote": "Entries are append-only, and each one is signed over the entry before it with a key kept outside the database. That does not make the log tamper-proof — anybody who can write to the database can rewrite rows. It makes a rewrite show."
+    },
+    "scim": {
+      "title": "Provisioning tokens",
+      "subtitle": "What your identity provider's sync engine signs in with to create, update and deactivate accounts. A token belongs to a system, not to a person: it works only at the provisioning endpoints, and nowhere else in this instance.",
+      "overlap": "More than one token can be live at once, and that is how you replace one: create the new token, put it into the provider, check that it syncs, then revoke the old one.",
+      "noteLabel": "Note",
+      "noteHint": "Optional. Only administrators see it — it is there so a list of otherwise identical tokens can say which system holds which.",
+      "create": "Create token",
+      "noNote": "No note",
+      "neverUsed": "Never used",
+      "revoke": "Revoke",
+      "lastUsedNote": "Last used stays empty until the provider authenticates with the token for the first time. That is how you tell a token somebody configured from one that was created and forgotten.",
+      "empty": "No provisioning tokens yet. Create one and paste it into your identity provider's SCIM configuration, and it can then create and deactivate accounts here.",
+      "loadFailed": "We could not load the provisioning tokens.",
+      "column": {
+        "note": "Note",
+        "createdBy": "Created by",
+        "created": "Created",
+        "lastUsed": "Last used",
+        "actions": "Actions"
+      },
+      "created": {
+        "title": "Provisioning token created",
+        "lede": "Paste it into your identity provider as the bearer token for SCIM provisioning.",
+        "warning": "This is the only time the token is shown. The server keeps a hash of it and nothing else, so it cannot show it to you again — copy or download it before you close this.",
+        "label": "Provisioning token",
+        "note": "Whatever holds this token can create and deactivate accounts on this instance. Put it in the provider and nowhere else."
+      },
+      "revokeConfirm": {
+        "title": "Revoke this token?",
+        "body": "It stops working immediately, and the provider's next sync fails to authenticate — no accounts are created, updated or deactivated until it has a token that works. If that provider should still be provisioning, create its new token first."
+      }
+    }
   },
   "settings": {
     "title": "Settings",
@@ -145,7 +485,47 @@
     "nav": {
       "language": "Language",
       "security": "Security",
-      "appearance": "Appearance"
+      "appearance": "Appearance",
+      "meetings": "Meetings"
+    },
+    "meetings": {
+      "title": "Meeting links",
+      "lede": "A meeting room anyone with the link can join, including people with no account here. The link keeps working until you revoke it.",
+      "titleLabel": "What to call it",
+      "create": "Create a meeting link",
+      "createSubmit": "Create link",
+      "empty": "You have no meeting links yet.",
+      "noLinkColumn": "There is no link column, and there cannot be.",
+      "linkOnceNote": "The link is shown once, when you create it. Only a hash of it is stored, so it cannot be shown again — create a new one if you lose it.",
+      "yourLinks": "Your links",
+      "readWhenOpened": "Read when this panel opened",
+      "refresh": "Refresh",
+      "revoke": "Revoke",
+      "live": "Someone is in it",
+      "idle": "Nobody in it",
+      "noExpiry": "Does not expire",
+      "creatorGone": "Account removed",
+      "loadFailed": "Your meeting links could not be loaded.",
+      "actionFailed": "That did not work. Try again.",
+      "column": {
+        "title": "Meeting",
+        "createdBy": "Created by",
+        "created": "Created",
+        "expires": "Expires",
+        "status": "Now",
+        "actions": "Actions"
+      },
+      "created": {
+        "title": "Meeting link created",
+        "lede": "Anyone with this link can join {{title}}.",
+        "warning": "This is the only time the link is shown. The server keeps a hash of it and nothing else, so it cannot show it to you again — copy or download it before you close this.",
+        "note": "Anyone who has the link can join, so send it only where you would say the same thing out loud. You can revoke it at any time.",
+        "linkLabel": "Meeting link"
+      },
+      "revokeConfirm": {
+        "title": "Revoke this meeting link?",
+        "body": "The link stops working for everyone, and the meeting behind it ends — anyone in the room right now is disconnected. This cannot be undone."
+      }
     },
     "leave": {
       "title": "Leave without saving?",
@@ -163,6 +543,21 @@
       "sessionsCount_other": "{{count}} devices signed in.",
       "thisDevice": "This one is a {{device}}.",
       "manageSessions": "Manage"
+    },
+    "sso": {
+      "cardTitle": "Single sign-on",
+      "linked": "Connected to {{provider}}.",
+      "notLinked": "Connect {{provider}} so you can sign in with it instead of typing your password.",
+      "connect": "Connect {{provider}}",
+      "connecting": "Connecting…",
+      "disconnect": "Disconnect {{provider}}",
+      "disconnecting": "Disconnecting…",
+      "error": {
+        "noPassword": "This account has no password, so single sign-on is its only way in. An administrator has to issue you a password before it can be disconnected.",
+        "alreadyLinked": "Single sign-on is already connected to this account.",
+        "notLinked": "Single sign-on is not connected to this account.",
+        "unavailable": "Single sign-on is not configured on this instance."
+      }
     },
     "totp": {
       "cardTitle": "Two-step verification",
@@ -298,8 +693,16 @@
       "cancel": "Cancel",
       "close": "Close"
     },
+    "fileSize": {
+      "b": "{{value}} B",
+      "kb": "{{value}} KB",
+      "mb": "{{value}} MB",
+      "gb": "{{value}} GB",
+      "tb": "{{value}} TB"
+    },
     "noConversations": "You are not in any conversation yet. Create a channel to start one.",
     "conversationsFailed": "We could not load your conversations. Reload the page to try again.",
+    "conversationUnavailable": "That conversation is not available to you. Pick one from the list to carry on.",
     "sidebar": {
       "label": "Conversations",
       "channels": "Channels",
@@ -339,6 +742,12 @@
       "loadingOlder": "Loading earlier messages…",
       "unknownMember": "unknown",
       "download": "Download {{filename}}",
+      "unnamedFile": "Unnamed file",
+      "encryptedFile": "Encrypted file",
+      "fileOpening": "Opening…",
+      "fileFailed": "This file could not be opened. It may have been deleted, or its link may have expired.",
+      "fileNeedsMessage": "Shared in a message this device cannot read, so it cannot be opened here.",
+      "fileNoKey": "The message that shared this file carries no key for it, so it cannot be opened.",
       "editLabel": "Edit message",
       "saveEdit": "Save",
       "cancelEdit": "Cancel",
@@ -356,7 +765,6 @@
     },
     "composer": {
       "placeholder": "Message {{target}}",
-      "attachUnavailable": "File sharing is not available yet.",
       "send": "Send",
       "mention": "Mention someone",
       "hintBold": "**bold**",
@@ -366,7 +774,14 @@
       "hintSend": "Enter to send · Shift+Enter for a new line",
       "hintCompact": "**bold** · *italic* · `code`",
       "disconnected": "Disconnected. Your message is kept and sends itself when the connection returns.",
-      "attachUnavailableLabel": "Attach a file — file sharing is not available yet",
+      "attach": "Attach a file",
+      "attachments": "Files attached to this message",
+      "uploading": "Uploading…",
+      "removeAttachment": "Remove {{filename}}",
+      "uploadFailed": "Could not be uploaded. Remove it and try again.",
+      "uploadTooLarge": "Larger than the {{limit}} this instance accepts.",
+      "uploadTypeMismatch": "The contents are not the kind of image the name claims.",
+      "uploadTooMany": "A message carries at most {{max}} files.",
       "closed": "The connection was closed. Reload the page to send again."
     },
     "connection": {
@@ -393,6 +808,8 @@
       "title": "This is the beginning of {{channel}}",
       "body": "Give it a topic so people know what belongs here, then invite the few who need it.",
       "bodyOwner": "You created this channel today. Give it a topic so people know what belongs here, then invite the few who need it.",
+      "dmTitle": "This is the beginning of your conversation with {{name}}.",
+      "dmBody": "Messages here stay between the two of you.",
       "invite": "Invite people",
       "setTopic": "Set a topic",
       "onlyYou": "Only you can see this channel until someone is invited."
@@ -405,7 +822,12 @@
       "private": "Private",
       "visibilityNote": "Both kinds are visible only to their members. Nobody can find or read a channel they were not invited to.",
       "submit": "Create channel",
-      "failed": "The channel could not be created."
+      "failed": "The channel could not be created.",
+      "e2eeByMode": {
+        "strict": "This channel will be end-to-end encrypted. Your organization encrypts every conversation created here, and a channel's encryption is fixed when it is created.",
+        "compliance": "This channel will not be end-to-end encrypted. Your organization stores conversations so the server can read them, which is what lets search, retention and export exist, and a channel's encryption is fixed when it is created."
+      },
+      "e2eeNote": "Encrypted channels have no server-side search, no link previews and no mention badges, and files cannot be attached yet."
     },
     "channelMenu": {
       "topicLabel": "Topic",
@@ -416,7 +838,216 @@
       "searchLabel": "Find someone",
       "invite": "Invite",
       "message": "Message",
-      "failed": "That did not work. Try again."
+      "failed": "That did not work. Try again.",
+      "e2eeByMode": {
+        "strict": "A new conversation started here will be end-to-end encrypted. Your organization encrypts every conversation created here.",
+        "compliance": "A new conversation started here will not be end-to-end encrypted. Your organization stores conversations so the server can read them, which is what lets search, retention and export exist."
+      },
+      "reopenNote": "This applies only if the conversation does not exist yet. Reopening one you already have keeps whatever it was opened as, whatever the mode is now."
+    },
+    "e2eeByOrg": {
+      "requiredError": "Your organization now encrypts every conversation created here, so this one was not created. Nothing was made — try again and it will be end-to-end encrypted.",
+      "forbiddenError": "Your organization now stores conversations so the server can read them, so this one was not created. Nothing was made — try again and it will not be end-to-end encrypted."
+    },
+    "e2ee": {
+      "regionLabel": "Encryption",
+      "indicator": "This conversation is end-to-end encrypted. Messages are encrypted on your device and the server stores only ciphertext.",
+      "preparing": "Setting up encryption for this conversation…",
+      "waitingToJoin": "Waiting to be added to this conversation's encryption group. Messages sent before you are added will not be readable here.",
+      "cannotAddYet": "Not everyone can read this conversation yet: {{names}} have no device set up for encryption. They will be added once they sign in.",
+      "nameSeparator": ", ",
+      "channelFailed": "This conversation's encryption could not be set up. Nothing can be sent here until it is.",
+      "unavailable": "Encryption could not be started in this session, so encrypted conversations cannot be read or written here.",
+      "composerNotReady": "You cannot send here until this conversation's encryption is ready.",
+      "decrypting": "Decrypting…",
+      "cannotDecrypt": "This message cannot be decrypted on this device.",
+      "verification": {
+        "openSheet": "Safety number",
+        "sheetTitle": "Safety number with {{name}}",
+        "level": {
+          "unverified": "You have not compared a safety number with this person on this device.",
+          "pinned": "This browser recorded these device keys without a comparison. That is real, and it is weaker than a check the two of you did together.",
+          "verified": "You compared this number with them and it matched."
+        },
+        "instructions": "Read these sixty digits to each other over something you already trust — in person, or a call where you recognise the voice. If they match, the device keys each of you holds for the other are the ones your devices are really using.",
+        "numberLabel": "Safety number",
+        "numberLoading": "Working out the number…",
+        "numberUnavailable": "This number cannot be worked out yet. It needs one successful read of this conversation's device list.",
+        "match": "We compared it and it matched",
+        "acceptWithoutComparing": "Accept without comparing",
+        "acceptIsAPin": "Accepting without a comparison records the keys but proves nothing about who holds them, so it is shown as recorded rather than compared.",
+        "blockedTitle": "Sending is paused until you decide about a device.",
+        "newDevice": "{{name}} has a device this browser has not seen before.",
+        "replacedKey": "A device key this browser had recorded for {{name}} has been replaced.",
+        "compare": "Compare safety number",
+        "accept": "I checked — accept",
+        "uncovered": "This conversation contains a device that nobody currently in it is listed as owning. Sending stays paused until it is removed, which the next update does on its own.",
+        "readingContinues": "Messages already here still open, and new ones still arrive.",
+        "ownTitle": "A device was added to your own account.",
+        "ownBody_one": "The server lists one device under your account that you have not confirmed here. If you signed in on another browser or another computer, that is probably it.",
+        "ownBody_other": "The server lists {{count}} devices under your account that you have not confirmed here. If you signed in elsewhere, those are probably them.",
+        "ownIfNotYours": "If you did not add it, do not confirm it. Leaving it unconfirmed is what stops this conversation encrypting anything to it.",
+        "ownAccept": "Yes, that device is mine"
+      },
+      "backup": {
+        "offerTitle": "Keep a backup of your trust decisions",
+        "offerSaves": "Hamlaneh can keep an encrypted copy of the people you have verified, so a new device does not have to start over if you lose this one.",
+        "offerNotMessages": "It does not save your messages. Encrypted messages cannot be recovered by anyone once the keys that opened them are gone — that is how the encryption works, and a backup cannot change it.",
+        "offerShownOnce": "You will be shown a recovery key once. It is the only thing that opens the backup, and nobody else has a copy: not Hamlaneh, not your administrator.",
+        "offerLosingIt": "If you lose the recovery key, you lose the backup and nothing else. Your account, your conversations and everything you send from then on carry on working.",
+        "offerSetUp": "Set up backup",
+        "offerHaveKey": "I already have a recovery key",
+        "offerNotNow": "Not now",
+        "setUpFailed": "Backup could not be set up in this browser, so it is off. Nothing was uploaded.",
+        "declinedNote": "Backup is off. You can turn it on whenever you like.",
+        "writeFailed": "Your backup is not up to date: the last copy could not be saved. Hamlaneh will try again the next time your trust decisions change.",
+        "keyLabel": "Recovery key",
+        "ceremonyTitle": "Write down your recovery key",
+        "ceremonyBody": "Write this down or put it in a password manager now. Type it exactly as shown; spaces, dashes and capitals do not matter.",
+        "ceremonyOnce": "This is the only time it will be shown. Hamlaneh keeps no copy of it, so it cannot be shown again and it cannot be reset.",
+        "ceremonyDone": "I have saved it",
+        "restoreTitle": "Restore from a backup",
+        "restoreBody": "Enter the recovery key you were shown when you set up the backup.",
+        "restoreSubmit": "Open the backup",
+        "restoreNoKey": "I do not have my recovery key",
+        "restoreSealedOn": "This backup was made on {{date}}.",
+        "restoreConfirmDate": "Check that this date looks right to you. If the backup is older than you expect, do not continue — say no, and ask an administrator about it.",
+        "restoreRecords_one": "It carries your decision about one person.",
+        "restoreRecords_other": "It carries your decisions about {{count}} people.",
+        "restoreWhatComesBack": "Restoring brings back who you had verified. People whose devices changed while you were away are still flagged, and devices listed under your own account are still asked about.",
+        "restoreConfirm": "Yes, restore it",
+        "restoreReject": "No, do not restore",
+        "failure": {
+          "badKey": "That is not a complete recovery key. Check it character by character — nothing was sent anywhere.",
+          "noBackup": "There is no backup stored for your account. If you are sure you made one, do not carry on as though it never existed: ask an administrator what happened to it.",
+          "wrongKey": "That recovery key does not open this backup. There is nothing else to check it against, so make sure it is the key from this account.",
+          "rolledBack": "This backup is older than one this device has already used, so it was refused. That does not happen on its own; ask an administrator about it.",
+          "wrongAccount": "This backup belongs to a different account.",
+          "notEmpty": "This device already has your trust decisions on it, so there is nothing to restore over. Restoring is for a device that is starting fresh.",
+          "failed": "The backup could not be fetched. Check your connection and try again."
+        },
+        "noKeyTitle": "Without the recovery key",
+        "noKeyCannotOpen": "Your backup cannot be opened without your recovery key.",
+        "noKeyNobodyHasIt": "Hamlaneh does not have a copy — that is what makes it private — and neither we nor your administrator can recover it.",
+        "noKeyWhatContinues": "Your account and your conversations continue. Your recorded trust decisions are gone, so you will be asked to verify people again.",
+        "noKeyByDesign": "This is how the feature is built, not a fault and not something support can undo."
+      }
+    }
+  },
+  "calls": {
+    "start": "Start a call",
+    "join": "Join call",
+    "joining": "Joining…",
+    "connecting": "Connecting…",
+    "dismiss": "Dismiss",
+    "strip": {
+      "label": "Call in this conversation",
+      "inProgress": "{{count}} in the call",
+      "idle": "No call in this channel",
+      "idleHint": "Whoever joins first opens the room",
+      "away": "You are in the call in {{channel}}",
+      "return": "Return to call"
+    },
+    "tile": {
+      "speaking": "Speaking",
+      "muted": "Muted",
+      "cameraOff": "Camera off",
+      "sharing": "Sharing screen"
+    },
+    "view": {
+      "heading": "Call in {{channel}}",
+      "participants": "In this call",
+      "controls": "Call controls",
+      "more": "+{{count}} more"
+    },
+    "control": {
+      "microphone": "Microphone",
+      "camera": "Camera",
+      "screenShare": "Share screen",
+      "leave": "Leave call"
+    },
+    "share": {
+      "warning": "You are sharing your whole screen.",
+      "detail": "Everyone in the call can see anything you open.",
+      "stop": "Stop sharing"
+    },
+    "ring": {
+      "label": "Incoming call",
+      "from": "{{name}} is calling",
+      "accept": "Answer",
+      "dismiss": "Dismiss",
+      "unknown": "Someone",
+      "note": "Dismissing closes this. The caller is not told, and no missed-call message is left behind."
+    },
+    "encrypted": {
+      "label": "End-to-end encrypted",
+      "detail": "Audio and video are encrypted on the devices in this call, and the server relays what it cannot read.",
+      "metadata": "It can still see who is in the call, when they joined and how long they stay."
+    },
+    "blocked": {
+      "title": "Your microphone and camera have stopped. This is not a fault with them: someone in this conversation has a device key this browser has not accepted, so nothing is sent from here until you decide.",
+      "continues": "You can still hear and see everyone else, and they can still hear each other."
+    },
+    "error": {
+      "unavailable": "Calls are not available on this instance.",
+      "failed": "The call could not be joined.",
+      "device": "The microphone or camera could not be used. Check this site’s permissions in the browser.",
+      "ended": "The call ended.",
+      "encryption": "This conversation's encryption is not ready on this device, so the call was not joined. A call here is never placed unencrypted.",
+      "encryptionUnsupported": "This browser cannot encrypt call media, so it cannot join a call in an end-to-end encrypted conversation. There is no unencrypted fallback here — try a newer browser."
+    }
+  },
+  "meet": {
+    "eyebrow": "Meeting",
+    "hostedBy": "is hosting this meeting",
+    "join": "Join the meeting",
+    "nameLabel": "Your name",
+    "nameHint": "What the room calls you. Nothing checks it, so treat any name in a meeting as a claim.",
+    "active": "People are already in this meeting.",
+    "empty": "Nobody is here yet. You can go in and wait.",
+    "guestNote": "You are joining one meeting as a guest. No account is created for you, and this link opens nothing else here.",
+    "mediaLabel": "This meeting is not end-to-end encrypted. It is protected in transit, and the server that hosts it can access its audio and video.",
+    "mediaWhy": "That is what lets anyone join from a link: end-to-end encryption needs an account on this instance, and a guest link deliberately does not create one.",
+    "goHome": "Go to the home page",
+    "unusable": {
+      "title": "This meeting link does not work",
+      "body": "The link may have expired, been revoked, or never have existed. Ask whoever sent it to you for a new one."
+    },
+    "unreachable": {
+      "title": "This meeting could not be checked",
+      "body": "We could not reach the server. Try again in a moment."
+    }
+  },
+  "redeemInvite": {
+    "done": "Your account is ready. Sign in to continue."
+  },
+  "invite": {
+    "title": "Join {{org}}",
+    "helper": "You were invited. Pick a username and a password, and you are in.",
+    "usernameLabel": "Username",
+    "usernameHint": "Letters, digits, dots, dashes and underscores. This is how people find you.",
+    "displayNameLabel": "Display name",
+    "displayNameHint": "Optional — what people see beside your messages. Your username if you leave it empty.",
+    "passwordLabel": "Password",
+    "confirmLabel": "Confirm password",
+    "submit": "Create account",
+    "submitting": "Creating your account…",
+    "goToSignIn": "Go to sign-in",
+    "unusable": {
+      "title": "This invitation cannot be used",
+      "body": "The link may have expired, been used already, or been withdrawn. Ask whoever invited you for a new one."
+    },
+    "unreachable": {
+      "body": "We could not reach the server to check this invitation. Try again in a moment."
+    },
+    "error": {
+      "username": "Pick a username of 3 to 32 characters.",
+      "usernameTaken": "That username is taken. Try another.",
+      "password": "Your password must be at least {{minimum}} characters.",
+      "mismatch": "The two passwords do not match.",
+      "unusable": "This invitation cannot be used any more.",
+      "rateLimited": "Too many attempts. Try again in a few minutes.",
+      "unexpected": "Something went wrong. Try again."
     }
   }
 }

@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SettingsButton } from "./SettingsButton";
 import { api } from "../../api/client";
+import { useRateLimitNotice } from "../../auth/rateLimit";
+import type { RateLimitKeys } from "../../auth/rateLimit";
 import { formatActivationDate } from "../../settings/sessionTime";
 import type { TotpStatus } from "../../settings/useTotpStatus";
 
@@ -13,6 +15,18 @@ const LOW_CODES = 2;
 type Prompt = "none" | "disable" | "regenerate";
 
 type PromptError = "none" | "invalidPassword" | "notEnabled" | "rateLimited" | "unexpected";
+
+/**
+ * The security section's undated wording, with the counted variants borrowed
+ * from the sign-in screen: `settings.totp.error.rateLimited` and
+ * `login.error.rateLimited` are the same sentence, and the counted forms are
+ * that sentence with the vague tail replaced by the number the server gave.
+ */
+const RATE_LIMIT_KEYS: RateLimitKeys = {
+  undated: "settings.totp.error.rateLimited",
+  seconds: "login.error.rateLimitedSeconds",
+  minutes: "login.error.rateLimitedMinutes",
+};
 
 interface TwoFactorCardProps {
   totp: TotpStatus;
@@ -35,10 +49,20 @@ export function TwoFactorCard({ totp, onSetUp, onDisabled, onRegenerated }: TwoF
   const [prompt, setPrompt] = useState<Prompt>("none");
   const [promptError, setPromptError] = useState<PromptError>("none");
   const [busy, setBusy] = useState(false);
+  const {
+    message: rateLimitMessage,
+    start: startRateLimitWait,
+    clear: clearRateLimitWait,
+  } = useRateLimitNotice(RATE_LIMIT_KEYS, () => {
+    // The stated wait has passed, so the notice goes — but only if it is
+    // still the notice on screen; a later failure of its own must stand.
+    setPromptError((current) => (current === "rateLimited" ? "none" : current));
+  });
 
   const closePrompt = () => {
     setPrompt("none");
     setPromptError("none");
+    clearRateLimitWait();
   };
 
   /** Maps the two password-gated endpoints' shared failure vocabulary. */
@@ -50,6 +74,18 @@ export function TwoFactorCard({ totp, onSetUp, onDisabled, onRegenerated }: TwoF
         : status === 429
           ? "rateLimited"
           : "unexpected";
+
+  /**
+   * Reports whichever way the call failed. A 429 carries the wait with it
+   * (spec: RateLimited); reading it is the difference between telling the user
+   * when the door reopens and inventing "a few minutes".
+   */
+  const reportFailure = (response: Response, code: string | undefined) => {
+    if (response.status === 429) {
+      startRateLimitWait(response);
+    }
+    setPromptError(mapFailure(response.status, code));
+  };
 
   const disable = async (password: string) => {
     setBusy(true);
@@ -63,7 +99,7 @@ export function TwoFactorCard({ totp, onSetUp, onDisabled, onRegenerated }: TwoF
         onDisabled();
         return;
       }
-      setPromptError(mapFailure(response.status, apiError?.error.code));
+      reportFailure(response, apiError?.error.code);
     } catch (requestError) {
       console.warn("Disabling two-step verification failed:", requestError);
       setPromptError("unexpected");
@@ -85,7 +121,7 @@ export function TwoFactorCard({ totp, onSetUp, onDisabled, onRegenerated }: TwoF
         onRegenerated(data.codes);
         return;
       }
-      setPromptError(mapFailure(response.status, apiError?.error.code));
+      reportFailure(response, apiError?.error.code);
     } catch (requestError) {
       console.warn("Regenerating the recovery codes failed:", requestError);
       setPromptError("unexpected");
@@ -168,7 +204,11 @@ export function TwoFactorCard({ totp, onSetUp, onDisabled, onRegenerated }: TwoF
           passwordLabel={t("settings.totp.confirmPasswordLabel")}
           busy={busy}
           error={
-            promptError === "none" ? undefined : t(`settings.totp.error.${promptError}`)
+            promptError === "none"
+              ? undefined
+              : promptError === "rateLimited"
+                ? rateLimitMessage
+                : t(`settings.totp.error.${promptError}`)
           }
           onConfirm={(password) => {
             void (prompt === "disable" ? disable(password) : regenerate(password));

@@ -20,21 +20,48 @@ var (
 	ErrUsernameTaken = errors.New("storage: username already taken")
 	// ErrEmailTaken reports an email uniqueness conflict.
 	ErrEmailTaken = errors.New("storage: email already taken")
+	// ErrLastAdmin reports a change that would leave the instance with no
+	// admin who can sign in. An instance nobody can administer is
+	// unrecoverable without database access, so the change is refused
+	// rather than warned about afterwards.
+	ErrLastAdmin = errors.New("storage: would remove the last admin")
+	// ErrScimIdentifierTaken reports that another account already carries
+	// the presented SCIM userName or externalId. One sentinel covers both
+	// because SCIM answers both with one 409 uniqueness.
+	ErrScimIdentifierTaken = errors.New("storage: scim identifier already taken")
 )
 
 // User is a row of the users table. PasswordHash is the argon2id PHC string;
-// it never leaves the server.
+// it never leaves the server. It is empty for an account with no password
+// credential — a directory-provisioned or SSO-only one — because migration
+// 0014 made the column nullable and the projection reads NULL back as "".
 type User struct {
-	ID                 uuid.UUID
-	Username           string
-	Email              *string
-	DisplayName        string
-	PasswordHash       string
-	Locale             string
-	IsAdmin            bool
+	ID           uuid.UUID
+	Username     string
+	Email        *string
+	DisplayName  string
+	PasswordHash string
+	Locale       string
+	IsAdmin      bool
+	// IsActive is false for a deactivated account: it cannot sign in, and
+	// deactivation revoked every session it held.
+	IsActive           bool
 	MustChangePassword bool
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	// ScimExternalID is the identity provider's own identifier for this
+	// person. Non-nil is what "directory-managed" means, and it is the one
+	// condition under which single sign-on may attach an identity by email
+	// (ADR 004).
+	ScimExternalID *string
+	// ScimUserName is the provider's userName, stored verbatim so a SCIM
+	// round trip returns what was sent. Nil for an account no directory has
+	// claimed; Username is what SCIM emits then.
+	ScimUserName *string
+	// SsoLinked is true when a row in oidc_identities points at this
+	// account (the contract's sso_linked). Derived, not stored: every user
+	// read computes it, so no writer can forget to maintain it.
+	SsoLinked bool
 }
 
 // NewUser carries the fields for creating a user. Validation is the
@@ -49,9 +76,58 @@ type NewUser struct {
 	MustChangePassword bool
 }
 
-// userColumns is the canonical column list every user query selects, in the
-// order scanUser expects.
-const userColumns = `id, username, email, display_name, password_hash, locale, is_admin, must_change_password, created_at, updated_at`
+// The users table has exactly TWO projections and one scan, and this is
+// where all three live. Read this before adding a query that returns a user.
+//
+// A third copy is not a shortcut, it is the bug: SessionUserByAccessHash
+// carried one inline, it was missed when migration 0014 made password_hash
+// nullable, and the result was a 500 on EVERY authenticated request by an
+// account with no password — the whole API, for every account a directory
+// had provisioned. It had also silently lost the two SCIM columns. Neither
+// drift is visible at the call site, which is why the fix was to delete the
+// copy rather than to correct it.
+//
+// So: select userColumns (or memberUserColumns when the query joins), scan
+// with scanUser (or userScanTargets when the row carries other columns
+// too). A new column is added to all three of these and nowhere else; adding
+// it to one projection and not the other, or not to userScanTargets, is a
+// scan error on the first read rather than a wrong value that survives.
+
+// userColumns is the canonical column list, in the order userScanTargets
+// expects. The final expression derives SsoLinked; the correlated users.id
+// resolves against the row being selected or returned, so the same list
+// works in SELECT ... FROM users and in RETURNING on it.
+//
+// password_hash is COALESCEd because migration 0014 made it nullable for
+// accounts with no password credential. Every reader keeps its plain string
+// and gets "" for those, which Login refuses explicitly.
+const userColumns = `id, username, email, display_name, COALESCE(password_hash, ''), locale, is_admin, is_active, must_change_password, created_at, updated_at,
+	scim_external_id, scim_user_name,
+	EXISTS (SELECT 1 FROM oidc_identities oi WHERE oi.user_id = users.id)`
+
+// memberUserColumns is userColumns qualified (alias u), for the queries that
+// join users against another table: channel member reads, the identity
+// lookup in oidc.go, and the session read in sessions.go. Same columns, same
+// order — a projection of the users table belongs beside the users table,
+// whichever file first happened to need it.
+const memberUserColumns = `u.id, u.username, u.email, u.display_name, COALESCE(u.password_hash, ''),
+	        u.locale, u.is_admin, u.is_active, u.must_change_password, u.created_at, u.updated_at,
+	        u.scim_external_id, u.scim_user_name,
+	        EXISTS (SELECT 1 FROM oidc_identities oi WHERE oi.user_id = u.id)`
+
+// userScanTargets is the scan destination for both projections above, in
+// their order. It is a function rather than an argument list written out at
+// each call site so that a query returning a user ALONGSIDE other columns —
+// SessionUserByAccessHash is the only one — appends this list instead of
+// retyping it, which is how the copy that drifted came to exist.
+func userScanTargets(u *User) []any {
+	return []any{
+		&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.PasswordHash,
+		&u.Locale, &u.IsAdmin, &u.IsActive, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt,
+		&u.ScimExternalID, &u.ScimUserName,
+		&u.SsoLinked,
+	}
+}
 
 // CreateUser inserts a user and returns the stored row. Uniqueness
 // conflicts map to ErrUsernameTaken / ErrEmailTaken.
@@ -233,13 +309,158 @@ func (s *Store) CountUsers(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
-// scanUser scans one userColumns row. pgx.ErrNoRows becomes ErrNotFound.
+// UserProfileUpdate is a user's patch of their own account. A nil field is
+// one the request did not mention and this call must not change.
+type UserProfileUpdate struct {
+	DisplayName *string
+	Locale      *string
+}
+
+// UpdateUserProfile applies a user's patch of their own account and returns
+// the stored row. ErrNotFound reports an account that is already gone.
+//
+// No lock and no transaction: this is one row, and nothing here is a fact
+// about a set the way the admin flags are — a display name and a locale
+// cannot leave the instance in a state no one can recover from.
+func (s *Store) UpdateUserProfile(ctx context.Context, userID uuid.UUID, upd UserProfileUpdate) (User, error) {
+	row := s.pool.QueryRow(ctx,
+		`UPDATE users
+		 SET display_name = COALESCE($1::text, display_name),
+		     locale       = COALESCE($2::text, locale),
+		     updated_at   = now()
+		 WHERE id = $3
+		 RETURNING `+userColumns,
+		upd.DisplayName, upd.Locale, userID,
+	)
+	u, err := scanUser(row)
+	if err != nil {
+		return User{}, fmt.Errorf("update user profile: %w", err)
+	}
+	return u, nil
+}
+
+// AdminUserUpdate is the admin dashboard's patch of one account. A nil field
+// is one the request did not mention and this call must not change.
+type AdminUserUpdate struct {
+	IsAdmin  *bool
+	IsActive *bool
+}
+
+// adminSetLockKey is the advisory-lock key that serializes every change to
+// the set of admins who can sign in. Its value is arbitrary and only has to
+// be unique within this database.
+const adminSetLockKey = 0x68616d6c // "haml"
+
+// UpdateUserAdmin applies an admin's patch of one account and returns the
+// stored row. It refuses with ErrLastAdmin any change that would leave the
+// instance with no admin who can sign in, and it revokes every session
+// family of an account it deactivates — in the same transaction, so a
+// deactivated account can never be observed still holding one.
+//
+// # Why the last-admin rule is race-safe
+//
+// The rule is about a set, not a row: "at least one active admin exists".
+// Two admins demoting each other at the same moment each read a set that
+// still contains the other, and each would commit — leaving zero. Locking
+// the two account rows does not help, because they are different rows.
+//
+// So the transaction takes one instance-wide advisory lock FIRST
+// (pg_advisory_xact_lock, released at commit or rollback), which serializes
+// every mutation of the admin set against every other. Under it the check is
+// stated the simple way round: apply the change, then count the admins that
+// remain, and return ErrLastAdmin — rolling the whole transaction back — if
+// the count is zero. Counting after the write needs no case analysis over
+// which field moved in which direction, and the count sees this
+// transaction's own UPDATE.
+//
+// Lock order (package rule): advisory lock → users → sessions. The advisory
+// lock is not a row lock and cannot deadlock against one, so taking it
+// before lockAccount adds no cycle.
+//
+// Refusing to deactivate yourself is deliberately NOT here: it is a fact
+// about the caller, not about the database, and the HTTP layer owns it.
+func (s *Store) UpdateUserAdmin(ctx context.Context, userID uuid.UUID, upd AdminUserUpdate) (User, error) {
+	var updated User
+
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(adminSetLockKey)); err != nil {
+			return fmt.Errorf("lock admin set: %w", err)
+		}
+		if err := lockAccount(ctx, tx, userID); err != nil {
+			return err
+		}
+
+		row := tx.QueryRow(ctx,
+			`UPDATE users
+			 SET is_admin   = COALESCE($1::boolean, is_admin),
+			     is_active  = COALESCE($2::boolean, is_active),
+			     updated_at = now()
+			 WHERE id = $3
+			 RETURNING `+userColumns,
+			upd.IsAdmin, upd.IsActive, userID,
+		)
+		u, err := scanUser(row)
+		if err != nil {
+			return fmt.Errorf("update user: %w", err)
+		}
+
+		var admins int
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM users WHERE is_admin AND is_active`,
+		).Scan(&admins); err != nil {
+			return fmt.Errorf("count admins: %w", err)
+		}
+		if admins == 0 {
+			return ErrLastAdmin
+		}
+
+		// Deactivation ends every session the account holds. A forced
+		// password reset deliberately does not, which is the whole
+		// difference between the two actions.
+		if !u.IsActive {
+			if _, err := tx.Exec(ctx,
+				`UPDATE sessions SET revoked_at = now()
+				 WHERE user_id = $1 AND revoked_at IS NULL`,
+				userID,
+			); err != nil {
+				return fmt.Errorf("revoke session families: %w", err)
+			}
+		}
+
+		updated = u
+		return nil
+	})
+	if err != nil {
+		return User{}, fmt.Errorf("update user admin: %w", err)
+	}
+	return updated, nil
+}
+
+// SetTemporaryPassword installs an admin-issued password and marks the
+// account as owing a change. Sessions are deliberately untouched: this is
+// the unlock path for somebody who forgot their password, not the
+// offboarding path, and ending their session would make the two
+// indistinguishable.
+func (s *Store) SetTemporaryPassword(ctx context.Context, userID uuid.UUID, passwordHash string) (User, error) {
+	row := s.pool.QueryRow(ctx,
+		`UPDATE users
+		 SET password_hash = $1, must_change_password = true, updated_at = now()
+		 WHERE id = $2
+		 RETURNING `+userColumns,
+		passwordHash, userID,
+	)
+	u, err := scanUser(row)
+	if err != nil {
+		return User{}, fmt.Errorf("set temporary password: %w", err)
+	}
+	return u, nil
+}
+
+// scanUser scans one userColumns (or memberUserColumns) row. pgx.ErrNoRows
+// becomes ErrNotFound.
 func scanUser(row pgx.Row) (User, error) {
 	var u User
-	err := row.Scan(
-		&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.PasswordHash,
-		&u.Locale, &u.IsAdmin, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt,
-	)
+	err := row.Scan(userScanTargets(&u)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -261,6 +482,12 @@ func mapUserConflict(err error) error {
 		return ErrUsernameTaken
 	case "users_email_key":
 		return ErrEmailTaken
+	case "users_scim_user_name_key", "users_scim_external_id_key":
+		// One sentinel for both because SCIM answers both with one
+		// 409 uniqueness; the local username conflict stays separate
+		// precisely because it is the one a caller resolves by retrying
+		// with a different derivation.
+		return ErrScimIdentifierTaken
 	default:
 		return err
 	}

@@ -41,6 +41,8 @@ jobs:
       webapp: ${{ steps.filter.outputs.webapp }}
       deploy: ${{ steps.filter.outputs.deploy }}
       e2e: ${{ steps.filter.outputs.e2e }}
+      release: ${{ steps.filter.outputs.release }}
+      desktop: ${{ steps.filter.outputs.desktop }}
     steps:
       - name: Filter changed paths
         id: filter
@@ -74,13 +76,40 @@ jobs:
               - 'deploy/**'
               - 'docs/api/**'
               - '.github/workflows/ci.yml'
+            # The shell scripts an operator runs, and the release pipeline that
+            # feeds them. Narrower than `deploy` on purpose: this job does not
+            # need the stack, so it should not wait for a server change to be
+            # the reason it runs.
+            release:
+              - 'deploy/*.sh'
+              - '.github/workflows/release.yml'
+              - '.github/workflows/ci.yml'
+            # `desktop/**` and NOT `webapp/**`, which is narrower than it
+            # looks and is a property of the design rather than a saving.
+            # The Tauri shell bundles no copy of the web application: it
+            # ships one local page that validates an address and hands the
+            # window to that instance's own origin, so the bundle's contents
+            # do not move when webapp/ does. See desktop/ui/connect.js for
+            # why loading the real origin is forced (the client's base URL is
+            # window.location.origin and the session is an HttpOnly cookie,
+            # neither of which survives a copy served from tauri://localhost).
+            #
+            # This matters: `webapp/**` here would put three cold Rust builds
+            # on every frontend commit, which is the most expensive wrong
+            # trigger available in this repository. Add it in the same commit
+            # as any change that makes frontendDist point at webapp/dist.
+            desktop:
+              - 'desktop/**'
+              - '.github/workflows/ci.yml'
 
   server:
     name: Server (Go)
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.server == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 35, not 20: this job now runs the whole module under -race twice, once
+    # per storage driver.
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: server
@@ -135,6 +164,19 @@ jobs:
           HAMLANEH_TEST_DSN: postgres://hamlaneh_test:ci-${{ github.run_id }}@localhost:5432/hamlaneh_test?sslmode=disable
         run: go test -race ./...
 
+      # The second driver, per CLAUDE.md: from Phase 4 the storage-interface
+      # suite runs against both. It is a full -race pass and not a cheaper
+      # subset because the SQLite driver's concurrency SHAPE is its own — one
+      # connection, a busy handler that retries rather than queues — so a race
+      # in it is precisely what the PostgreSQL leg cannot reach.
+      #
+      # No service container: that is the point of home mode, and a leg that
+      # needed one would not be testing what ships.
+      - name: Test (race detector, SQLite driver)
+        env:
+          HAMLANEH_TEST_DRIVER: sqlite
+        run: go test -race ./...
+
       - name: Coverage floors — security-critical packages ≥95% (CLAUDE.md)
         run: |
           set -euo pipefail
@@ -162,7 +204,8 @@ jobs:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.webapp == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30, not 20: the MLS wasm toolchain image costs ~5-6 minutes cold.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: webapp
@@ -192,15 +235,78 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Build the MLS wasm wrapper
+        # The same script a dev machine runs, so CI can never pass on a
+        # toolchain nobody else has. This makes the wasm round-trip tests
+        # run rather than skip, and `npm run build` below resolve the
+        # `hamlaneh-mls` alias. Cold cost is dominated by compiling
+        # wasm-bindgen-cli inside the toolchain image (~5 min); when that
+        # hurts enough, the fix is publishing the toolchain image to GHCR
+        # from a scheduled job, not a second build definition.
+        run: bash src-mls/build.sh
+
+      - name: MLS crate advisory scan (cargo audit)
+        # ADR 006: the critical hpke-rs advisories sat one layer below the
+        # audited library, which is the whole argument for this gate.
+        run: |
+          MSYS_NO_PATHCONV=1 docker run --rm \
+            -v "$PWD/src-mls:/crate" -w /crate \
+            hamlaneh-mls-build cargo audit
+
       - name: Test
         run: npm test
 
       - name: Locale key parity (en/fa)
         run: npm run i18n:check
 
+      # The layout tier: a real browser over Vite's dev server and the contract
+      # mocks, with no stack behind it. It lives in THIS job rather than in the
+      # e2e one on purpose — the whole point is a check that needs no Docker,
+      # so it runs on every webapp change and on any developer's machine
+      # (`npm run e2e:layout`), including the Windows and macOS hosts where the
+      # media specs skip.
+      #
+      # It exists because three separate slices shipped an undesigned surface
+      # lying across a control nobody could then click, and nothing caught any
+      # of them: no unit test lays anything out, and the two specs that would
+      # have seen it are Linux-only. Chromium is ~120 MB and a few seconds.
+      - name: Install the browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Layout checks (Playwright, no stack)
+        run: npm run e2e:layout
+
+      - name: Upload the layout report on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: layout-report
+          path: |
+            webapp/playwright-report/
+            webapp/test-results/
+          retention-days: 7
+
       - name: Build
         run: npm run build
 
+  # Also carries the two Phase 2 media gates, because they are ordinary specs
+  # in the same suite against the same stack and there is nothing to add:
+  #
+  #   calls-relay-only.e2e.ts  ROADMAP §2 gate 2 — two browsers forced to
+  #                            relay-only ICE complete a call, with a live
+  #                            control probe proving the relay port is not
+  #                            reachable from outside the media container.
+  #   livekit-key-leak.e2e.ts  the media API secret appears in no response
+  #                            body, header, WebSocket frame or served asset.
+  #
+  # PER PULL REQUEST, not nightly, and deliberately: both guard a claim that a
+  # single line of deploy config can silently break (a published port, an
+  # advertised address, a token field), and a gate that only turns red at 02:30
+  # is a gate that gets found the morning after the change has been merged and
+  # forgotten. Together they cost under two minutes on top of a job whose
+  # `docker compose up --build` already dominates. The nightly workflow runs
+  # them again in the both-locales tier; the specs themselves skip the second
+  # locale, since neither measures anything a translation can move.
   e2e:
     name: End-to-end (Playwright)
     needs: changes
@@ -232,10 +338,12 @@ jobs:
         # config's single device profile uses.
         run: npx playwright install --with-deps chromium
 
-      - name: Run the suite (full en + fa smoke subset)
+      - name: Run the suite (full en + fa smoke subset, media gates included)
         working-directory: webapp
         # The suite starts and stops the stack itself, under its own compose
-        # project name; see webapp/e2e/support/stack.ts.
+        # project name; see webapp/e2e/support/stack.ts. The media gates need
+        # the runner to be the Docker host — it is, and calls-relay-only skips
+        # itself with the reason stated anywhere it is not.
         run: npm run e2e
 
       - name: Upload the report, traces and screenshots
@@ -251,6 +359,183 @@ jobs:
             webapp/test-results/
           retention-days: 7
           if-no-files-found: ignore
+
+  # ROADMAP.md Phase 4 test gate item 2, made runnable per pull request rather
+  # than only when a tag is cut. The three negatives it proves — a tampered
+  # release rejected, an unsigned one rejected, an older validly-signed one
+  # refused without --force — are exactly the controls that would otherwise be
+  # discovered broken during a security release, which is the worst possible
+  # moment to discover it.
+  #
+  # The signatures here are made with a throwaway key pair, off the
+  # transparency log. That is real cosign doing real verification; it is NOT
+  # the keyless identity check, which needs a real tag. See the header of
+  # deploy/verify-release.test.sh and docs/releasing.md.
+  release-tooling:
+    name: Release verification (anti-rollback gate)
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    # 20, not 10: this job now runs three suites rather than one.
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # The version release.yml signs with. A gate that passes against a
+          # different cosign major than the one that signs releases proves
+          # nothing: v3 changed the default blob format to Sigstore bundles.
+          cosign-release: v3.0.6
+
+      - name: Lint the operator scripts (shellcheck)
+        # Preinstalled on the runner image. All of deploy/*.sh, not just the
+        # new ones: they were already clean, and this keeps them that way.
+        run: shellcheck deploy/*.sh
+
+      - name: Verify the release gate
+        run: bash deploy/verify-release.test.sh
+
+      # The updater is the half that APPLIES what the verifier passed, so its
+      # own suite has to run beside it: a verifier that refuses correctly and
+      # an updater that applies anyway is still a shipped downgrade.
+      - name: Verify the updater gate
+        run: bash deploy/hamlaneh-update.test.sh
+
+      # Installer detection, idempotency and error paths. Container-level only
+      # -- it cannot start systemd or install Docker, which is why the roadmap
+      # still calls for real VMs. What it does prove is that a second run
+      # leaves deploy/.env byte-identical, which is the property most likely
+      # to break silently.
+      - name: Verify the installer
+        run: bash deploy/install.test.sh
+
+  # Separate from release-tooling because this suite is not shell-only: it
+  # runs a real PostgreSQL container and a real docker volume, and proves the
+  # canary is absent from an encrypted archive AND recoverable from a
+  # decrypted one. The positive control is the point -- absence alone would
+  # certify a plain gzip as encrypted.
+  backup-tooling:
+    name: Backup and restore drill
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The suite exits 2 rather than passing when docker or sqlite3 is
+      # missing, so a runner image that loses either fails loudly instead of
+      # reporting a green run that tested nothing.
+      - name: Run the backup and restore drill
+        run: bash deploy/hamlaneh-backup.test.sh
+
+  # ROADMAP Phase 4 test gate clause 4: "Tauri app builds for all three OSes
+  # in CI". Three runners, three real bundles, uploaded so a human can install
+  # one — a job that only typechecked the Rust would not prove the clause, and
+  # the failures this catches (a missing icon format, an unresolvable
+  # frontendDist, a bundler prerequisite) all live in bundling rather than in
+  # compilation.
+  #
+  # What each leg does and does not prove is written on its own matrix row.
+  #
+  # Rust comes from the runner image rather than from a pinned toolchain
+  # action, and it is the one unpinned input in this workflow. That is a
+  # deliberate trade, not an oversight: the shell is a dozen lines of Rust
+  # with no MSRV surface of its own, and adding a third-party action to a
+  # repository that pins every one of them by SHA costs more supply chain than
+  # it buys here. It stops being the right trade the day these bundles are
+  # released rather than merely built — a shipped artifact wants a pinned
+  # toolchain, and release.yml is where that belongs.
+  desktop:
+    name: Desktop app (Tauri, ${{ matrix.label }})
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true'
+    runs-on: ${{ matrix.os }}
+    # 45, not 25: every leg is a cold compile of Tauri's dependency tree
+    # (measured at 5m35s on Linux from an empty registry) and no build cache
+    # is configured — a job that runs this rarely would mostly miss one.
+    timeout-minutes: 45
+    strategy:
+      # One platform breaking must not cancel the evidence from the other
+      # two: which of the three broke is the entire content of this gate.
+      fail-fast: false
+      matrix:
+        include:
+          # Proves the WebKitGTK path and both Linux bundle formats. The
+          # AppImage leg also proves the network fetch of linuxdeploy, which
+          # is the flakiest step in the job and the first one to suspect.
+          - os: ubuntu-latest
+            label: Linux
+            bundles: deb,appimage
+          # Proves the WKWebView path. Apple silicon ONLY — the runner is
+          # arm64, so this is aarch64-apple-darwin and not a universal
+          # binary; an Intel Mac is not covered by this leg. The bundle is
+          # also unsigned and unnotarised, so Gatekeeper will quarantine it:
+          # that needs an Apple Developer identity the project does not have.
+          - os: macos-latest
+            label: macOS
+            bundles: app,dmg
+          # Proves the WebView2 path and the NSIS installer. Unsigned, so
+          # SmartScreen warns on it. MSI is one word away if an operator ever
+          # needs Group Policy deployment; NSIS alone keeps the leg cheap.
+          - os: windows-latest
+            label: Windows
+            bundles: nsis
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install the WebKitGTK toolchain
+        if: runner.os == 'Linux'
+        # Tauri v2's Linux prerequisites. macOS and Windows need none:
+        # WKWebView ships with the OS, and WebView2 is preinstalled on the
+        # runner image and evergreen on Windows 10 and 11.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test the connect page
+        # `node --test`, no framework. Cheap enough to run on all three legs
+        # rather than nominate one, and what it covers is the guard deciding
+        # which addresses the shell will navigate its own window to.
+        run: npm test
+
+      - name: Build the bundles
+        run: npx tauri build --bundles ${{ matrix.bundles }}
+
+      - name: Upload the bundles
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-${{ matrix.label }}
+          path: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+          # This IS the assertion that something was bundled. `tauri build`
+          # exits 0 having emitted nothing for a target it decided to skip,
+          # so without this a green leg would prove only that Rust compiled.
+          if-no-files-found: error
+          retention-days: 7
 
   gitleaks:
     name: Secret scan (gitleaks)
@@ -298,14 +583,27 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Generate throwaway environment file
-        # POSTGRES_PASSWORD is random per run, exists only in the runner temp
+        # Every secret is random per run, exists only in the runner temp
         # directory, and is never printed. Nothing is hard-coded.
+        #
+        # This block must carry a value for EVERY `${VAR:?...}` in
+        # deploy/docker-compose.yml. Compose refuses to interpolate a missing
+        # one, so a variable added to the stack without a line here fails this
+        # job in seconds, before a single image is built — which is what the
+        # LiveKit pair did. `grep -oE '[A-Z_]+:[?]' deploy/docker-compose.yml`
+        # lists the set this has to cover.
         run: |
           umask 077
           env_file="$RUNNER_TEMP/compose-smoke.env"
           {
             echo "HAMLANEH_DOMAIN=localhost"
             echo "POSTGRES_PASSWORD=$(openssl rand -hex 32)"
+            echo "HAMLANEH_FILE_URL_KEY=$(openssl rand -hex 32)"
+            echo "HAMLANEH_AUDIT_KEY=$(openssl rand -hex 32)"
+            # Same shapes install.sh generates (new_livekit_api_key /
+            # new_livekit_api_secret): 16 bytes of key, 32 of secret.
+            echo "HAMLANEH_LIVEKIT_API_KEY=$(openssl rand -hex 16)"
+            echo "HAMLANEH_LIVEKIT_API_SECRET=$(openssl rand -hex 32)"
           } > "$env_file"
           echo "COMPOSE=docker compose -f deploy/docker-compose.yml --env-file $env_file" >> "$GITHUB_ENV"
 
@@ -362,7 +660,10 @@ jobs:
       - name: Verify secure defaults
         env:
           HAMLANEH_DOMAIN: localhost
-        run: bash deploy/verify-defaults.sh
+        # The stack was started with --env-file in the runner temp directory,
+        # so point the verifier at the same file: its LiveKit leak check reads
+        # the secret from there, and without this it fails having never had one.
+        run: HAMLANEH_ENV_FILE="$RUNNER_TEMP/compose-smoke.env" bash deploy/verify-defaults.sh
 
       - name: Dump service state and logs on failure
         if: failure()

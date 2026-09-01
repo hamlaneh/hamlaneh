@@ -10,6 +10,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
+	"github.com/hamlaneh/hamlaneh/server/internal/audit"
+	"github.com/hamlaneh/hamlaneh/server/internal/blobstore"
+	"github.com/hamlaneh/hamlaneh/server/internal/calls"
+	"github.com/hamlaneh/hamlaneh/server/internal/oidc"
 	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
 	"github.com/hamlaneh/hamlaneh/server/internal/ratelimit"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
@@ -29,10 +33,27 @@ type Store interface {
 	Ready(ctx context.Context) error
 
 	UserByIdentifier(ctx context.Context, identifier string) (storage.User, error)
+	// UserByEmail backs rungs 2 and 3 of the SSO resolution ladder: whether
+	// an unlinked identity's email names an account the directory manages
+	// (attach) or any other account (refuse). It never decides who signs in
+	// on its own — (issuer, subject) is the whole login key (ADR 004).
+	UserByEmail(ctx context.Context, email string) (storage.User, error)
 	CreateUser(ctx context.Context, nu storage.NewUser) (storage.User, error)
 	UpdatePassword(ctx context.Context, userID uuid.UUID, passwordHash string, keepFamilyID uuid.UUID) error
 	UpdatePasswordHash(ctx context.Context, userID uuid.UUID, passwordHash string) error
 	ListUsers(ctx context.Context, params storage.ListUsersParams) ([]storage.User, error)
+	// ListDirectory is the people-picker read: username order, filtered,
+	// and a different query from ListUsers rather than a mode flag on it
+	// (storage/directory.go says why).
+	ListDirectory(ctx context.Context, params storage.ListDirectoryParams) ([]storage.User, error)
+	// UserByID names the person in a membership event. The events carry a
+	// UserSummary, and broadcasting one with an empty username is worse than
+	// not broadcasting at all.
+	UserByID(ctx context.Context, id uuid.UUID) (storage.User, error)
+	// UpdateUserProfile is the settings panel's own edit of the caller's
+	// account — the locale among them, so a language choice follows the
+	// person rather than the browser it was made in.
+	UpdateUserProfile(ctx context.Context, userID uuid.UUID, upd storage.UserProfileUpdate) (storage.User, error)
 
 	CreateSession(ctx context.Context, ns storage.NewSession) (storage.Session, error)
 	SessionUserByAccessHash(ctx context.Context, accessHash []byte) (storage.Session, storage.User, error)
@@ -58,6 +79,24 @@ type Store interface {
 	// the store has confirmed the account has a second factor to reissue
 	// codes for. The store calls it inside the transaction, after the check.
 	ReplaceRecoveryCodes(ctx context.Context, userID uuid.UUID, hashes func() []string) error
+	// Single sign-on identities (ADR 004 slice 2). The lookup also records
+	// the use (last_login_at); the two conflicts of a link map to
+	// storage.ErrOidcAccountLinked / ErrOidcIdentityTaken.
+	UserByOidcIdentity(ctx context.Context, issuer, subject string) (storage.User, error)
+	LinkOidcIdentity(ctx context.Context, userID uuid.UUID, issuer, subject string, emailAtLink *string) error
+	UnlinkOidcIdentity(ctx context.Context, userID uuid.UUID) error
+	// CreateOidcUser is just-in-time provisioning: the account and its link
+	// in one transaction, so two tabs of one person leave one account behind
+	// rather than one account plus an orphan.
+	CreateOidcUser(ctx context.Context, nu storage.NewOidcUser) (storage.User, error)
+	// Pending links: the server-side state that decides link vs sign-in at
+	// the callback. Create is called only by the session-gated link
+	// endpoint; Consume atomically deletes and returns the target account
+	// (ErrNotFound when there is no live pending link), so the callback can
+	// never be steered by a forged cookie.
+	CreateOidcLinkRequest(ctx context.Context, stateHash, secretHash []byte, userID uuid.UUID, ttl time.Duration) error
+	ConsumeOidcLinkRequest(ctx context.Context, stateHash, secretHash []byte) (uuid.UUID, error)
+
 	CreateTotpChallenge(ctx context.Context, userID uuid.UUID, tokenHash []byte, ttl time.Duration) error
 	// TotpChallengeUserByTokenHash identifies the account behind a challenge
 	// token so CompleteTotpLogin can consult the per-account limiter BEFORE
@@ -65,6 +104,123 @@ type Store interface {
 	// would not have stopped the guess.
 	TotpChallengeUserByTokenHash(ctx context.Context, tokenHash []byte) (uuid.UUID, error)
 	CompleteTotpChallenge(ctx context.Context, att storage.TotpChallengeAttempt) (storage.User, storage.Session, storage.TotpChallengeOutcome, error)
+
+	// Conversations. ChannelForUser is the one to reach for in a handler:
+	// it fills the per-caller counts the contract makes required on every
+	// Channel. ChannelByID answers without a caller and leaves those zero,
+	// so it is only correct where no user is in scope.
+	CreateChannel(ctx context.Context, nc storage.NewChannel) (storage.Channel, error)
+	ChannelForUser(ctx context.Context, channelID, userID uuid.UUID) (storage.Channel, error)
+	UpdateChannelTopic(ctx context.Context, id uuid.UUID, topic string) (storage.Channel, error)
+	ListChannelsForUser(ctx context.Context, userID uuid.UUID, params storage.ListChannelsParams) ([]storage.Channel, error)
+	OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID, e2ee bool) (storage.Channel, bool, error)
+	AddChannelMember(ctx context.Context, channelID, userID, addedBy uuid.UUID) error
+	RemoveChannelMember(ctx context.Context, channelID, userID uuid.UUID) error
+	ListChannelMembers(ctx context.Context, channelID uuid.UUID, params storage.ListChannelMembersParams) ([]storage.User, error)
+	// IsChannelMember is the fact authz.Can decides channel actions on. It
+	// is read per request, never cached across one: membership changes while
+	// a client is connected, and a stale copy is an authorization bug.
+	IsChannelMember(ctx context.Context, channelID, userID uuid.UUID) (bool, error)
+
+	CreateMessage(ctx context.Context, nm storage.NewMessage) (storage.Message, bool, error)
+	ListMessages(ctx context.Context, params storage.ListMessagesParams) (storage.MessagePage, error)
+	SetReadPosition(ctx context.Context, channelID, userID, messageID uuid.UUID) error
+
+	// The tamper-evident log (internal/audit). The append takes a seal
+	// callback rather than a finished hash because the entry cannot be
+	// sealed until its place in the chain is fixed, and that happens inside
+	// the transaction — storage decides the position, audit holds the key.
+	AppendAuditEntry(ctx context.Context, e storage.AuditEntry, seal func(storage.AuditEntry) []byte) (storage.AuditEntry, error)
+	ListAuditEntries(ctx context.Context, params storage.ListAuditParams) ([]storage.AuditEntry, error)
+
+	// CreateAttachment records an upload whose bytes are already on disk.
+	// Reading attachments back is not a call of its own: they arrive with
+	// the messages that carry them, in one query per page rather than one
+	// per message (storage.Message.Attachments).
+	CreateAttachment(ctx context.Context, na storage.NewAttachment) (storage.Attachment, error)
+
+	// Admin user lifecycle. UpdateUserAdmin owns the last-admin rule — the
+	// refusal is a fact about a set, so it cannot be decided by a handler
+	// reading rows one at a time.
+	UpdateUserAdmin(ctx context.Context, userID uuid.UUID, upd storage.AdminUserUpdate) (storage.User, error)
+	SetTemporaryPassword(ctx context.Context, userID uuid.UUID, passwordHash string) (storage.User, error)
+
+	// Invitations. Only the hash is ever stored, so nothing here takes or
+	// returns a raw token except by its digest.
+	CreateInvite(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string, ttl time.Duration) (storage.Invite, error)
+	ListOpenInvites(ctx context.Context, params storage.ListInvitesParams) ([]storage.Invite, error)
+	RevokeInvite(ctx context.Context, id uuid.UUID) error
+	OpenInviteByTokenHash(ctx context.Context, tokenHash []byte) (storage.Invite, error)
+	RedeemInvite(ctx context.Context, tokenHash []byte, nu storage.NewUser) (storage.User, error)
+
+	// SCIM provisioning credentials. Only the digest is ever stored, so
+	// nothing here takes or returns a raw token — the same shape as
+	// invitations. The provisioning surface itself reaches storage through
+	// its own narrow interface (internal/scim), not through this one: it is
+	// a second door with its own credential and none of these methods.
+	CreateScimToken(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string) (storage.ScimToken, error)
+	ListScimTokens(ctx context.Context) ([]storage.ScimToken, error)
+	RevokeScimToken(ctx context.Context, id uuid.UUID) error
+
+	// Conference rooms (ADR 005). Only the digest of a link is ever stored,
+	// so nothing here takes or returns a raw one — the same shape
+	// invitations have. LiveConferenceByTokenHash collapses unknown, expired
+	// and revoked into ErrNotFound at the query, so the three cannot be told
+	// apart anywhere above it; ConferenceByID does the same for a revoked
+	// id, and says nothing about who may act on the row — that is
+	// internal/authz's, and it needs the owner this returns to decide it.
+	CreateConference(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, title string, expiresAt *time.Time) (storage.Conference, error)
+	ListConferences(ctx context.Context, ownerID uuid.UUID, all bool) ([]storage.Conference, error)
+	ConferenceByID(ctx context.Context, id uuid.UUID) (storage.Conference, error)
+	RevokeConference(ctx context.Context, id uuid.UUID) error
+	LiveConferenceByTokenHash(ctx context.Context, tokenHash []byte) (storage.Conference, error)
+
+	// The E2EE transport (ADR 006, migration 0017). Every blob crossing this
+	// boundary is opaque: the store sequences and delivers MLS artifacts it
+	// never parses, and nothing on this interface hands one to anything that
+	// could.
+	//
+	// The two that answer a race are the ones worth naming. ClaimMlsKeyPackages
+	// is a CONSUMING read — the packages it returns are deleted in the
+	// transaction that returned them, so no package can be handed out twice —
+	// and SubmitMlsCommit is a compare-and-swap that stores the commit and all
+	// its Welcomes in the same transaction as the epoch it advances.
+	RegisterMlsDevice(ctx context.Context, userID uuid.UUID, signatureKey []byte) (storage.MlsDevice, bool, error)
+	ReplaceMlsKeyPackages(ctx context.Context, userID, deviceID uuid.UUID, packages [][]byte) (int, error)
+	MlsGroupByChannel(ctx context.Context, channelID uuid.UUID) (storage.MlsGroup, error)
+	CreateMlsGroup(ctx context.Context, channelID uuid.UUID, groupID []byte) (storage.MlsGroup, error)
+	ClaimMlsKeyPackages(ctx context.Context, channelID, targetUserID uuid.UUID) ([]storage.MlsKeyPackageClaim, []uuid.UUID, error)
+	ListMlsMemberDevices(ctx context.Context, channelID uuid.UUID, after *uuid.UUID, limit int) ([]storage.MlsMemberDevice, error)
+	SubmitMlsCommit(ctx context.Context, nc storage.NewMlsCommit) (storage.MlsCommitOutcome, error)
+	ListMlsCommits(ctx context.Context, channelID uuid.UUID, afterEpoch int64, limit int) ([]storage.MlsCommit, error)
+	ListMlsWelcomes(ctx context.Context, userID uuid.UUID) ([]storage.MlsWelcome, error)
+	DeleteMlsWelcome(ctx context.Context, userID, welcomeID uuid.UUID) error
+
+	// The recovery surface (ADR 010, migration 0019). The envelope is the one
+	// blob on this interface that is not merely unparsed but sealed: the key
+	// that opens it is derived from a recovery key generated on the device and
+	// never sent here, so there is no method that could be added later to read
+	// it. PutMlsBackup refuses a counter that does not advance — a rail
+	// against the owner's own two devices writing out of order, never the
+	// anti-rollback control, which is client-side by necessity.
+	//
+	// DeregisterMlsDevice is the directory write ADR 007's sweep needs in
+	// order to act, and is deliberately not coupled to session revocation:
+	// un-listing a key and signing a device out answer different questions.
+	PutMlsBackup(ctx context.Context, userID uuid.UUID, envelope []byte, counter int64) error
+	MlsBackupByUser(ctx context.Context, userID uuid.UUID) (storage.MlsBackup, error)
+	DeleteMlsBackup(ctx context.Context, userID uuid.UUID) error
+	DeregisterMlsDevice(ctx context.Context, userID, deviceID uuid.UUID) error
+
+	// Instance settings, including the derived accounts-without-two-step
+	// count the enforcement switch is read beside.
+	OrgSettings(ctx context.Context) (storage.OrgSettings, error)
+	UpdateOrgSettings(ctx context.Context, patch storage.OrgSettingsPatch) (storage.OrgSettings, error)
+	// EncryptionMode is the mode alone, which is what the two conversation
+	// creation paths read; SetEncryptionMode is the only way it is written,
+	// and OrgSettingsPatch deliberately carries no field for it.
+	EncryptionMode(ctx context.Context) (string, error)
+	SetEncryptionMode(ctx context.Context, mode string) (storage.OrgSettings, error)
 }
 
 // The production store satisfies the whole surface at compile time.
@@ -98,28 +254,10 @@ const (
 	totpRateWindow = 5 * time.Minute
 )
 
-// Two-step settings rate limit: one sliding window per account across the
-// four endpoints the contract gives a 429 — totp/setup, totp/verify,
-// totp/disable and totp/recovery-codes.
-//
-// The budget is about server work, not guessing, which is why it is keyed
-// on the account alone and why every call spends a unit rather than only
-// the failures. Two of the four run a full argon2id password verification
-// (64 MiB) before they decide anything, and recovery-codes then hashes ten
-// more; a session that has been hijacked, or simply a stuck client, can
-// otherwise repeat that indefinitely. There is no IP key because there is
-// no anonymous reach here: all four sit behind a session, so the account IS
-// the caller.
-//
-// One window covers all four because an attacker who has a session picks
-// whichever endpoint is cheapest for them, and per-endpoint budgets would
-// just multiply the total. 10 in 5 minutes is far above any real use — a
-// user regenerates codes once — and far below what makes the argon2 cost
-// worth paying.
-const (
-	totpSettingsRateLimit  = 10
-	totpSettingsRateWindow = 5 * time.Minute
-)
+// Every other budget this server enforces — two-step settings, search, the
+// user directory, and the conversation and message writes — is per endpoint
+// and lives in the table in ratelimits.go, spent by middleware rather than by
+// hand inside a handler.
 
 // readyzTimeout bounds the whole readiness probe: a stalled database must
 // become a fast 503, not a hung request.
@@ -144,6 +282,11 @@ var errNoStorage = errors.New("no storage configured")
 type apiServer struct {
 	store Store
 
+	// realtime delivers ws-protocol.md §4 events. Never nil — it defaults to
+	// noRealtime, so a handler announces unconditionally and no event can be
+	// lost to a forgotten nil check.
+	realtime Realtime
+
 	// reset is the password-reset policy. A nil service means reset is not
 	// configured, which is exactly what a zero-config install is:
 	// GET /api/v1/instance reports password_reset_available false, a request
@@ -151,11 +294,93 @@ type apiServer struct {
 	// reset-complete is invalid.
 	reset *passwordreset.Service
 
+	// calls is the media plane (internal/calls). Nil means no media server is
+	// configured — the zero-config install and any development server without
+	// the stack: the instance document reports calls false, the token
+	// endpoint answers 503 calls_unavailable, and every read of live state
+	// honestly answers that there is no call. Every method on it is nil-safe,
+	// so no handler needs a nil check to say so.
+	calls *calls.Service
+
+	// sso is the OIDC relying party. Nil means no provider is configured —
+	// the zero-config install: instance info reports sso disabled, the
+	// start/callback/link endpoints answer 503 sso_unavailable, and
+	// unlinking (a plain database delete) still works.
+	sso *oidc.Service
+
+	// The budgets that cannot be decided from a route, spent by the handlers
+	// that own them (ratelimits.go explains why each one stayed).
 	loginIPLimiter         *ratelimit.Limiter
 	loginIdentifierLimiter *ratelimit.Limiter
 	totpIPLimiter          *ratelimit.Limiter
 	totpAccountLimiter     *ratelimit.Limiter
-	totpSettingsLimiter    *ratelimit.Limiter
+
+	// budgets holds one limiter per named per-endpoint budget, spent by
+	// rateLimitMiddleware against the route the request matched.
+	budgets map[budgetName]*ratelimit.Limiter
+
+	// previews is the asynchronous link-preview pipeline
+	// (preview_enricher.go). Nil means enrichment is not wired, and messages
+	// carry no preview cards.
+	previews PreviewEnricher
+
+	// files wires the cookie-less files origin (files_origin.go). Its zero
+	// value is an install with no upload pipeline configured, and the two
+	// file routes then answer 404 — which is what that install is.
+	files Files
+
+	// scim is the SCIM 2.0 provisioning surface (internal/scim), served from
+	// the same listener on /scim/v2 and from nothing else. Nil is a server
+	// built without provisioning, and those paths then answer the
+	// application's own 404. It is an http.Handler and not a store because
+	// this package deliberately knows nothing about SCIM beyond where it is
+	// mounted (server.go).
+	scim http.Handler
+
+	// blobs holds uploaded file bytes. A nil one is a server wired without
+	// the upload pipeline — a unit-test fixture, never production — and
+	// UploadFile answers 500 rather than pretending to have stored anything.
+	blobs *blobstore.Store
+
+	// fileSigner mints the URLs every serialized Attachment carries. Never
+	// nil: it defaults to the unsigned placeholder, so serialization needs no
+	// nil check and no attachment can be written without the url the
+	// contract makes required.
+	fileSigner fileURLSigner
+
+	// audit records administrative actions. Never nil — it defaults to
+	// noAudit, so a handler records unconditionally and no action can be
+	// lost to a forgotten nil check (the same reason realtime works that
+	// way).
+	audit AuditRecorder
+
+	// auditChain verifies the pages the log reads back. Nil is a server
+	// wired without the audit key — a unit-test fixture, never production,
+	// because main refuses to start without one — and the audit endpoint
+	// then answers 500 rather than claiming a page verified when nothing
+	// checked it (audit_handlers.go).
+	auditChain *audit.Chain
+
+	// publicURL is the instance's absolute public origin, used to build the
+	// invitation link the dashboard shows once. Empty is an install that was
+	// never told its own origin; the link is then site-relative, which still
+	// resolves for the admin looking at it (admin_handlers.go).
+	publicURL string
+
+	// compressAssets gzips the embedded web build. False — the default, and
+	// what every compose install stays on, because Caddy compresses there —
+	// serves the build's bytes as they are. It is read once, when the routes
+	// are built (server.go), and reaches nothing under /api by design
+	// (compress.go).
+	compressAssets bool
+
+	// trustProxy says a reverse proxy sits in front of this listener and may
+	// name the client with X-Forwarded-For. False — the default — reads the
+	// direct peer and nothing else, which is the honest answer for any
+	// deployment with nothing forwarding: the single binary, and every test
+	// fixture. WithTrustedProxy is the only thing that sets it, and
+	// clientIP carries the whole argument.
+	trustProxy bool
 }
 
 var _ api.ServerInterface = (*apiServer)(nil)
@@ -167,11 +392,14 @@ var _ api.ServerInterface = (*apiServer)(nil)
 func newAPIServer(store Store, opts ...Option) *apiServer {
 	s := &apiServer{
 		store:                  store,
+		realtime:               noRealtime{},
 		loginIPLimiter:         ratelimit.New(loginRateLimit, loginRateWindow),
 		loginIdentifierLimiter: ratelimit.New(loginRateLimit, loginRateWindow),
 		totpIPLimiter:          ratelimit.New(totpRateLimit, totpRateWindow),
 		totpAccountLimiter:     ratelimit.New(totpRateLimit, totpRateWindow),
-		totpSettingsLimiter:    ratelimit.New(totpSettingsRateLimit, totpSettingsRateWindow),
+		budgets:                newBudgetLimiters(),
+		fileSigner:             unsignedFileURLs{},
+		audit:                  noAudit{},
 	}
 	for _, opt := range opts {
 		opt(s)

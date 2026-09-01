@@ -46,6 +46,10 @@ the family. Revoking a family — logout, remote device revocation, password cha
 enforces this with a periodic revocation sweep, not only on the next inbound frame, so an idle
 socket cannot outlive its session.
 
+**No permessage-deflate.** The server does not negotiate WebSocket compression. Frame sizes
+are small (§2), and a shared compression context mixing one user's text with another's is a
+length side-channel this protocol simply refuses to have rather than reason about per-frame.
+
 **CSRF:** the `X-Hamlaneh-CSRF` double-submit header that guards mutating REST requests cannot
 be sent on a browser WebSocket handshake. The Origin check above is the equivalent control for
 this transport.
@@ -78,8 +82,14 @@ closed with `4400`.
 
 The version is negotiated **once**, in this exchange, and never renegotiated on a live socket.
 The client offers `protocol_version`; the server answers with the version it will speak. If the
-server cannot speak the offered version it closes with `4400` and a `data.reason` of
-`unsupported_protocol_version` rather than silently downgrading. Protocol version is `1`.
+server cannot speak the offered version it closes with `4400` and the close **reason**
+`unsupported_protocol_version`, rather than silently downgrading. (A WebSocket close frame
+carries a code and a reason string and nothing else — there is no `data` object to put it in.)
+Protocol version is `1`.
+
+A **second `hello` on a live socket closes it with `4400`.** "Negotiated once" is the rule;
+re-offering a version is a client that has lost track of its own connection, and the safe answer
+is to end it rather than guess which negotiation is in force.
 
 `resume` is optional and covered in §5. On a fresh connect it is omitted.
 
@@ -116,6 +126,12 @@ not an object, or a channel-scoped frame without `chan` closes the socket with `
 no partial-parse recovery: an ambiguous frame is a bug or an attack, and neither deserves a
 best-effort interpretation.
 
+**A known field of the wrong type inside `data` is not fatal** — the frame is ignored and the
+socket stays open, the same treatment an unknown `type` gets. The envelope is what has to be
+trustworthy; a `presence` whose `state` arrived as a number is one unusable instruction, not an
+unusable connection. The exception is `hello`: it is the frame that establishes what the socket
+*is*, so an unusable payload there closes with `4400`.
+
 ---
 
 ## 3. Client → server operations
@@ -132,6 +148,10 @@ best-effort interpretation.
 
 Notes that matter:
 
+- **The channel is the envelope's `chan`, never a field inside `data`.** Every channel-scoped
+  event carries it at the top level, and no payload repeats it. Some older readers in this repo
+  accept both, which is tolerance rather than permission — a payload that carries its own `chan`
+  is two sources for one fact, and the envelope is the one.
 - **Membership is checked on every channel-scoped operation, every time**, against the database
   or an invalidated cache — never against a membership set captured at connect. A user removed
   from a channel mid-socket stops being able to act on it immediately.
@@ -166,14 +186,21 @@ this socket has subscribed to).
 | `subscribed` | socket | no | `{}` — echoes `id` and `chan`. |
 | `unsubscribed` | socket | no | `{}` — echoes `id` and `chan`. |
 | `message_created` | membership | yes | `{message}` — the `Message` schema from `openapi.yaml`. |
-| `message_updated` | membership | yes | `{message}` — an edit; `edited_at` is set. |
+| `message_updated` | membership | yes | `{message}` — an edit, or a server-side enrichment (a link preview arriving). `edited_at` is set only by a real edit; enrichment must not stamp somebody's message "(edited)" for a card the server added. |
 | `message_deleted` | membership | yes | `{message}` — soft delete; `deleted_at` set, `content` empty. Sent as the full message so the placeholder keeps its position and metadata. |
 | `channel_created` | membership | no | `{channel}` — you created it, or somebody invited you. The sidebar adds a row. |
 | `channel_updated` | membership | yes | `{channel}` — topic changed, or `member_count` moved. |
 | `member_added` | membership | yes | `{chan, user}` — `UserSummary`. |
+| `member_removed` | membership | yes | `{chan, user}` — `UserSummary`. Delivered to the members that remain. |
+| `channel_removed` | own user | no | `{chan}` — this channel is gone *for you*: you were removed, or you left from another device. Drop the sidebar row and any subscription. |
 | `read_position` | own user | no | `{chan, message_id, read_at}` — sent only to the *same user's* other sockets. |
 | `typing` | subscription | no | `{user_id}` — expires client-side after ~5 s; there is no `typing_stopped`. |
 | `presence` | membership, DM channels only | no | `{user_id, state}` — `online`/`away`/`offline`. |
+| `call_started` | membership | no | `{started_by, participants}` — a call is now happening here. Membership scope rather than subscription is what makes a DM peer's client ring without having subscribed to anything. `started_by` exists only on this event: a ring is strictly live, and `GET .../call` cannot rebuild one after a reconnect because it does not carry who started the call. |
+| `call_updated` | membership | no | `{participants}` — somebody joined or left, or started sharing a screen. |
+| `call_ended` | membership | no | `{}` — the last participant left. Sent immediately on that departure, not when the room is eventually reaped, so a banner never claims a call that ended five minutes ago. |
+| `mls_commit` | membership | no | `{epoch}` — a commit was accepted at this epoch; fetch the blob with `GET …/mls/commits?after_epoch=<your epoch>`. Notification only, deliberately: commit blobs can approach 256 KiB, which no frame under the 64 KiB cap can carry, and the commit log is durable where the replay buffer is not — so the event says something changed and REST says what is true, the same doctrine as calls. Missing this event costs nothing but latency: every client refetches the log on reconnect and on channel open. |
+| `mls_welcome` | own user | no | `{}` — a Welcome awaits at least one of your devices; fetch `GET /api/v1/users/me/mls/welcomes`. Delivered to all the user's sockets because a Welcome is encrypted to one device's key package — a sibling device receives bytes it cannot open, so the fan-out reveals nothing. |
 | `resync` | socket | no | `{chan}` — this channel's replay buffer could not satisfy your resume; backfill over REST (§5). |
 | `ping` | socket | no | `{}` — §6. |
 | `pong` | socket | no | `{}` — answer to a client `ping`. |
@@ -188,9 +215,18 @@ Notes that matter:
 - **The three presence states**: `online` means a live socket exists; `away` means a client
   reported itself idle; `offline` means no socket after a short grace period (so a reload or a
   tunnel blip does not flash the peer offline).
+- **A `typing` event is never echoed to its own sender.** The author already knows; rendering
+  "you are typing" would be a bug baked into the transport.
 - **`typing` has a protocol but no designed UI yet.** The frames are specified and implemented so
   the transport is settled; whether and how a typing indicator is drawn is a design question
   that has not been answered. Nothing renders it in Phase 1.2.
+- **Removal is two events because the audiences are disjoint.** The members that remain get
+  `member_removed` — they are still members, so `membership` scope reaches them. The removed
+  user is *not* a member any more, so no membership-scoped event can legally reach them; their
+  own sockets get `channel_removed` instead, which tells them only about their own state and
+  names nothing that is now none of their business. On removal the server also drops the
+  removed user's subscriptions to that channel itself — it must not wait for the client to be
+  polite about it.
 - **Events never leak across membership.** A socket receives an event for a channel only while
   its user is a member of that channel at send time. This is the WS half of the IDOR matrix and
   is tested per channel-scoped event type, not merely per endpoint.
@@ -204,7 +240,14 @@ Notes that matter:
 Each channel carries a monotonically increasing **`seq`**, assigned by the server, incremented
 once per ordered event on that channel (the `seq: yes` rows in §4). Ephemeral events carry no
 `seq` and are never replayed: a typing indicator or a presence blip from thirty seconds ago is
-worthless.
+worthless, and a call event from five minutes ago is worse than worthless — it would paint a
+banner for a call nobody is in. Clients reconcile call state against
+`GET /api/v1/channels/{id}/call` on opening a channel and after a reconnect. The events say
+something changed; REST says what is true — as of the moment it was asked. A read is a round
+trip, and a client that applies its answer unconditionally will undo any call event that arrived
+while it was in flight, with no reconciliation point left to put the banner back. So an answer
+the socket overtook is dropped rather than applied: whichever of the two spoke last wins, and an
+event that landed after the read was issued is the later of them.
 
 The server keeps a bounded per-channel **replay buffer**: the more recent of the last **256
 events** or the last **5 minutes**. It is memory only. It is not durable, not a queue, and not a
@@ -227,6 +270,15 @@ For each requested channel the server either
   the client backfills over REST with
   `GET /api/v1/channels/{id}/messages?after=<after_cursor>` until the page returns no
   `after_cursor`. A `resync` event can also arrive mid-socket for a single channel.
+
+**Resume is not a back door around membership.** The `resume` list is the client's claim about
+what it once saw, and the server re-checks membership for every requested channel at `hello`
+time: a channel the user is not a member of *now* — removed while disconnected, or never a
+member at all — is never replayed. It is listed in `resync`, which reveals nothing (the list is
+derived from the client's own request), and the REST backfill answers 404 exactly as it would
+for any non-member, at which point the client drops the channel. Replayed events are ordinary
+sends under §4's membership rule; buffering an event earlier never grandfathers a socket into
+receiving it.
 
 Falling back to REST is the **normal** path, not the failure path. A client that treats `resync`
 as an error will be wrong most of the time it reconnects after a long sleep.
@@ -297,16 +349,24 @@ close codes:
 | `4401` | Session expired or revoked (§7). | Stop reconnecting; return to sign-in. |
 | `4408` | Heartbeat timeout (§6). | Reconnect with backoff and resume. |
 | `4413` | Frame exceeded the 64 KiB cap. | Not retry the frame. |
-| `4429` | Rate limited (§ below). | Reconnect after the backoff, slower. |
+| `4429` | Rate limited. **Reserved, and unreachable by this design** — see the note below. | Reconnect after the backoff, slower. |
 
 **Reconnect backoff** is exponential with full jitter, starting at 1 s, capped at 30 s. The
 "No connection. Retrying in 8 s." banner in the design counts down this timer, so the client
 owns the schedule and shows it rather than hiding it.
 
+**`4429` is reserved and nothing sends it.** The close-code table lists it because a rate limit
+that terminated a live socket would need one, but no such rule exists here: the connect budget
+decides *before* the upgrade, when there is no socket to close and an HTTP `429` is the answer,
+and the per-frame budgets deliberately keep the socket open and reply with an `error` frame —
+a subscribe-storm is a client bug, not grounds to drop a connection somebody is reading in. The
+code stays in the table so a future rule that does close a socket has one to use, and so nobody
+reinvents a different number for it.
+
 **Rate limits** apply per session family and per IP to: WebSocket connect and reconnect,
 `subscribe` (a subscribe-storm is a cheap way to hammer membership checks), and `typing`.
 Exceeding the per-frame budgets yields an `error` frame with code `rate_limited`; exceeding the
-connect budget yields `429` on the handshake or `4429` on an open socket. Message send and
+connect budget yields `429` on the handshake. Message send and
 search are rate-limited on their REST endpoints.
 
 ---
@@ -383,10 +443,17 @@ entry and on an entry without a row. Columns are fixed: `op`, `direction`, `scop
 | channel_created | s2c | channel | member |
 | channel_updated | s2c | channel | member |
 | member_added | s2c | channel | member |
+| member_removed | s2c | channel | member |
+| channel_removed | s2c | channel | self |
 | read_position | s2c | channel | self |
 | typing | s2c | channel | member |
 | presence | s2c | channel | member-dm |
+| mls_commit | s2c | channel | member |
+| mls_welcome | s2c | user | self |
 | resync | s2c | channel | member |
+| call_started | s2c | channel | member |
+| call_updated | s2c | channel | member |
+| call_ended | s2c | channel | member |
 | ping | s2c | socket | session |
 | pong | s2c | socket | session |
 | error | s2c | socket | session |

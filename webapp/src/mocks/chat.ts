@@ -20,10 +20,13 @@ type OpenDirectMessageRequest = components["schemas"]["OpenDirectMessageRequest"
 type UpdateChannelRequest = components["schemas"]["UpdateChannelRequest"];
 type AddChannelMemberRequest = components["schemas"]["AddChannelMemberRequest"];
 type SetReadPositionRequest = components["schemas"]["SetReadPositionRequest"];
+type ChannelCall = components["schemas"]["ChannelCall"];
+type CallToken = components["schemas"]["CallToken"];
 type ApiError = components["schemas"]["Error"];
+type EncryptionMode = components["schemas"]["EncryptionMode"];
 
 /**
- * Contract mocks for the Phase 1.2 messaging surface, typed against the
+ * Contract mocks for the messaging and file surface, typed against the
  * generated schema. The fixture conversation mirrors the artboards
  * (chat-default's `#deploys`, the DM with Parisa, the empty `#design-tokens`)
  * so `VITE_API_MOCK=1 npm run dev` shows the design rather than lorem ipsum.
@@ -71,10 +74,9 @@ export const CHAT_CHANNELS = {
 const TODAY = "2026-08-21";
 
 /**
- * What the three cards on the component sheet render from. The real API
- * returns no attachments until the Phase 1.3 upload pipeline and no previews
- * until the Phase 1.3 egress proxy, so these fixtures are what the card code
- * is exercised against in the meantime.
+ * What the three cards on the component sheet render from — the fixed history
+ * the artboards draw. Uploads made during a session come back from the upload
+ * handler below with their own ids; these are the seeded ones.
  */
 export const FIXTURE_FILE: Attachment = {
   id: "00000000-0000-4000-8000-0000000000f1",
@@ -85,11 +87,13 @@ export const FIXTURE_FILE: Attachment = {
 };
 
 /**
- * No `thumbnail_url`: the deployed CSP is `img-src 'self'` (deploy/Caddyfile)
- * while the files origin is deliberately a separate, cookie-less one, so where
- * thumbnails may be loaded from is a Phase 1.3 decision. The card draws its
- * designed no-preview glyph until then, which is a real drawn state rather
- * than a broken image.
+ * No `thumbnail_url`: the fixture is static, so a URL here would name bytes
+ * the mock server does not have. The card draws its designed no-preview glyph
+ * instead, which is a real drawn state rather than a broken image — and the
+ * same state an expired thumbnail URL falls back to (AttachmentCards).
+ *
+ * Real attachment URLs are origin-relative (`/files/{id}?exp=…&sig=…`,
+ * server/internal/filesign), so `img-src 'self'` covers them.
  */
 export const FIXTURE_IMAGE: Attachment = {
   id: "00000000-0000-4000-8000-0000000000f2",
@@ -147,6 +151,7 @@ function seedState(): ChatState {
     {
       id: CHAT_CHANNELS.general,
       kind: "public",
+      e2ee: false,
       slug: "general",
       topic: "Everything that does not have a home yet",
       member_count: 22,
@@ -158,6 +163,7 @@ function seedState(): ChatState {
     {
       id: CHAT_CHANNELS.deploys,
       kind: "public",
+      e2ee: false,
       slug: "deploys",
       topic: "Release coordination and rollout notes",
       member_count: 14,
@@ -169,6 +175,7 @@ function seedState(): ChatState {
     {
       id: CHAT_CHANNELS.designReview,
       kind: "public",
+      e2ee: false,
       slug: "design-review",
       topic: "",
       member_count: 9,
@@ -180,6 +187,7 @@ function seedState(): ChatState {
     {
       id: CHAT_CHANNELS.leads,
       kind: "private",
+      e2ee: false,
       slug: "leads",
       topic: "",
       member_count: 4,
@@ -191,6 +199,7 @@ function seedState(): ChatState {
     {
       id: CHAT_CHANNELS.designTokens,
       kind: "public",
+      e2ee: false,
       slug: "design-tokens",
       topic: "",
       member_count: 1,
@@ -202,6 +211,7 @@ function seedState(): ChatState {
     {
       id: CHAT_CHANNELS.dmParisa,
       kind: "dm",
+      e2ee: false,
       slug: null,
       topic: "",
       member_count: 2,
@@ -218,9 +228,8 @@ function seedState(): ChatState {
     message(deploys, nasrin, "Staging is green. Tag is `v1.2.0-rc3`", at("09:12")),
     message(deploys, nasrin, "Rolling to canary in ten minutes.", at("09:13")),
     message(deploys, me, "Nice. I'll watch the error rate.", at("09:14")),
-    // The file card the chat-default artboard draws. Attachments are always
-    // empty from the real API until the Phase 1.3 upload pipeline lands; the
-    // fixture carries one so the drawn card has a data source to render from.
+    // The file card the chat-default artboard draws, seeded so the fixture
+    // conversation shows what the artboard shows.
     message(deploys, omid, "Checklist for the rollout", at("09:20"), {
       edited_at: at("09:21"),
       attachments: [FIXTURE_FILE],
@@ -277,9 +286,70 @@ function seedState(): ChatState {
 
 let chat = seedState();
 
+/**
+ * Files uploaded but not yet attached to a message — the server's own
+ * bookkeeping, so that an attachment_id naming nothing answers 404 here too.
+ */
+let uploaded = new Map<string, Attachment>();
+let uploadSequence = 0;
+
+/**
+ * Live call state, per channel. There is no calls table on the server either
+ * (ADR 005) — the media server's own room state is the truth, and this stands
+ * in for it. Empty means nobody is in any call.
+ */
+let calls = new Map<string, ChannelCall>();
+
+/**
+ * The organisation's encryption mode, which decides what a conversation is
+ * born as (ADR 011 decision 1). Strict on every install and every migrated
+ * instance, and the only mode the real API can currently be in — the
+ * compliance branch exists here for the same reason it exists on the server:
+ * the creation rule has to be right the day Compliance unlocks.
+ */
+let encryptionMode: EncryptionMode = "strict";
+
+/** Puts the mock instance in a mode the API cannot yet be talked into. */
+export function setMockEncryptionMode(mode: EncryptionMode): void {
+  encryptionMode = mode;
+}
+
+/**
+ * Puts a call in a channel, the way one is already running before this client
+ * ever opened the conversation. That is the case the REST read exists for.
+ */
+export function setMockCall(channelId: string, call: ChannelCall): void {
+  calls.set(channelId, call);
+}
+
 /** Tests call this between cases to drop mock conversation state. */
 export function resetMockChat(): void {
   chat = seedState();
+  calls = new Map();
+  uploaded = new Map();
+  uploadSequence = 0;
+  encryptionMode = "strict";
+}
+
+/** What a conversation created right now is born as. */
+function bornE2ee(): boolean {
+  return encryptionMode === "strict";
+}
+
+/**
+ * The named refusal when a request's `e2ee` disagrees with the mode, or null
+ * when it may proceed. The contract's own rule: omitted means the mode's
+ * value, matching is fine, and mismatching is refused rather than coerced — a
+ * client whose view of the mode is stale must not be handed the opposite of
+ * what its screen said about a property fixed forever at creation.
+ */
+function modeRefusal(requested: boolean | undefined) {
+  if (requested === undefined || requested === bornE2ee()) {
+    return null;
+  }
+  return bornE2ee()
+    ? errorResponse(400, "e2ee_required_by_org", "This organisation encrypts every conversation.")
+    : errorResponse(400, "e2ee_forbidden_by_org", "This organisation stores conversations readable.");
 }
 
 /** The fixture history of one channel, for assertions in tests. */
@@ -289,6 +359,40 @@ export function mockMessages(channelId: string): Message[] {
 
 export function mockChannel(channelId: string): Channel | undefined {
   return chat.channels.find((entry) => entry.id === channelId);
+}
+
+/**
+ * The one multipart part `uploadFile` takes, parsed by hand.
+ *
+ * `request.formData()` is what this should be, but under jsdom the File the
+ * app appends is jsdom's while the parser is Node's, and Node's asserts on its
+ * own class — a browser has no such seam. Parsing the part here keeps the
+ * workaround inside the mock instead of distorting the code under test.
+ *
+ * The same seam means a jsdom-created File arrives with its name and bytes
+ * flattened to an anonymous empty blob, so no test may assert on the filename
+ * or size a mocked upload comes back with. What a real browser sends is
+ * asserted end to end instead (webapp/e2e/specs/chat-files.e2e.ts).
+ */
+function singleFilePart(
+  raw: string,
+): { filename: string; contentType: string; size: number } | null {
+  const headEnd = raw.indexOf("\r\n\r\n");
+  if (headEnd === -1) {
+    return null;
+  }
+  const head = raw.slice(0, headEnd);
+  const filename = /filename="([^"]*)"/u.exec(head)?.[1];
+  if (filename === undefined || filename === "") {
+    return null;
+  }
+  const closing = raw.lastIndexOf("\r\n--");
+  const body = raw.slice(headEnd + 4, closing === -1 ? undefined : closing);
+  return {
+    filename,
+    contentType: /content-type:\s*([^\r\n]+)/iu.exec(head)?.[1] ?? "application/octet-stream",
+    size: new TextEncoder().encode(body).length,
+  };
 }
 
 function errorResponse(status: number, code: string, message: string) {
@@ -363,9 +467,16 @@ export const chatHandlers = [
       if (chat.channels.some((entry) => entry.slug === body.slug)) {
         return errorResponse(409, "channel_slug_taken", "That name is taken.");
       }
+      const refusal = modeRefusal(body.e2ee);
+      if (refusal !== null) {
+        return refusal;
+      }
       const created: Channel = {
         id: `00000000-0000-4000-8000-${String(chat.channels.length).padStart(12, "9")}`,
         kind: body.kind,
+        // Immutable from here (openapi.yaml -> Channel.e2ee): the organisation
+        // mode decides it at birth and nothing ever toggles it afterwards.
+        e2ee: bornE2ee(),
         slug: body.slug,
         topic: body.topic ?? "",
         member_count: 1,
@@ -392,11 +503,22 @@ export const chatHandlers = [
         (entry) => entry.kind === "dm" && entry.dm_peer?.id === peer.id,
       );
       if (existing !== undefined) {
+        // Before the mode check, deliberately: reopening is idempotent and
+        // returns the conversation as it is, so a flag that disagrees with
+        // today's mode is not a refusal here — there is nothing being born.
         return HttpResponse.json(existing);
+      }
+      const refusal = modeRefusal(body.e2ee);
+      if (refusal !== null) {
+        return refusal;
       }
       const created: Channel = {
         id: `00000000-0000-4000-8000-${String(chat.channels.length).padStart(12, "8")}`,
         kind: "dm",
+        // Only this branch reaches the mode: it decides when the call
+        // *creates* the DM, and the get-or-create above returns an existing
+        // one as it is, whatever the request says (openapi.yaml).
+        e2ee: bornE2ee(),
         slug: null,
         topic: "",
         member_count: 2,
@@ -432,6 +554,37 @@ export const chatHandlers = [
       }
       channel.topic = (await request.json()).topic;
       return HttpResponse.json(channel);
+    },
+  ),
+
+  http.get<{ channelId: string }, never, ChannelCall | ApiError>(
+    "/api/v1/channels/:channelId/call",
+    ({ params }) => {
+      if (mockChannel(params.channelId) === undefined) {
+        return notFound();
+      }
+      // "No call here" is a 200 with active false, not a 404: the channel is
+      // real and the answer about it is "nobody is in one".
+      return HttpResponse.json(calls.get(params.channelId) ?? { active: false });
+    },
+  ),
+
+  http.post<{ channelId: string }, never, CallToken | ApiError>(
+    "/api/v1/channels/:channelId/call/token",
+    ({ params }) => {
+      if (mockChannel(params.channelId) === undefined) {
+        return notFound();
+      }
+      return HttpResponse.json(
+        {
+          token: "fixture-call-ticket-not-a-real-one",
+          room: `chan-${params.channelId}`,
+          // Two minutes: a ticket has no business outliving the click that
+          // asked for it (openapi.yaml, createCallToken).
+          expires_at: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+        },
+        { status: 201 },
+      );
     },
   ),
 
@@ -479,15 +632,53 @@ export const chatHandlers = [
       if (existing !== undefined) {
         return HttpResponse.json(existing, { status: 200 });
       }
+      if (body.content === "" && (body.attachment_ids ?? []).length === 0) {
+        return errorResponse(400, "invalid_request", "A message needs text or files.");
+      }
+      const attachments = (body.attachment_ids ?? []).map((id) => uploaded.get(id));
+      if (attachments.some((entry) => entry === undefined)) {
+        return errorResponse(404, "attachment_not_found", "No such attachment.");
+      }
       const created = message(
         params.channelId,
         CHAT_USERS.me,
         body.content,
         new Date().toISOString(),
+        { attachments: attachments.filter((entry) => entry !== undefined) },
       );
       created.client_msg_id = body.client_msg_id;
       messages.push(created);
       return HttpResponse.json(created, { status: 201 });
+    },
+  ),
+
+  http.post<{ channelId: string }, never, Attachment | ApiError>(
+    "/api/v1/channels/:channelId/files",
+    async ({ params, request }) => {
+      if (mockChannel(params.channelId) === undefined) {
+        return notFound();
+      }
+      const file = singleFilePart(await request.text());
+      if (file === null) {
+        return errorResponse(400, "invalid_request", "No file part.");
+      }
+      // The size cap is the instance document's; the mock instance serves the
+      // same 25 MiB default the fallback assumes.
+      if (file.size > 25 * 1024 * 1024) {
+        return errorResponse(413, "file_too_large", "The file is too large.");
+      }
+      uploadSequence += 1;
+      const id = `00000000-0000-4000-8000-${String(uploadSequence).padStart(12, "f")}`;
+      const attachment: Attachment = {
+        id,
+        filename: file.filename,
+        content_type: file.contentType,
+        size_bytes: file.size,
+        // Origin-relative and signature-shaped, exactly as filesign mints it.
+        url: `/files/${id}?exp=0&sig=mock`,
+      };
+      uploaded.set(id, attachment);
+      return HttpResponse.json(attachment, { status: 201 });
     },
   ),
 

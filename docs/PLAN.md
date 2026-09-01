@@ -57,7 +57,7 @@ The defining promise is the **install experience**. The self-hosted communicatio
 | Database | **PostgreSQL** (server mode), **SQLite** (single-machine/home mode) | Postgres for real deployments; SQLite makes "one binary + one data file" possible. |
 | Real-time messaging | **WebSockets** | Chat, presence, typing, notifications. |
 | Calls / video / conferencing | **LiveKit** (open-source SFU, Go) + TURN (**coturn** or LiveKit's embedded TURN) | 1:1 → large conferences, screen share, E2EE-capable media. TURN makes calls survive corporate NAT/firewalls. |
-| E2EE — messages | **MLS (RFC 9420)** via an audited library (OpenMLS / libsignal) | Group E2EE with forward secrecy and post-compromise security. **Never hand-rolled.** |
+| E2EE — messages | **MLS (RFC 9420)** via **OpenMLS** (the audited implementation — ADR 006; libsignal was never a candidate, it implements no MLS) | Group E2EE with forward secrecy and post-compromise security. **Never hand-rolled.** |
 | E2EE — media | LiveKit insertable streams | SFU routes packets it cannot read. |
 | Web frontend | **React + TypeScript** | Ecosystem, hiring, component reuse into desktop. |
 | Desktop apps | **Tauri** wrapping the web UI | Small native .exe/.dmg/.AppImage; far lighter than Electron. |
@@ -113,6 +113,33 @@ Security is meaningless until we name the adversary. We defend against:
 5. **Supply-chain attacks on us** — our dependencies, CI, and release pipeline.
 
 **Explicit non-goals (stated publicly):** a nation-state with malware on the user's device (nobody survives the endpoint); full metadata invisibility (E2EE protects *content*; we minimize metadata but cannot make traffic patterns disappear). Publishing this threat model, as Signal and Mattermost do, is itself a trust signal.
+
+#### 6.1.1 What an encrypted conversation still tells the server
+
+"We minimize metadata" is worth nothing as a sentence and everything as a list, because only a
+list can be checked. This is that list: what a compromised or untrusted server (adversary 3)
+learns about a conversation whose *content* it cannot read. Every ADR that concedes something
+lands its concession here, and an ADR that concedes something new without adding a line to this
+register has not finished.
+
+| What it learns | Where it is conceded |
+|---|---|
+| Who is in a channel, and when they joined or left | membership is server-side by construction |
+| A channel's name and topic | plaintext columns — the encryption drill's control depends on this |
+| That a message exists: its author, channel, time, and ciphertext size | the message row |
+| How far each person has read | read positions |
+| Which members a message's sender **says** it names | [ADR 014](adr/014-mentions-under-e2ee.md) |
+| That a file exists: ciphertext size (plaintext + 28 bytes, so effectively the size), upload time, uploader, channel, which message claims it, and the count per message | [ADR 013](adr/013-encrypted-attachments.md) |
+| Who is in a call and their speaking patterns | [ADR 009](adr/009-media-e2ee.md) |
+| That a device keeps an encrypted backup, and its counter | [ADR 010](adr/010-encrypted-backups.md) |
+| Which devices a person has, and their public keys | the device directory MLS needs to add anyone |
+
+Two things this list is not. It is **not** a claim that each item is harmless — a social graph
+with timestamps is a real disclosure, and saying so plainly is the point. And it is **not**
+final: size padding for messages and files is refused today rather than absent by accident
+(ADRs 010 and 013 both price it and decline it), so a future audit that values the leak higher
+has a named place to start.
+
 
 ### 6.2 Application security — where breaches actually happen
 
@@ -281,12 +308,17 @@ Explicitly out of scope until after v1 ships — each is a scope trap:
 | Stack: Go / Postgres+SQLite / LiveKit / MLS / React+TS / Tauri / Caddy | ✅ Decided | §4 |
 | Cloud: instance-per-customer | ✅ Decided | Installer = provisioner |
 | Payments: merchant of record first | ✅ Decided | Paddle / Lemon Squeezy |
+| **MLS library: OpenMLS**, exact-pinned, server MLS-blind, guests outside E2EE | ✅ Decided | Aug 2026, ADR 006. "OpenMLS vs libsignal" was a phantom choice — libsignal implements no MLS |
+| **Device identity: eviction by leaf signature key against the directory; out-of-band comparison is the only real binding** | ✅ Decided | Aug 2026, ADR 007. No server-signed credentials — under §6.1's adversary 3 the signer is the adversary |
+| **Key verification: client-local records, set-based safety numbers, refusal on the send path, TOFU pinning on** | ✅ Decided | Aug 2026, ADR 008. Your own half of the number never comes from the directory, or the ceremony would bless the attack |
+| **Media E2EE: the key is MLS exporter output, rotating with the epoch; conferences stay outside** | ✅ Decided | Aug 2026, ADR 009. Nothing distributes the key — every member derives it. A fixed per-call key would let a removed member keep listening, which is ADR 007's property surrendered |
+| **Home mode: a second storage driver, no calls, loopback HTTP** | ✅ Decided | Aug 2026, ADR 012. SQLite's single writer supplies the outcomes Postgres gets from row and advisory locks, so the second driver is cheap where a portable-SQL rewrite would have cost the server mode |
 | **DCO** instead of CLA | 🟡 Leaning | Confirm before first external PR — this is the last easy moment to choose |
 | Cloud jurisdiction / data residency options | ⬜ Open | Decide before Phase 6 |
 | Pricing numbers | ⬜ Open | Validate via Managed pre-sales |
 | Opt-in telemetry design (version ping) | ⬜ Open | Privacy-first or none |
 | Company formation timing/structure | ⬜ Open | Before first paying customer |
-| Mobile push architecture (metadata) | ⬜ Open | Research during Phase 3 |
+| Mobile push architecture (metadata) | 🟡 Leaning | Spike done: [`docs/spikes/mobile-push.md`](spikes/mobile-push.md) — standard Web Push from our own server, no vendor relationship. Blocked on one device test: can a service worker run the MLS core? |
 
 ---
 

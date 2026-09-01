@@ -72,6 +72,24 @@ func (e CreateChannelRequestKind) Valid() bool {
 	}
 }
 
+// Defines values for EncryptionMode.
+const (
+	Compliance EncryptionMode = "compliance"
+	Strict     EncryptionMode = "strict"
+)
+
+// Valid indicates whether the value is a known member of the EncryptionMode enum.
+func (e EncryptionMode) Valid() bool {
+	switch e {
+	case Compliance:
+		return true
+	case Strict:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HealthStatusStatus.
 const (
 	Degraded HealthStatusStatus = "degraded"
@@ -84,6 +102,24 @@ func (e HealthStatusStatus) Valid() bool {
 	case Degraded:
 		return true
 	case Ok:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OrgSettingsDefaultLocale.
+const (
+	OrgSettingsDefaultLocaleEn OrgSettingsDefaultLocale = "en"
+	OrgSettingsDefaultLocaleFa OrgSettingsDefaultLocale = "fa"
+)
+
+// Valid indicates whether the value is a known member of the OrgSettingsDefaultLocale enum.
+func (e OrgSettingsDefaultLocale) Valid() bool {
+	switch e {
+	case OrgSettingsDefaultLocaleEn:
+		return true
+	case OrgSettingsDefaultLocaleFa:
 		return true
 	default:
 		return false
@@ -105,6 +141,24 @@ func (e Presence) Valid() bool {
 	case Offline:
 		return true
 	case Online:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RegistrationMode.
+const (
+	RegistrationModeInvite RegistrationMode = "invite"
+	RegistrationModeOpen   RegistrationMode = "open"
+)
+
+// Valid indicates whether the value is a known member of the RegistrationMode enum.
+func (e RegistrationMode) Valid() bool {
+	switch e {
+	case RegistrationModeInvite:
+		return true
+	case RegistrationModeOpen:
 		return true
 	default:
 		return false
@@ -138,6 +192,42 @@ const (
 func (e TwoFactorChallengeMethods) Valid() bool {
 	switch e {
 	case Totp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateCurrentUserRequestLocale.
+const (
+	UpdateCurrentUserRequestLocaleEn UpdateCurrentUserRequestLocale = "en"
+	UpdateCurrentUserRequestLocaleFa UpdateCurrentUserRequestLocale = "fa"
+)
+
+// Valid indicates whether the value is a known member of the UpdateCurrentUserRequestLocale enum.
+func (e UpdateCurrentUserRequestLocale) Valid() bool {
+	switch e {
+	case UpdateCurrentUserRequestLocaleEn:
+		return true
+	case UpdateCurrentUserRequestLocaleFa:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateOrgSettingsRequestDefaultLocale.
+const (
+	UpdateOrgSettingsRequestDefaultLocaleEn UpdateOrgSettingsRequestDefaultLocale = "en"
+	UpdateOrgSettingsRequestDefaultLocaleFa UpdateOrgSettingsRequestDefaultLocale = "fa"
+)
+
+// Valid indicates whether the value is a known member of the UpdateOrgSettingsRequestDefaultLocale enum.
+func (e UpdateOrgSettingsRequestDefaultLocale) Valid() bool {
+	switch e {
+	case UpdateOrgSettingsRequestDefaultLocaleEn:
+		return true
+	case UpdateOrgSettingsRequestDefaultLocaleFa:
 		return true
 	default:
 		return false
@@ -182,7 +272,32 @@ type AdminCreateUserRequest struct {
 // AdminCreateUserRequestLocale defines model for AdminCreateUserRequest.Locale.
 type AdminCreateUserRequestLocale string
 
-// Attachment A file card in the message list. Read-only on Message: attachments are created by the Phase 1.3 upload pipeline, so until that slice lands the array is always empty. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both.
+// AdminUser A row of the users table. Carries what the dashboard shows and nothing more — never a password hash, never a session token.
+type AdminUser struct {
+	CreatedAt   time.Time `json:"created_at"`
+	DisplayName string    `json:"display_name"`
+	Email       *string   `json:"email,omitempty"`
+
+	// HasTotp Whether the account has a second factor. The org-settings screen uses it to say who enforcement will affect.
+	HasTotp *bool              `json:"has_totp,omitempty"`
+	Id      openapi_types.UUID `json:"id"`
+
+	// IsActive False for a deactivated account — it cannot sign in and holds no sessions.
+	IsActive           bool   `json:"is_active"`
+	IsAdmin            bool   `json:"is_admin"`
+	MustChangePassword bool   `json:"must_change_password"`
+	Username           string `json:"username"`
+}
+
+// AdminUserPage defines model for AdminUserPage.
+type AdminUserPage struct {
+	// NextCursor Present when another page exists.
+	NextCursor *string     `json:"next_cursor,omitempty"`
+	Users      []AdminUser `json:"users"`
+}
+
+// Attachment A file card in the message list. Read-only on Message: a file becomes an attachment by being uploaded first and named in the send's attachment_ids, never by being written here.
+// On an e2ee channel these fields are placeholders, not description: `filename` is `encrypted`, `content_type` is `application/octet-stream`, `size_bytes` is the size of the ciphertext, and there are no dimensions — the server was never told the real ones. The card renders from metadata the client decrypts out of the message, so an unreadable message yields an unreadable card rather than a card that lies. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both.
 type Attachment struct {
 	// ContentType The card's short type label ("PDF", "PNG") is derived from this.
 	ContentType string             `json:"content_type"`
@@ -191,14 +306,59 @@ type Attachment struct {
 	Id          openapi_types.UUID `json:"id"`
 	SizeBytes   int64              `json:"size_bytes"`
 
-	// ThumbnailUrl Images only — the card's preview.
+	// ThumbnailUrl Images only — the card's preview, signed and expiring like url. Thumbnails are derivatives generated at ingest from the stripped original, bounded to 512px on the long edge.
 	ThumbnailUrl *string `json:"thumbnail_url,omitempty"`
 
-	// Url Download target. Served from the cookie-less files origin (Phase 1.3).
+	// Url Download target on the cookie-less files origin. Signed and expiring (about an hour): that origin carries no cookies, so a fresh URL is the credential, minted every time an Attachment is serialized for somebody entitled to see it. Stale ones answer 404 — re-fetch the message for fresh links, never store these.
 	Url string `json:"url"`
 
 	// Width Images only — the card's "1600 × 900" line.
 	Width *int `json:"width,omitempty"`
+}
+
+// AuditEntry One recorded action. `actor` is null for something the system did rather than a person.
+type AuditEntry struct {
+	// Action Namespaced verb, e.g. user.deactivated, invite.created.
+	Action     string                  `json:"action"`
+	Actor      *UserSummary            `json:"actor,omitempty"`
+	Detail     *map[string]interface{} `json:"detail,omitempty"`
+	Id         openapi_types.UUID      `json:"id"`
+	Ip         *string                 `json:"ip,omitempty"`
+	OccurredAt time.Time               `json:"occurred_at"`
+	TargetId   *openapi_types.UUID     `json:"target_id,omitempty"`
+
+	// TargetLabel What the target was called when this happened, kept so the log still reads correctly after a rename or a deletion.
+	TargetLabel *string `json:"target_label,omitempty"`
+}
+
+// AuditPage defines model for AuditPage.
+type AuditPage struct {
+	// ChainValid False means the hash chain over the returned entries does not verify — somebody edited or removed a row in the database. It is not a display concern.
+	ChainValid bool         `json:"chain_valid"`
+	Entries    []AuditEntry `json:"entries"`
+	NextCursor *string      `json:"next_cursor,omitempty"`
+}
+
+// CallParticipant defines model for CallParticipant.
+type CallParticipant struct {
+	JoinedAt time.Time `json:"joined_at"`
+
+	// ScreenSharing Whether this participant is publishing a screen share.
+	ScreenSharing *bool `json:"screen_sharing,omitempty"`
+
+	// User The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
+	User UserSummary `json:"user"`
+}
+
+// CallToken defines model for CallToken.
+type CallToken struct {
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// Room The room to join. Derived from the channel, and safe to hand back because no ticket this server mints can enumerate rooms -- the only people who ever see this name are already members of the channel it names.
+	Room string `json:"room"`
+
+	// Token The join ticket, for the media client. Short-lived, single room, single identity. Never store it; ask again on the next join.
+	Token string `json:"token"`
 }
 
 // ChangePasswordRequest defines model for ChangePasswordRequest.
@@ -215,8 +375,12 @@ type Channel struct {
 	CreatedBy *openapi_types.UUID `json:"created_by,omitempty"`
 
 	// DmPeer The other person. Present only when kind is dm.
-	DmPeer *UserSummary       `json:"dm_peer,omitempty"`
-	Id     openapi_types.UUID `json:"id"`
+	DmPeer *UserSummary `json:"dm_peer,omitempty"`
+
+	// E2ee Fixed at creation, never toggled — flipping it either way on a live conversation is exactly the silent mode-switch the downgrade test forbids. In an e2ee channel every message carries the mls envelope and empty content, so the server holds nothing it can read. Two consequences a client renders honestly rather than papering over: no link previews, and no server-side search — unread counts are row counts and survive.
+	// Mentions do work, by a different route: the sender declares them in mls.mentions, because the server cannot parse content it cannot read (ADR 014). Attachments work too — the bytes are opaque and every key travels inside the ciphertext (ADR 013), so a file in an encrypted conversation is encrypted rather than a lie.
+	E2ee bool               `json:"e2ee"`
+	Id   openapi_types.UUID `json:"id"`
 
 	// Kind Flat channel kinds (ADR 001 — no org or team layer). In Phase 1.2 visibility is membership for all three; `kind` is stored so a channel directory and join flow can arrive without a schema change.
 	Kind ChannelKind `json:"kind"`
@@ -243,6 +407,13 @@ type Channel struct {
 	UnreadCount int `json:"unread_count"`
 }
 
+// ChannelCall A channel's live call. `active` false means nobody is in it, and the other fields are absent rather than stale.
+type ChannelCall struct {
+	Active       bool               `json:"active"`
+	Participants *[]CallParticipant `json:"participants,omitempty"`
+	StartedAt    *time.Time         `json:"started_at,omitempty"`
+}
+
 // ChannelKind Flat channel kinds (ADR 001 — no org or team layer). In Phase 1.2 visibility is membership for all three; `kind` is stored so a channel directory and join flow can arrive without a schema change.
 type ChannelKind string
 
@@ -265,8 +436,45 @@ type ChannelRef struct {
 	Slug *string     `json:"slug,omitempty"`
 }
 
+// ClaimMlsKeyPackagesRequest defines model for ClaimMlsKeyPackagesRequest.
+type ClaimMlsKeyPackagesRequest struct {
+	// UserId The member whose devices are being added. May be the caller — that is how a person's own second device gets added.
+	UserId openapi_types.UUID `json:"user_id"`
+}
+
+// Conference A conference as its owner or an administrator sees it. Never the link.
+type Conference struct {
+	// Active Whether anybody is in the room right now.
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// CreatedBy Null when the account that made it is gone.
+	CreatedBy *UserSummary `json:"created_by"`
+
+	// ExpiresAt Null means it does not expire. See createConference.
+	ExpiresAt *time.Time         `json:"expires_at,omitempty"`
+	Id        openapi_types.UUID `json:"id"`
+	Title     string             `json:"title"`
+}
+
+// ConferencePage defines model for ConferencePage.
+type ConferencePage struct {
+	Conferences []Conference `json:"conferences"`
+}
+
+// ConferencePreview What a link-holder may see before joining. Deliberately thin: whose instance is hosting, what the meeting is called, and whether anybody is in there. Not who created it, not who is in it, and nothing else about the instance.
+// `org_name` was left out of the first draft, on the reasoning that a preview should say as little as possible. That was wrong in a way the contract could have caught itself: `InvitePreview` carries the same field for the equally unauthenticated redemption screen, so the precedent already existed. And the cost of withholding it lands on the visitor — somebody following a link from a chat message, with no way to tell whose meeting they are about to walk into. A link-holder who can see the meeting's title learns nothing dangerous from the name of the organisation hosting it.
+type ConferencePreview struct {
+	Active  bool   `json:"active"`
+	OrgName string `json:"org_name"`
+	Title   string `json:"title"`
+}
+
 // CreateChannelRequest defines model for CreateChannelRequest.
 type CreateChannelRequest struct {
+	// E2ee Omit it and the organisation's encryption mode decides (ADR 011). Send it and it must agree with that mode: under `strict`, false is refused with 400 e2ee_required_by_org; under `compliance`, true is refused with 400 e2ee_forbidden_by_org. There is no per-conversation opt-out, because one would be a hole in exactly the guarantee the mode exists to state. Immutable after creation — the flag is never updated, which is what makes a later mode switch unable to touch this conversation either way.
+	E2ee *bool `json:"e2ee,omitempty"`
+
 	// Kind Direct messages are opened through /api/v1/dms, not here.
 	Kind  CreateChannelRequestKind `json:"kind"`
 	Slug  string                   `json:"slug"`
@@ -276,10 +484,74 @@ type CreateChannelRequest struct {
 // CreateChannelRequestKind Direct messages are opened through /api/v1/dms, not here.
 type CreateChannelRequestKind string
 
+// CreateConferenceRequest defines model for CreateConferenceRequest.
+type CreateConferenceRequest struct {
+	// ExpiresAt Optional, for a link genuinely meant to be short-lived. Absent means it does not expire.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+
+	// Title What to call it. Guests see this before they join.
+	Title *string `json:"title,omitempty"`
+}
+
+// CreateInviteRequest defines model for CreateInviteRequest.
+type CreateInviteRequest struct {
+	ExpiresInHours *int `json:"expires_in_hours,omitempty"`
+
+	// Note What this link is for; shown in the table, never to the invitee.
+	Note *string `json:"note,omitempty"`
+}
+
+// CreateMlsGroupRequest defines model for CreateMlsGroupRequest.
+type CreateMlsGroupRequest struct {
+	// GroupId Base64, at most 64 raw bytes, chosen by the creating client — the MLS GroupId. Opaque to the server; unique across the instance.
+	GroupId string `json:"group_id"`
+}
+
+// CreateScimTokenRequest defines model for CreateScimTokenRequest.
+type CreateScimTokenRequest struct {
+	// Note Optional, and only administrators see it. It exists so a list of opaque tokens can say which system holds which.
+	Note *string `json:"note,omitempty"`
+}
+
+// CreatedConference defines model for CreatedConference.
+type CreatedConference struct {
+	// Conference A conference as its owner or an administrator sees it. Never the link.
+	Conference Conference `json:"conference"`
+
+	// Url The link, shown once. Only its hash is kept, so nothing can redisplay it — send it somewhere you trust.
+	Url string `json:"url"`
+}
+
+// CreatedInvite The link is in this response and nowhere else: only its hash is stored, exactly as password-reset tokens are.
+type CreatedInvite struct {
+	ExpiresAt time.Time          `json:"expires_at"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// Url `{base}/invite#token=<token>`. The token rides the **fragment**, which no browser sends to any server, so it cannot reach an access log, a Referer header or a proxy's history — the same reasoning the emailed reset link follows.
+	// The shape is written down here because leaving it unsaid is not free: this field said only "string" for two phases, the two halves drifted into a path form on the client and a fragment form on the server, and every real invitation landed on the sign-in screen with nothing failing loudly.
+	Url string `json:"url"`
+}
+
+// CreatedScimToken defines model for CreatedScimToken.
+type CreatedScimToken struct {
+	// Scim A provisioning token as the table lists it. Never the token.
+	Scim ScimToken `json:"scim"`
+
+	// Token Shown once and never again. Only its hash is kept.
+	Token string `json:"token"`
+}
+
 // EditMessageRequest defines model for EditMessageRequest.
 type EditMessageRequest struct {
+	// Content Non-empty on a plaintext channel. On an e2ee channel it must be the empty string, with the new ciphertext in mls — same rule as send.
 	Content string `json:"content"`
+
+	// Mls The replacement ciphertext. Required on an e2ee channel, refused elsewhere — the same boundary as send, at the same choke point.
+	Mls *MlsMessageEnvelope `json:"mls,omitempty"`
 }
+
+// EncryptionMode Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+type EncryptionMode string
 
 // Error defines model for Error.
 type Error struct {
@@ -300,18 +572,57 @@ type HealthStatus struct {
 // HealthStatusStatus defines model for HealthStatus.Status.
 type HealthStatusStatus string
 
-// InstanceInfo What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere.
+// InstanceInfo What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere. encryption_mode is here rather than only on the admin settings document because every member's creation surfaces need it and that document answers 403 to them. It is not withheld as a secret: an instance's encryption posture is a product characteristic its own users are entitled to know before they type anything into it, and a client that had to guess would guess wrong somewhere.
 type InstanceInfo struct {
-	PasswordMinLength      int  `json:"password_min_length"`
-	PasswordResetAvailable bool `json:"password_reset_available"`
+	// Calls False when no media server is configured -- a development server without the stack, or an install that has not enabled calls. The UI omits call controls rather than offering a door that goes nowhere, the same discipline password_reset_available follows.
+	Calls *bool `json:"calls,omitempty"`
+
+	// EncryptionMode Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+	EncryptionMode EncryptionMode `json:"encryption_mode"`
+
+	// MaxFileSizeBytes The per-file upload cap, published so a client can refuse a file before spending the user's bandwidth on a doomed request. The server enforces it regardless; this is a courtesy, not the check.
+	MaxFileSizeBytes       int64      `json:"max_file_size_bytes"`
+	PasswordMinLength      int        `json:"password_min_length"`
+	PasswordResetAvailable bool       `json:"password_reset_available"`
+	Sso                    *SsoStatus `json:"sso,omitempty"`
+}
+
+// Invite An open invite, as the table lists it. Never the link itself.
+type Invite struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// CreatedBy The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
+	CreatedBy UserSummary        `json:"created_by"`
+	ExpiresAt time.Time          `json:"expires_at"`
+	Id        openapi_types.UUID `json:"id"`
+	Note      *string            `json:"note,omitempty"`
+}
+
+// InvitePage defines model for InvitePage.
+type InvitePage struct {
+	Invites    []Invite `json:"invites"`
+	NextCursor *string  `json:"next_cursor,omitempty"`
+}
+
+// InvitePreview What the redemption screen draws before anybody has an account. Deliberately says nothing about who issued the invite or for whom.
+type InvitePreview struct {
+	OrgName string `json:"org_name"`
+}
+
+// JoinConferenceRequest defines model for JoinConferenceRequest.
+type JoinConferenceRequest struct {
+	// DisplayName What the room calls you. Not verified, and cannot be.
+	DisplayName string `json:"display_name"`
 }
 
 // LinkPreview The link-preview card: image, title, description, and the host line the client derives from url. Read-only, and always absent until the Phase 1.3 egress preview proxy exists.
 type LinkPreview struct {
 	Description *string `json:"description,omitempty"`
-	ImageUrl    *string `json:"image_url,omitempty"`
-	Title       *string `json:"title,omitempty"`
-	Url         string  `json:"url"`
+
+	// ImageUrl Always on this instance's own files origin, never the remote site: the preview image is fetched by the server through the same egress guard as the page, stored as a bounded derivative, and served signed like any attachment. A reader's browser must never be made to fetch a stranger's server — and the strict img-src 'self' CSP would refuse it anyway.
+	ImageUrl *string `json:"image_url,omitempty"`
+	Title    *string `json:"title,omitempty"`
+	Url      string  `json:"url"`
 }
 
 // LoginRequest defines model for LoginRequest.
@@ -331,7 +642,7 @@ type MemberPage struct {
 
 // Message defines model for Message.
 type Message struct {
-	// Attachments Always empty until the Phase 1.3 upload pipeline lands.
+	// Attachments The message's file cards, in the order the sender listed them in attachment_ids. Empty when the message carries no files.
 	Attachments []Attachment `json:"attachments"`
 
 	// Author The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
@@ -354,6 +665,9 @@ type Message struct {
 
 	// LinkPreview Absent until the Phase 1.3 preview proxy lands.
 	LinkPreview *LinkPreview `json:"link_preview,omitempty"`
+
+	// Mls Present on every message of an e2ee channel (until deletion erases it), absent everywhere else — content is empty exactly when this is present.
+	Mls *MlsMessageEnvelope `json:"mls,omitempty"`
 }
 
 // MessagePage One page of history, always ordered ascending by (created_at, id). The two cursors are the handles for the next scrollback and the next forward fetch; each is absent when there is nothing more in that direction.
@@ -366,11 +680,188 @@ type MessagePage struct {
 	Messages     []Message `json:"messages"`
 }
 
+// MlsBackup defines model for MlsBackup.
+type MlsBackup struct {
+	Counter int64 `json:"counter"`
+
+	// Envelope Base64, exactly as stored.
+	Envelope string `json:"envelope"`
+
+	// UpdatedAt When the server last accepted a write. Shown to the person during a restore so a rolled-back envelope has a visible date to disagree with — the only defence available on a first restore, where the device that would hold the floor is the one that was lost.
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// MlsCommit defines model for MlsCommit.
+type MlsCommit struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Epoch The epoch the group REACHED by this commit — the submitted epoch plus one. This is the only numbering under which after_epoch=<your epoch> returns exactly the commits you have not applied, and under which a fresh group at epoch 0 has an empty log.
+	Epoch int64 `json:"epoch"`
+
+	// Message Base64, as submitted.
+	Message string `json:"message"`
+}
+
+// MlsCommitPage defines model for MlsCommitPage.
+type MlsCommitPage struct {
+	// Commits Ascending by epoch. The last epoch received is the next after_epoch; an empty page means caught up — epochs are the cursor, so there is no separate one.
+	Commits []MlsCommit `json:"commits"`
+}
+
+// MlsDevice defines model for MlsDevice.
+type MlsDevice struct {
+	CreatedAt time.Time          `json:"created_at"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// SignaturePublicKey Base64, echoed as registered.
+	SignaturePublicKey string `json:"signature_public_key"`
+}
+
+// MlsGroup defines model for MlsGroup.
+type MlsGroup struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Epoch The server's sequencing claim — how many commits the log holds — not cryptographic truth. Clients trust their own group state and use this to see how far behind they are.
+	Epoch int64 `json:"epoch"`
+
+	// GroupId Base64, as registered at creation.
+	GroupId string `json:"group_id"`
+}
+
+// MlsKeyPackageClaim defines model for MlsKeyPackageClaim.
+type MlsKeyPackageClaim struct {
+	DeviceId openapi_types.UUID `json:"device_id"`
+
+	// KeyPackage Base64. Consumed — this package will never be handed out again.
+	KeyPackage string `json:"key_package"`
+}
+
+// MlsKeyPackageClaims defines model for MlsKeyPackageClaims.
+type MlsKeyPackageClaims struct {
+	Claims []MlsKeyPackageClaim `json:"claims"`
+
+	// MissingDeviceIds The target's devices whose pool was empty — they cannot be added until they replenish. Both lists empty means the target has no MLS devices at all; the client says "cannot add yet" rather than pretending.
+	MissingDeviceIds []openapi_types.UUID `json:"missing_device_ids"`
+}
+
+// MlsKeyPackagePool defines model for MlsKeyPackagePool.
+type MlsKeyPackagePool struct {
+	// UnclaimedCount Unclaimed packages now stored for this device — what the client checks on connect to decide whether to replenish.
+	UnclaimedCount int `json:"unclaimed_count"`
+}
+
+// MlsMemberDevice One member and the signature keys of every device they have registered. A member with no devices yet appears with an empty list rather than being omitted, so a client can tell "has no device" from "is not a member" without a second question.
+type MlsMemberDevice struct {
+	// SignaturePublicKeys Base64, as registered. Opaque to the server.
+	SignaturePublicKeys []string           `json:"signature_public_keys"`
+	UserId              openapi_types.UUID `json:"user_id"`
+}
+
+// MlsMemberDevicePage defines model for MlsMemberDevicePage.
+type MlsMemberDevicePage struct {
+	Members []MlsMemberDevice `json:"members"`
+
+	// NextCursor Present when another page exists. A client must read every page before sweeping: an allow-list built from half the roster would evict the members it had not read yet.
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
+// MlsMessageEnvelope The encrypted half of a message in an e2ee channel. The server stores and echoes it without parsing; content is the empty string wherever this is present, so nothing the server can read ever carries the words. Deleting the message erases the ciphertext exactly as it erases content; editing replaces it and stamps edited_at as for any edit.
+type MlsMessageEnvelope struct {
+	// Ciphertext Base64 MLSMessage (application message). Cap ~32 KiB raw: a 4000-character message plus MLS framing fits with room, and the resulting message_created frame stays far under the 64 KiB WebSocket cap.
+	Ciphertext string `json:"ciphertext"`
+
+	// Epoch The group epoch the sender encrypted at — a routing hint for receivers holding older state, never a server-verified claim.
+	Epoch int64 `json:"epoch"`
+
+	// Mentions Sender-declared notification routing for an encrypted message (ADR 014). The server cannot read the ciphertext, so it cannot derive mentions the way it does on a plaintext channel — the sender names them instead.
+	// Ids that are not current members of the channel are dropped silently, duplicates collapse, and order is irrelevant: the write joins this list against channel_members, which is what keeps a declaration from naming a stranger. Trusting the sender here therefore widens nothing the membership join did not already bound.
+	// Never echoed on reads. Recipients render mentions from the tokens in the decrypted content; this list exists only so the badge and any later notification can outlive the reader's ability to decrypt.
+	// PRIVACY: this list is visible to the server. It is the one content-derived fact an encrypted message discloses — a directed sender-to-member edge — and it is named in the threat model rather than left implicit.
+	Mentions *[]openapi_types.UUID `json:"mentions,omitempty"`
+}
+
+// MlsWelcome defines model for MlsWelcome.
+type MlsWelcome struct {
+	ChannelId openapi_types.UUID `json:"channel_id"`
+	CreatedAt time.Time          `json:"created_at"`
+
+	// DeviceId Which of the caller's devices this Welcome is encrypted to. The others hold bytes they cannot open.
+	DeviceId openapi_types.UUID `json:"device_id"`
+
+	// GroupId Base64.
+	GroupId string             `json:"group_id"`
+	Id      openapi_types.UUID `json:"id"`
+
+	// Welcome Base64.
+	Welcome string `json:"welcome"`
+}
+
+// MlsWelcomeDelivery defines model for MlsWelcomeDelivery.
+type MlsWelcomeDelivery struct {
+	// DeviceIds Every claimed device this Welcome covers. The server stores one pending-Welcome row per device; each recipient extracts its own secrets from the shared blob.
+	DeviceIds []openapi_types.UUID `json:"device_ids"`
+
+	// Welcome Base64 Welcome, encrypted to the claimed key packages of every device it names.
+	Welcome string `json:"welcome"`
+}
+
+// MlsWelcomeList defines model for MlsWelcomeList.
+type MlsWelcomeList struct {
+	// Welcomes Oldest first.
+	Welcomes []MlsWelcome `json:"welcomes"`
+}
+
+// OidcRedirect defines model for OidcRedirect.
+type OidcRedirect struct {
+	// RedirectUrl The provider authorization URL to send the browser to.
+	RedirectUrl string `json:"redirect_url"`
+}
+
 // OpenDirectMessageRequest defines model for OpenDirectMessageRequest.
 type OpenDirectMessageRequest struct {
+	// E2ee Applies only when this call CREATES the DM; reopening an existing one returns it as it is, whatever this says — get-or-create is idempotent and a flag cannot re-decide a conversation that already exists, which is also why a mode switch cannot. On creation the organisation's encryption mode decides when this is omitted, and a value that disagrees with the mode is refused exactly as on channel creation (400 e2ee_required_by_org / e2ee_forbidden_by_org).
+	E2ee *bool `json:"e2ee,omitempty"`
+
 	// UserId The other person. Must not be the caller.
 	UserId openapi_types.UUID `json:"user_id"`
 }
+
+// OrgSettings defines model for OrgSettings.
+type OrgSettings struct {
+	// AccountsWithoutTotp How many accounts enforcement would affect. Read-only, and the reason the screen can say who it hits before it is turned on.
+	AccountsWithoutTotp *int `json:"accounts_without_totp,omitempty"`
+
+	// DefaultLocale The locale a new account starts in.
+	DefaultLocale OrgSettingsDefaultLocale `json:"default_locale"`
+
+	// EncryptedConversations How many conversations this instance holds that are end-to-end encrypted.
+	EncryptedConversations *int `json:"encrypted_conversations,omitempty"`
+
+	// EncryptionMode Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+	EncryptionMode EncryptionMode `json:"encryption_mode"`
+	OrgName        string         `json:"org_name"`
+
+	// PlaintextConversations How many are not. Both totals rather than one "outside the current mode" count, because the switch confirmation has to name what will be outside the mode being CHOSEN — which is the other set in each direction, so a single current-mode count would state the plaintext total as the encrypted one on a screen about encryption. Neither number ever moves on a switch: conversations are never converted, which is the whole of decision 2, so these are also the honest standing answer to "what does the mode not describe".
+	PlaintextConversations *int `json:"plaintext_conversations,omitempty"`
+
+	// RegistrationMode How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
+	RegistrationMode RegistrationMode `json:"registration_mode"`
+
+	// RequireTotp Enforced at the next sign-in, never mid-session — turning it on must not lock out the admin who turned it on. The mechanism is User.totp_enrollment_required, which is decided once when a session is minted; see that field.
+	RequireTotp bool `json:"require_totp"`
+
+	// SessionLifetimeHours How long a session may live before its refresh token expires, read at every mint, including the rotation a refresh performs. Shortening it does not retroactively end an already-issued window, so an idle session keeps the window it has.
+	// Read what it governs carefully: it bounds how long a session may go UNUSED, not how long it may exist. A client that keeps refreshing renews its window each time and can stay signed in indefinitely — which is also why "enforced at the next sign-in" can, for a continuously active client, mean a long time. Ending a specific session now is what the device list and administrative deactivation are for. The server's own maximum is the ceiling, so a value above it is clamped rather than refused.
+	SessionLifetimeHours int `json:"session_lifetime_hours"`
+
+	// SsoJitProvisioning Whether an identity the provider vouches for, matching no account here, creates one.
+	// Off by default, and deliberately not inferred from registration_mode: that setting governs a self-serve password door, and "an administrator configured an identity provider" is not the same consent as "everyone in the directory may have an account here". While it is off, an unmatched identity creates nothing at all - the branch does not run, which is what makes single sign-on unable to walk around registration being closed.
+	// An organisation provisioning through SCIM can leave this off entirely; it exists for organisations that want single sign-on without a sync engine.
+	SsoJitProvisioning bool `json:"sso_jit_provisioning"`
+}
+
+// OrgSettingsDefaultLocale The locale a new account starts in.
+type OrgSettingsDefaultLocale string
 
 // PasswordConfirmRequest Re-authentication for an action that changes the second factor. The session alone is not enough: a hijacked session must not be able to disable two-step verification or mint fresh sign-in codes.
 type PasswordConfirmRequest struct {
@@ -393,17 +884,68 @@ type PasswordResetRequest struct {
 // Presence online — a live socket. away — the client reported itself idle. offline — no socket after a short grace period.
 type Presence string
 
+// PutMlsBackupRequest defines model for PutMlsBackupRequest.
+type PutMlsBackupRequest struct {
+	// Counter A readable copy of the counter sealed in the header. The server compares it only to refuse a backward write; the client compares the SEALED one against its own stored floor, which is the check a hostile server cannot pass by lying here.
+	Counter int64 `json:"counter"`
+
+	// Envelope Base64 of `header ‖ iv ‖ ciphertext` (ADR 010). The header is the magic HMLB, a version byte, and the length-prefixed framing of the counter and the user id, used verbatim as the AEAD's additional data — so a server that edits any of it produces a blob that will not open, rather than one that opens differently. The cap is ~512 KiB raw: verification records are kilobytes, and this endpoint is not a blob store.
+	Envelope string `json:"envelope"`
+}
+
 // RecoveryCodes Ten single-use codes in the design's XXXX-XXXX format, shown exactly once — the server keeps only argon2id hashes and can never display them again. Regeneration replaces the entire set.
 type RecoveryCodes struct {
 	Codes []string `json:"codes"`
 }
 
-// SearchKind The two tabs above the results. `files` is accepted from Phase 1.2 but returns an empty page until the Phase 1.3 upload pipeline exists.
+// RedeemInviteRequest defines model for RedeemInviteRequest.
+type RedeemInviteRequest struct {
+	DisplayName *string `json:"display_name,omitempty"`
+
+	// Password The same bound every other password field carries. A shorter one here would refuse a passphrase at redemption that the account could set five minutes later.
+	Password string `json:"password"`
+	Username string `json:"username"`
+}
+
+// RegisterMlsDeviceRequest defines model for RegisterMlsDeviceRequest.
+type RegisterMlsDeviceRequest struct {
+	// SignaturePublicKey Base64. The device's MLS signature public key — an opaque identifier to the server, the idempotency key of registration, and the handle other members' clients verify against. Sized for Ed25519 today with headroom for post-quantum suites.
+	SignaturePublicKey string `json:"signature_public_key"`
+}
+
+// RegistrationMode How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
+type RegistrationMode string
+
+// ReplaceMlsKeyPackagesRequest defines model for ReplaceMlsKeyPackagesRequest.
+type ReplaceMlsKeyPackagesRequest struct {
+	// KeyPackages Base64 key packages, each single-use. The measured size today is ~275 bytes raw; the cap leaves room for post-quantum suites without renegotiating the contract.
+	KeyPackages []string `json:"key_packages"`
+}
+
+// ScimToken A provisioning token as the table lists it. Never the token.
+type ScimToken struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// CreatedBy The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
+	CreatedBy UserSummary        `json:"created_by"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// LastUsedAt Null until the provider first authenticates with it. It is how an administrator tells a token that was configured from one that was minted and forgotten.
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Note       *string    `json:"note,omitempty"`
+}
+
+// ScimTokenPage defines model for ScimTokenPage.
+type ScimTokenPage struct {
+	Tokens []ScimToken `json:"tokens"`
+}
+
+// SearchKind The two tabs above the results. `files` searches filenames, scoped by channel membership exactly as messages are.
 type SearchKind string
 
 // SearchPage defines model for SearchPage.
 type SearchPage struct {
-	// Kind The two tabs above the results. `files` is accepted from Phase 1.2 but returns an empty page until the Phase 1.3 upload pipeline exists.
+	// Kind The two tabs above the results. `files` searches filenames, scoped by channel membership exactly as messages are.
 	Kind SearchKind `json:"kind"`
 
 	// NextCursor Present when another page exists.
@@ -417,8 +959,11 @@ type SearchPage struct {
 	TotalCapped bool `json:"total_capped"`
 }
 
-// SearchResult One message hit: where it was said, by whom, when, and the matching run of text. The result shape for kind=files arrives with Phase 1.3.
+// SearchResult One hit. For kind=messages: where it was said, by whom, when, and the matching run of text. For kind=files the same shape carries the attachment, and the snippet runs over the filename — same matching, same honesty about it (substrings, not stems). message_id points at the message the file rode in on, which is where a click lands.
 type SearchResult struct {
+	// Attachment Present exactly when kind is files.
+	Attachment *Attachment `json:"attachment,omitempty"`
+
 	// Author The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
 	Author UserSummary `json:"author"`
 
@@ -445,11 +990,19 @@ type SearchSnippetPart struct {
 
 // SendMessageRequest defines model for SendMessageRequest.
 type SendMessageRequest struct {
+	// AttachmentIds Files previously uploaded to this channel by this caller and not yet attached to any message, attached atomically with the send. An id that names anything else — another channel's file, another person's, one already attached — answers 404 attachment_not_found, one code for every miss so nothing about other people's uploads leaks. Duplicates in the list are a 400.
+	// The ORDER of this list is significant and is preserved: a message's cards come back in it, on the send response and on every later read. It is the order the person arranged their files in, which is not the order the uploads finished — one request per file goes out concurrently, so completion order is a property of the network.
+	AttachmentIds *[]openapi_types.UUID `json:"attachment_ids,omitempty"`
+
 	// ClientMsgId Generated by the client once per message and reused verbatim on every retry. Unique per (channel, author).
 	ClientMsgId openapi_types.UUID `json:"client_msg_id"`
 
-	// Content Markdown as authored, with one extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name.
+	// Content Markdown as authored. May be empty only when attachment_ids is non-empty — an image with no caption is an ordinary message, a message with neither text nor files is nothing (400). One extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name.
 	Content string `json:"content"`
+
+	// Mls Required on an e2ee channel, refused elsewhere — the write path enforces the boundary in both directions rather than trusting clients to keep it. On an e2ee channel content must be the empty string (400 e2ee_required); on a plaintext channel this field is a 400 e2ee_not_enabled. Idempotency by client_msg_id is unchanged.
+	// attachment_ids is permitted beside this field (ADR 013). The ids must name opaque uploads to the same channel; every per-file key and the real filename, type and dimensions travel inside the ciphertext, so the server stores bytes it cannot open and metadata it was never given.
+	Mls *MlsMessageEnvelope `json:"mls,omitempty"`
 }
 
 // SessionFamily One signed-in device — a refresh-token family. Every field is one a settings-sessions row draws.
@@ -476,10 +1029,43 @@ type SessionFamilyList struct {
 	Sessions []SessionFamily `json:"sessions"`
 }
 
+// SetEncryptionModeRequest defines model for SetEncryptionModeRequest.
+type SetEncryptionModeRequest struct {
+	// EncryptionMode Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+	EncryptionMode EncryptionMode `json:"encryption_mode"`
+}
+
 // SetReadPositionRequest defines model for SetReadPositionRequest.
 type SetReadPositionRequest struct {
 	// MessageId The newest message the caller has seen. Must belong to this channel.
 	MessageId openapi_types.UUID `json:"message_id"`
+}
+
+// SsoStatus defines model for SsoStatus.
+type SsoStatus struct {
+	// Enabled False when no provider is configured. The sign-in screen renders the button only when the door exists, rather than offering one that goes nowhere.
+	Enabled bool `json:"enabled"`
+
+	// ProviderName What to call the provider on the button. Present whenever enabled is true, and absent otherwise - a configured provider always has a name, defaulting to a generic one, so a client never has to render a button it cannot label.
+	ProviderName *string `json:"provider_name,omitempty"`
+}
+
+// SubmitMlsCommitRequest defines model for SubmitMlsCommitRequest.
+type SubmitMlsCommitRequest struct {
+	// Epoch The epoch this commit was built at. Accepted only while it is still current — the compare-and-swap that makes one commit win each epoch.
+	Epoch int64 `json:"epoch"`
+
+	// Message Base64 MLSMessage carrying the commit. The cap (~256 KiB raw) bounds a commit for a large tree; measured today a two-member commit is under 1 KiB.
+	Message string `json:"message"`
+
+	// Welcomes Welcomes for the devices this commit adds, stored atomically with the commit — a committed add whose Welcome was lost is a forked group. MLS produces ONE Welcome covering every member a commit adds, so a delivery names many devices and carries the blob once; a shape that repeated the blob per device would multiply a tree-sized payload by the member count, which is the 70 MB request the first implementation caught. The whole request is additionally bounded by an 8 MiB body cap on this endpoint, stated here so the per-item caps cannot be read as multiplying past it.
+	Welcomes *[]MlsWelcomeDelivery `json:"welcomes,omitempty"`
+}
+
+// TemporaryCredentials Shown once and never again — the password is stored only as an argon2id hash, so there is nothing to redisplay.
+type TemporaryCredentials struct {
+	TemporaryPassword string `json:"temporary_password"`
+	Username          string `json:"username"`
 }
 
 // TotpLoginRequest defines model for TotpLoginRequest.
@@ -527,6 +1113,35 @@ type UpdateChannelRequest struct {
 	Topic string `json:"topic"`
 }
 
+// UpdateCurrentUserRequest Only the fields present are changed. Locale is the only one: a screen that edits your own display name does not exist yet, and an endpoint that accepts a field nothing sends is a field nothing tests.
+type UpdateCurrentUserRequest struct {
+	Locale *UpdateCurrentUserRequestLocale `json:"locale,omitempty"`
+}
+
+// UpdateCurrentUserRequestLocale defines model for UpdateCurrentUserRequest.Locale.
+type UpdateCurrentUserRequestLocale string
+
+// UpdateOrgSettingsRequest Only the fields present are changed; each saves on its own.
+type UpdateOrgSettingsRequest struct {
+	DefaultLocale *UpdateOrgSettingsRequestDefaultLocale `json:"default_locale,omitempty"`
+	OrgName       *string                                `json:"org_name,omitempty"`
+
+	// RegistrationMode How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
+	RegistrationMode     *RegistrationMode `json:"registration_mode,omitempty"`
+	RequireTotp          *bool             `json:"require_totp,omitempty"`
+	SessionLifetimeHours *int              `json:"session_lifetime_hours,omitempty"`
+	SsoJitProvisioning   *bool             `json:"sso_jit_provisioning,omitempty"`
+}
+
+// UpdateOrgSettingsRequestDefaultLocale defines model for UpdateOrgSettingsRequest.DefaultLocale.
+type UpdateOrgSettingsRequestDefaultLocale string
+
+// UpdateUserAdminRequest Only the fields present are changed.
+type UpdateUserAdminRequest struct {
+	IsActive *bool `json:"is_active,omitempty"`
+	IsAdmin  *bool `json:"is_admin,omitempty"`
+}
+
 // User defines model for User.
 type User struct {
 	CreatedAt   time.Time            `json:"created_at"`
@@ -536,20 +1151,21 @@ type User struct {
 	IsAdmin     bool                 `json:"is_admin"`
 	Locale      UserLocale           `json:"locale"`
 
-	// MustChangePassword True until the user replaces their admin-assigned temporary password. While true, every endpoint except change-password, logout, and users/me returns 403 with code password_change_required.
-	MustChangePassword bool   `json:"must_change_password"`
-	Username           string `json:"username"`
+	// MustChangePassword True until the user replaces their admin-assigned temporary password. While true, every endpoint except change-password, logout, reading and patching users/me returns 403 with code password_change_required.
+	MustChangePassword bool `json:"must_change_password"`
+
+	// SsoLinked Whether this account has a single sign-on identity attached. It is what the settings screen offers Connect or Disconnect from.
+	SsoLinked bool `json:"sso_linked"`
+
+	// TotpEnrollmentRequired True when this session was minted while the organisation requires two-step verification and this account has none activated. While true, every endpoint except logout, reading and patching users/me, and the TOTP enrolment endpoints returns 403 with code totp_enrollment_required, and the WebSocket refuses the upgrade. Patching is admitted for the same reason the password gate admits it: the only field it carries is locale, and somebody whose account language is wrong would otherwise be stuck reading a screen they cannot change in a language they cannot read.
+	// It is a property of the session rather than of the account, which is what makes "at the next sign-in, never mid-session" true: turning the policy on strands nobody who is already working, including the administrator who turned it on.
+	// The two gates are sequential, not simultaneous: while must_change_password is also true, only that gate applies. An account an administrator created on an instance that requires two-step carries both flags on its first sign-in, and the two allow-lists intersect at almost nothing -- enforcing both at once would leave that person able to do neither thing being demanded of them. The password comes first because a temporary password is a credential its holder does not yet exclusively hold, and changing it revokes every other session, so enrolment then happens on a session nobody else could be sharing.
+	TotpEnrollmentRequired bool   `json:"totp_enrollment_required"`
+	Username               string `json:"username"`
 }
 
 // UserLocale defines model for User.Locale.
 type UserLocale string
-
-// UserPage defines model for UserPage.
-type UserPage struct {
-	// NextCursor Present when another page exists.
-	NextCursor *string `json:"next_cursor,omitempty"`
-	Users      []User  `json:"users"`
-}
 
 // UserSummary The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
 type UserSummary struct {
@@ -577,8 +1193,20 @@ type VerifyTotpSetupRequest struct {
 // ChannelId defines model for ChannelId.
 type ChannelId = openapi_types.UUID
 
+// InviteId defines model for InviteId.
+type InviteId = openapi_types.UUID
+
 // MessageId defines model for MessageId.
 type MessageId = openapi_types.UUID
+
+// MlsDeviceId defines model for MlsDeviceId.
+type MlsDeviceId = openapi_types.UUID
+
+// MlsWelcomeId defines model for MlsWelcomeId.
+type MlsWelcomeId = openapi_types.UUID
+
+// UserId defines model for UserId.
+type UserId = openapi_types.UUID
 
 // BadRequest defines model for BadRequest.
 type BadRequest = Error
@@ -595,6 +1223,28 @@ type RateLimited = Error
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
 
+// ListAuditEntriesParams defines parameters for ListAuditEntries.
+type ListAuditEntriesParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor Opaque pagination cursor from a previous response.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Action Filter to one action.
+	Action *string `form:"action,omitempty" json:"action,omitempty"`
+
+	// ActorId Filter to one actor.
+	ActorId *openapi_types.UUID `form:"actor_id,omitempty" json:"actor_id,omitempty"`
+}
+
+// ListInvitesParams defines parameters for ListInvites.
+type ListInvitesParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor Opaque pagination cursor from a previous response.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
 // AdminListUsersParams defines parameters for AdminListUsers.
 type AdminListUsersParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
@@ -603,12 +1253,24 @@ type AdminListUsersParams struct {
 	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
+// CompleteOidcSignInParams defines parameters for CompleteOidcSignIn.
+type CompleteOidcSignInParams struct {
+	Code  *string `form:"code,omitempty" json:"code,omitempty"`
+	State *string `form:"state,omitempty" json:"state,omitempty"`
+	Error *string `form:"error,omitempty" json:"error,omitempty"`
+}
+
 // ListChannelsParams defines parameters for ListChannels.
 type ListChannelsParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor Opaque pagination cursor from a previous response.
 	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// UploadFileMultipartBody defines parameters for UploadFile.
+type UploadFileMultipartBody struct {
+	File openapi_types.File `json:"file"`
 }
 
 // ListChannelMembersParams defines parameters for ListChannelMembers.
@@ -632,6 +1294,19 @@ type ListMessagesParams struct {
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// ListMlsCommitsParams defines parameters for ListMlsCommits.
+type ListMlsCommitsParams struct {
+	AfterEpoch int64 `form:"after_epoch" json:"after_epoch"`
+	Limit      *int  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListMlsMemberDevicesParams defines parameters for ListMlsMemberDevices.
+type ListMlsMemberDevicesParams struct {
+	// Cursor From a previous page's next_cursor.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // SearchParams defines parameters for Search.
 type SearchParams struct {
 	Q     string      `form:"q" json:"q"`
@@ -652,8 +1327,23 @@ type ListUsersParams struct {
 	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
+// CreateInviteJSONRequestBody defines body for CreateInvite for application/json ContentType.
+type CreateInviteJSONRequestBody = CreateInviteRequest
+
+// UpdateOrgSettingsJSONRequestBody defines body for UpdateOrgSettings for application/json ContentType.
+type UpdateOrgSettingsJSONRequestBody = UpdateOrgSettingsRequest
+
+// SetOrgEncryptionModeJSONRequestBody defines body for SetOrgEncryptionMode for application/json ContentType.
+type SetOrgEncryptionModeJSONRequestBody = SetEncryptionModeRequest
+
+// CreateScimTokenJSONRequestBody defines body for CreateScimToken for application/json ContentType.
+type CreateScimTokenJSONRequestBody = CreateScimTokenRequest
+
 // AdminCreateUserJSONRequestBody defines body for AdminCreateUser for application/json ContentType.
 type AdminCreateUserJSONRequestBody = AdminCreateUserRequest
+
+// UpdateUserAdminJSONRequestBody defines body for UpdateUserAdmin for application/json ContentType.
+type UpdateUserAdminJSONRequestBody = UpdateUserAdminRequest
 
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = ChangePasswordRequest
@@ -676,6 +1366,9 @@ type CreateChannelJSONRequestBody = CreateChannelRequest
 // UpdateChannelJSONRequestBody defines body for UpdateChannel for application/json ContentType.
 type UpdateChannelJSONRequestBody = UpdateChannelRequest
 
+// UploadFileMultipartRequestBody defines body for UploadFile for multipart/form-data ContentType.
+type UploadFileMultipartRequestBody UploadFileMultipartBody
+
 // AddChannelMemberJSONRequestBody defines body for AddChannelMember for application/json ContentType.
 type AddChannelMemberJSONRequestBody = AddChannelMemberRequest
 
@@ -685,11 +1378,41 @@ type SendMessageJSONRequestBody = SendMessageRequest
 // EditMessageJSONRequestBody defines body for EditMessage for application/json ContentType.
 type EditMessageJSONRequestBody = EditMessageRequest
 
+// SubmitMlsCommitJSONRequestBody defines body for SubmitMlsCommit for application/json ContentType.
+type SubmitMlsCommitJSONRequestBody = SubmitMlsCommitRequest
+
+// CreateMlsGroupJSONRequestBody defines body for CreateMlsGroup for application/json ContentType.
+type CreateMlsGroupJSONRequestBody = CreateMlsGroupRequest
+
+// ClaimMlsKeyPackagesJSONRequestBody defines body for ClaimMlsKeyPackages for application/json ContentType.
+type ClaimMlsKeyPackagesJSONRequestBody = ClaimMlsKeyPackagesRequest
+
 // SetReadPositionJSONRequestBody defines body for SetReadPosition for application/json ContentType.
 type SetReadPositionJSONRequestBody = SetReadPositionRequest
 
+// CreateConferenceJSONRequestBody defines body for CreateConference for application/json ContentType.
+type CreateConferenceJSONRequestBody = CreateConferenceRequest
+
 // OpenDirectMessageJSONRequestBody defines body for OpenDirectMessage for application/json ContentType.
 type OpenDirectMessageJSONRequestBody = OpenDirectMessageRequest
+
+// RedeemInviteJSONRequestBody defines body for RedeemInvite for application/json ContentType.
+type RedeemInviteJSONRequestBody = RedeemInviteRequest
+
+// JoinConferenceJSONRequestBody defines body for JoinConference for application/json ContentType.
+type JoinConferenceJSONRequestBody = JoinConferenceRequest
+
+// UpdateCurrentUserJSONRequestBody defines body for UpdateCurrentUser for application/json ContentType.
+type UpdateCurrentUserJSONRequestBody = UpdateCurrentUserRequest
+
+// PutMlsBackupJSONRequestBody defines body for PutMlsBackup for application/json ContentType.
+type PutMlsBackupJSONRequestBody = PutMlsBackupRequest
+
+// RegisterMlsDeviceJSONRequestBody defines body for RegisterMlsDevice for application/json ContentType.
+type RegisterMlsDeviceJSONRequestBody = RegisterMlsDeviceRequest
+
+// ReplaceMlsKeyPackagesJSONRequestBody defines body for ReplaceMlsKeyPackages for application/json ContentType.
+type ReplaceMlsKeyPackagesJSONRequestBody = ReplaceMlsKeyPackagesRequest
 
 // DisableTotpJSONRequestBody defines body for DisableTotp for application/json ContentType.
 type DisableTotpJSONRequestBody = PasswordConfirmRequest
@@ -702,12 +1425,48 @@ type VerifyTotpSetupJSONRequestBody = VerifyTotpSetupRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// ListAuditEntries The audit log.
+	// (GET /api/v1/admin/audit)
+	ListAuditEntries(w http.ResponseWriter, r *http.Request, params ListAuditEntriesParams)
+	// ListInvites Open invite links.
+	// (GET /api/v1/admin/invites)
+	ListInvites(w http.ResponseWriter, r *http.Request, params ListInvitesParams)
+	// CreateInvite Generate a single-use invite link.
+	// (POST /api/v1/admin/invites)
+	CreateInvite(w http.ResponseWriter, r *http.Request)
+	// RevokeInvite Revoke an open invite.
+	// (DELETE /api/v1/admin/invites/{inviteId})
+	RevokeInvite(w http.ResponseWriter, r *http.Request, inviteId InviteId)
+	// GetOrgSettings The instance's own settings.
+	// (GET /api/v1/admin/org)
+	GetOrgSettings(w http.ResponseWriter, r *http.Request)
+	// UpdateOrgSettings Change the instance's settings.
+	// (PATCH /api/v1/admin/org)
+	UpdateOrgSettings(w http.ResponseWriter, r *http.Request)
+	// SetOrgEncryptionMode Change which kind of conversation this instance creates.
+	// (PUT /api/v1/admin/org/encryption-mode)
+	SetOrgEncryptionMode(w http.ResponseWriter, r *http.Request)
+	// ListScimTokens Provisioning tokens.
+	// (GET /api/v1/admin/scim/tokens)
+	ListScimTokens(w http.ResponseWriter, r *http.Request)
+	// CreateScimToken Mint a provisioning token.
+	// (POST /api/v1/admin/scim/tokens)
+	CreateScimToken(w http.ResponseWriter, r *http.Request)
+	// RevokeScimToken Revoke a provisioning token.
+	// (DELETE /api/v1/admin/scim/tokens/{tokenId})
+	RevokeScimToken(w http.ResponseWriter, r *http.Request, tokenId openapi_types.UUID)
 	// AdminListUsers List users (dashboard). adminOnly.
 	// (GET /api/v1/admin/users)
 	AdminListUsers(w http.ResponseWriter, r *http.Request, params AdminListUsersParams)
 	// AdminCreateUser Create a user (dashboard). adminOnly.
 	// (POST /api/v1/admin/users)
 	AdminCreateUser(w http.ResponseWriter, r *http.Request)
+	// UpdateUserAdmin Deactivate, reactivate, or change a user's role.
+	// (PATCH /api/v1/admin/users/{userId})
+	UpdateUserAdmin(w http.ResponseWriter, r *http.Request, userId UserId)
+	// ForcePasswordReset Issue a new temporary password for a user.
+	// (POST /api/v1/admin/users/{userId}/reset-password)
+	ForcePasswordReset(w http.ResponseWriter, r *http.Request, userId UserId)
 	// ChangePassword Change the authenticated user's password.
 	// (POST /api/v1/auth/change-password)
 	ChangePassword(w http.ResponseWriter, r *http.Request)
@@ -720,6 +1479,12 @@ type ServerInterface interface {
 	// Logout End the current session and clear cookies.
 	// (POST /api/v1/auth/logout)
 	Logout(w http.ResponseWriter, r *http.Request)
+	// CompleteOidcSignIn Return from the identity provider.
+	// (GET /api/v1/auth/oidc/callback)
+	CompleteOidcSignIn(w http.ResponseWriter, r *http.Request, params CompleteOidcSignInParams)
+	// StartOidcSignIn Begin single sign-on.
+	// (GET /api/v1/auth/oidc/start)
+	StartOidcSignIn(w http.ResponseWriter, r *http.Request)
 	// RefreshSession Rotate the refresh token and mint a new session.
 	// (POST /api/v1/auth/refresh)
 	RefreshSession(w http.ResponseWriter, r *http.Request)
@@ -741,6 +1506,15 @@ type ServerInterface interface {
 	// UpdateChannel Set the channel topic.
 	// (PATCH /api/v1/channels/{channelId})
 	UpdateChannel(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// GetChannelCall What is happening in this channel's call.
+	// (GET /api/v1/channels/{channelId}/call)
+	GetChannelCall(w http.ResponseWriter, r *http.Request, channelId openapi_types.UUID)
+	// CreateCallToken A ticket to join this channel's call.
+	// (POST /api/v1/channels/{channelId}/call/token)
+	CreateCallToken(w http.ResponseWriter, r *http.Request, channelId openapi_types.UUID)
+	// UploadFile Upload one file into a channel.
+	// (POST /api/v1/channels/{channelId}/files)
+	UploadFile(w http.ResponseWriter, r *http.Request, channelId ChannelId)
 	// ListChannelMembers Members of a channel (the count in the header).
 	// (GET /api/v1/channels/{channelId}/members)
 	ListChannelMembers(w http.ResponseWriter, r *http.Request, channelId ChannelId, params ListChannelMembersParams)
@@ -762,15 +1536,54 @@ type ServerInterface interface {
 	// EditMessage Edit your own message.
 	// (PATCH /api/v1/channels/{channelId}/messages/{messageId})
 	EditMessage(w http.ResponseWriter, r *http.Request, channelId ChannelId, messageId MessageId)
+	// ListMlsCommits The commit log after a given epoch, ascending.
+	// (GET /api/v1/channels/{channelId}/mls/commits)
+	ListMlsCommits(w http.ResponseWriter, r *http.Request, channelId ChannelId, params ListMlsCommitsParams)
+	// SubmitMlsCommit Submit a commit — first-wins per epoch.
+	// (POST /api/v1/channels/{channelId}/mls/commits)
+	SubmitMlsCommit(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// GetMlsGroup The channel's MLS group, if one exists.
+	// (GET /api/v1/channels/{channelId}/mls/group)
+	GetMlsGroup(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// CreateMlsGroup Create the channel's MLS group.
+	// (POST /api/v1/channels/{channelId}/mls/group)
+	CreateMlsGroup(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// ClaimMlsKeyPackages Claim one key package per device of a member, to add them.
+	// (POST /api/v1/channels/{channelId}/mls/key-package-claims)
+	ClaimMlsKeyPackages(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// ListMlsMemberDevices Every current member's registered device signature keys.
+	// (GET /api/v1/channels/{channelId}/mls/member-devices)
+	ListMlsMemberDevices(w http.ResponseWriter, r *http.Request, channelId ChannelId, params ListMlsMemberDevicesParams)
 	// SetReadPosition Move the caller's read position in a channel.
 	// (PUT /api/v1/channels/{channelId}/read)
 	SetReadPosition(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// ListConferences Your conference rooms.
+	// (GET /api/v1/conferences)
+	ListConferences(w http.ResponseWriter, r *http.Request)
+	// CreateConference Make a room anyone with the link can join.
+	// (POST /api/v1/conferences)
+	CreateConference(w http.ResponseWriter, r *http.Request)
+	// RevokeConference Kill the link, and the meeting behind it.
+	// (DELETE /api/v1/conferences/{conferenceId})
+	RevokeConference(w http.ResponseWriter, r *http.Request, conferenceId openapi_types.UUID)
 	// OpenDirectMessage Open — or reuse — the 1:1 direct message with one user.
 	// (POST /api/v1/dms)
 	OpenDirectMessage(w http.ResponseWriter, r *http.Request)
 	// GetInstance Public instance capabilities and policy.
 	// (GET /api/v1/instance)
 	GetInstance(w http.ResponseWriter, r *http.Request)
+	// PreviewInvite What this invite offers, before signing up.
+	// (GET /api/v1/invites/{token})
+	PreviewInvite(w http.ResponseWriter, r *http.Request, token string)
+	// RedeemInvite Create an account from an invite.
+	// (POST /api/v1/invites/{token})
+	RedeemInvite(w http.ResponseWriter, r *http.Request, token string)
+	// PreviewConference What is behind this link.
+	// (GET /api/v1/meet/{token})
+	PreviewConference(w http.ResponseWriter, r *http.Request, token string)
+	// JoinConference Join as a guest.
+	// (POST /api/v1/meet/{token}/join)
+	JoinConference(w http.ResponseWriter, r *http.Request, token string)
 	// Search Search messages (and, from Phase 1.3, files).
 	// (GET /api/v1/search)
 	Search(w http.ResponseWriter, r *http.Request, params SearchParams)
@@ -780,6 +1593,39 @@ type ServerInterface interface {
 	// GetCurrentUser The authenticated user.
 	// (GET /api/v1/users/me)
 	GetCurrentUser(w http.ResponseWriter, r *http.Request)
+	// UpdateCurrentUser Change your own account settings.
+	// (PATCH /api/v1/users/me)
+	UpdateCurrentUser(w http.ResponseWriter, r *http.Request)
+	// DeleteMlsBackup Forget this account's backup.
+	// (DELETE /api/v1/users/me/mls/backup)
+	DeleteMlsBackup(w http.ResponseWriter, r *http.Request)
+	// GetMlsBackup Fetch this account's sealed backup, if one exists.
+	// (GET /api/v1/users/me/mls/backup)
+	GetMlsBackup(w http.ResponseWriter, r *http.Request)
+	// PutMlsBackup Store this account's sealed verification backup.
+	// (PUT /api/v1/users/me/mls/backup)
+	PutMlsBackup(w http.ResponseWriter, r *http.Request)
+	// RegisterMlsDevice Register this client instance as an MLS device.
+	// (POST /api/v1/users/me/mls/device)
+	RegisterMlsDevice(w http.ResponseWriter, r *http.Request)
+	// DeregisterMlsDevice Drop one of this account's devices from the directory.
+	// (DELETE /api/v1/users/me/mls/devices/{deviceId})
+	DeregisterMlsDevice(w http.ResponseWriter, r *http.Request, deviceId MlsDeviceId)
+	// ReplaceMlsKeyPackages Replace this device's pool of unclaimed key packages.
+	// (PUT /api/v1/users/me/mls/devices/{deviceId}/key-packages)
+	ReplaceMlsKeyPackages(w http.ResponseWriter, r *http.Request, deviceId MlsDeviceId)
+	// ListMlsWelcomes Welcomes waiting for any of the caller's devices.
+	// (GET /api/v1/users/me/mls/welcomes)
+	ListMlsWelcomes(w http.ResponseWriter, r *http.Request)
+	// AcknowledgeMlsWelcome Acknowledge a Welcome after successfully joining.
+	// (DELETE /api/v1/users/me/mls/welcomes/{welcomeId})
+	AcknowledgeMlsWelcome(w http.ResponseWriter, r *http.Request, welcomeId MlsWelcomeId)
+	// UnlinkOidcIdentity Disconnect single sign-on from this account.
+	// (DELETE /api/v1/users/me/oidc)
+	UnlinkOidcIdentity(w http.ResponseWriter, r *http.Request)
+	// LinkOidcIdentity Connect single sign-on to this account.
+	// (POST /api/v1/users/me/oidc)
+	LinkOidcIdentity(w http.ResponseWriter, r *http.Request)
 	// ListMySessions Every device signed in to the caller's account.
 	// (GET /api/v1/users/me/sessions)
 	ListMySessions(w http.ResponseWriter, r *http.Request)
@@ -826,6 +1672,260 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// ListAuditEntries operation middleware
+func (siw *ServerInterfaceWrapper) ListAuditEntries(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAuditEntriesParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "action" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "action", r.URL.Query(), &params.Action, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "action"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "action", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "actor_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "actor_id", r.URL.Query(), &params.ActorId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "actor_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "actor_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListAuditEntries(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListInvites operation middleware
+func (siw *ServerInterfaceWrapper) ListInvites(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListInvitesParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListInvites(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateInvite operation middleware
+func (siw *ServerInterfaceWrapper) CreateInvite(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateInvite(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeInvite operation middleware
+func (siw *ServerInterfaceWrapper) RevokeInvite(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "inviteId" -------------
+	var inviteId InviteId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "inviteId", r.PathValue("inviteId"), &inviteId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "inviteId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeInvite(w, r, inviteId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetOrgSettings operation middleware
+func (siw *ServerInterfaceWrapper) GetOrgSettings(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetOrgSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateOrgSettings operation middleware
+func (siw *ServerInterfaceWrapper) UpdateOrgSettings(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateOrgSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetOrgEncryptionMode operation middleware
+func (siw *ServerInterfaceWrapper) SetOrgEncryptionMode(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetOrgEncryptionMode(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListScimTokens operation middleware
+func (siw *ServerInterfaceWrapper) ListScimTokens(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListScimTokens(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateScimToken operation middleware
+func (siw *ServerInterfaceWrapper) CreateScimToken(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateScimToken(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeScimToken operation middleware
+func (siw *ServerInterfaceWrapper) RevokeScimToken(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "tokenId" -------------
+	var tokenId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "tokenId", r.PathValue("tokenId"), &tokenId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tokenId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeScimToken(w, r, tokenId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // AdminListUsers operation middleware
 func (siw *ServerInterfaceWrapper) AdminListUsers(w http.ResponseWriter, r *http.Request) {
@@ -887,6 +1987,58 @@ func (siw *ServerInterfaceWrapper) AdminCreateUser(w http.ResponseWriter, r *htt
 	handler.ServeHTTP(w, r)
 }
 
+// UpdateUserAdmin operation middleware
+func (siw *ServerInterfaceWrapper) UpdateUserAdmin(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "userId" -------------
+	var userId UserId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", r.PathValue("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "userId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateUserAdmin(w, r, userId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ForcePasswordReset operation middleware
+func (siw *ServerInterfaceWrapper) ForcePasswordReset(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "userId" -------------
+	var userId UserId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", r.PathValue("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "userId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ForcePasswordReset(w, r, userId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ChangePassword operation middleware
 func (siw *ServerInterfaceWrapper) ChangePassword(w http.ResponseWriter, r *http.Request) {
 
@@ -934,6 +2086,79 @@ func (siw *ServerInterfaceWrapper) Logout(w http.ResponseWriter, r *http.Request
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.Logout(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CompleteOidcSignIn operation middleware
+func (siw *ServerInterfaceWrapper) CompleteOidcSignIn(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CompleteOidcSignInParams
+
+	// ------------- Optional query parameter "code" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "code", r.URL.Query(), &params.Code, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "code"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "code", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", r.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "state"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "state", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "error" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "error", r.URL.Query(), &params.Error, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "error"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "error", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CompleteOidcSignIn(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartOidcSignIn operation middleware
+func (siw *ServerInterfaceWrapper) StartOidcSignIn(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartOidcSignIn(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1088,6 +2313,84 @@ func (siw *ServerInterfaceWrapper) UpdateChannel(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateChannel(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetChannelCall operation middleware
+func (siw *ServerInterfaceWrapper) GetChannelCall(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetChannelCall(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateCallToken operation middleware
+func (siw *ServerInterfaceWrapper) CreateCallToken(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateCallToken(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UploadFile operation middleware
+func (siw *ServerInterfaceWrapper) UploadFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UploadFile(w, r, channelId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1390,6 +2693,220 @@ func (siw *ServerInterfaceWrapper) EditMessage(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ListMlsCommits operation middleware
+func (siw *ServerInterfaceWrapper) ListMlsCommits(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListMlsCommitsParams
+
+	// ------------- Required query parameter "after_epoch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "after_epoch", r.URL.Query(), &params.AfterEpoch, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "after_epoch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "after_epoch", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMlsCommits(w, r, channelId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SubmitMlsCommit operation middleware
+func (siw *ServerInterfaceWrapper) SubmitMlsCommit(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SubmitMlsCommit(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMlsGroup operation middleware
+func (siw *ServerInterfaceWrapper) GetMlsGroup(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMlsGroup(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateMlsGroup operation middleware
+func (siw *ServerInterfaceWrapper) CreateMlsGroup(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateMlsGroup(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClaimMlsKeyPackages operation middleware
+func (siw *ServerInterfaceWrapper) ClaimMlsKeyPackages(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClaimMlsKeyPackages(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListMlsMemberDevices operation middleware
+func (siw *ServerInterfaceWrapper) ListMlsMemberDevices(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListMlsMemberDevicesParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMlsMemberDevices(w, r, channelId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SetReadPosition operation middleware
 func (siw *ServerInterfaceWrapper) SetReadPosition(w http.ResponseWriter, r *http.Request) {
 
@@ -1407,6 +2924,60 @@ func (siw *ServerInterfaceWrapper) SetReadPosition(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SetReadPosition(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListConferences operation middleware
+func (siw *ServerInterfaceWrapper) ListConferences(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListConferences(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateConference operation middleware
+func (siw *ServerInterfaceWrapper) CreateConference(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateConference(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeConference operation middleware
+func (siw *ServerInterfaceWrapper) RevokeConference(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "conferenceId" -------------
+	var conferenceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "conferenceId", r.PathValue("conferenceId"), &conferenceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "conferenceId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeConference(w, r, conferenceId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1435,6 +3006,110 @@ func (siw *ServerInterfaceWrapper) GetInstance(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetInstance(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PreviewInvite operation middleware
+func (siw *ServerInterfaceWrapper) PreviewInvite(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token" -------------
+	var token string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token", r.PathValue("token"), &token, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PreviewInvite(w, r, token)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RedeemInvite operation middleware
+func (siw *ServerInterfaceWrapper) RedeemInvite(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token" -------------
+	var token string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token", r.PathValue("token"), &token, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RedeemInvite(w, r, token)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PreviewConference operation middleware
+func (siw *ServerInterfaceWrapper) PreviewConference(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token" -------------
+	var token string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token", r.PathValue("token"), &token, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PreviewConference(w, r, token)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// JoinConference operation middleware
+func (siw *ServerInterfaceWrapper) JoinConference(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token" -------------
+	var token string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token", r.PathValue("token"), &token, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.JoinConference(w, r, token)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1580,6 +3255,196 @@ func (siw *ServerInterfaceWrapper) GetCurrentUser(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetCurrentUser(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateCurrentUser operation middleware
+func (siw *ServerInterfaceWrapper) UpdateCurrentUser(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateCurrentUser(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteMlsBackup operation middleware
+func (siw *ServerInterfaceWrapper) DeleteMlsBackup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteMlsBackup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMlsBackup operation middleware
+func (siw *ServerInterfaceWrapper) GetMlsBackup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMlsBackup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PutMlsBackup operation middleware
+func (siw *ServerInterfaceWrapper) PutMlsBackup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PutMlsBackup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RegisterMlsDevice operation middleware
+func (siw *ServerInterfaceWrapper) RegisterMlsDevice(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RegisterMlsDevice(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeregisterMlsDevice operation middleware
+func (siw *ServerInterfaceWrapper) DeregisterMlsDevice(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "deviceId" -------------
+	var deviceId MlsDeviceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deviceId", r.PathValue("deviceId"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deviceId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeregisterMlsDevice(w, r, deviceId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ReplaceMlsKeyPackages operation middleware
+func (siw *ServerInterfaceWrapper) ReplaceMlsKeyPackages(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "deviceId" -------------
+	var deviceId MlsDeviceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deviceId", r.PathValue("deviceId"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deviceId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ReplaceMlsKeyPackages(w, r, deviceId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListMlsWelcomes operation middleware
+func (siw *ServerInterfaceWrapper) ListMlsWelcomes(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMlsWelcomes(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AcknowledgeMlsWelcome operation middleware
+func (siw *ServerInterfaceWrapper) AcknowledgeMlsWelcome(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "welcomeId" -------------
+	var welcomeId MlsWelcomeId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "welcomeId", r.PathValue("welcomeId"), &welcomeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "welcomeId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AcknowledgeMlsWelcome(w, r, welcomeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UnlinkOidcIdentity operation middleware
+func (siw *ServerInterfaceWrapper) UnlinkOidcIdentity(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UnlinkOidcIdentity(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// LinkOidcIdentity operation middleware
+func (siw *ServerInterfaceWrapper) LinkOidcIdentity(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.LinkOidcIdentity(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1900,10 +3765,15 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/reset-request", wrapper.RequestPasswordReset)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/auth/reset-complete", wrapper.CompletePasswordReset)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me", wrapper.GetCurrentUser)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/users/me", wrapper.UpdateCurrentUser)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me/totp", wrapper.GetTotpStatus)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/setup", wrapper.StartTotpSetup)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/verify", wrapper.VerifyTotpSetup)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/activate", wrapper.ActivateTotp)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/auth/oidc/start", wrapper.StartOidcSignIn)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/auth/oidc/callback", wrapper.CompleteOidcSignIn)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/users/me/oidc", wrapper.UnlinkOidcIdentity)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/oidc", wrapper.LinkOidcIdentity)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/disable", wrapper.DisableTotp)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/totp/recovery-codes", wrapper.RegenerateRecoveryCodes)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me/sessions", wrapper.ListMySessions)
@@ -1912,6 +3782,20 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users", wrapper.ListUsers)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/users", wrapper.AdminListUsers)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/users", wrapper.AdminCreateUser)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/admin/users/{userId}", wrapper.UpdateUserAdmin)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/users/{userId}/reset-password", wrapper.ForcePasswordReset)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/scim/tokens", wrapper.ListScimTokens)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/scim/tokens", wrapper.CreateScimToken)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/admin/scim/tokens/{tokenId}", wrapper.RevokeScimToken)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/invites", wrapper.ListInvites)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/invites", wrapper.CreateInvite)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/admin/invites/{inviteId}", wrapper.RevokeInvite)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/invites/{token}", wrapper.PreviewInvite)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/invites/{token}", wrapper.RedeemInvite)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/admin/org/encryption-mode", wrapper.SetOrgEncryptionMode)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/org", wrapper.GetOrgSettings)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/admin/org", wrapper.UpdateOrgSettings)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/audit", wrapper.ListAuditEntries)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels", wrapper.ListChannels)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels", wrapper.CreateChannel)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/dms", wrapper.OpenDirectMessage)
@@ -1920,11 +3804,33 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/members", wrapper.ListChannelMembers)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/members", wrapper.AddChannelMember)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/channels/{channelId}/members/{userId}", wrapper.RemoveChannelMember)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/conferences", wrapper.ListConferences)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/conferences", wrapper.CreateConference)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/conferences/{conferenceId}", wrapper.RevokeConference)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/meet/{token}", wrapper.PreviewConference)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/meet/{token}/join", wrapper.JoinConference)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/call", wrapper.GetChannelCall)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/call/token", wrapper.CreateCallToken)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages", wrapper.ListMessages)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages", wrapper.SendMessage)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages/{messageId}", wrapper.DeleteMessage)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages/{messageId}", wrapper.EditMessage)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/files", wrapper.UploadFile)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/channels/{channelId}/read", wrapper.SetReadPosition)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/mls/device", wrapper.RegisterMlsDevice)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/users/me/mls/devices/{deviceId}/key-packages", wrapper.ReplaceMlsKeyPackages)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/group", wrapper.GetMlsGroup)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/group", wrapper.CreateMlsGroup)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/member-devices", wrapper.ListMlsMemberDevices)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/key-package-claims", wrapper.ClaimMlsKeyPackages)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/commits", wrapper.ListMlsCommits)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/commits", wrapper.SubmitMlsCommit)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/users/me/mls/backup", wrapper.DeleteMlsBackup)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me/mls/backup", wrapper.GetMlsBackup)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/users/me/mls/backup", wrapper.PutMlsBackup)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/users/me/mls/devices/{deviceId}", wrapper.DeregisterMlsDevice)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me/mls/welcomes", wrapper.ListMlsWelcomes)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/users/me/mls/welcomes/{welcomeId}", wrapper.AcknowledgeMlsWelcome)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/search", wrapper.Search)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/ws", wrapper.ConnectWebSocket)
 

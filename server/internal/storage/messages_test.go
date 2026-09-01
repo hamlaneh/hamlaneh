@@ -10,108 +10,120 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
 )
 
-// messagesRawConn opens a direct connection to the scratch database for the
-// fixtures storage has no function for (channels) and for the rows storage
+// The fixtures storage has no function for (channels) and the rows storage
 // deliberately cannot write: an explicit created_at, and a soft-deleted
-// message. It registers citext exactly like the pool's connections, because
-// channels.slug is a citext column.
-func messagesRawConn(ctx context.Context, t *testing.T, dsn string) *pgx.Conn {
-	t.Helper()
-
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect for fixtures: %v", err)
-	}
-	t.Cleanup(func() {
-		if closeErr := conn.Close(context.Background()); closeErr != nil {
-			t.Errorf("close fixture connection: %v", closeErr)
-		}
-	})
-	if err := storage.RegisterCitext(ctx, conn); err != nil {
-		t.Fatalf("register citext on fixture connection: %v", err)
-	}
-	return conn
-}
+// message. They go through testdb.Raw, so a test that needs one of them is
+// still a test of the contract on both drivers rather than a PostgreSQL test.
+//
+// Neither driver generates an identifier or stamps a fixture's timestamps for
+// us — the SQLite tree has no gen_random_uuid() and no now() defaults — so
+// every insert below names its own id and its own times, which the PostgreSQL
+// side accepts unchanged.
 
 // seedMessagesChannel inserts a public channel and returns its id.
-func seedMessagesChannel(ctx context.Context, t *testing.T, conn *pgx.Conn, slug string) uuid.UUID {
+func seedMessagesChannel(ctx context.Context, t *testing.T, raw *testdb.Raw, slug string) uuid.UUID {
 	t.Helper()
 
-	var id uuid.UUID
-	err := conn.QueryRow(ctx,
-		`INSERT INTO channels (kind, slug) VALUES ('public', $1) RETURNING id`, slug,
-	).Scan(&id)
-	if err != nil {
-		t.Fatalf("seed channel %s: %v", slug, err)
-	}
+	id := uuid.New()
+	now := time.Now().UTC()
+	raw.Exec(ctx, t,
+		`INSERT INTO channels (id, kind, slug, created_at, updated_at)
+		 VALUES (?, 'public', ?, ?, ?)`,
+		id, slug, now, now)
 	return id
 }
 
 // seedMessageAt inserts one message with an explicit created_at — the row
 // CreateMessage cannot produce, because the server always stamps now().
 func seedMessageAt(
-	ctx context.Context, t *testing.T, conn *pgx.Conn,
+	ctx context.Context, t *testing.T, raw *testdb.Raw,
 	channelID, authorID uuid.UUID, content string, createdAt time.Time,
 ) {
 	t.Helper()
 
-	_, err := conn.Exec(ctx,
-		`INSERT INTO messages (channel_id, author_id, client_msg_id, content, created_at)
-		 VALUES ($1, $2, gen_random_uuid(), $3, $4)`,
-		channelID, authorID, content, createdAt,
-	)
-	if err != nil {
-		t.Fatalf("seed message %q: %v", content, err)
-	}
+	raw.Exec(ctx, t,
+		`INSERT INTO messages (id, channel_id, author_id, client_msg_id, content, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		uuid.New(), channelID, authorID, uuid.New(), content, createdAt)
 }
 
 // seedDeletedMessageAt inserts a soft-deleted message: content erased,
 // deleted_at set. It stands in for what slice 1.2b will write, so history
 // can be pinned on it today.
 func seedDeletedMessageAt(
-	ctx context.Context, t *testing.T, conn *pgx.Conn,
+	ctx context.Context, t *testing.T, raw *testdb.Raw,
 	channelID, authorID uuid.UUID, createdAt time.Time,
 ) uuid.UUID {
 	t.Helper()
 
-	var id uuid.UUID
-	err := conn.QueryRow(ctx,
-		`INSERT INTO messages (channel_id, author_id, client_msg_id, content, created_at, deleted_at, deleted_by)
-		 VALUES ($1, $2, gen_random_uuid(), '', $3, $3, $2)
-		 RETURNING id`,
-		channelID, authorID, createdAt,
-	).Scan(&id)
-	if err != nil {
-		t.Fatalf("seed deleted message: %v", err)
-	}
+	id := uuid.New()
+	raw.Exec(ctx, t,
+		`INSERT INTO messages (id, channel_id, author_id, client_msg_id, content, created_at, deleted_at, deleted_by)
+		 VALUES (?, ?, ?, ?, '', ?, ?, ?)`,
+		id, channelID, authorID, uuid.New(), createdAt, createdAt, authorID)
 	return id
 }
 
 // countMessages counts the rows of one channel, straight from SQL, so the
 // idempotency tests assert on the table rather than on the API's own answer.
-func countMessages(ctx context.Context, t *testing.T, conn *pgx.Conn, channelID uuid.UUID) int {
+func countMessages(ctx context.Context, t *testing.T, raw *testdb.Raw, channelID uuid.UUID) int {
 	t.Helper()
 
 	var n int
-	err := conn.QueryRow(ctx, `SELECT count(*) FROM messages WHERE channel_id = $1`, channelID).Scan(&n)
-	if err != nil {
+	if err := raw.QueryRow(ctx, `SELECT count(*) FROM messages WHERE channel_id = ?`, channelID).Scan(&n); err != nil {
 		t.Fatalf("count messages: %v", err)
 	}
 	return n
 }
 
+// mentionedIDs reads the message_mentions rows of one message straight from
+// SQL, so the assertions below are about the table the sidebar's "@" badge
+// counts rather than about anything CreateMessage reports back.
+func mentionedIDs(ctx context.Context, t *testing.T, raw *testdb.Raw, messageID uuid.UUID) []uuid.UUID {
+	t.Helper()
+
+	rows := raw.Query(ctx, t,
+		`SELECT mentioned_user_id FROM message_mentions WHERE message_id = ?`, messageID)
+
+	ids := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			t.Fatalf("scan mention: %v", scanErr)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read mentions: %v", err)
+	}
+	return ids
+}
+
+// assertMentionRows checks exactly who a message's mention rows name, in no
+// particular order.
+func assertMentionRows(t *testing.T, got, want []uuid.UUID) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("message_mentions holds %v, want exactly %v", got, want)
+	}
+	for _, id := range want {
+		if !slices.Contains(got, id) {
+			t.Errorf("message_mentions is missing %s; it holds %v", id, got)
+		}
+	}
+}
+
 func TestCreateMessageIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("sender"))
 	other := mustCreateUser(ctx, t, store, newUser("othersender"))
@@ -261,12 +273,9 @@ func TestCreateMessageIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("first send: %v", err)
 		}
-		if _, execErr := conn.Exec(ctx,
-			`UPDATE messages SET content = '', deleted_at = now(), deleted_by = author_id WHERE id = $1`,
-			stored.ID,
-		); execErr != nil {
-			t.Fatalf("soft delete: %v", execErr)
-		}
+		conn.Exec(ctx, t,
+			`UPDATE messages SET content = '', deleted_at = ?, deleted_by = author_id WHERE id = ?`,
+			time.Now().UTC(), stored.ID)
 
 		again, created, err := store.CreateMessage(ctx, nm)
 		if err != nil {
@@ -288,9 +297,8 @@ func TestCreateMessageIntegration(t *testing.T) {
 func TestCreateMessageConcurrentIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("racer"))
 	channelID := seedMessagesChannel(ctx, t, conn, "contended")
@@ -355,9 +363,8 @@ func TestCreateMessageConcurrentIntegration(t *testing.T) {
 func TestListMessagesIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("historian"))
 
@@ -477,9 +484,8 @@ func TestListMessagesIntegration(t *testing.T) {
 func TestListMessagesPagingIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	author := mustCreateUser(ctx, t, store, newUser("walker"))
 	channelID := seedMessagesChannel(ctx, t, conn, "walking")
@@ -539,7 +545,7 @@ func TestListMessagesPagingIntegration(t *testing.T) {
 // walkBackwards pages from the live edge into the past with `before`,
 // stitching the pages back into one ascending history.
 func walkBackwards(
-	ctx context.Context, t *testing.T, store *storage.Store,
+	ctx context.Context, t *testing.T, store testdb.Store,
 	channelID uuid.UUID, limit, total int,
 ) []storage.Message {
 	t.Helper()
@@ -570,7 +576,7 @@ func walkBackwards(
 // walkForwards pages from the beginning of history with `after`, the
 // reconnect backfill the WS protocol falls back to.
 func walkForwards(
-	ctx context.Context, t *testing.T, store *storage.Store,
+	ctx context.Context, t *testing.T, store testdb.Store,
 	channelID uuid.UUID, limit, total int,
 ) []storage.Message {
 	t.Helper()
@@ -629,4 +635,620 @@ func contentsOf(messages []storage.Message) []string {
 		contents[i] = m.Content
 	}
 	return contents
+}
+
+// seedMembership puts a user in a channel. Mentions are member-scoped, so
+// tests about them have to say who is actually in the conversation.
+func seedMembership(ctx context.Context, t *testing.T, raw *testdb.Raw, channelID, userID uuid.UUID) {
+	t.Helper()
+
+	raw.Exec(ctx, t,
+		`INSERT INTO channel_members (channel_id, user_id, joined_at) VALUES (?, ?, ?)
+		 ON CONFLICT DO NOTHING`, channelID, userID, time.Now().UTC())
+}
+
+// mentionToken is the contract's literal wire form: <@{user_id}>.
+func mentionTokenFor(id uuid.UUID) string { return "<@" + id.String() + ">" }
+
+// TestCreateMessageMentionsIntegration asserts the rows the sidebar's filled
+// "@" badge counts, read straight from message_mentions rather than from
+// whatever CreateMessage reports back.
+//
+// The member-only rule is the one worth pinning: a mention row names somebody
+// entitled to read the message it points at, so a future "my mentions" view
+// cannot surface a conversation its reader was never in.
+func TestCreateMessageMentionsIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, conn := testdb.New(t)
+	ctx := context.Background()
+
+	author := mustCreateUser(ctx, t, store, newUser("mentionauthor"))
+	member := mustCreateUser(ctx, t, store, newUser("mentionmember"))
+	stranger := mustCreateUser(ctx, t, store, newUser("mentionstranger"))
+	channelID := seedMessagesChannel(ctx, t, conn, "mentioning")
+	seedMembership(ctx, t, conn, channelID, author.ID)
+	seedMembership(ctx, t, conn, channelID, member.ID)
+
+	send := func(t *testing.T, clientMsgID uuid.UUID, content string) storage.Message {
+		t.Helper()
+		msg, _, err := store.CreateMessage(ctx, storage.NewMessage{
+			ChannelID: channelID, AuthorID: author.ID,
+			ClientMsgID: clientMsgID, Content: content,
+		})
+		if err != nil {
+			t.Fatalf("CreateMessage: %v", err)
+		}
+		return msg
+	}
+
+	t.Run("a mentioned member gets a row", func(t *testing.T) {
+		msg := send(t, uuid.New(), "morning "+mentionTokenFor(member.ID)+", ready?")
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), []uuid.UUID{member.ID})
+	})
+
+	t.Run("naming the same person twice writes one row", func(t *testing.T) {
+		token := mentionTokenFor(member.ID)
+		msg := send(t, uuid.New(), token+" and again "+token)
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), []uuid.UUID{member.ID})
+	})
+
+	t.Run("a non-member is dropped, and does not fail the message", func(t *testing.T) {
+		// A stale paste or a hand-typed id. The message must still land.
+		msg := send(t, uuid.New(), "cc "+mentionTokenFor(stranger.ID)+" "+mentionTokenFor(member.ID))
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), []uuid.UUID{member.ID})
+	})
+
+	t.Run("a token naming nobody is dropped rather than erroring", func(t *testing.T) {
+		// No foreign-key violation: the join simply matches nothing.
+		msg := send(t, uuid.New(), "who is "+mentionTokenFor(uuid.New())+"?")
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, msg.ID), nil)
+	})
+
+	t.Run("a resend writes no second set of rows", func(t *testing.T) {
+		clientMsgID := uuid.New()
+		content := "please look " + mentionTokenFor(member.ID)
+		first := send(t, clientMsgID, content)
+		again := send(t, clientMsgID, content)
+
+		if again.ID != first.ID {
+			t.Fatalf("resend returned message %s, want the existing %s", again.ID, first.ID)
+		}
+		// The primary key would refuse a duplicate outright, so the real risk
+		// is the resend erroring rather than being a lookup. It did not.
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, first.ID), []uuid.UUID{member.ID})
+	})
+
+	t.Run("the counts the sidebar reads follow the rows", func(t *testing.T) {
+		// A fresh channel, so the counts below are only about this subtest.
+		countedID := seedMessagesChannel(ctx, t, conn, "mentioncounts")
+		seedMembership(ctx, t, conn, countedID, author.ID)
+		seedMembership(ctx, t, conn, countedID, member.ID)
+
+		for _, content := range []string{
+			"plain unread, nobody named",
+			"and now " + mentionTokenFor(member.ID),
+		} {
+			if _, _, err := store.CreateMessage(ctx, storage.NewMessage{
+				ChannelID: countedID, AuthorID: author.ID,
+				ClientMsgID: uuid.New(), Content: content,
+			}); err != nil {
+				t.Fatalf("CreateMessage: %v", err)
+			}
+		}
+
+		seen, err := store.ChannelForUser(ctx, countedID, member.ID)
+		if err != nil {
+			t.Fatalf("ChannelForUser: %v", err)
+		}
+		if seen.UnreadCount != 2 {
+			t.Errorf("unread_count = %d, want 2", seen.UnreadCount)
+		}
+		if seen.MentionCount != 1 {
+			t.Errorf("mention_count = %d, want 1", seen.MentionCount)
+		}
+		if seen.MentionCount > seen.UnreadCount {
+			t.Errorf("mention_count %d exceeds unread_count %d; the badge would outrank its own total",
+				seen.MentionCount, seen.UnreadCount)
+		}
+
+		// The author's own message is not unread to them, so neither count
+		// moves for the person who wrote it.
+		mine, err := store.ChannelForUser(ctx, countedID, author.ID)
+		if err != nil {
+			t.Fatalf("ChannelForUser: %v", err)
+		}
+		if mine.UnreadCount != 0 || mine.MentionCount != 0 {
+			t.Errorf("author sees unread=%d mention=%d, want 0/0", mine.UnreadCount, mine.MentionCount)
+		}
+	})
+}
+
+// TestMessageByIDIntegration pins the read the edit and delete handlers make
+// before they ask authz anything: the channel is part of the key, so a
+// message id from another conversation is indistinguishable from one that
+// never existed.
+func TestMessageByIDIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, conn := testdb.New(t)
+	ctx := context.Background()
+
+	author := mustCreateUser(ctx, t, store, newUser("readback"))
+	channelID := seedMessagesChannel(ctx, t, conn, "readback")
+	other := seedMessagesChannel(ctx, t, conn, "readbackother")
+
+	sent, _, err := store.CreateMessage(ctx, storage.NewMessage{
+		ChannelID: channelID, AuthorID: author.ID,
+		ClientMsgID: uuid.New(), Content: "find me",
+	})
+	if err != nil {
+		t.Fatalf("CreateMessage: %v", err)
+	}
+
+	got, err := store.MessageByID(ctx, channelID, sent.ID)
+	if err != nil {
+		t.Fatalf("MessageByID: %v", err)
+	}
+	if got.ID != sent.ID || got.Content != "find me" {
+		t.Errorf("MessageByID returned %+v, want the stored message", got)
+	}
+	if got.Author.ID != author.ID || got.Author.Username != author.Username {
+		t.Errorf("author = %+v, want %s", got.Author, author.Username)
+	}
+	if got.EditedAt != nil || got.DeletedAt != nil {
+		t.Errorf("a fresh message carries edited_at=%v deleted_at=%v", got.EditedAt, got.DeletedAt)
+	}
+
+	if _, err := store.MessageByID(ctx, other, sent.ID); !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("reading the message through another channel: %v, want ErrNotFound", err)
+	}
+	if _, err := store.MessageByID(ctx, channelID, uuid.New()); !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("reading an unknown message: %v, want ErrNotFound", err)
+	}
+}
+
+// TestUpdateMessageContentIntegration pins the edit: new content, an
+// edited_at the "(edited)" marker renders from, and the message's place in
+// history untouched.
+func TestUpdateMessageContentIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, conn := testdb.New(t)
+	ctx := context.Background()
+
+	author := mustCreateUser(ctx, t, store, newUser("editor"))
+	channelID := seedMessagesChannel(ctx, t, conn, "editing")
+	seedMembership(ctx, t, conn, channelID, author.ID)
+
+	send := func(t *testing.T, content string) storage.Message {
+		t.Helper()
+		msg, _, err := store.CreateMessage(ctx, storage.NewMessage{
+			ChannelID: channelID, AuthorID: author.ID,
+			ClientMsgID: uuid.New(), Content: content,
+		})
+		if err != nil {
+			t.Fatalf("CreateMessage: %v", err)
+		}
+		return msg
+	}
+
+	t.Run("content is replaced and edited_at is stamped", func(t *testing.T) {
+		sent := send(t, "frist post")
+
+		edited, err := store.UpdateMessageContent(ctx, channelID, sent.ID, "first post", nil)
+		if err != nil {
+			t.Fatalf("UpdateMessageContent: %v", err)
+		}
+		if edited.Content != "first post" {
+			t.Errorf("content = %q, want the edit", edited.Content)
+		}
+		if edited.EditedAt == nil {
+			t.Fatal("edited_at is nil; the client cannot draw the (edited) marker")
+		}
+		if edited.EditedAt.Before(edited.CreatedAt) {
+			t.Errorf("edited_at %v is before created_at %v", edited.EditedAt, edited.CreatedAt)
+		}
+		if edited.ID != sent.ID || !edited.CreatedAt.Equal(sent.CreatedAt) {
+			t.Errorf("the edit moved the message: %s at %v, want %s at %v",
+				edited.ID, edited.CreatedAt, sent.ID, sent.CreatedAt)
+		}
+		if edited.Author.Username != author.Username {
+			t.Errorf("author = %+v, want %s", edited.Author, author.Username)
+		}
+		if edited.DeletedAt != nil {
+			t.Errorf("the edit set deleted_at=%v", edited.DeletedAt)
+		}
+	})
+
+	t.Run("a deleted message cannot be edited", func(t *testing.T) {
+		sent := send(t, "about to go")
+		if _, err := store.SoftDeleteMessage(ctx, channelID, sent.ID, author.ID); err != nil {
+			t.Fatalf("SoftDeleteMessage: %v", err)
+		}
+
+		_, err := store.UpdateMessageContent(ctx, channelID, sent.ID, "back from the dead", nil)
+		if !errors.Is(err, storage.ErrNotFound) {
+			t.Fatalf("editing a deleted message: %v, want ErrNotFound", err)
+		}
+
+		// And the row is still the placeholder it was.
+		after, err := store.MessageByID(ctx, channelID, sent.ID)
+		if err != nil {
+			t.Fatalf("MessageByID: %v", err)
+		}
+		if after.Content != "" || after.DeletedAt == nil {
+			t.Errorf("the refused edit left content=%q deleted_at=%v", after.Content, after.DeletedAt)
+		}
+	})
+
+	t.Run("another channel's message is never edited", func(t *testing.T) {
+		elsewhere := seedMessagesChannel(ctx, t, conn, "editingelsewhere")
+		sent := send(t, "not yours to edit")
+
+		if _, err := store.UpdateMessageContent(ctx, elsewhere, sent.ID, "rewritten", nil); !errors.Is(err, storage.ErrNotFound) {
+			t.Fatalf("editing through another channel: %v, want ErrNotFound", err)
+		}
+		after, err := store.MessageByID(ctx, channelID, sent.ID)
+		if err != nil {
+			t.Fatalf("MessageByID: %v", err)
+		}
+		if after.Content != "not yours to edit" || after.EditedAt != nil {
+			t.Errorf("the refused edit still changed the row: %+v", after)
+		}
+	})
+
+	t.Run("mentions follow the edited content", func(t *testing.T) {
+		named := mustCreateUser(ctx, t, store, newUser("editnamed"))
+		dropped := mustCreateUser(ctx, t, store, newUser("editdropped"))
+		stranger := mustCreateUser(ctx, t, store, newUser("editstranger"))
+		seedMembership(ctx, t, conn, channelID, named.ID)
+		seedMembership(ctx, t, conn, channelID, dropped.ID)
+
+		sent := send(t, "hello "+mentionTokenFor(dropped.ID))
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, sent.ID), []uuid.UUID{dropped.ID})
+
+		// The edit names somebody else, drops the first name, and names a
+		// stranger to the channel — who must not become a row, exactly as on
+		// a send.
+		_, err := store.UpdateMessageContent(ctx, channelID, sent.ID,
+			"hello "+mentionTokenFor(named.ID)+" and "+mentionTokenFor(stranger.ID), nil)
+		if err != nil {
+			t.Fatalf("UpdateMessageContent: %v", err)
+		}
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, sent.ID), []uuid.UUID{named.ID})
+
+		// An edit that keeps a mention keeps its row rather than churning it.
+		if _, err := store.UpdateMessageContent(ctx, channelID, sent.ID,
+			"still "+mentionTokenFor(named.ID), nil); err != nil {
+			t.Fatalf("UpdateMessageContent: %v", err)
+		}
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, sent.ID), []uuid.UUID{named.ID})
+
+		// And an edit that names nobody leaves none.
+		if _, err := store.UpdateMessageContent(ctx, channelID, sent.ID, "quiet now", nil); err != nil {
+			t.Fatalf("UpdateMessageContent: %v", err)
+		}
+		assertMentionRows(t, mentionedIDs(ctx, t, conn, sent.ID), nil)
+	})
+}
+
+// TestSoftDeleteMessageIntegration pins the delete: the row keeps its place
+// with its content erased, which is what the dashed placeholder renders, and
+// a second delete changes nothing.
+func TestSoftDeleteMessageIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, conn := testdb.New(t)
+	ctx := context.Background()
+
+	author := mustCreateUser(ctx, t, store, newUser("deleter"))
+	admin := mustCreateUser(ctx, t, store, newUser("deletemod"))
+	channelID := seedMessagesChannel(ctx, t, conn, "deleting")
+
+	send := func(t *testing.T, content string) storage.Message {
+		t.Helper()
+		msg, _, err := store.CreateMessage(ctx, storage.NewMessage{
+			ChannelID: channelID, AuthorID: author.ID,
+			ClientMsgID: uuid.New(), Content: content,
+		})
+		if err != nil {
+			t.Fatalf("CreateMessage: %v", err)
+		}
+		return msg
+	}
+
+	t.Run("the content is erased and the row keeps its place", func(t *testing.T) {
+		sent := send(t, "regrettable")
+
+		deleted, err := store.SoftDeleteMessage(ctx, channelID, sent.ID, admin.ID)
+		if err != nil {
+			t.Fatalf("SoftDeleteMessage: %v", err)
+		}
+		if deleted.Content != "" {
+			t.Errorf("deleted message still carries content %q", deleted.Content)
+		}
+		if deleted.DeletedAt == nil {
+			t.Fatal("deleted_at is nil; the client cannot draw the placeholder")
+		}
+		if deleted.ID != sent.ID || !deleted.CreatedAt.Equal(sent.CreatedAt) {
+			t.Errorf("the delete moved the message: %s at %v, want %s at %v",
+				deleted.ID, deleted.CreatedAt, sent.ID, sent.CreatedAt)
+		}
+		if deleted.Author.ID != author.ID {
+			t.Errorf("author = %+v, want the message's own author %s", deleted.Author, author.Username)
+		}
+		if got := deletedByOf(ctx, t, conn, sent.ID); got != admin.ID {
+			t.Errorf("deleted_by = %s, want the deleting user %s", got, admin.ID)
+		}
+	})
+
+	t.Run("deleting twice changes nothing the second time", func(t *testing.T) {
+		sent := send(t, "gone once")
+
+		first, err := store.SoftDeleteMessage(ctx, channelID, sent.ID, author.ID)
+		if err != nil {
+			t.Fatalf("SoftDeleteMessage: %v", err)
+		}
+		if _, again := store.SoftDeleteMessage(ctx, channelID, sent.ID, admin.ID); !errors.Is(again, storage.ErrNotFound) {
+			t.Fatalf("second delete: %v, want ErrNotFound so the handler announces nothing twice", again)
+		}
+
+		after, err := store.MessageByID(ctx, channelID, sent.ID)
+		if err != nil {
+			t.Fatalf("MessageByID: %v", err)
+		}
+		if !after.DeletedAt.Equal(*first.DeletedAt) {
+			t.Errorf("the second delete moved deleted_at from %v to %v", first.DeletedAt, after.DeletedAt)
+		}
+		if got := deletedByOf(ctx, t, conn, sent.ID); got != author.ID {
+			t.Errorf("deleted_by = %s, want the first deleter %s", got, author.ID)
+		}
+	})
+
+	t.Run("another channel's message is never deleted", func(t *testing.T) {
+		elsewhere := seedMessagesChannel(ctx, t, conn, "deletingelsewhere")
+		sent := send(t, "not yours to delete")
+
+		if _, err := store.SoftDeleteMessage(ctx, elsewhere, sent.ID, admin.ID); !errors.Is(err, storage.ErrNotFound) {
+			t.Fatalf("deleting through another channel: %v, want ErrNotFound", err)
+		}
+		after, err := store.MessageByID(ctx, channelID, sent.ID)
+		if err != nil {
+			t.Fatalf("MessageByID: %v", err)
+		}
+		if after.DeletedAt != nil {
+			t.Errorf("the refused delete still erased the row: %+v", after)
+		}
+	})
+}
+
+// TestDeletedRowsAgreeIntegration is the subtlety this slice owes the one
+// before it: TestListMessagesIntegration pinned how a soft-deleted message
+// surfaces in history against a hand-seeded row, written before anything
+// could set deleted_at. Now that deletion is real, the two must be the same
+// row — otherwise the older test pins a shape nothing produces.
+func TestDeletedRowsAgreeIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, conn := testdb.New(t)
+	ctx := context.Background()
+
+	author := mustCreateUser(ctx, t, store, newUser("agreeing"))
+	channelID := seedMessagesChannel(ctx, t, conn, "agreeing")
+	seedMembership(ctx, t, conn, channelID, author.ID)
+	base := time.Date(2026, 8, 5, 9, 0, 0, 0, time.UTC)
+
+	seedMessageAt(ctx, t, conn, channelID, author.ID, "before", base)
+	seededID := seedDeletedMessageAt(ctx, t, conn, channelID, author.ID, base.Add(time.Minute))
+	sent, _, err := store.CreateMessage(ctx, storage.NewMessage{
+		ChannelID: channelID, AuthorID: author.ID,
+		ClientMsgID: uuid.New(), Content: "deleted for real",
+	})
+	if err != nil {
+		t.Fatalf("CreateMessage: %v", err)
+	}
+	if _, delErr := store.SoftDeleteMessage(ctx, channelID, sent.ID, author.ID); delErr != nil {
+		t.Fatalf("SoftDeleteMessage: %v", delErr)
+	}
+
+	page, err := store.ListMessages(ctx, storage.ListMessagesParams{ChannelID: channelID, Limit: 50})
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(page.Messages) != 3 {
+		t.Fatalf("page holds %d messages, want both deleted rows in place", len(page.Messages))
+	}
+
+	seeded, erased := page.Messages[1], page.Messages[2]
+	if seeded.ID != seededID || erased.ID != sent.ID {
+		t.Fatalf("page = %s, %s, %s; want the seeded %s then the deleted %s",
+			page.Messages[0].ID, seeded.ID, erased.ID, seededID, sent.ID)
+	}
+	if seeded.Content != erased.Content {
+		t.Errorf("seeded content %q, deleted-for-real content %q", seeded.Content, erased.Content)
+	}
+	if (seeded.DeletedAt == nil) != (erased.DeletedAt == nil) {
+		t.Errorf("seeded deleted_at=%v, deleted-for-real deleted_at=%v", seeded.DeletedAt, erased.DeletedAt)
+	}
+	if erased.Content != "" || erased.DeletedAt == nil {
+		t.Errorf("a really-deleted row surfaced as content=%q deleted_at=%v", erased.Content, erased.DeletedAt)
+	}
+
+	// The search index is partial on deleted_at, so a deleted message must
+	// also stop being findable — the other half of "erased" (migration 0006).
+	results, err := store.SearchMessages(ctx, storage.SearchMessagesParams{
+		UserID: author.ID, Query: "deleted for real", Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("SearchMessages: %v", err)
+	}
+	if len(results.Results) != 0 {
+		t.Errorf("a deleted message is still searchable: %+v", results.Results)
+	}
+}
+
+// deletedByOf reads a message's deleted_by straight from SQL: the column is
+// deliberately not on storage.Message (nothing renders it before the Phase
+// 1.4 audit log), so this is the only way to assert it was recorded.
+func deletedByOf(ctx context.Context, t *testing.T, raw *testdb.Raw, messageID uuid.UUID) uuid.UUID {
+	t.Helper()
+
+	var id *uuid.UUID
+	err := raw.QueryRow(ctx, `SELECT deleted_by FROM messages WHERE id = ?`, messageID).Scan(&id)
+	if err != nil {
+		t.Fatalf("read deleted_by: %v", err)
+	}
+	if id == nil {
+		t.Fatalf("deleted_by is null on %s; nobody is named for the deletion", messageID)
+	}
+	return *id
+}
+
+// TestListMessagesAroundIntegration pins the permalink page: the anchor
+// itself, centred, with the limit split either side of it — and what happens
+// when the anchor sits near either end of the channel.
+func TestListMessagesAroundIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, conn := testdb.New(t)
+	ctx := context.Background()
+
+	author := mustCreateUser(ctx, t, store, newUser("permalinker"))
+	channelID := seedMessagesChannel(ctx, t, conn, "permalink")
+	base := time.Date(2026, 8, 6, 9, 0, 0, 0, time.UTC)
+	const total = 9
+	for i := range total {
+		seedMessageAt(ctx, t, conn, channelID, author.ID,
+			fmt.Sprintf("m%d", i), base.Add(time.Duration(i)*time.Minute))
+	}
+
+	// The whole channel, ascending, so a cursor can be taken for any of it.
+	all, err := store.ListMessages(ctx, storage.ListMessagesParams{ChannelID: channelID, Limit: 50})
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(all.Messages) != total {
+		t.Fatalf("fixture holds %d messages, want %d", len(all.Messages), total)
+	}
+	anchorAt := func(i int) *storage.MessageCursor {
+		m := all.Messages[i]
+		return &storage.MessageCursor{CreatedAt: m.CreatedAt, ID: m.ID}
+	}
+	around := func(t *testing.T, anchor *storage.MessageCursor, limit int) storage.MessagePage {
+		t.Helper()
+		page, pageErr := store.ListMessages(ctx, storage.ListMessagesParams{
+			ChannelID: channelID, Around: anchor, Limit: limit,
+		})
+		if pageErr != nil {
+			t.Fatalf("ListMessages around: %v", pageErr)
+		}
+		assertAscending(t, "around page", page.Messages)
+		return page
+	}
+
+	t.Run("the page is centred on the anchor", func(t *testing.T) {
+		// Limit 5: the anchor takes one place, the odd message goes to the
+		// older side, so two older and two newer.
+		page := around(t, anchorAt(4), 5)
+		if got := contentsOf(page.Messages); !slices.Equal(got, []string{"m2", "m3", "m4", "m5", "m6"}) {
+			t.Errorf("around page = %v, want m2..m6", got)
+		}
+		if !page.HasBefore || !page.HasAfter {
+			t.Errorf("before=%v after=%v, want history reported on both sides", page.HasBefore, page.HasAfter)
+		}
+	})
+
+	t.Run("an even limit gives the extra message to the older side", func(t *testing.T) {
+		page := around(t, anchorAt(4), 6)
+		if got := contentsOf(page.Messages); !slices.Equal(got, []string{"m1", "m2", "m3", "m4", "m5", "m6"}) {
+			t.Errorf("around page = %v, want m1..m6", got)
+		}
+	})
+
+	t.Run("a limit of one is the anchor alone", func(t *testing.T) {
+		page := around(t, anchorAt(4), 1)
+		if got := contentsOf(page.Messages); !slices.Equal(got, []string{"m4"}) {
+			t.Errorf("around page = %v, want just the anchor", got)
+		}
+		if !page.HasBefore || !page.HasAfter {
+			t.Errorf("before=%v after=%v, want both sides reported", page.HasBefore, page.HasAfter)
+		}
+	})
+
+	t.Run("at the start of the channel the page is simply shorter", func(t *testing.T) {
+		// Nothing is older than m0, and the newer side is NOT widened to
+		// make up the shortfall: a short page here means the channel really
+		// does start there, which HasBefore reports.
+		page := around(t, anchorAt(0), 5)
+		if got := contentsOf(page.Messages); !slices.Equal(got, []string{"m0", "m1", "m2"}) {
+			t.Errorf("around page = %v, want the anchor and its newer share", got)
+		}
+		if page.HasBefore {
+			t.Error("HasBefore is true at the oldest message in the channel")
+		}
+		if !page.HasAfter {
+			t.Error("HasAfter is false with six newer messages left")
+		}
+	})
+
+	t.Run("at the live edge the page is shorter the other way", func(t *testing.T) {
+		page := around(t, anchorAt(total-1), 5)
+		if got := contentsOf(page.Messages); !slices.Equal(got, []string{"m6", "m7", "m8"}) {
+			t.Errorf("around page = %v, want the anchor and its older share", got)
+		}
+		if !page.HasBefore {
+			t.Error("HasBefore is false with six older messages left")
+		}
+		if page.HasAfter {
+			t.Error("HasAfter is true at the newest message in the channel")
+		}
+	})
+
+	t.Run("a whole channel that fits reports nothing either side", func(t *testing.T) {
+		page := around(t, anchorAt(4), 50)
+		if len(page.Messages) != total {
+			t.Errorf("around page holds %d messages, want the whole channel", len(page.Messages))
+		}
+		if page.HasBefore || page.HasAfter {
+			t.Errorf("before=%v after=%v on a page holding everything", page.HasBefore, page.HasAfter)
+		}
+	})
+
+	t.Run("an anchor naming no message still centres on its position", func(t *testing.T) {
+		// A permalink to a message that is gone — or a cursor a client
+		// invented — lands between two rows rather than on one.
+		between := &storage.MessageCursor{
+			CreatedAt: base.Add(4*time.Minute + 30*time.Second),
+			ID:        uuid.New(),
+		}
+		page := around(t, between, 4)
+		if got := contentsOf(page.Messages); !slices.Equal(got, []string{"m3", "m4", "m5", "m6"}) {
+			t.Errorf("around page = %v, want the messages either side of the gap", got)
+		}
+	})
+
+	t.Run("an empty channel pages cleanly", func(t *testing.T) {
+		empty := seedMessagesChannel(ctx, t, conn, "permalinkempty")
+		page, pageErr := store.ListMessages(ctx, storage.ListMessagesParams{
+			ChannelID: empty, Around: anchorAt(0), Limit: 50,
+		})
+		if pageErr != nil {
+			t.Fatalf("ListMessages around: %v", pageErr)
+		}
+		if len(page.Messages) != 0 || page.HasBefore || page.HasAfter {
+			t.Errorf("empty channel returned %+v; an empty page has no row to anchor a cursor on", page)
+		}
+	})
+
+	t.Run("around excludes the other two cursors", func(t *testing.T) {
+		for _, params := range []storage.ListMessagesParams{
+			{ChannelID: channelID, Around: anchorAt(4), Before: anchorAt(4), Limit: 10},
+			{ChannelID: channelID, Around: anchorAt(4), After: anchorAt(4), Limit: 10},
+		} {
+			if _, err := store.ListMessages(ctx, params); err == nil {
+				t.Error("paging around and in a direction at once was accepted")
+			}
+		}
+	})
 }

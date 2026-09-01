@@ -19,11 +19,14 @@ import en from "./locales/en/common.json";
 import {
   expireMockAccess,
   FIXTURE_ADMIN,
+  FIXTURE_BOTH_CREDENTIALS,
   FIXTURE_CREDENTIALS,
+  FIXTURE_ENROL_CREDENTIALS,
   FIXTURE_NEWHIRE,
   FIXTURE_NEWHIRE_CREDENTIALS,
   FIXTURE_RATELIMITED_IDENTIFIER,
   FIXTURE_RETRY_AFTER_SECONDS,
+  FIXTURE_TOTP_CODE,
   resetMockAuth,
 } from "./mocks/handlers";
 import { server } from "./mocks/node";
@@ -158,6 +161,46 @@ async function loginAsNewhire(user: UserEvent) {
     FIXTURE_NEWHIRE_CREDENTIALS.password,
   );
   await screen.findByRole("heading", { name: en.changePassword.title });
+}
+
+/**
+ * Signs in as the account whose session carries `totp_enrollment_required`
+ * and waits for the forced enrolment screen.
+ */
+async function loginAsEnrolUser(user: UserEvent) {
+  await renderAppAtLogin();
+  await submitLogin(
+    user,
+    FIXTURE_ENROL_CREDENTIALS.identifier,
+    FIXTURE_ENROL_CREDENTIALS.password,
+  );
+  await screen.findByRole("heading", { name: en.totpRequired.title });
+}
+
+/**
+ * Walks the delivered three-step setup (scan → verify → recovery codes) to
+ * activation. Identical to the Settings path, because it is the same
+ * component — that is the point of routing here rather than building a second
+ * enrolment flow.
+ */
+async function completeEnrolment(user: UserEvent) {
+  await user.click(
+    await screen.findByRole("button", { name: en.settings.totp.scan.continue }),
+  );
+  const cells = within(
+    await screen.findByRole("group", { name: en.settings.totp.verify.codeLabel }),
+  ).getAllByRole("textbox");
+  const firstCell = cells[0];
+  if (firstCell === undefined) {
+    throw new Error("the setup code input has no cells");
+  }
+  await user.click(firstCell);
+  await user.keyboard(FIXTURE_TOTP_CODE);
+  await user.click(screen.getByRole("button", { name: en.settings.totp.verify.submit }));
+
+  await screen.findByRole("heading", { name: en.settings.totp.codes.title });
+  await user.click(screen.getByLabelText(en.settings.totp.codes.acknowledge));
+  await user.click(screen.getByRole("button", { name: en.settings.totp.codes.activate }));
 }
 
 /** Fills and submits the change-password form; empty fields are left untouched (userEvent.type rejects ""). */
@@ -613,6 +656,94 @@ describe("forced password change", () => {
     expect(
       screen.queryByText(en.changePassword.forcedNotice),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("forced two-step enrolment", () => {
+  it("routes a flagged session to enrolment, with the chat shell out of reach", async () => {
+    const user = userEvent.setup({ delay: null });
+    await loginAsEnrolUser(user);
+
+    expect(screen.getByText(en.totpRequired.body)).toBeInTheDocument();
+    expect(queryChatShell()).not.toBeInTheDocument();
+    // Every exit is the same exit, and it is named for what it does: a
+    // "Cancel" that signs you out would be lying.
+    expect(
+      screen.queryByRole("button", { name: en.settings.cancel }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: en.totpRequired.signOut }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("returns to the login screen when the flagged user signs out instead", async () => {
+    const user = userEvent.setup({ delay: null });
+    await loginAsEnrolUser(user);
+
+    const [exit] = screen.getAllByRole("button", { name: en.totpRequired.signOut });
+    if (exit === undefined) {
+      throw new Error("the enrolment screen offers no way out");
+    }
+    await user.click(exit);
+
+    expect(
+      await screen.findByRole("heading", { name: en.login.title }),
+    ).toBeInTheDocument();
+  });
+
+  it("continues into chat when enrolment completes, with no second sign-in", async () => {
+    const user = userEvent.setup({ delay: null });
+    await loginAsEnrolUser(user);
+    const logins = trackRequests("/api/v1/auth/login");
+
+    try {
+      await completeEnrolment(user);
+
+      expect(await findChatShell()).toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: en.login.title }),
+      ).not.toBeInTheDocument();
+      // The flag clears server-side; nothing re-authenticates.
+      expect(logins.count()).toBe(0);
+    } finally {
+      logins.stop();
+    }
+  });
+
+  it("leaves a session without the flag alone", async () => {
+    const user = userEvent.setup({ delay: null });
+    await renderAppAtLogin();
+    await submitLogin(user, FIXTURE_CREDENTIALS.identifier, FIXTURE_CREDENTIALS.password);
+
+    expect(await findChatShell()).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: en.totpRequired.title }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("puts the password change first when a session carries both flags", async () => {
+    const user = userEvent.setup({ delay: null });
+    await renderAppAtLogin();
+    await submitLogin(user, FIXTURE_BOTH_CREDENTIALS.identifier, FIXTURE_BOTH_CREDENTIALS.password);
+
+    // Precedence (see App.tsx): the temporary password goes first, because it
+    // is a credential somebody else still knows.
+    await screen.findByRole("heading", { name: en.changePassword.title });
+    expect(
+      screen.queryByRole("heading", { name: en.totpRequired.title }),
+    ).not.toBeInTheDocument();
+
+    await submitChangePassword(user, {
+      current: FIXTURE_BOTH_CREDENTIALS.password,
+      next: VALID_NEW_PASSWORD,
+      confirm: VALID_NEW_PASSWORD,
+    });
+
+    // One forced screen hands over to the other; chat is still out of reach.
+    expect(
+      await screen.findByRole("heading", { name: en.totpRequired.title }),
+    ).toBeInTheDocument();
+    expect(queryChatShell()).not.toBeInTheDocument();
   });
 });
 

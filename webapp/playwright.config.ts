@@ -42,8 +42,33 @@ const onCI = process.env.CI !== undefined;
  * in — so it lives in its own project, which `dependencies` puts last.
  */
 const RATE_LIMIT_SPEC = "**/rate-limit.e2e.ts";
-/** Persian-only assertions; running them under the `en` project is meaningless. */
-const PERSIAN_SPEC = "**/fa-smoke.e2e.ts";
+/**
+ * Persian-only assertions; running them under the `en` project is meaningless
+ * — and for the snapshot suite it is worse than meaningless, because a second
+ * project would ask for a second set of committed baselines nobody wants.
+ */
+const PERSIAN_SPECS = ["**/fa-smoke.e2e.ts", "**/fa-rtl-snapshots.e2e.ts"];
+
+/**
+ * Specs that measure something with no language in it — a candidate type, a
+ * credential in a response body — so running them twice measures the same
+ * thing twice and calls it coverage.
+ *
+ * They live here rather than as a `test.skip` inside each spec so the routing
+ * is in one readable place: a reader asking "what runs in Persian" gets an
+ * answer from this file instead of from every spec's first three lines.
+ */
+const LOCALE_AGNOSTIC_SPECS = [
+  "**/calls-relay-only.e2e.ts",
+  "**/livekit-key-leak.e2e.ts",
+  // Audio bytes, decoder energy and an MLS epoch. Nothing in what it measures
+  // has a language in it, and it is one of the most expensive specs there is.
+  "**/e2ee-call-rotation.e2e.ts",
+  // A SQLite row read back after a process restart. It drives a whole second
+  // deployment of its own (webapp/e2e/support/homestack.ts), so running it
+  // twice would boot two more servers to measure the same database.
+  "**/home-mode-restart.e2e.ts",
+];
 
 /**
  * `.e2e.ts`, not `.spec.ts`: Vitest's default include is
@@ -81,12 +106,12 @@ export default defineConfig<TestOptions>({
     {
       name: "en",
       use: { ...devices["Desktop Chrome"], uiLocale: "en" },
-      testIgnore: [RATE_LIMIT_SPEC, PERSIAN_SPEC],
+      testIgnore: [RATE_LIMIT_SPEC, ...PERSIAN_SPECS],
     },
     {
       name: "fa",
       use: { ...devices["Desktop Chrome"], uiLocale: "fa" },
-      testIgnore: [RATE_LIMIT_SPEC],
+      testIgnore: [RATE_LIMIT_SPEC, ...LOCALE_AGNOSTIC_SPECS],
       ...(allLocales ? {} : { grep: /@fa-smoke/u }),
     },
     {

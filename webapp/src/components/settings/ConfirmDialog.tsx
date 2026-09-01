@@ -21,6 +21,12 @@ interface ConfirmDialogProps {
   /** Shown above the actions; already localized. */
   error?: string | undefined;
   busy?: boolean;
+  /**
+   * Draws the confirm as unavailable rather than removing it — the
+   * "blocked, not warned" dialog on `admin-components` §02, where the action
+   * you asked for is named and visibly refused instead of silently missing.
+   */
+  confirmDisabled?: boolean;
   onConfirm: (password: string) => void;
   onCancel: () => void;
   /**
@@ -48,6 +54,7 @@ export function ConfirmDialog({
   passwordLabel,
   error,
   busy = false,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
   onDismiss,
@@ -98,6 +105,7 @@ export function ConfirmDialog({
             label={confirmLabel}
             busyLabel={busyLabel}
             busy={busy}
+            disabled={confirmDisabled}
             tone={tone === "danger" ? "dangerSolid" : "primary"}
             size="sm"
             onClick={() => {

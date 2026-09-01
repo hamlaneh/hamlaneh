@@ -29,6 +29,12 @@ export interface ApiSession {
 }
 
 export interface TestAccount {
+  /**
+   * The server's id for this account. Taken from the creation response rather
+   * than looked up later: it is the value a mention token carries and the one
+   * an invite names, so a spec that needs it must not have to search for it.
+   */
+  id: string;
   username: string;
   password: string;
   email: string;
@@ -44,7 +50,7 @@ function uniqueUsername(prefix: string): string {
   return `${prefix}-${token(6)}`.slice(0, 32);
 }
 
-async function expectOk(response: APIResponse, what: string): Promise<APIResponse> {
+export async function expectOk(response: APIResponse, what: string): Promise<APIResponse> {
   if (!response.ok()) {
     throw new Error(`${what}: ${String(response.status())} ${await response.text()}`);
   }
@@ -85,10 +91,23 @@ export async function signInApi(
   return { context, dispose: () => context.dispose() };
 }
 
-async function post(session: ApiSession, url: string, data?: unknown): Promise<APIResponse> {
+/**
+ * A mutating request on a signed-in session, carrying the double-submit CSRF
+ * header the server requires. Exported because conversation setup (chat.ts)
+ * needs exactly the same thing: there is no test-only write path, so every
+ * fixture goes through the API a browser would.
+ */
+export async function post(session: ApiSession, url: string, data?: unknown): Promise<APIResponse> {
   return session.context.post(url, {
     headers: { [CSRF_HEADER]: await csrfToken(session.context) },
     ...(data === undefined ? {} : { data }),
+  });
+}
+
+/** The DELETE half of `post` — same session, same CSRF rule. */
+export async function del(session: ApiSession, url: string): Promise<APIResponse> {
+  return session.context.delete(url, {
+    headers: { [CSRF_HEADER]: await csrfToken(session.context) },
   });
 }
 
@@ -145,6 +164,20 @@ export interface TotpAccount extends TestAccount {
   recoveryCodes: string[];
 }
 
+/** The two fields a spec sometimes has to choose rather than be handed. */
+export interface AccountOptions {
+  /**
+   * A fixed display name.
+   *
+   * The generated one carries random hex, and the display name is drawn on
+   * every screen that names a person — the sidebar footer, a message author,
+   * the admin footer. A screenshot suite has to pin it; nothing else does.
+   */
+  displayName?: string;
+  /** Born an administrator, which is the only way to reach /admin. */
+  isAdmin?: boolean;
+}
+
 /** Creates accounts, and cleans up the API contexts it opened. */
 export class AccountFactory {
   private readonly opened: ApiSession[] = [];
@@ -152,6 +185,16 @@ export class AccountFactory {
   constructor(
     private readonly baseURL: string,
     private readonly admin: ApiSession,
+    /**
+     * The locale every account this factory makes is born with.
+     *
+     * It is the project's UI locale, because since 1.5 the interface follows
+     * the *account*, not the browser (src/i18n/useLanguage.ts). Seeding
+     * localStorage only settles the screens before sign-in; an account
+     * created without this renders English the moment it signs in, and a
+     * whole Persian suite quietly asserts against an English UI.
+     */
+    private readonly locale: "en" | "fa" = "en",
   ) {}
 
   /**
@@ -159,23 +202,26 @@ export class AccountFactory {
    * contract forces must_change_password on every account it makes, so this
    * is the state the forced-change screen is reached from.
    */
-  async createPending(prefix = "e2e"): Promise<TestAccount> {
-    const account: TestAccount = {
+  async createPending(prefix = "e2e", options: AccountOptions = {}): Promise<TestAccount> {
+    const account = {
       username: uniqueUsername(prefix),
       password: `initial-${token(10)}`,
       email: `${token(8)}@e2e.invalid`,
-      displayName: `E2E ${token(3)}`,
+      displayName: options.displayName ?? `E2E ${token(3)}`,
     };
-    await expectOk(
+    const created = await expectOk(
       await post(this.admin, "/api/v1/admin/users", {
         username: account.username,
         password: account.password,
         email: account.email,
         display_name: account.displayName,
+        locale: this.locale,
+        ...(options.isAdmin === true ? { is_admin: true } : {}),
       }),
       "admin user creation",
     );
-    return account;
+    const { id } = (await created.json()) as { id: string };
+    return { id, ...account };
   }
 
   /**
@@ -185,8 +231,8 @@ export class AccountFactory {
    * is handed over, so a test that counts devices counts only the sessions
    * it created itself.
    */
-  async createReady(prefix = "e2e"): Promise<TestAccount> {
-    const pending = await this.createPending(prefix);
+  async createReady(prefix = "e2e", options: AccountOptions = {}): Promise<TestAccount> {
+    const pending = await this.createPending(prefix, options);
     const password = `settled-${token(10)}`;
     const session = await this.open(pending.username, pending.password);
     await changePasswordApi(session, pending.password, password);

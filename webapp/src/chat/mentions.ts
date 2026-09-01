@@ -44,6 +44,25 @@ function splitMentions(text: string): MentionSegment[] {
   return segments;
 }
 
+/**
+ * Whether a message's content mentions one particular user.
+ *
+ * This is how the sidebar's "@" badge is raised for a message that arrives on
+ * the socket. The count on a Channel is the server's (it comes from the
+ * message_mentions rows storage writes with the message), but no event carries
+ * an updated Channel, so a live arrival has to be read the same way the server
+ * read it — from the token in the content — or a mention would be
+ * indistinguishable from ordinary unread until the next reload.
+ *
+ * Deliberately not markdown-aware, exactly like the server's parser: a badge
+ * on a mention that renders as literal text is a failure the reader can see
+ * and explain, while a swallowed one means nobody ever learns they were
+ * pinged. Case is ignored because a uuid is the same id however it is written.
+ */
+export function mentionsUser(content: string, userId: string): boolean {
+  return content.toLowerCase().includes(`<@${userId.toLowerCase()}>`);
+}
+
 /** Resolves a user id to the name to draw. Returns null when the user is unknown. */
 export type MentionResolver = (userId: string) => string | null;
 

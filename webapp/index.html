@@ -10,6 +10,31 @@
           media="(prefers-color-scheme: light)" />
     <link rel="icon" type="image/svg+xml" href="/brand/flat/symbol-dark.svg"
           media="(prefers-color-scheme: dark)" />
+
+    <!-- Installability. The manifest sits under /brand/ rather than at the
+         root because the Go binary enumerates its static routes instead of
+         serving a catch-all, and /brand/ is the one public prefix it routes
+         (server/internal/httpserver/webapp.go). The .json extension is load
+         bearing too: that server's Content-Type allowlist has no entry for
+         .webmanifest, and every response carries nosniff, so a manifest with
+         that extension would be served as an octet-stream and refused. -->
+    <link rel="manifest" href="/brand/manifest.json" />
+    <!-- iOS reads this instead of the manifest's icons for the home screen. -->
+    <link rel="apple-touch-icon" href="/brand/icons/icon-192.png" />
+    <!-- --color-canvas, light and dark: what sits behind the whole app, so
+         the browser's own chrome continues the page rather than framing it.
+         The manifest can carry only one theme_color, so it takes the light
+         value; these two carry both.
+
+         Both are copies of --color-canvas, which no bundler resolves inside
+         markup, so src/manifest.test.ts asserts them against tokens.css.
+         They follow the system theme only: an in-app theme picker would
+         make them disagree with the page, and whoever builds it owns
+         updating them from script. -->
+    <meta name="theme-color" content="#f7f6f2"
+          media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#111615"
+          media="(prefers-color-scheme: dark)" />
   </head>
   <body>
     <div id="root"></div>

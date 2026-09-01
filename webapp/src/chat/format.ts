@@ -1,36 +1,16 @@
 /**
  * Date, time and size formatting for the chat shell.
  *
- * Digit shaping follows the Persian artboard (chat-rtl-fa), which sets times,
- * member counts and badge counts in Latin digits and file sizes in Persian
- * digits. That split is the design's, not a default: `formatTime`/`formatCount`
- * pin the `latn` numbering system for `fa`, `formatFileSize` uses the locale's
- * own. See the handoff note in the slice report.
+ * Digit shaping: every app-generated number is set in Latin digits, including
+ * in Persian. That is the designer's locked correction of 2026-08-21
+ * (docs/design/CHAT_HANDOFF.md, "Numerals"), which replaced the earlier split
+ * where file sizes alone followed the locale. `latinDigitLocale` is how it is
+ * pinned.
  */
+
+import { latinDigitLocale } from "../i18n/digits";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Bidi isolation for values interpolated into a sentence.
- *
- * The handoff requires channel slugs, filenames, version tags and URLs to be
- * isolated LTR runs inside Persian, and a person's name to follow its own
- * direction. Unicode isolates do exactly that without any markup, which is
- * what lets them sit inside a translated string: LRI/FSI ... PDI.
- */
-export function isolateLtr(value: string): string {
-  return `⁦${value}⁩`;
-}
-
-/** First-strong isolate: the run takes the direction of its own first letter. */
-export function isolateAuto(value: string): string {
-  return `⁨${value}⁩`;
-}
-
-/** Locale tag with Latin digits forced, for the values the artboard draws that way. */
-function latinDigitLocale(locale: string): string {
-  return locale.startsWith("fa") ? "fa-u-nu-latn" : locale;
-}
 
 /** "09:12" — 24-hour, zero-padded, as drawn on every artboard. */
 export function formatTime(iso: string, locale: string): string {
@@ -42,6 +22,29 @@ export function formatTime(iso: string, locale: string): string {
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
+  }).format(value);
+}
+
+/**
+ * "3 March 2026" — a whole date, year always included.
+ *
+ * The year is not optional here, unlike on the day separator: this formats the
+ * sealed date a person confirms during a restore (ADR 010, decision 3), and
+ * "3 March" would be exactly as true of a backup from last year as of one from
+ * this week — which is the confusion the confirmation exists to prevent.
+ *
+ * Empty for an unparseable value, so a missing date renders as absent rather
+ * than as "Invalid Date".
+ */
+export function formatFullDate(iso: string, locale: string): string {
+  const value = new Date(iso);
+  if (Number.isNaN(value.getTime())) {
+    return "";
+  }
+  return new Intl.DateTimeFormat(latinDigitLocale(locale), {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
   }).format(value);
 }
 
@@ -96,7 +99,7 @@ export function daySeparatorLabel(
   }
   return {
     kind: "date",
-    text: new Intl.DateTimeFormat(locale, {
+    text: new Intl.DateTimeFormat(latinDigitLocale(locale), {
       day: "numeric",
       month: "long",
       year: value.getFullYear() === now.getFullYear() ? undefined : "numeric",
@@ -119,27 +122,52 @@ export function formatResultStamp(iso: string, locale: string, now: Date = new D
     return formatTime(iso, locale);
   }
   if (distance < 7) {
-    return new Intl.DateTimeFormat(locale, { weekday: "short" }).format(value);
+    return new Intl.DateTimeFormat(latinDigitLocale(locale), { weekday: "short" }).format(value);
   }
-  return new Intl.DateTimeFormat(locale, { day: "numeric", month: "short" }).format(value);
+  return new Intl.DateTimeFormat(latinDigitLocale(locale), { day: "numeric", month: "short" }).format(value);
 }
 
-const SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"] as const;
+/**
+ * The unit is a translated string, not a suffix: the Persian artboard writes
+ * it out ("۲۴۸ کیلوبایت"), and where the number sits relative to the word is
+ * the translator's call, so the whole pair lives in one key.
+ */
+const SIZE_UNIT_KEYS = [
+  "chat.fileSize.b",
+  "chat.fileSize.kb",
+  "chat.fileSize.mb",
+  "chat.fileSize.gb",
+  "chat.fileSize.tb",
+] as const;
 
-/** "248 KB", "1.2 MB" — the second line of the file and image cards. */
-export function formatFileSize(bytes: number, locale: string): string {
+export interface FileSize {
+  /** The number alone, already localized. Interpolate as `value`. */
+  readonly value: string;
+  readonly unitKey: (typeof SIZE_UNIT_KEYS)[number];
+}
+
+/**
+ * "248" + `chat.fileSize.kb` — the second line of the file and image cards.
+ *
+ * Latin digits in Persian, like `formatTime` and `formatCount`: the designer's
+ * locked correction of 2026-08-21 (CHAT_HANDOFF.md) says the Persian UI uses
+ * ASCII 0–9 for every app-generated number and names file sizes explicitly.
+ */
+export function formatFileSize(bytes: number, locale: string): FileSize {
   let size = Math.max(0, bytes);
   let unitIndex = 0;
-  while (size >= 1024 && unitIndex < SIZE_UNITS.length - 1) {
+  while (size >= 1024 && unitIndex < SIZE_UNIT_KEYS.length - 1) {
     size /= 1024;
     unitIndex += 1;
   }
   const fractionDigits = unitIndex === 0 || size >= 100 ? 0 : 1;
-  const formatted = new Intl.NumberFormat(locale, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: fractionDigits,
-  }).format(size);
-  return `${formatted} ${SIZE_UNITS[unitIndex] ?? "B"}`;
+  return {
+    value: new Intl.NumberFormat(latinDigitLocale(locale), {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: fractionDigits,
+    }).format(size),
+    unitKey: SIZE_UNIT_KEYS[unitIndex] ?? "chat.fileSize.b",
+  };
 }
 
 /**

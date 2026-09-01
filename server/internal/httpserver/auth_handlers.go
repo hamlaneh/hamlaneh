@@ -44,7 +44,7 @@ func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	addr, ipKey := clientIP(r)
+	addr, ipKey := s.clientIP(r)
 	if s.loginIPLimiter.Limited(ipKey) {
 		writeRateLimited(w, r, s.loginIPLimiter.RetryAfter(ipKey))
 		return
@@ -84,6 +84,25 @@ func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if user.PasswordHash == "" {
+		// No password credential: an account a directory provisioned, or one
+		// that only ever signed in through the identity provider. Migration
+		// 0014 made the column nullable and the projection reads NULL back
+		// as "", so this is the explicit guard ADR 004 calls for — without
+		// it every attempt against such an account reaches the verifier as a
+		// malformed hash and is logged as an internal defect, which it is
+		// not.
+		//
+		// The refusal is the same invalid_credentials everything else here
+		// answers, and it burns the same argon2 work first, so "this account
+		// has no password" is not something an unauthenticated caller can
+		// learn by timing or by reading the body.
+		password.CompareDummy(req.Password)
+		s.consumeLoginBudget(ipKey, identifierKey)
+		writeInvalidCredentials(w, r)
+		return
+	}
+
 	ok, needsRehash, err := password.Verify(req.Password, user.PasswordHash)
 	if err != nil {
 		// A malformed stored hash is an internal defect. Fail closed with
@@ -95,6 +114,18 @@ func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
+		s.consumeLoginBudget(ipKey, identifierKey)
+		writeInvalidCredentials(w, r)
+		return
+	}
+
+	if !user.IsActive {
+		// A deactivated account cannot sign in. The refusal is deliberately
+		// the same invalid_credentials every other failure answers with: an
+		// account's state is not something an unauthenticated caller gets to
+		// learn, and "wrong password" and "this person has left" must look
+		// identical from outside. Deactivation already revoked every session
+		// the account held, so this is the only door left to close.
 		s.consumeLoginBudget(ipKey, identifierKey)
 		writeInvalidCredentials(w, r)
 		return
@@ -118,16 +149,35 @@ func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 	tokens.UserAgent = sanitizedUserAgent(r)
 	tokens.IP = ipParam(addr)
 
-	if _, err := s.store.CreateSession(r.Context(), storage.NewSession{
+	sess, err := s.store.CreateSession(r.Context(), storage.NewSession{
 		UserID:        user.ID,
 		SessionTokens: tokens,
-	}); err != nil {
+	})
+	if err != nil {
 		internalError(w, r, err)
 		return
 	}
 
+	s.recordSignIn(r, user, "password")
 	session.SetCookies(w, cookies)
-	writeJSONValue(w, r, http.StatusOK, apiUser(user))
+	writeJSONValue(w, r, http.StatusOK, apiSessionUser(user, sess))
+}
+
+// recordSignIn audits one completed sign-in: user.signed_in, with the method
+// that finished it (PLAN.md §6.7 promises logins in the log). Only the two
+// session-MINTING sites record one — password login here, the two-step
+// completion in totp_handlers.go. A refresh rotation is deliberately not a
+// sign-in: it presents no credential, only possession of a token an earlier
+// sign-in earned, and logging every 15-minute rotation would bury the events
+// the log exists to show.
+func (s *apiServer) recordSignIn(r *http.Request, user storage.User, method string) {
+	s.record(r, AuditEvent{
+		Action:      "user.signed_in",
+		ActorID:     user.ID,
+		TargetID:    user.ID,
+		TargetLabel: user.Username,
+		Detail:      map[string]any{"method": method},
+	})
 }
 
 // consumeLoginBudget counts one login attempt against both login rate-limit
@@ -183,7 +233,7 @@ func (s *apiServer) RefreshSession(w http.ResponseWriter, r *http.Request) {
 	accessRaw, accessHash := session.NewToken()
 	refreshRaw, refreshHash := session.NewToken()
 
-	addr, _ := clientIP(r)
+	addr, _ := s.clientIP(r)
 	_, outcome, err := s.store.RotateSession(r.Context(), session.HashToken(c.Value), storage.SessionTokens{
 		AccessTokenHash:  accessHash,
 		RefreshTokenHash: refreshHash,
@@ -257,6 +307,10 @@ func (s *apiServer) ChangePassword(w http.ResponseWriter, r *http.Request) {
 
 // mintSessionTokens generates the access, refresh, and CSRF tokens for a
 // fresh login, returning the storage-side hashes and the cookies to set.
+// RefreshTTL is the server's ceiling; the store clamps the org's configured
+// session lifetime to it at mint (ADR 004). Cookie Max-Age deliberately
+// stays at the ceiling — the database clock is what actually ends a
+// session, and a cookie outliving its token costs one clean 401.
 func mintSessionTokens() (storage.SessionTokens, []*http.Cookie) {
 	accessRaw, accessHash := session.NewToken()
 	refreshRaw, refreshHash := session.NewToken()

@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -83,9 +84,6 @@ func (s *apiServer) StartTotpSetup(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.spendTotpSettingsBudget(w, r, prin) {
-		return
-	}
 
 	secret := totp.NewSecret()
 	enrollment, err := totp.Enroll(secret, prin.user.Username)
@@ -118,9 +116,6 @@ func (s *apiServer) StartTotpSetup(w http.ResponseWriter, r *http.Request) {
 func (s *apiServer) VerifyTotpSetup(w http.ResponseWriter, r *http.Request) {
 	prin, store, ok := s.totpPrincipal(w, r, "totp verify")
 	if !ok {
-		return
-	}
-	if !s.spendTotpSettingsBudget(w, r, prin) {
 		return
 	}
 
@@ -196,16 +191,20 @@ func (s *apiServer) DisableTotp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Before confirmPassword, never after: the argon2id verification is the
-	// cost the budget exists to bound.
-	if !s.spendTotpSettingsBudget(w, r, prin) {
-		return
-	}
+	// The two-step settings budget was already spent by rateLimitMiddleware,
+	// which is what puts it ahead of confirmPassword: the argon2id
+	// verification below is the cost that budget exists to bound, and a 429
+	// written after it would have paid for what it refused.
 	if !s.confirmPassword(w, r, prin) {
 		return
 	}
 
 	err := store.DisableTotp(r.Context(), prin.user.ID)
+	if errors.Is(err, storage.ErrTotpRequiredByOrg) {
+		writeError(w, r, http.StatusForbidden, codeTOTPRequiredByOrg,
+			"your organisation requires two-step verification")
+		return
+	}
 	if errors.Is(err, storage.ErrTotpNotEnabled) {
 		writeError(w, r, http.StatusConflict, codeTOTPNotEnabled, "two-step verification is not on")
 		return
@@ -225,11 +224,8 @@ func (s *apiServer) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	// Before confirmPassword, never after: the argon2id verification is the
-	// cost the budget exists to bound.
-	if !s.spendTotpSettingsBudget(w, r, prin) {
-		return
-	}
+	// Spent by rateLimitMiddleware before this handler ran, which is what
+	// keeps it ahead of the argon2id verification below — see DisableTotp.
 	if !s.confirmPassword(w, r, prin) {
 		return
 	}
@@ -269,7 +265,7 @@ func (s *apiServer) CompleteTotpLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	addr, ipKey := clientIP(r)
+	addr, ipKey := s.clientIP(r)
 	if s.totpIPLimiter.Limited(ipKey) {
 		writeRateLimited(w, r, s.totpIPLimiter.RetryAfter(ipKey))
 		return
@@ -328,19 +324,21 @@ func (s *apiServer) CompleteTotpLogin(w http.ResponseWriter, r *http.Request) {
 	// comparisons and a recovery code is never checked against the clock.
 	// A code that is neither shape still costs an attempt.
 	now := time.Now()
+	method := "totp"
 	switch normalized, isRecovery := totp.NormalizeRecoveryCode(req.Code); {
 	case totp.IsAuthenticatorCode(req.Code):
 		att.CheckCode = func(secret []byte, lastUsedStep *int64) (int64, bool) {
 			return totp.Verify(secret, req.Code, now, lastUsedStep)
 		}
 	case isRecovery:
+		method = "recovery_code"
 		att.MatchRecoveryCode = func(storedHash string) bool {
 			matched, _, matchErr := password.Verify(normalized, storedHash)
 			return matchErr == nil && matched
 		}
 	}
 
-	user, _, outcome, err := store.CompleteTotpChallenge(r.Context(), att)
+	user, sess, outcome, err := store.CompleteTotpChallenge(r.Context(), att)
 	if err != nil {
 		internalError(w, r, err)
 		return
@@ -350,9 +348,10 @@ func (s *apiServer) CompleteTotpLogin(w http.ResponseWriter, r *http.Request) {
 	case storage.TotpChallengeCompleted:
 		// A completed sign-in records nothing, matching Login's rule that
 		// only attempts an attacker would want to repeat spend budget.
+		s.recordSignIn(r, user, method)
 		http.SetCookie(w, challengeCookie("", -1))
 		session.SetCookies(w, cookies)
-		writeJSONValue(w, r, http.StatusOK, apiUser(user))
+		writeJSONValue(w, r, http.StatusOK, apiSessionUser(user, sess))
 	case storage.TotpChallengeRejected:
 		// The challenge survives: the cells clear and the caller retries.
 		s.recordTotpFailure(ipKey, accountKey)
@@ -410,22 +409,13 @@ func (s *apiServer) challengeIfTwoStep(w http.ResponseWriter, r *http.Request, u
 		return true
 	}
 
-	record, err := store.TotpByUser(r.Context(), userID)
-	if errors.Is(err, storage.ErrNotFound) {
-		return false
-	}
+	raw, challenged, err := startTotpChallenge(r.Context(), store, userID)
 	if err != nil {
 		internalError(w, r, err)
 		return true
 	}
-	if !record.Enabled() {
+	if !challenged {
 		return false
-	}
-
-	raw, hash := session.NewToken()
-	if err := store.CreateTotpChallenge(r.Context(), userID, hash, totp.ChallengeTTL); err != nil {
-		internalError(w, r, err)
-		return true
 	}
 	s.consumeLoginBudget(ipKey, identifierKey)
 
@@ -434,6 +424,34 @@ func (s *apiServer) challengeIfTwoStep(w http.ResponseWriter, r *http.Request, u
 		Methods: []api.TwoFactorChallengeMethods{api.Totp},
 	})
 	return true
+}
+
+// startTotpChallenge is the shared half of both sign-in doors: it mints and
+// stores a two-step challenge when the account's second factor is on,
+// returning the raw cookie value. Password login (above) answers it with a
+// 202 and the SSO callback with a redirect, but the challenge itself — the
+// token, the storage row, the cookie built from raw — is one path, so the
+// two doors cannot drift apart (ADR 004: no second challenge path).
+//
+// (_, false, nil) means the account is password-only and the caller mints a
+// session as usual.
+func startTotpChallenge(ctx context.Context, store Store, userID uuid.UUID) (raw string, challenged bool, err error) {
+	record, err := store.TotpByUser(ctx, userID)
+	if errors.Is(err, storage.ErrNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if !record.Enabled() {
+		return "", false, nil
+	}
+
+	raw, hash := session.NewToken()
+	if err := store.CreateTotpChallenge(ctx, userID, hash, totp.ChallengeTTL); err != nil {
+		return "", false, err
+	}
+	return raw, true, nil
 }
 
 // totpPrincipal resolves the request principal and the store together, the
@@ -449,24 +467,6 @@ func (s *apiServer) totpPrincipal(w http.ResponseWriter, r *http.Request, name s
 		return principal{}, nil, false
 	}
 	return prin, store, true
-}
-
-// spendTotpSettingsBudget enforces the contract's 429 on the four two-step
-// settings endpoints. It answers the refusal itself (with Retry-After, like
-// every other 429 in the server) and reports whether the caller may proceed.
-//
-// Every call spends a unit, successes included — see totpSettingsRateLimit
-// for why this budget counts work rather than failures. Callers must run it
-// BEFORE any argon2id verification, or the 429 arrives after the server has
-// already paid the cost it was meant to refuse.
-func (s *apiServer) spendTotpSettingsBudget(w http.ResponseWriter, r *http.Request, prin principal) bool {
-	key := prin.user.ID.String()
-	if s.totpSettingsLimiter.Limited(key) {
-		writeRateLimited(w, r, s.totpSettingsLimiter.RetryAfter(key))
-		return false
-	}
-	s.totpSettingsLimiter.Record(key)
-	return true
 }
 
 // confirmPassword enforces the re-authentication the contract requires

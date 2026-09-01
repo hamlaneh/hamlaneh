@@ -45,7 +45,7 @@ the RTL-critical screen of the product mirrors structurally rather than by re-al
 ## Decisions made where the brief left them open
 
 - **Search** is a third column beside the channel (brief said designer's call). Keeps the
-  conversation visible and in context. Below 1024 it becomes an overlay instead.
+  conversation visible and in context. At `900–1279` it becomes an overlay instead.
 - **Markdown hint row** is permanently visible under the composer rather than
   focus-revealed — it states Enter/Shift+Enter, which is worth saying always, not once.
 - **Unread vs mention**: unread is bold text plus an outlined count; a mention is a filled
@@ -68,9 +68,20 @@ the RTL-critical screen of the product mirrors structurally rather than by re-al
 - The unread divider is placed on entry and holds position until you leave the channel.
 - Editing replaces the bubble with an inline composer; the message keeps its place.
 - Composer grows to 120px then scrolls. Enter sends, Shift+Enter newlines.
-- Bidi: channel slugs, filenames, version tags and URLs are isolated LTR runs inside Persian.
-  Message bodies are `dir="auto"`. Only send, reply and back mirror — attach, search,
-  download and the hash do not.
+- Bidi: filenames, version tags and URLs are isolated LTR runs inside Persian, and the
+  complete channel slug renders as one isolated unit — `<bdi dir="ltr">#deploys</bdi>` — so it
+  never reads as `deploys#`. Message bodies, topics and display names are `dir="auto"`.
+  Centred dialogs use `inset-inline: 0; margin-inline: auto` with a vertical-only transform,
+  never `inset-inline-start: 50%` plus a physical X translation. Only `arrow-left` and
+  `log-out` mirror — attach, search, download, hash, lock, close, settings and the chevrons
+  do not.
+- **Numerals are settled, not an open question**: Persian UI uses ASCII `0–9` for every
+  app-generated number (times, dates, unread and member counts, badges, file sizes, counters,
+  limits). User-authored messages, topics, filenames, usernames and technical strings stay
+  exactly as authored.
+- **Technical text uses the platform `ui-monospace` stack** (`ui-monospace, SFMono-Regular,
+  Menlo, monospace`). No web-font asset and no new typography token is introduced for it.
+- **Breakpoints are exactly** `≥1280`, `900–1279`, `≤899`. There is no 1024 rule.
 - Persian sets at 1.7–1.75 line-height, no negative tracking.
 - Desktop rows are 36px (pointer-only); every touch target is 44px.
 
@@ -126,8 +137,7 @@ Other decisions worth knowing:
 - Fourteen new strings need matching `en` and `fa` keys; they are listed on
   `chat-addendum-overlay-components` §04.
 
-Persian digit shaping remains unresolved (open question 3 below). The addendum contains no
-human-facing numbers and must not be read as choosing Latin or Persian digits.
+All app-generated numbers use ASCII `0–9`, in both languages.
 
 ## Addendum 2 — Channel actions and Account menu
 
@@ -155,8 +165,11 @@ and no scrim or desktop focus trap.
   backdrop now shows ASCII timestamps and file size.
 - **Rendered mentions** are inline text in the deep brand step at weight 500 — no pill, chip,
   background or border. Documented on `chat-addendum-menu-components` §04.
-- **The Channel actions trigger grows from 34×34 to 44×44.** The ten earlier chat artboards
-  still show the delivered 34px ellipsis; the component sheet is the value to build.
+- **The Channel actions trigger is 44×44 everywhere.** Propagated through the live shell and
+  every base artboard, not only the addendum boards.
+- **Channel actions renders only for an active public or private channel.** It is absent from
+  the DOM in a DM and in the no-channel state — the `chat-dm` artboard no longer draws it, and
+  no explanatory dead-end popover exists.
 
 ### Structural changes to the shell
 
@@ -195,32 +208,42 @@ channel-member management. None are in §2.
 | Chat shell (9 artboards) | BRIEFS.md §2 | DESIGNED | Hamlaneh Chat.dc.html |
 ```
 
-## Questions raised during implementation — status after addendum 2
+## Correction pass
 
-**Answered by the designer's locked corrections (2026-08-21), no action outstanding:**
+A narrow correction pass was applied across the whole canvas. No tokens, artboard names,
+colours, component scope or light/dark geometry changed.
 
-- *Mention treatment* — inline text in the deep brand step at weight 500, no pill or background.
-  The implementation had guessed the same emphasis pair; it is now the specified value.
-- *Persian numerals* — ASCII `0–9` for every app-generated number in the Persian UI. This
-  supersedes the artboard inconsistency implementation had copied (Latin times and counts,
-  Persian file size); file sizes must switch to ASCII.
-- *Responsive tiers* — `≥1280` / `900–1279` / `≤899`, with no separate 1024 behaviour. Matches
-  the two-tier reading implementation had flagged as an assumption.
-- *Channel menu and account menu* — both designed in addendum 2; the unstyled plumbing built for
-  them is now a reskin, and the sidebar identity block becomes a 44px disclosure button.
-
-**Still open:**
-
-1. **Code blocks are set in IBM Plex Mono on the artboards**, which is not in the token sheet and
-   would be a new self-hosted font. The platform monospace stack is used instead — add the font
-   and a token, or bless the substitution.
-2. **The `fa` markdown hint** renders `> نقل‌قول` with a bidi-mirroring `>` that displays as `<`.
-   Faithful to the artboard, so it is a design question rather than a defect.
-
-**Deliberate deviations from the drawn chrome, for honesty (unchanged):**
-
-- The **attach control** is drawn enabled, but uploads arrive in Phase 1.3, so it renders disabled
-  with its reason — following the component sheet's own rule that the reason travels with the
-  disabled state.
-- The **admin-dashboard shield** is not rendered: the admin surface does not exist yet, and a
-  control that goes nowhere is worse than an absent one. Restore it with the admin slice.
+- **RTL dialog centring.** Every centred dialog now uses `inset-inline: 0; margin-inline: auto`
+  with a vertical-only transform. `inset-inline-start: 50%` combined with a physical X
+  translation mis-shifts under `dir="rtl"` — the Persian people picker was cropped off the left
+  edge and now sits centred at 460px on both sides.
+- **Mention popovers anchor inside the chat pane** at `inset-inline-start: 308px` with
+  `max-inline-size: calc(100% - 336px)`, clear of the 280px sidebar.
+- **ASCII numerals everywhere.** Twelve Persian digits were converted; nothing app-generated
+  renders in Eastern Arabic-Indic form.
+- **Platform monospace.** All 490 `IBM Plex Mono` references became
+  `ui-monospace, SFMono-Regular, Menlo, monospace`, and the Google Fonts entry was removed.
+  No new font asset ships.
+- **Shell contract propagated** to the live shell and all 19 base artboard footers: the avatar,
+  display name, presence and chevron are one 44px `Open account menu` disclosure button with
+  the avatar *inside* the target; the gear is a separate sibling opening Settings directly;
+  Admin stays separate.
+- **Slugs as single LTR units** — `<bdi dir="ltr">#deploys</bdi>`, fifteen occurrences.
+- **Topic saving disables Invite people** and every action that could open a competing overlay.
+- **Mobile Topic field is 16px computed** so iOS Safari does not auto-zoom with the keyboard up.
+- **Accessibility rendered, not just described**: `aria-haspopup`, `aria-expanded` and
+  `aria-controls` on both triggers; `aria-checked` on all 19 language radios; Persian `بستن`
+  on RTL Close controls.
+- **Mentions map to `brand.hover`** — `#194941` light, `#9ADACF` dark, shown as two specimens.
+  The light value is never hardcoded into dark mode.
+- **State-sheet specimens are labelled non-production illustrations** at both sheet heads and
+  in `chat-addendum-menu-components` §06. Production geometry and the 44×44 floor live on the
+  full frames.
+- **Localization is complete**: 59 keys in the repository's existing `chat.*` namespace, both
+  languages, including the previously omitted helper copy ("Lowercase letters, numbers,
+  hyphens and underscores…", "Anyone invited can take part.", "Invitation only, same as
+  public.", "Name or username").
+- **Icon inventory** now names chevron-up, chevron-down, key-round and log-out with size,
+  stroke and mirroring — only `log-out` mirrors in RTL.
+- **Mobile dismissal recorded**: Account Close closes only the popover and leaves the drawer
+  open; tapping the drawer scrim closes both.

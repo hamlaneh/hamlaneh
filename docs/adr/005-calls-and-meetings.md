@@ -1,0 +1,229 @@
+# ADR 005 — Calls and meetings: LiveKit, the token service, TURN, and conference links
+
+**Status:** accepted, 2026-08-27 · **Owner:** orchestrator · **Scope:** Phase 2
+
+## Context
+
+Phase 2 adds real-time media to an instance that so far moves only JSON. The stack decision is
+already made (PLAN §4: LiveKit as the SFU, plus TURN). Every remaining question is an
+*attachment* question — how media joins a codebase whose authorization is one choke point, whose
+route and budget tables fail closed, and which must survive `docker compose up` with only a
+domain or a bare IP.
+
+Three precedents this phase reuses rather than reinventing: SCIM tokens (a credential-minting
+surface), the files origin (a cookie-less surface authorised by a signed artifact), and invite
+links (a public capability URL). Phase 2 needs all three shapes at once.
+
+One structural fact simplifies several questions: **channel deletion does not exist.** There is
+no `DELETE /channels/{id}`; channels are left, and the last member cannot leave. The "room whose
+channel was deleted" case is unreachable today.
+
+## Decisions
+
+**One stable room per conversation, created by the server when it mints a ticket.** A LiveKit
+room maps to a `channels` row — DM or named channel alike — as `chan-<uuid>`; conferences are
+`conf-<uuid>`. The room is made at mint time and closes after the last participant leaves.
+
+The first draft let LiveKit's own `auto_create` instantiate a room when the first authorised
+token arrived, which was simpler and was wrong. Tokens are stateless and deleting a room does not
+invalidate them; a connected participant is re-minted a ten-minute token every five minutes, and
+the client reconnects with it. So a revoked guest was disconnected once, reconnected, **recreated
+the room**, and stayed — for as long as they kept reconnecting inside their rolling token. The
+claim two paragraphs below, that revoking a conference ends the meeting, was false in exactly the
+case revocation exists for.
+
+With `auto_create` off and no `roomCreate` grant on any join ticket, the server is the only thing
+that can bring a room into being, and a join for a room that is not there is refused. That is
+what makes ending a meeting mean it stays ended. Creation is idempotent — the room manager
+returns the existing room and resolves the concurrent race under its own lock — so two people
+starting a call at the same moment still both succeed, which is what the stable name was for.
+
+A per-call id would need a `calls` table, a current-call pointer, and a race when two people
+start a call at once. A stable name needs none of that: minting is deterministic, and two
+simultaneous starters land in the same room, which is the wanted outcome. Reuse costs nothing —
+a token minted during a previous call is entitled by the same membership as the next one, and it
+expires long before that matters. **There is no `calls` table at all**; LiveKit's live room state
+is the truth, and duplicating it into Postgres would buy a cache-invalidation problem. The
+consequence, stated rather than hidden: a LiveKit restart ends every call.
+
+**The token service is the security core.** Our server holds the API key and secret and is the
+only minter. A token is scoped to one room and one identity, carries the least-privilege grant
+set, and lives two minutes. It is a join ticket, not a session. `roomList` is absent so no
+participant can enumerate rooms — which is also why deriving a room name from a channel id is
+safe. `roomAdmin` is absent so no participant can eject another. `canPublishData` is present and
+**false** so chat stays on the one write path with the one authz choke point, which also keeps
+message E2EE on the MLS path in Phase 3.
+
+That last one was wrong in the first draft, which said the grant was *absent*. In LiveKit an
+absent `canPublishData` inherits `canPublish` — so absence grants the data channel rather than
+withholding it, and a token minted on the original reading would have opened a second write path
+around the authorization choke point. Written here rather than only fixed in code, because
+"absent means denied" is the assumption that produced it and the next claim added to this set
+will be read the same way unless the trap is named. The test asserts the field is present and
+false, over the decoded claim map rather than over the struct we built.
+
+**A token can outlive its membership, briefly, and the exposure is bounded in two places rather
+than denied.** A JWT is valid until it expires and membership can be revoked a second later.
+Minted-but-unused is bounded by the two-minute TTL, and nothing shorter is honest: closing that
+window entirely would need LiveKit to consult us per join, which its model does not do.
+Already-joined is bounded by us calling `RemoveParticipant` as after-commit work of the two
+events that end entitlement — removal from the channel, and account deactivation, which extends
+ADR 004's offboarding from sockets to calls. Two residual windows are accepted and documented:
+revoking a single session does not eject an already-joined participant, and a failed removal RPC
+leaves them until the call ends.
+
+**The signal path rides the app origin.** Caddy proxies `/rtc*` to LiveKit. One choice solves
+four problems: no new subdomain, so **bare-IP installs work identically**; no new certificate; no
+client-side URL configuration; and no CSP change, since `connect-src 'self'` already admits
+same-origin `wss:`. Nothing else of LiveKit is public — its RoomService API is reachable only
+from inside the compose network.
+
+**Embedded TURN, not coturn.** The deciding reason is credentials: embedded TURN issues
+per-participant short-lived credentials over the already-authenticated signal connection, so we
+mint nothing, store nothing, and have no credential-handout endpoint to authorise and rate-limit.
+A non-member never receives any, because no join token means no signal connection. A leaked
+credential is worth relay bandwidth until it expires — never room access, which only the JWT
+grants. With coturn we would own that entire story ourselves.
+
+**No TURN/TLS in the default install, and this is the accepted gap.** TURN/TLS wants a
+certificate; Caddy owns ours, occupies 443, and cannot terminate TURN's TLS. The default stack
+traverses NATs with STUN plus external-IP discovery, TURN over UDP, and ICE over TCP. What it
+does not traverse is a network permitting *only* TLS on 443 — that needs a dedicated IP, which a
+single-box zero-config install cannot have. This goes in the hardening guide rather than being
+papered over.
+
+**The embedded TURN relay allocates from a port range, and that range is deliberately not
+published.** Verified rather than assumed, because the first draft of this ADR said the relay was
+purely in-process and that was wrong: real sockets appear on 30000-40000, and anyone reading
+`ss -lnup` will find them and reasonably wonder why they are unreachable.
+
+They are unreachable and calls work anyway, which is worth stating precisely because it looks
+like a bug. The browser's relay allocation sends its connectivity checks to the SFU's *published*
+media port; the SFU replies to the source address it observed rather than to the advertised
+candidate; that pair validates, is nominated, and carries media both ways on the same 5-tuple.
+Nothing outside ever needs to address the relay port. The SFU's own outbound checks toward the
+client's relay candidate do fail — they simply do not matter, which is exactly what ICE is built
+to tolerate.
+
+This was measured, under forced relay-only policy, with a control probe run against the live
+stack while media flowed: a packet to the node IP on an unpublished relay port was lost, while
+the published mux port was delivered by hairpin. So the result cannot be explained by a port that
+happened to be open. Full evidence in `docs/drills/001-livekit-turn-relay-ports.md`.
+
+One boundary: this holds wherever the node IP is an address the host itself owns, which is the
+ordinary VPS shape. Where it is not — an elastic IP behind a NAT gateway that will not hairpin —
+the relay's outbound fails, but so does ordinary non-relay media, so it is not a relay problem
+and `node_ip` is the existing escape hatch.
+
+**Three published ports** — TURN/UDP, ICE/TCP, media/UDP. Compose opens Docker's own firewall
+path, but a cloud provider's security group is beyond any script's reach. Those ports are the
+single manual step a locked-down VPS operator must take, `install.sh` prints them, and the NAT
+drill is what proves the instruction suffices.
+
+**Our gateway carries three events and no new client frames**: `call_started`, `call_updated`,
+`call_ended`, scoped to channel membership. A DM peer's sockets receive `call_started` with no
+subscribe, and the client rings from it — that is the entire 1:1 ringing design for this phase.
+The events are hints, not truth: no sequence numbers, no replay, and clients reconcile against
+REST on channel open and on reconnect, exactly as presence does. A five-minute-old call event is
+worthless or wrong.
+
+**A conference link is a bearer capability whose blast radius is one media room.** It never
+authenticates: no session is minted, no user row is created or read, and no endpoint beyond the
+one join route honours it. A link-holder who is not an instance member may join — that is the
+feature — but a closed-registration instance stays exactly as closed, because the guest receives
+a token for one `conf-` room and nothing else. Unknown, expired and revoked links all answer the
+same 404, as invites do. Revocation ends the live room rather than merely refusing the next join.
+
+**A conference link carries its token in the path, and an invitation carries its token in a
+fragment.** The two look inconsistent and are not, so the difference is written here rather than
+left for somebody to tidy away.
+
+An invitation is a credential emailed to one person, used once. A fragment never reaches any
+server, so the token cannot land in an access log or a Referer header, and that protection is
+worth having because nothing else in the flow puts the token in front of a server until the
+person actually redeems it.
+
+A conference link is a standing capability, pasted into a calendar entry and clicked by many
+people over months. It has to survive a reload and a copy out of the address bar. More
+decisively, the preview and join endpoints take the token in the path, so it reaches the access
+log the moment anybody opens the page — a fragment on the page would protect nothing while
+costing the link its ordinary behaviour. What bounds the exposure instead is what the link buys:
+one media room, revocable at any moment, with the revocation ending the meeting as well as the
+link.
+
+**Conference links do not expire by default.** Secure-by-default argues for expiry; the dominant
+use is a standing weekly link, and an expiry that surprises people drives worse behaviour —
+minting a fresh link for every meeting, pasted into more places. Instead the link is always
+revocable, always visible to an administrator, and its creation and revocation are audited. An
+optional expiry may be set at creation for a link genuinely meant to be short-lived.
+
+## Consequences
+
+- One migration, for conferences. Channel calls need no schema.
+- New dependencies, pinned and vetted. The webapp takes `livekit-client`, lazily imported so a
+  megabyte of WebRTC is not paid for on every chat load. The deploy stack takes a digest-pinned
+  server image. The server takes LiveKit's `protocol` module — **not** the full server SDK, whose
+  extra weight is a WebRTC participant implementation we never use.
+
+  The measured cost of that one module is worth stating, because the first draft named it in
+  passing: the server's build closure goes from roughly 19 third-party modules to 73. `auth`
+  alone transitively pulls in a WebRTC stack, NATS, Redis, gRPC, Prometheus and CEL, none of
+  which this server uses, and there is no lighter subset within the module. Five advisories in
+  those transitives had to be cleared on the way in.
+
+  The alternative is roughly two hundred lines against a documented token format, using a JOSE
+  library already in the tree, and it adds no modules. It stays documented here as the fallback
+  if that surface becomes a maintenance cost rather than a line item — and it is worth noticing
+  that using the library did not prevent the `canPublishData` trap above. Reading their source
+  did.
+- `GET /api/v1/instance` gains a `calls` flag, so the UI omits call controls rather than offering
+  a door that goes nowhere. A half-configured LiveKit environment stops startup, as a
+  half-configured mail transport does.
+- A webhook receiver registered outside the contract — the files-origin precedent — authenticated
+  by verifying LiveKit's signature over the body. Delivery is at-least-once and unordered, so
+  every event is treated as a hint that triggers a fresh read of live state, which makes the
+  handler idempotent and order-proof by construction.
+- Call activity in channels is deliberately **not** audited: high volume, and no security
+  question that membership does not already answer. Conference creation, revocation and guest
+  joins **are** — they are the instance's only anonymous-access events.
+- A guest types their own display name, so a guest can present as anyone. That is inherent to
+  anonymous-guest meetings and is mitigated only by the humans in the room. Named, not hidden.
+
+## Not in this phase
+
+Recording, egress, ingress and SIP — each a whole service, absent from the roadmap, and recording
+collides with Phase 3's strict mode. Moderator controls, because no channel role model exists
+beyond creator and inventing one for calls is a product decision. Decline/busy/missed-call
+signalling, multi-device call presence, "in a call" presence, and call history — each cut where
+it was named. Group DMs, breakout rooms, waiting rooms, livestreams. Multi-node LiveKit: the
+instance is the organisation (ADR 001), so one node per instance is the architecture rather than
+a limitation.
+
+## Slices
+
+1. **Media plane in the stack** — deploy only, and it existed partly to *falsify three
+   assumptions*. Two held: embedded TURN runs cert-less over UDP, and LiveKit takes its whole
+   configuration from the environment, so the container keeps a read-only filesystem with no
+   writable directory at all. The third was wrong as written and is corrected above.
+2. **Call core, server** — the two channel endpoints, token minting, the webhook receiver, the
+   three gateway events, and the removal hooks on membership loss and deactivation.
+3. **Call UI, webapp** — in parallel with 2, against mocks.
+4. **NAT truth** — the relay-only CI test, the key-leak scan, and the manual two-network drill.
+5. **Conference rooms** — last, on ADR 004's logic: the widest door lands after every gate it
+   must respect is tested. It also forces the webapp's first unauthenticated route.
+
+## Open questions
+
+- Whether the signal channel refreshes a connected participant's token. It is load-bearing for
+  the two-minute TTL: if it turns out not to, the TTL rises and this ADR's exposure statement
+  must be rewritten rather than quietly left standing. Verified in slice 2.
+- Whether a conference should distinguish a verified member from a guest. Deferred with the
+  impersonation weakness named.
+- Home-mode calls: LiveKit is a second process a single binary cannot trivially absorb. Phase 4
+  decides; nothing here worsens either branch.
+- Phase 3's one real tension with this design: conference guests have no identity for MLS key
+  exchange, so strict mode must either exclude them from end-to-end encrypted conferences or
+  design a key-in-fragment scheme. Left genuinely open when this was written; **resolved by
+  [ADR 006](006-mls-library-and-boundaries.md)** — guests are excluded, the key-in-fragment
+  scheme is rejected because the server mints the link and could mint itself the key, and the
+  encryption boundary is the room kind, fixed at birth.

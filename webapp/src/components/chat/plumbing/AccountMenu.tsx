@@ -28,7 +28,7 @@ export function AccountMenu({ user, onLogout, onClose }: AccountMenuProps) {
 
   return (
     <section
-      className="hm-plumbing hm-plumbing--footer"
+      className="hm-plumbing hm-plumbing--overlay hm-plumbing--footer"
       role="dialog"
       aria-modal="false"
       aria-label={t("account.title")}
@@ -40,6 +40,18 @@ export function AccountMenu({ user, onLogout, onClose }: AccountMenuProps) {
     >
       <h2>{t("account.title")}</h2>
       <p>{t("account.signedInAs", { name: user.display_name })}</p>
+      {/* Admins only, and it is a link rather than a button because the
+          dashboard is a place with a URL — the handoff's whole mode signal
+          is that admin is somewhere you visit and come back from. Non-admins
+          are not shown it, and the server refuses them regardless: a
+          dashboard that paints and then errors would be a lie. */}
+      {user.is_admin && (
+        <p>
+          <a href="/admin" onClick={onClose}>
+            {t("account.adminDashboard")}
+          </a>
+        </p>
+      )}
       <p>
         <button type="button" onClick={onLogout}>
           {t("account.logout")}

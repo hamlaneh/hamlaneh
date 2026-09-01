@@ -1,22 +1,30 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
   fileTypeLabel,
   formatCount,
   formatFileSize,
-  isolateLtr,
   linkPreviewHost,
 } from "../../chat/format";
 import type { Attachment, LinkPreview, Message } from "../../chat/types";
+import { isolateLtr } from "../../i18n/bidi";
+import type { AttachmentEntry } from "../../mls/attachments";
 import { DownloadIcon, FileTextIcon, ImageIcon } from "../icons";
+import { EncryptedAttachmentCard, UnopenableAttachmentCard } from "./EncryptedAttachments";
 
 /**
  * The file, image and link-preview cards from chat-components.
  *
- * Both arrays are always empty in Phase 1.2 — attachments arrive with the
- * upload pipeline and previews with the egress proxy (openapi.yaml). The
- * cards are implemented now because the design draws them and the contract
- * types them; nothing here fetches anything on its own.
+ * Nothing here fetches anything on its own: an Attachment arrives with its
+ * url and thumbnail_url already signed, and `AttachmentList` is also what the
+ * composer's pending tray and the optimistic bubble render, so an uploaded
+ * file looks the same before the send as after it.
+ *
+ * Signed URLs expire in about an hour and the contract says never to store
+ * them. This component stores nothing, but the chat store keeps message
+ * objects for as long as the tab lives — see `ImageCard` below and
+ * docs/design/STATUS.md for what that means once an hour has passed.
  */
 
 function isImage(attachment: Attachment): boolean {
@@ -44,7 +52,8 @@ function DownloadLink({ url, filename }: DownloadLinkProps) {
 }
 
 function FileCard({ attachment }: { attachment: Attachment }) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const size = formatFileSize(attachment.size_bytes, i18n.language);
   return (
     <div className="hm-card">
       <span className="hm-card__glyph">
@@ -56,10 +65,9 @@ function FileCard({ attachment }: { attachment: Attachment }) {
           {attachment.filename}
         </span>
         <span className="hm-card__meta">
-          {`${fileTypeLabel(attachment.content_type)} · ${formatFileSize(
-            attachment.size_bytes,
-            i18n.language,
-          )}`}
+          {`${fileTypeLabel(attachment.content_type)} · ${t(size.unitKey, {
+            value: size.value,
+          })}`}
         </span>
       </div>
       <DownloadLink url={attachment.url} filename={attachment.filename} />
@@ -68,7 +76,12 @@ function FileCard({ attachment }: { attachment: Attachment }) {
 }
 
 function ImageCard({ attachment }: { attachment: Attachment }) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
+  // A thumbnail URL that has outlived its signature answers 404, and a broken
+  // <img> glyph is nobody's design. Falling back to the frame the card
+  // already draws for an attachment that has no thumbnail keeps the failure
+  // inside a delivered state instead of inventing one.
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const dimensions =
     attachment.width !== undefined &&
     attachment.width !== null &&
@@ -79,17 +92,23 @@ function ImageCard({ attachment }: { attachment: Attachment }) {
           i18n.language,
         )}`
       : "";
+  const size = formatFileSize(attachment.size_bytes, i18n.language);
 
   return (
     <div className="hm-image-card">
       <div className="hm-image-card__frame">
-        {attachment.thumbnail_url === undefined || attachment.thumbnail_url === null ? (
+        {attachment.thumbnail_url === undefined ||
+        attachment.thumbnail_url === null ||
+        thumbnailFailed ? (
           <ImageIcon size={30} strokeWidth={1.4} />
         ) : (
           <img
             className="hm-image-card__preview"
             src={attachment.thumbnail_url}
             alt={attachment.filename}
+            onError={() => {
+              setThumbnailFailed(true);
+            }}
           />
         )}
       </div>
@@ -99,10 +118,9 @@ function ImageCard({ attachment }: { attachment: Attachment }) {
             {attachment.filename}
           </span>
           <span className="hm-card__meta">
-            {`${fileTypeLabel(attachment.content_type)} · ${formatFileSize(
-              attachment.size_bytes,
-              i18n.language,
-            )}${dimensions}`}
+            {`${fileTypeLabel(attachment.content_type)} · ${t(size.unitKey, {
+              value: size.value,
+            })}${dimensions}`}
           </span>
         </div>
         <DownloadLink url={attachment.url} filename={attachment.filename} />
@@ -138,16 +156,80 @@ function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
   );
 }
 
-export function AttachmentCards({ message }: { message: Message }) {
+/**
+ * The cards for a list of attachments — a stored message's, or a pending one's.
+ *
+ * `entries` is what makes a card encrypted: present, and every card is drawn
+ * from the decrypted envelope (ADR 013) rather than from the server's row,
+ * whose filename is the literal placeholder and whose type is opaque. Absent
+ * is the plaintext channel, unchanged.
+ *
+ * An id with no entry gets the cannot-be-opened card rather than the
+ * placeholder one. That is not a defensive nicety: it is what a hostile or
+ * truncated envelope produces, and drawing "encrypted · OCTET-STREAM" there
+ * would be showing the reader the server's fiction as though it were the file.
+ */
+export function AttachmentList({
+  attachments,
+  entries,
+}: {
+  attachments: readonly Attachment[];
+  entries?: readonly AttachmentEntry[] | undefined;
+}) {
+  if (entries !== undefined) {
+    return (
+      <>
+        {attachments.map((attachment) => {
+          const entry = entries.find((candidate) => candidate.id === attachment.id);
+          return entry === undefined ? (
+            <UnopenableAttachmentCard key={attachment.id} reason="key" />
+          ) : (
+            <EncryptedAttachmentCard key={attachment.id} attachment={attachment} entry={entry} />
+          );
+        })}
+      </>
+    );
+  }
   return (
     <>
-      {message.attachments.map((attachment) =>
+      {attachments.map((attachment) =>
         isImage(attachment) ? (
           <ImageCard key={attachment.id} attachment={attachment} />
         ) : (
           <FileCard key={attachment.id} attachment={attachment} />
         ),
       )}
+    </>
+  );
+}
+
+/**
+ * The files of a message this device cannot read.
+ *
+ * The key rides inside the message, so a message that will not open takes its
+ * files with it. Saying so is the honest rendering of E2EE's join boundary
+ * applied to files; drawing nothing would leave the reader to guess.
+ */
+export function UnreadableAttachments({ message }: { message: Message }) {
+  return (
+    <>
+      {message.attachments.map((attachment) => (
+        <UnopenableAttachmentCard key={attachment.id} reason="message" />
+      ))}
+    </>
+  );
+}
+
+export function AttachmentCards({
+  message,
+  entries,
+}: {
+  message: Message;
+  entries?: readonly AttachmentEntry[] | undefined;
+}) {
+  return (
+    <>
+      <AttachmentList attachments={message.attachments} entries={entries} />
       {message.link_preview === undefined ? null : (
         <LinkPreviewCard preview={message.link_preview} />
       )}

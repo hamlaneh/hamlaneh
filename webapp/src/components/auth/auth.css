@@ -321,6 +321,12 @@
   cursor: not-allowed;
 }
 
+/* The standing constraint line under a control (admin-create-user). */
+.hm-field__hint {
+  font: 400 var(--text-caption) / 1.55 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+}
+
 .hm-field__error {
   display: flex;
   align-items: center;
@@ -478,6 +484,12 @@ button.hm-link {
 .hm-otp__cell {
   inline-size: var(--size-otp-cell-w);
   block-size: var(--size-otp-cell-h);
+  /* Six drawn cells plus their gaps come to 400px, which is wider than a
+   * 375px phone can show — and an input is a flex item whose automatic
+   * minimum size refuses to shrink below its content. Releasing that lets the
+   * row narrow to fit and no further; every viewport wide enough for the
+   * drawn 60px still gets exactly the drawn 60px. */
+  min-inline-size: 0;
   padding: 0;
   text-align: center;
   background: var(--color-surface);

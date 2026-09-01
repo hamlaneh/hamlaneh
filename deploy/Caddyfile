@@ -8,6 +8,12 @@
 #     via ACME, plus HTTP->HTTPS redirect
 # Switching between the two needs no edits here — only the env var.
 #
+# The bare-IP line is not out of date, so before "fixing" it: Let's Encrypt has
+# issued certificates for IP addresses since January 2026, but only under its
+# short-lived profile, and Caddy classifies every IP address as an internal
+# name and issues locally without asking a public CA at all. Caddy 2.10, which
+# Dockerfile.caddy pins, has no way to be talked out of that.
+#
 # Note: this file is baked into the proxy image (Dockerfile.caddy).
 # After editing it, re-run: docker compose up -d --build
 
@@ -41,6 +47,28 @@
 		-Server
 	}
 
+	# The LiveKit signal path (ADR 005). Calls ride the app origin instead of
+	# a subdomain of their own: no second certificate, nothing for the client
+	# to configure, bare-IP installs work identically, and the existing
+	# connect-src 'self' already admits a same-origin wss: — so the app's CSP
+	# needs no exception for calls.
+	#
+	# SECURITY INVARIANT — this matcher is an allow-list of exactly the two
+	# signal routes, never a prefix of the whole service. LiveKit serves its
+	# RoomService admin API on /twirp/*, and goroutine and room dumps on
+	# /debug/*, from the SAME port. Widening this to `path /rtc*` or, worse,
+	# proxying the site root to livekit would publish an unauthenticated-by-
+	# our-standards admin surface on the public origin. RoomService is
+	# reachable only from inside the compose network, by the server that
+	# holds the API secret.
+	@rtc path /rtc /rtc/*
+	handle @rtc {
+		# WebSocket upgrades need no extra directive: reverse_proxy passes
+		# them through. The join token is a query parameter on this URL and
+		# never a cookie, which is why nothing here forwards credentials.
+		reverse_proxy livekit:7880
+	}
+
 	# SECURITY INVARIANT — do not add trusted_proxies here without changing
 	# the Go server. With no trusted_proxies (this default), Caddy strips any
 	# client-supplied X-Forwarded-For and forwards only the true peer IP; the
@@ -48,5 +76,61 @@
 	# trusts the leftmost XFF value on that basis. Fronting Caddy with a CDN
 	# or another proxy requires switching the server to rightmost-untrusted
 	# parsing first, or login rate limiting becomes spoofable.
-	reverse_proxy server:8080
+	handle {
+		reverse_proxy server:8080
+	}
+}
+
+# The files origin (ADR 003). Uploaded bytes are served from a SEPARATE
+# hostname, routed to the same Go binary, so that a file can never script
+# against the app: a different origin means no cookies are sent with the
+# request, no app document shares a scripting context with it, and the
+# signed URL is therefore the only credential involved.
+#
+# The separate origin is defense in depth, NOT the defense. Every file
+# response carries Content-Disposition: attachment (for anything that is not
+# a proven image), X-Content-Type-Options: nosniff and a sandboxing CSP, set
+# by the Go server, on every serving mode — see files_origin.go. An install
+# that never reaches this block still gets all three.
+#
+# Bare-IP and localhost installs: "files.<ip>" is not a name anything can
+# certify meaningfully, and home mode has no proxy at all. Those installs
+# serve /files/* from the app origin instead, with the identical headers.
+# That is why deploy/verify-defaults.sh probes the app origin unconditionally
+# and this hostname only when the domain is a real one.
+#
+# The site address is its OWN variable rather than "files." glued onto
+# HAMLANEH_DOMAIN, and that is load-bearing rather than tidiness. Glued to a
+# bare IP it produced "files.203.0.113.7" -- not an IP, so Caddy could not use
+# the internal CA, and not a name anyone controls, so ACME could never
+# succeed. Caddy retried that for max_duration 2592000: a month of failing
+# certificate orders on an install that was otherwise working, from a
+# hostname the deployment had already decided not to use.
+#
+# The default is a .localhost name, which Caddy certifies from its internal
+# CA without touching the network, so a deployment that never sets the
+# variable declares an inert block instead of an impossible one. install.sh
+# sets it to files.<domain> only when it was given a real domain.
+{$HAMLANEH_FILES_DOMAIN:files.localhost} {
+	encode zstd gzip
+
+	# Same ownership rule as above: HSTS and hiding the server software are
+	# all this proxy sets. The file responses' own security headers come
+	# from the Go server, which is the only thing that knows whether the
+	# bytes it is about to write proved to be an image.
+	header {
+		Strict-Transport-Security "max-age=15552000"
+		-Server
+	}
+
+	# Only the two file routes exist here. Everything else on this hostname
+	# is 404 rather than a second copy of the application: the whole point
+	# of the origin is that it serves nothing that could script.
+	@files path /files/*
+	handle @files {
+		reverse_proxy server:8080
+	}
+	handle {
+		respond 404
+	}
 }

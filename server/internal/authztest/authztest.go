@@ -6,20 +6,31 @@
 //
 // Registering a new endpoint is a one-line ask per slice: add its Entry
 // here, and the harness enforces the user-A-cannot-touch-B matrix for it
-// forever.
+// forever. An endpoint that acts on a channel registers two — one per
+// fixture kind — and answers the five channel relations instead of the four
+// instance-scoped columns (ADR 002).
 package authztest
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/png"
+	"maps"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"sort"
 	"strings"
+
+	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
 
 // Principal is a matrix column: who is making the request.
 type Principal string
 
-// The four Phase 1.1 principals.
+// The instance-scoped principals: what an endpoint outside any channel can
+// be asked by.
 const (
 	// Anonymous sends no cookies at all.
 	Anonymous Principal = "anonymous"
@@ -27,13 +38,90 @@ const (
 	Member Principal = "member"
 	// MemberMustChange is authenticated with must_change_password set.
 	MemberMustChange Principal = "member-must-change"
+	// MemberTotpPending is authenticated with a session flagged
+	// totp_enrollment_required: minted while the org required two-step
+	// verification and the account had none activated (ADR 004). It is a
+	// required column on EVERY entry so the gate is proved against the whole
+	// surface, not just the endpoints somebody remembered — a flagged
+	// session may reach only logout, reading users/me, and the four TOTP
+	// enrolment endpoints; everywhere else it gets 403
+	// totp_enrollment_required, the WebSocket route included.
+	MemberTotpPending Principal = "member-totp-pending"
+	// MemberMustChangeTotpPending carries BOTH flags: an admin-created
+	// account signing in for the first time on an instance that requires
+	// two-step verification. The contract makes the two gates sequential —
+	// while must_change_password is set, only the password gate applies —
+	// because the two allow-lists intersect at almost nothing and enforcing
+	// both at once would leave the person able to satisfy neither demand.
+	// This column is what proves the sequencing: its change-password cell is
+	// a 204, which no single-flag column can assert.
+	MemberMustChangeTotpPending Principal = "member-must-change-totp-pending"
 	// Admin is an authenticated admin.
 	Admin Principal = "admin"
 )
 
-// Principals returns every matrix column in stable order.
+// The channel relations (ADR 002). Instance role and channel membership are
+// independent facts, so both admin columns exist: they pin the contract's
+// boundary from either side — admin grants nothing outside membership, and
+// within membership only what the operation's own text grants.
+const (
+	// ChannelNonMember is authenticated and a stranger to this channel.
+	ChannelNonMember Principal = "channel-non-member"
+	// ChannelMember is a member who neither created the channel nor wrote
+	// the fixture message.
+	ChannelMember Principal = "channel-member"
+	// ChannelOwner is the member who created the channel
+	// (channels.created_by). Never the fixture message's author: creating a
+	// channel confers no authority over what is said in it.
+	ChannelOwner Principal = "channel-owner"
+	// AdminNonMember is an org admin who is a stranger to this channel.
+	AdminNonMember Principal = "admin-non-member"
+	// AdminMember is an org admin who is a member of this channel, and not
+	// the fixture message's author.
+	AdminMember Principal = "admin-member"
+	// MemberAuthor is the authorship refinement: a member acting on a
+	// message they wrote. Optional — declared only by operations whose
+	// contract distinguishes the author.
+	MemberAuthor Principal = "member-author"
+	// ConferenceOwner is the ownership refinement: a member acting on a
+	// conference they made. It is MemberAuthor's shape for the one resource
+	// in this server whose authority is ownership rather than membership, and
+	// it is what makes the plain Member column below it mean "somebody
+	// else's" instead of "anybody's" (ADR 005).
+	ConferenceOwner Principal = "conference-owner"
+)
+
+// Principals returns every matrix column in stable order. It is the universe
+// of columns, not the set any one entry declares: an entry runs exactly the
+// principals present in its Want (Entry.Principals), and must declare at
+// least the ones its shape requires (Entry.RequiredPrincipals).
 func Principals() []Principal {
-	return []Principal{Anonymous, Member, MemberMustChange, Admin}
+	return []Principal{
+		Anonymous, Member, MemberMustChange, MemberTotpPending,
+		MemberMustChangeTotpPending, Admin,
+		ChannelNonMember, ChannelMember, ChannelOwner,
+		AdminNonMember, AdminMember, MemberAuthor, ConferenceOwner,
+	}
+}
+
+// InstancePrincipals are the columns every instance-scoped entry must
+// declare.
+func InstancePrincipals() []Principal {
+	return []Principal{
+		Anonymous, Member, MemberMustChange, MemberTotpPending,
+		MemberMustChangeTotpPending, Admin,
+	}
+}
+
+// ChannelPrincipals are the columns ADR 002 requires of every channel-scoped
+// entry: the route-gate columns, unchanged, plus the five channel relations.
+// MemberAuthor is a refinement on top, not one of them.
+func ChannelPrincipals() []Principal {
+	return []Principal{
+		Anonymous, MemberMustChange, MemberTotpPending, MemberMustChangeTotpPending,
+		ChannelNonMember, ChannelMember, ChannelOwner,
+		AdminNonMember, AdminMember,
+	}
 }
 
 // Class is the deliberate security classification of an endpoint. The zero
@@ -60,17 +148,47 @@ const (
 	ClassAdmin
 )
 
-// Fixture describes the acting user of one matrix cell. Every cell gets a
-// fresh user (and session), so cells cannot interfere.
+// Fixture is one matrix cell's provisioned world: the acting user and, for a
+// channel-scoped cell, the fresh channel it acts on, the message inside it,
+// and the other users its bodies and paths name.
+//
+// Every cell gets its own — cells mutate (a removal, an edit, a send), and a
+// fixture shared across cells would make a failure depend on the order they
+// happened to run in.
 type Fixture struct {
 	Username string
 	Password string
 	// Unique is a per-cell suffix for bodies that must not collide
-	// (e.g. admin-created usernames).
+	// (e.g. admin-created usernames, channel slugs).
 	Unique string
+
+	// ChannelID and MessageID name the cell's channel and the message inside
+	// it that the message-scoped operations act on. Set for channel-scoped
+	// cells only.
+	ChannelID string
+	MessageID string
+	// MemberUserID is a member of that channel other than the acting user:
+	// the target of a removal, and the author of MessageID for every
+	// principal except MemberAuthor.
+	MemberUserID string
+
+	// OutsiderUserID is a real user who belongs to no channel: the target of
+	// an invite, and the peer of a newly opened direct message.
+	OutsiderUserID string
+
+	// ConferenceID names the cell's own conference, made by the acting user
+	// for the ownership refinement and by somebody else for every other
+	// principal. Set for cells whose contract path names a {conferenceId}.
+	ConferenceID string
 }
 
 // Entry is one endpoint's row in the authorization matrix.
+//
+// A channel-scoped entry (Kind non-empty) is registered once per fixture
+// kind, so one contract operation has several rows — private and dm always,
+// public where the tripwire calls for it — each answering on a channel of
+// that kind. The completeness gate refuses a {channelId} operation that
+// registers the instance-scoped shape instead.
 type Entry struct {
 	Method string
 	// Path is the contract path exactly as openapi.yaml spells it,
@@ -78,19 +196,31 @@ type Entry struct {
 	Path  string
 	Class Class
 
-	// RequestTarget is the concrete target the harness requests when Path
-	// is not one itself: real ids substituted for {template} segments,
-	// plus any query parameter the contract makes required (search's q,
-	// which the generated router rejects with 400 before the security
-	// middleware ever runs). Empty means Path is already a valid target.
+	// Kind is the kind of channel this row's fixture provisions, and is what
+	// makes the entry channel-scoped. Empty for instance-scoped entries.
+	Kind storage.ChannelKind
+
+	// RequestTarget is the concrete target the harness requests when Path is
+	// not one itself and the fixture cannot supply it: an id the contract
+	// requires to name nothing, plus any query parameter the contract makes
+	// required (search's q, which the generated router rejects with 400
+	// before the security middleware ever runs). Empty means Path is already
+	// a valid target, or that its {template} segments come from the fixture.
 	RequestTarget string
 
 	// Body builds a minimal valid request body for the acting fixture;
 	// nil for bodyless requests.
 	Body func(fx Fixture) string
 
-	// Want is the expected status per principal. Every principal must be
-	// present (checked by the completeness test).
+	// ContentType overrides the JSON default for entries whose body is not
+	// JSON — the file upload's multipart form is the only one so far. It
+	// must carry whatever parameters the body needs (a multipart boundary),
+	// which is why the body builder uses a fixed one.
+	ContentType string
+
+	// Want is the expected status per principal. Every principal the entry's
+	// shape requires must be present (checked by the completeness test and
+	// by the runner), and the runner executes exactly the keys that are.
 	Want map[Principal]int
 
 	// WantCode optionally pins the contract error code of non-2xx cells,
@@ -98,63 +228,236 @@ type Entry struct {
 	WantCode map[Principal]string
 }
 
-// Target returns the request target for this entry.
-func (e Entry) Target() string {
-	if e.RequestTarget != "" {
-		return e.RequestTarget
+// Target returns the request target for one cell: RequestTarget, or Path when
+// there is none, with every {template} segment replaced by the fixture's real
+// ids.
+func (e Entry) Target(fx Fixture) string {
+	target := e.RequestTarget
+	if target == "" {
+		target = e.Path
 	}
-	return e.Path
+	return strings.NewReplacer(
+		"{channelId}", fx.ChannelID,
+		"{messageId}", fx.MessageID,
+		"{userId}", fx.MemberUserID,
+		"{conferenceId}", fx.ConferenceID,
+	).Replace(target)
 }
 
-// Fixture ids for the path-parameterised Phase 1.2 routes. They name
-// nothing in the database on purpose: while those endpoints are stubs the
-// request never reaches storage, and a well-formed uuid is all the
-// generated router needs to bind the path parameter and hand the request
-// to the security middleware.
-const (
-	fixtureChannelID = "11111111-2222-3333-4444-555555555555"
-	fixtureUserID    = "66666666-7777-8888-9999-aaaaaaaaaaaa"
-	fixtureMessageID = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
-)
+// ChannelScoped reports whether this entry acts on a fixture channel.
+func (e Entry) ChannelScoped() bool { return e.Kind != "" }
 
-// channelPath builds a target under the fixture channel.
-func channelPath(suffix string) string {
-	return "/api/v1/channels/" + fixtureChannelID + suffix
+// ConferenceScoped reports whether this entry acts on a fixture conference.
+// Unlike a channel entry it needs no kind — a conference has exactly one
+// shape — so the contract path is what says so.
+func (e Entry) ConferenceScoped() bool { return strings.Contains(e.Path, conferenceSegment) }
+
+// RequiredPrincipals returns the columns this entry's shape must declare.
+func (e Entry) RequiredPrincipals() []Principal {
+	if e.ChannelScoped() {
+		return ChannelPrincipals()
+	}
+	return InstancePrincipals()
 }
 
-// sessionStub builds the matrix row of one Phase 1.2 messaging endpoint
-// while its handler is still a stub (server/internal/httpserver/
-// messaging_stubs.go). target is empty when path is already a concrete
-// request target.
+// Principals returns the columns this entry actually runs: every principal
+// present in Want, in the stable order of Principals. A refinement runs
+// because it is declared; a key that is not a known principal runs never,
+// which is what the runner's cell count catches.
+func (e Entry) Principals() []Principal {
+	cols := make([]Principal, 0, len(e.Want))
+	for _, p := range Principals() {
+		if _, ok := e.Want[p]; ok {
+			cols = append(cols, p)
+		}
+	}
+	return cols
+}
+
+// outcome is one cell's expected answer: a status, plus the contract error
+// code when it is a refusal. The code is not decoration — a 404 and a 403 are
+// not interchangeable here, and neither are two refusals sharing a status:
+// "you are not a member" and "this channel has no topic" are both answers a
+// member of a private channel must never see confused for the other.
+type outcome struct {
+	status int
+	code   string
+}
+
+// success is an outcome with no error code to pin.
+func success(status int) outcome { return outcome{status: status} }
+
+// refusal is a non-2xx outcome and the contract code that must carry it.
+func refusal(status int, code string) outcome { return outcome{status: status, code: code} }
+
+// notMember is the answer every channel-scoped operation owes a stranger:
+// 404, never 403, so a channel's existence never leaks — and an org admin who
+// is not a member is a stranger, because membership is the only visibility
+// rule in this phase (openapi.yaml, ADR 002).
+var notMember = refusal(http.StatusNotFound, "channel_not_found")
+
+// members builds the five channel-relation columns from the three answers a
+// member can get. Both non-member columns are notMember on every operation,
+// which is exactly the boundary ADR 002 exists to pin from both sides.
+func members(member, owner, adminMember outcome) map[Principal]outcome {
+	return map[Principal]outcome{
+		ChannelNonMember: notMember,
+		AdminNonMember:   notMember,
+		ChannelMember:    member,
+		ChannelOwner:     owner,
+		AdminMember:      adminMember,
+	}
+}
+
+// plus adds one refinement column to a want map, returning a copy so a map
+// shared by several rows cannot be edited through one of them.
+func plus(want map[Principal]outcome, p Principal, o outcome) map[Principal]outcome {
+	out := maps.Clone(want)
+	out[p] = o
+	return out
+}
+
+// searchPath is message search's contract path, spelled as openapi.yaml
+// spells it. Its registry row and its entry below must name one operation,
+// not two strings that agree today.
+const searchPath = "/api/v1/search"
+
+// notImplementedOperations is the closed list of contract operations whose
+// matrix rows may expect a 501.
 //
-// The expectations say what the stubs actually support: the route-level
-// gates decide first — anonymous 401, still-owes-a-password-change 403 —
-// and a caller past both gates reaches a handler that answers 501.
+// It is empty: every operation in docs/api/openapi.yaml has a handler, and
+// nothing in this server answers 501 any more. uploadFile was the last one —
+// specified ahead of its pipeline on purpose — and the Phase 1.3 upload
+// slice landed it, tightening its rows from 501 into the real outcomes.
 //
-// The 501 cells are a statement about missing code, never a permission
-// decision. When the messaging slice lands they tighten into real
-// per-channel outcomes (a member of the channel 200/201, a non-member 404 so
-// a private channel's existence never leaks, an admin who is not a member
-// the same 404), and this helper disappears with them.
-func sessionStub(method, path, target string) Entry {
-	return Entry{
+// The list stays because it is the gate, not the record. DiffNotImplemented
+// enforces it in both directions — a row expecting 501 for an unlisted
+// operation fails, so a cell parked at "nobody wrote this" is always a
+// deliberate edit here; and a listed operation no cell expects a 501 for
+// fails too, so the list cannot outlive the stubs it describes. With the
+// list empty, the first direction is the live one: a 501 cannot re-enter the
+// matrix unnoticed. The remaining direction is covered by TestAuthzMatrix
+// itself: a handler that lands while its row still says 501 gets asked,
+// answers for real, and turns the cell red.
+func notImplementedOperations() []Operation {
+	return []Operation{}
+}
+
+// channelEntry builds one channel-scoped row. want carries the five channel
+// relations and any refinement; the route-gate columns are identical on
+// every channel-scoped endpoint — anonymous 401, still-owes-a-password-change
+// 403, a totp-enrolment-pending session 403, and the both-flags session the
+// password gate's 403 (the gates are sequential; the password comes first) —
+// and are filled in here so no row can quietly disagree about them.
+func channelEntry(method, path string, kind storage.ChannelKind,
+	body func(Fixture) string, want map[Principal]outcome,
+) Entry {
+	e := Entry{
+		Method: method,
+		Path:   path,
+		Class:  ClassSession,
+		Kind:   kind,
+		Body:   body,
+		Want: map[Principal]int{
+			Anonymous:                   http.StatusUnauthorized,
+			MemberMustChange:            http.StatusForbidden,
+			MemberTotpPending:           http.StatusForbidden,
+			MemberMustChangeTotpPending: http.StatusForbidden,
+		},
+		WantCode: map[Principal]string{
+			Anonymous:                   "not_authenticated",
+			MemberMustChange:            "password_change_required",
+			MemberTotpPending:           "totp_enrollment_required",
+			MemberMustChangeTotpPending: "password_change_required",
+		},
+	}
+	for p, o := range want {
+		e.Want[p] = o.status
+		if o.code != "" {
+			e.WantCode[p] = o.code
+		}
+	}
+	return e
+}
+
+// bothKinds registers one {channelId} operation for the two kinds ADR 002
+// requires, for an operation whose answers do not depend on the kind.
+func bothKinds(method, path string, body func(Fixture) string, want map[Principal]outcome) []Entry {
+	return []Entry{
+		channelEntry(method, path, storage.ChannelKindPrivate, body, want),
+		channelEntry(method, path, storage.ChannelKindDM, body, want),
+	}
+}
+
+// adminEntry builds the matrix row of an implemented admin-only endpoint.
+// The three refusals are identical on every one of them and are filled in
+// here so no row can quietly disagree about them: anonymous 401, a member
+// 403 forbidden, and a caller who still owes a password change 403
+// password_change_required — the last of which is the column that proves the
+// must-change gate runs BEFORE the admin check, not instead of it.
+//
+// want is the handler's own answer for an admin, which is what makes the
+// Admin cell prove the gates ran AND the handler decided.
+func adminEntry(method, path, target string, body func(Fixture) string, want int, code string) Entry {
+	e := Entry{
 		Method:        method,
 		Path:          path,
-		Class:         ClassSession,
+		Class:         ClassAdmin,
 		RequestTarget: target,
+		Body:          body,
 		Want: map[Principal]int{
-			Anonymous:        http.StatusUnauthorized,
-			MemberMustChange: http.StatusForbidden,
-			Member:           http.StatusNotImplemented,
-			Admin:            http.StatusNotImplemented,
+			Anonymous:                   http.StatusUnauthorized,
+			Member:                      http.StatusForbidden,
+			MemberMustChange:            http.StatusForbidden,
+			MemberTotpPending:           http.StatusForbidden,
+			MemberMustChangeTotpPending: http.StatusForbidden,
+			Admin:                       want,
 		},
 		WantCode: map[Principal]string{
 			Anonymous:        "not_authenticated",
+			Member:           "forbidden",
 			MemberMustChange: "password_change_required",
-			Member:           "not_implemented",
-			Admin:            "not_implemented",
+			// The enrolment gate answers before the admin check does — the
+			// column that proves a flagged session's gate runs BEFORE admin
+			// authz, exactly as the must-change column proves for its gate.
+			MemberTotpPending:           "totp_enrollment_required",
+			MemberMustChangeTotpPending: "password_change_required",
 		},
 	}
+	if code != "" {
+		e.WantCode[Admin] = code
+	}
+	return e
+}
+
+// publicEntry builds the row of a capability-URL endpoint asked with a token
+// that was never issued: every principal gets the same 404, carrying code.
+//
+// That uniformity is not a shortcut — on the invite and conference routes it
+// IS the security property, twice over. A signed-in caller learning something
+// an anonymous one cannot would be a leak, and so would a guesser learning
+// which of unknown, expired, revoked and spent their token was.
+//
+// The status is fixed rather than a parameter because there is only one
+// answer these rows may pin. A public endpoint that succeeds for everybody —
+// the health probes, the instance document — is a different shape and is
+// registered as a literal, so it cannot borrow this helper's uniformity
+// argument without stating its own.
+func publicEntry(method, path, target string, body func(Fixture) string, code string) Entry {
+	e := Entry{
+		Method:        method,
+		Path:          path,
+		Class:         ClassPublic,
+		RequestTarget: target,
+		Body:          body,
+		Want:          map[Principal]int{},
+		WantCode:      map[Principal]string{},
+	}
+	for _, p := range InstancePrincipals() {
+		e.Want[p] = http.StatusNotFound
+		e.WantCode[p] = code
+	}
+	return e
 }
 
 // sessionEntry builds the matrix row of an implemented session-gated
@@ -163,8 +466,7 @@ func sessionStub(method, path, target string) Entry {
 // handler, which answers want (with code, or "" when want is a success).
 //
 // target is the concrete request target when path carries {template}
-// segments, empty when path is already one (same convention as
-// sessionStub).
+// segments the fixture does not fill, empty when path is already one.
 //
 // Every fixture is a fresh account, so want is the handler's answer for one
 // in its initial state: no pending setup, no second factor, one session.
@@ -176,14 +478,18 @@ func sessionEntry(method, path, target string, body func(Fixture) string, want i
 		RequestTarget: target,
 		Body:          body,
 		Want: map[Principal]int{
-			Anonymous:        http.StatusUnauthorized,
-			MemberMustChange: http.StatusForbidden,
-			Member:           want,
-			Admin:            want,
+			Anonymous:                   http.StatusUnauthorized,
+			MemberMustChange:            http.StatusForbidden,
+			MemberTotpPending:           http.StatusForbidden,
+			MemberMustChangeTotpPending: http.StatusForbidden,
+			Member:                      want,
+			Admin:                       want,
 		},
 		WantCode: map[Principal]string{
-			Anonymous:        "not_authenticated",
-			MemberMustChange: "password_change_required",
+			Anonymous:                   "not_authenticated",
+			MemberMustChange:            "password_change_required",
+			MemberTotpPending:           "totp_enrollment_required",
+			MemberMustChangeTotpPending: "password_change_required",
 		},
 	}
 	if code != "" {
@@ -193,6 +499,88 @@ func sessionEntry(method, path, target string, body func(Fixture) string, want i
 	return e
 }
 
+// totpEnrollmentReachable marks one session row as part of the TOTP
+// enrolment path: the flagged principal gets the member's own answer
+// instead of the gate's 403, because these four endpoints ARE the way out
+// of the gate. The both-flags column deliberately stays on the password
+// gate's 403 — the gates are sequential and the password comes first
+// (contract, User.totp_enrollment_required).
+func totpEnrollmentReachable(e Entry) Entry {
+	e.Want[MemberTotpPending] = e.Want[Member]
+	if code, ok := e.WantCode[Member]; ok {
+		e.WantCode[MemberTotpPending] = code
+	} else {
+		delete(e.WantCode, MemberTotpPending)
+	}
+	return e
+}
+
+// The contract paths of the channel-scoped surface, spelled exactly as
+// openapi.yaml spells them: the {template} segments are the completeness
+// gate's key, and Entry.Target fills them from the cell's fixture.
+const (
+	channelPath   = "/api/v1/channels/{channelId}"
+	membersPath   = channelPath + "/members"
+	memberPath    = membersPath + "/{userId}"
+	messagesPath  = channelPath + "/messages"
+	messagePath   = messagesPath + "/{messageId}"
+	readPath      = channelPath + "/read"
+	callPath      = channelPath + "/call"
+	callTokenPath = callPath + "/token"
+
+	// The E2EE transport's channel-scoped half (ADR 006).
+	mlsGroupPath   = channelPath + "/mls/group"
+	mlsClaimsPath  = channelPath + "/mls/key-package-claims"
+	mlsCommitsPath = channelPath + "/mls/commits"
+	mlsDevicesPath = channelPath + "/mls/member-devices"
+)
+
+// The E2EE transport's own-account half. Every one of these is decided by the
+// session alone: the subject is the caller, and no request on them names
+// another user.
+const (
+	mlsDevicePath   = "/api/v1/users/me/mls/device"
+	mlsPackagesPath = "/api/v1/users/me/mls/devices/{deviceId}/key-packages"
+	mlsWelcomesPath = "/api/v1/users/me/mls/welcomes"
+	mlsWelcomePath  = mlsWelcomesPath + "/{welcomeId}"
+
+	// The recovery surface (ADR 010). Same half of the matrix and for the same
+	// reason: the backup is keyed by the caller's own id, and the device id on
+	// the deregistration is scoped inside the query rather than checked beside
+	// it — so no request here can name another account's row.
+	mlsBackupPath          = "/api/v1/users/me/mls/backup"
+	mlsDeregisterPath      = "/api/v1/users/me/mls/devices/{deviceId}"
+	mlsUnknownDeviceTarget = "/api/v1/users/me/mls/devices/00000000-0000-4000-8000-0000000000d2"
+)
+
+// mlsBlob is a well-formed base64 payload for the rows that must get past
+// request validation to reach a security answer. It decodes to real bytes and
+// means nothing: the server never parses one, so a matrix row that sent
+// something "more realistic" would be pinning the same thing more slowly.
+const mlsBlob = "aGFtbGFuZWgtbWF0cml4"
+
+// The conference surface's contract paths, and the segment that makes an
+// operation conference-scoped.
+const (
+	conferenceSegment = "{conferenceId}"
+	conferencesPath   = "/api/v1/conferences"
+	conferencePath    = conferencesPath + "/" + conferenceSegment
+	meetPath          = "/api/v1/meet/{token}"
+	meetJoinPath      = meetPath + "/join"
+)
+
+// guessedToken is a well-formed link that was never issued: the shape of a
+// real one, so the rows that present it pin the answer to a GUESS rather
+// than to a malformed string. It is what both the invite and the conference
+// public rows ask with.
+var guessedToken = strings.Repeat("z", 43)
+
+// matrixClientMsgID is the send row's idempotency key. Every cell posts into
+// its own fresh channel and the key is unique per (channel, author), so one
+// constant can never collide — not with another cell's send, and not with the
+// fixture message, which storage creates under a key of its own.
+const matrixClientMsgID = "00000000-0000-4000-8000-00000000c0de"
+
 // passwordBody re-authenticates as the acting fixture. The TOTP rows that
 // need it send the CORRECT password on purpose: what the matrix pins there
 // is the account's state, not a re-auth failure that would mask it.
@@ -200,8 +588,37 @@ func passwordBody(fx Fixture) string {
 	return fmt.Sprintf(`{"password":%q}`, fx.Password)
 }
 
-// Registry returns the full authorization matrix for the Phase 1.1 surface.
+// userIDBody names the cell's outsider: a real account that is in no channel.
+// Both operations that take one want a stranger — an invite that adds
+// somebody who is already a member answers 204 without proving anything, and
+// a DM opened with an existing peer is the 200 half of the idempotent pair,
+// not the 201 the row pins.
+func userIDBody(fx Fixture) string {
+	return fmt.Sprintf(`{"user_id":%q}`, fx.OutsiderUserID)
+}
+
+// newChannelBody creates a channel whose slug is this cell's alone.
+func newChannelBody(fx Fixture) string {
+	return fmt.Sprintf(`{"slug":"new%s","kind":"private"}`, fx.Unique)
+}
+
+// readBody moves the read position to the cell's own fixture message, which
+// the contract requires to belong to the channel — so a refusal is about
+// permission, never about the message being somewhere else.
+func readBody(fx Fixture) string {
+	return fmt.Sprintf(`{"message_id":%q}`, fx.MessageID)
+}
+
+// Registry returns the full authorization matrix: the instance-scoped
+// surface followed by the channel-scoped one.
 func Registry() []Entry {
+	return append(instanceRegistry(), channelRegistry()...)
+}
+
+// instanceRegistry is the half of the matrix decided without a channel:
+// instance role, session state, and the endpoints that answer the same to
+// everybody by design.
+func instanceRegistry() []Entry {
 	return []Entry{
 		{
 			Method: http.MethodGet,
@@ -209,7 +626,8 @@ func Registry() []Entry {
 			Class:  ClassPublic,
 			Want: map[Principal]int{
 				Anonymous: http.StatusOK, Member: http.StatusOK,
-				MemberMustChange: http.StatusOK, Admin: http.StatusOK,
+				MemberMustChange: http.StatusOK, MemberTotpPending: http.StatusOK,
+				MemberMustChangeTotpPending: http.StatusOK, Admin: http.StatusOK,
 			},
 		},
 		{
@@ -218,7 +636,8 @@ func Registry() []Entry {
 			Class:  ClassPublic,
 			Want: map[Principal]int{
 				Anonymous: http.StatusOK, Member: http.StatusOK,
-				MemberMustChange: http.StatusOK, Admin: http.StatusOK,
+				MemberMustChange: http.StatusOK, MemberTotpPending: http.StatusOK,
+				MemberMustChangeTotpPending: http.StatusOK, Admin: http.StatusOK,
 			},
 		},
 		{
@@ -230,30 +649,45 @@ func Registry() []Entry {
 			},
 			Want: map[Principal]int{
 				Anonymous: http.StatusOK, Member: http.StatusOK,
-				MemberMustChange: http.StatusOK, Admin: http.StatusOK,
+				MemberMustChange: http.StatusOK, MemberTotpPending: http.StatusOK,
+				MemberMustChangeTotpPending: http.StatusOK, Admin: http.StatusOK,
 			},
 		},
 		{
+			// Logout is on both gates' allow-lists: a session that may do
+			// nothing else may always end itself.
 			Method: http.MethodPost,
 			Path:   "/api/v1/auth/logout",
 			Class:  ClassSession,
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusNoContent,
-				MemberMustChange: http.StatusNoContent, Admin: http.StatusNoContent,
+				MemberMustChange: http.StatusNoContent, MemberTotpPending: http.StatusNoContent,
+				MemberMustChangeTotpPending: http.StatusNoContent, Admin: http.StatusNoContent,
 			},
 			WantCode: map[Principal]string{Anonymous: "not_authenticated"},
 		},
 		{
+			// Refresh is authenticated by the refresh cookie, not the
+			// session, so neither gate is in its path: a flagged session may
+			// keep itself alive while its holder enrols — and the rotated
+			// generation carries the flag forward, which the integration
+			// tests pin.
 			Method: http.MethodPost,
 			Path:   "/api/v1/auth/refresh",
 			Class:  ClassRefreshCookie,
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusNoContent,
-				MemberMustChange: http.StatusNoContent, Admin: http.StatusNoContent,
+				MemberMustChange: http.StatusNoContent, MemberTotpPending: http.StatusNoContent,
+				MemberMustChangeTotpPending: http.StatusNoContent, Admin: http.StatusNoContent,
 			},
 			WantCode: map[Principal]string{Anonymous: "not_authenticated"},
 		},
 		{
+			// The both-flags 204 is THE sequencing cell: the enrolment gate
+			// alone answers change-password 403, so only the password gate
+			// yielding to nothing — and the enrolment gate yielding to it —
+			// lets the person do the first thing being demanded of them. A
+			// single-flag column structurally cannot assert this.
 			Method: http.MethodPost,
 			Path:   "/api/v1/auth/change-password",
 			Class:  ClassSession,
@@ -262,9 +696,13 @@ func Registry() []Entry {
 			},
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusNoContent,
-				MemberMustChange: http.StatusNoContent, Admin: http.StatusNoContent,
+				MemberMustChange: http.StatusNoContent, MemberTotpPending: http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusNoContent, Admin: http.StatusNoContent,
 			},
-			WantCode: map[Principal]string{Anonymous: "not_authenticated"},
+			WantCode: map[Principal]string{
+				Anonymous:         "not_authenticated",
+				MemberTotpPending: "totp_enrollment_required",
+			},
 		},
 		{
 			Method: http.MethodGet,
@@ -272,7 +710,26 @@ func Registry() []Entry {
 			Class:  ClassSession,
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusOK,
-				MemberMustChange: http.StatusOK, Admin: http.StatusOK,
+				MemberMustChange: http.StatusOK, MemberTotpPending: http.StatusOK,
+				MemberMustChangeTotpPending: http.StatusOK, Admin: http.StatusOK,
+			},
+			WantCode: map[Principal]string{Anonymous: "not_authenticated"},
+		},
+		{
+			// The patch joins its GET on BOTH gates' allow-lists. It carries
+			// locale and nothing else, and both forced screens render the
+			// language switcher: refusing the save would leave a control that
+			// appears to work and silently does not, for somebody stuck on a
+			// screen in a language they cannot read. Each cell edits only the
+			// fixture that sent it, which is the property this row pins.
+			Method: http.MethodPatch,
+			Path:   "/api/v1/users/me",
+			Class:  ClassSession,
+			Body:   func(Fixture) string { return `{"locale":"fa"}` },
+			Want: map[Principal]int{
+				Anonymous: http.StatusUnauthorized, Member: http.StatusOK,
+				MemberMustChange: http.StatusOK, MemberTotpPending: http.StatusOK,
+				MemberMustChangeTotpPending: http.StatusOK, Admin: http.StatusOK,
 			},
 			WantCode: map[Principal]string{Anonymous: "not_authenticated"},
 		},
@@ -282,12 +739,36 @@ func Registry() []Entry {
 			Class:  ClassAdmin,
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusForbidden,
-				MemberMustChange: http.StatusForbidden, Admin: http.StatusOK,
+				MemberMustChange: http.StatusForbidden, MemberTotpPending: http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusForbidden, Admin: http.StatusOK,
 			},
 			WantCode: map[Principal]string{
-				Anonymous:        "not_authenticated",
-				Member:           "forbidden",
-				MemberMustChange: "password_change_required",
+				Anonymous:                   "not_authenticated",
+				Member:                      "forbidden",
+				MemberMustChange:            "password_change_required",
+				MemberTotpPending:           "totp_enrollment_required",
+				MemberMustChangeTotpPending: "password_change_required",
+			},
+		},
+		{
+			// Phase 1.4: the audit log. A member must not read who did what
+			// to whom — the log names people, addresses and the actions taken
+			// on accounts, which is a wider disclosure than the dashboard it
+			// belongs to.
+			Method: http.MethodGet,
+			Path:   "/api/v1/admin/audit",
+			Class:  ClassAdmin,
+			Want: map[Principal]int{
+				Anonymous: http.StatusUnauthorized, Member: http.StatusForbidden,
+				MemberMustChange: http.StatusForbidden, MemberTotpPending: http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusForbidden, Admin: http.StatusOK,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:                   "not_authenticated",
+				Member:                      "forbidden",
+				MemberMustChange:            "password_change_required",
+				MemberTotpPending:           "totp_enrollment_required",
+				MemberMustChangeTotpPending: "password_change_required",
 			},
 		},
 		{
@@ -299,53 +780,276 @@ func Registry() []Entry {
 			},
 			Want: map[Principal]int{
 				Anonymous: http.StatusUnauthorized, Member: http.StatusForbidden,
-				MemberMustChange: http.StatusForbidden, Admin: http.StatusCreated,
+				MemberMustChange: http.StatusForbidden, MemberTotpPending: http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusForbidden, Admin: http.StatusCreated,
 			},
 			WantCode: map[Principal]string{
-				Anonymous:        "not_authenticated",
-				Member:           "forbidden",
-				MemberMustChange: "password_change_required",
+				Anonymous:                   "not_authenticated",
+				Member:                      "forbidden",
+				MemberMustChange:            "password_change_required",
+				MemberTotpPending:           "totp_enrollment_required",
+				MemberMustChangeTotpPending: "password_change_required",
 			},
 		},
 
-		// Phase 1.2 messaging surface — see sessionStub for what these
-		// expectations mean and what they become once the slice ships.
-		sessionStub(http.MethodGet, "/api/v1/users", ""),
-		sessionStub(http.MethodGet, "/api/v1/channels", ""),
-		sessionStub(http.MethodPost, "/api/v1/channels", ""),
-		sessionStub(http.MethodPost, "/api/v1/dms", ""),
-		sessionStub(http.MethodGet, "/api/v1/channels/{channelId}", channelPath("")),
-		sessionStub(http.MethodPatch, "/api/v1/channels/{channelId}", channelPath("")),
-		sessionStub(http.MethodGet, "/api/v1/channels/{channelId}/members", channelPath("/members")),
-		sessionStub(http.MethodPost, "/api/v1/channels/{channelId}/members", channelPath("/members")),
-		sessionStub(http.MethodDelete, "/api/v1/channels/{channelId}/members/{userId}",
-			channelPath("/members/"+fixtureUserID)),
-		sessionStub(http.MethodGet, "/api/v1/channels/{channelId}/messages", channelPath("/messages")),
-		sessionStub(http.MethodPost, "/api/v1/channels/{channelId}/messages", channelPath("/messages")),
-		sessionStub(http.MethodPatch, "/api/v1/channels/{channelId}/messages/{messageId}",
-			channelPath("/messages/"+fixtureMessageID)),
-		sessionStub(http.MethodDelete, "/api/v1/channels/{channelId}/messages/{messageId}",
-			channelPath("/messages/"+fixtureMessageID)),
-		sessionStub(http.MethodPut, "/api/v1/channels/{channelId}/read", channelPath("/read")),
-		sessionStub(http.MethodGet, "/api/v1/search", "/api/v1/search?q=hello"),
-		sessionStub(http.MethodGet, "/api/v1/ws", ""),
+		// Phase 1.4 administration. Every row here acts on something that
+		// does not exist — a well-formed id naming nothing, an invitation
+		// token of the right shape that was never issued — so the Admin cell
+		// pins the handler's own answer without any row mutating what
+		// another row reads.
+		//
+		// The two user rows answer 404 for exactly the reason the
+		// session-family row does: a well-formed id naming nobody must be
+		// indistinguishable from one naming somebody else's account.
+		adminEntry(http.MethodPatch, "/api/v1/admin/users/{userId}",
+			"/api/v1/admin/users/00000000-0000-4000-8000-0000000000ad",
+			func(Fixture) string { return `{"is_admin":false}` },
+			http.StatusNotFound, "user_not_found"),
+		adminEntry(http.MethodPost, "/api/v1/admin/users/{userId}/reset-password",
+			"/api/v1/admin/users/00000000-0000-4000-8000-0000000000ad/reset-password",
+			nil, http.StatusNotFound, "user_not_found"),
+
+		adminEntry(http.MethodGet, "/api/v1/admin/invites", "", nil, http.StatusOK, ""),
+		adminEntry(http.MethodPost, "/api/v1/admin/invites", "",
+			func(fx Fixture) string { return fmt.Sprintf(`{"note":"matrix %s"}`, fx.Unique) },
+			http.StatusCreated, ""),
+		// Revocation is idempotent, so an id naming nothing is the 204 the
+		// contract promises rather than a 404. The row pins that: "already
+		// gone" is the outcome the caller wanted.
+		adminEntry(http.MethodDelete, "/api/v1/admin/invites/{inviteId}",
+			"/api/v1/admin/invites/00000000-0000-4000-8000-0000000000be",
+			nil, http.StatusNoContent, ""),
+
+		// Phase 1.6 SCIM provisioning tokens. Minting one is minting a second
+		// credential into the instance — one that is not a session and is not
+		// gated by any of the columns to its left — so who may ask matters
+		// more here than on any other row in this block. The revocation names
+		// a token that was never issued and answers the contract's 404.
+		adminEntry(http.MethodGet, "/api/v1/admin/scim/tokens", "", nil, http.StatusOK, ""),
+		adminEntry(http.MethodPost, "/api/v1/admin/scim/tokens", "",
+			func(fx Fixture) string { return fmt.Sprintf(`{"note":"matrix %s"}`, fx.Unique) },
+			http.StatusCreated, ""),
+		adminEntry(http.MethodDelete, "/api/v1/admin/scim/tokens/{tokenId}",
+			"/api/v1/admin/scim/tokens/00000000-0000-4000-8000-0000000000fc",
+			nil, http.StatusNotFound, "scim_token_not_found"),
+
+		adminEntry(http.MethodGet, "/api/v1/admin/org", "", nil, http.StatusOK, ""),
+		// A no-op patch: the settings screen saves one field at a time, and
+		// this row is about who may save at all, not about what changes.
+		adminEntry(http.MethodPatch, "/api/v1/admin/org", "",
+			func(Fixture) string { return `{"require_totp":false}` },
+			http.StatusOK, ""),
+		// Phase 3: the encryption mode (ADR 011). It asks for strict, which
+		// every instance already is, so the row changes nothing and pins only
+		// who may ask — and the five refusals to its left are the point: this
+		// is the one setting that decides whether a conversation can ever be
+		// read by this server, and nobody below an administrator may move it.
+		// The 409 that compliance answers is asserted in internal/httpserver;
+		// it is a question about the value, not about the caller.
+		adminEntry(http.MethodPut, "/api/v1/admin/org/encryption-mode", "",
+			func(Fixture) string { return `{"encryption_mode":"strict"}` },
+			http.StatusOK, ""),
+
+		// The two public halves of an invitation, asked with a token of the
+		// right shape that was never issued. All four principals get one
+		// 404: an unknown, expired, revoked or spent token is one answer, and
+		// a session neither helps nor hinders. Both properties are the
+		// security story, so the matrix pins them rather than trusting the
+		// handlers to agree.
+		publicEntry(http.MethodGet, "/api/v1/invites/{token}",
+			"/api/v1/invites/"+guessedToken, nil, "invite_not_found"),
+		publicEntry(http.MethodPost, "/api/v1/invites/{token}",
+			"/api/v1/invites/"+guessedToken,
+			func(fx Fixture) string {
+				return fmt.Sprintf(`{"username":"redeem%s","password":"a matrix passphrase"}`, fx.Unique)
+			},
+			"invite_not_found"),
+
+		// Phase 2 conferences (ADR 005) — the widest door in the product, and
+		// the four rows that pin how narrow it stays.
+		//
+		// The two /meet rows are asked with a well-formed link that was never
+		// issued. Every principal gets one 404: unknown, expired and revoked
+		// are one answer, and a session neither helps nor hinders — the same
+		// two properties the invite rows above pin, and here they matter
+		// more, because these are the routes an anonymous stranger reaches.
+		//
+		// The join row also pins an ordering: the matrix server configures no
+		// media plane, so a live link would answer 503, and this row's 404
+		// proves the link is resolved BEFORE the instance's configuration is
+		// consulted. A guesser learns nothing about this instance.
+		publicEntry(http.MethodGet, meetPath, "/api/v1/meet/"+guessedToken, nil,
+			"conference_not_found"),
+		publicEntry(http.MethodPost, meetJoinPath, "/api/v1/meet/"+guessedToken+"/join",
+			func(Fixture) string { return `{"display_name":"A Guest"}` },
+			"conference_not_found"),
+
+		// Listing is the caller's own view; every signed-in caller gets a 200,
+		// and what differs is the rows inside it, which is a scope question
+		// rather than a status one and is pinned in internal/httpserver.
+		sessionEntry(http.MethodGet, conferencesPath, "", nil, http.StatusOK, ""),
+		// Creating one is the 503 of an instance with no media plane: a link
+		// to a room this instance cannot open is worse than a refusal. Unlike
+		// the channel ticket, there is no channel to be a stranger to, so the
+		// 503 IS the answer rather than something a 404 must come before.
+		sessionEntry(http.MethodPost, conferencesPath, "",
+			func(fx Fixture) string { return fmt.Sprintf(`{"title":"matrix %s"}`, fx.Unique) },
+			http.StatusServiceUnavailable, "calls_unavailable"),
+		// The revocation is the ownership distinction, and this row is the
+		// whole of ADR 005's revocation authority. Its owner or an
+		// administrator may; anybody else gets the same 404 a conference that
+		// does not exist gets — never a 403, which would confirm one does.
+		//
+		// It is built as a literal because Member and Admin answer
+		// differently here, which is exactly what sessionEntry's shape
+		// assumes they never do.
+		{
+			Method: http.MethodDelete,
+			Path:   conferencePath,
+			Class:  ClassSession,
+			Want: map[Principal]int{
+				Anonymous:                   http.StatusUnauthorized,
+				MemberMustChange:            http.StatusForbidden,
+				MemberTotpPending:           http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusForbidden,
+				Member:                      http.StatusNotFound,
+				Admin:                       http.StatusNoContent,
+				ConferenceOwner:             http.StatusNoContent,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:                   "not_authenticated",
+				MemberMustChange:            "password_change_required",
+				MemberTotpPending:           "totp_enrollment_required",
+				MemberMustChangeTotpPending: "password_change_required",
+				Member:                      "conference_not_found",
+			},
+		},
+
+		// Phase 1.2, the endpoints decided without a channel. Nothing here
+		// turns on membership: the directory and the sidebar are the caller's
+		// own view, creating a channel needs no permission beyond a session,
+		// and a DM is opened with a user, not inside a conversation.
+		sessionEntry(http.MethodGet, "/api/v1/users", "", nil, http.StatusOK, ""),
+		sessionEntry(http.MethodGet, "/api/v1/channels", "", nil, http.StatusOK, ""),
+		sessionEntry(http.MethodPost, "/api/v1/channels", "", newChannelBody, http.StatusCreated, ""),
+		// A fresh fixture shares no DM with anybody, so opening one is always
+		// the 201 half of this idempotent pair.
+		sessionEntry(http.MethodPost, "/api/v1/dms", "", userIDBody, http.StatusCreated, ""),
+		// Search landed in slice 1.2b, so these are real outcomes: a session
+		// is the whole gate, and every signed-in caller gets a 200 — an empty
+		// page for a fresh fixture, which has said nothing to find.
+		//
+		// This row pins the first half of search's contract, "a session".
+		// The second half — results only from your own channels — is not a
+		// matrix shape: it is one caller reading a page, not a principal
+		// reaching an endpoint, and the query enforces it in SQL rather than
+		// at the route. It is pinned where it can be proved, by the leak test
+		// in storage (TestSearchScopeIntegration) and its handler-level twin.
+		sessionEntry(http.MethodGet, searchPath, searchPath+"?q=hello", nil,
+			http.StatusOK, ""),
+		// The upgrade endpoint, asked without an Origin header. The contract
+		// requires the handshake to carry one matching the instance origin and
+		// to reject a missing or mismatched value (CSWSH defense), so the
+		// authenticated columns pin that refusal: a session is necessary and
+		// not sufficient to open a socket. 101 is deliberately not the
+		// expectation — the harness serves through an httptest recorder, which
+		// cannot be hijacked, and a row that could only ever pass by not
+		// upgrading would assert nothing.
+		sessionEntry(http.MethodGet, "/api/v1/ws", "", nil, http.StatusForbidden, "origin_not_allowed"),
+
+		// Phase 3 slice 1: the E2EE transport's own-account half (ADR 006).
+		// Every cell acts on the caller's own devices and Welcomes; there is
+		// no id anywhere in a request body to point at somebody else's, which
+		// is why these are instance-scoped rows and not channel ones.
+		//
+		// Registration is the 201 of a fresh fixture: each cell is its own
+		// account, so the same signature key registers cleanly in every one
+		// of them — the idempotency rule is per (user, key), and pinning the
+		// 200 half needs one account twice, which is a handler test rather
+		// than a matrix shape.
+		sessionEntry(http.MethodPost, mlsDevicePath, "",
+			func(Fixture) string { return fmt.Sprintf(`{"signature_public_key":%q}`, mlsBlob) },
+			http.StatusCreated, ""),
+		// A well-formed device id that was never registered. It answers
+		// exactly like another user's device, which IS the property: a guess
+		// must not confirm that somebody else's device exists.
+		sessionEntry(http.MethodPut, mlsPackagesPath,
+			"/api/v1/users/me/mls/devices/00000000-0000-4000-8000-0000000000d1/key-packages",
+			func(Fixture) string { return fmt.Sprintf(`{"key_packages":[%q]}`, mlsBlob) },
+			http.StatusNotFound, "mls_device_not_found"),
+		sessionEntry(http.MethodGet, mlsWelcomesPath, "", nil, http.StatusOK, ""),
+		// Acknowledgement is a uniform 204 for every id — one that names
+		// nothing, one already acknowledged, one belonging to somebody else.
+		// The uniformity IS the security property, so the matrix pins it:
+		// this row asks with an id that was never issued and requires the
+		// same answer a real one gets, because a 404 here would be exactly
+		// the distinguisher the design removes. That foreign rows are not
+		// deleted is the other half, and is pinned in storage
+		// (TestMlsWelcomesIntegration) where a row exists to survive.
+		sessionEntry(http.MethodDelete, mlsWelcomePath,
+			"/api/v1/users/me/mls/welcomes/00000000-0000-4000-8000-0000000000e1",
+			nil, http.StatusNoContent, ""),
+
+		// Phase 3 slice 5: the recovery surface (ADR 010). Four more
+		// own-account rows. Nobody else reads or writes another person's
+		// envelope — it is ciphertext this server cannot open, and least
+		// privilege is not a function of what the bytes reveal — and the
+		// matrix is where "owner only" is a fact rather than a sentence in an
+		// ADR.
+		//
+		// The upload is the 204 of a fresh fixture: each cell is its own
+		// account, so counter 1 always advances past the nothing that is
+		// stored. The stale refusal needs one account writing twice, which is
+		// a handler test rather than a matrix shape.
+		sessionEntry(http.MethodPut, mlsBackupPath, "",
+			func(Fixture) string {
+				return fmt.Sprintf(`{"envelope":%q,"counter":1}`, mlsBlob)
+			},
+			http.StatusNoContent, ""),
+		// A fresh account has stored nothing, and the endpoint says so with
+		// its own code rather than the router's generic 404 — the restore
+		// screen has to be able to distinguish "the server says there is
+		// nothing here" from "your key was wrong".
+		sessionEntry(http.MethodGet, mlsBackupPath, "", nil,
+			http.StatusNotFound, "mls_backup_not_found"),
+		// Idempotent: an account with no backup asked for a state that is
+		// already true. The uniformity is the point — a 404 here would tell a
+		// caller whether a backup existed, which is not something a delete
+		// needs to answer.
+		sessionEntry(http.MethodDelete, mlsBackupPath, "", nil,
+			http.StatusNoContent, ""),
+		// A well-formed device id that was never registered, which answers
+		// exactly like another account's device. That indistinguishability IS
+		// the property: the lost-device write must not double as a way to
+		// confirm somebody else's device exists.
+		sessionEntry(http.MethodDelete, mlsDeregisterPath, mlsUnknownDeviceTarget, nil,
+			http.StatusNotFound, "mls_device_not_found"),
 
 		// Phase 1.1b two-step verification. Real outcomes: every cell below is
 		// the handler's own answer for a fresh account, so a Member/Admin cell
-		// that is not 501 proves the gates ran AND the handler decided.
+		// proves the gates ran AND the handler decided.
 		//
 		// The four settings endpoints that refuse do so on the account's state,
 		// never on permission: nothing has been set up, so there is nothing to
 		// verify, activate, disable or reissue. Each carries the body that gets
 		// it past request validation to that decision — a 400 here would pin
 		// the shape of the request instead of the security answer.
-		sessionEntry(http.MethodGet, "/api/v1/users/me/totp", "", nil, http.StatusOK, ""),
-		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/setup", "", nil, http.StatusOK, ""),
-		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/verify", "",
-			func(Fixture) string { return `{"code":"123456"}` },
-			http.StatusConflict, "totp_setup_expired"),
-		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/activate", "", nil,
-			http.StatusConflict, "totp_setup_not_verified"),
+		// The first four are the enrolment path and stay reachable for a
+		// totp-pending session — they are the way out of the gate, so the
+		// flagged column gets the member's own answer. disable and
+		// recovery-codes stay behind it: neither removing a second factor
+		// nor minting fresh sign-in codes is enrolment.
+		totpEnrollmentReachable(
+			sessionEntry(http.MethodGet, "/api/v1/users/me/totp", "", nil, http.StatusOK, "")),
+		totpEnrollmentReachable(
+			sessionEntry(http.MethodPost, "/api/v1/users/me/totp/setup", "", nil, http.StatusOK, "")),
+		totpEnrollmentReachable(
+			sessionEntry(http.MethodPost, "/api/v1/users/me/totp/verify", "",
+				func(Fixture) string { return `{"code":"123456"}` },
+				http.StatusConflict, "totp_setup_expired")),
+		totpEnrollmentReachable(
+			sessionEntry(http.MethodPost, "/api/v1/users/me/totp/activate", "", nil,
+				http.StatusConflict, "totp_setup_not_verified")),
 		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/disable", "", passwordBody,
 			http.StatusConflict, "totp_not_enabled"),
 		sessionEntry(http.MethodPost, "/api/v1/users/me/totp/recovery-codes", "", passwordBody,
@@ -371,10 +1075,12 @@ func Registry() []Entry {
 			Path:   "/api/v1/instance",
 			Class:  ClassPublic,
 			Want: map[Principal]int{
-				Anonymous:        http.StatusOK,
-				MemberMustChange: http.StatusOK,
-				Member:           http.StatusOK,
-				Admin:            http.StatusOK,
+				Anonymous:                   http.StatusOK,
+				MemberMustChange:            http.StatusOK,
+				MemberTotpPending:           http.StatusOK,
+				MemberMustChangeTotpPending: http.StatusOK,
+				Member:                      http.StatusOK,
+				Admin:                       http.StatusOK,
 			},
 		},
 		{
@@ -389,16 +1095,18 @@ func Registry() []Entry {
 				return `{"email":"nobody` + fx.Unique + `@example.invalid"}`
 			},
 			Want: map[Principal]int{
-				Anonymous:        http.StatusAccepted,
-				MemberMustChange: http.StatusAccepted,
-				Member:           http.StatusAccepted,
-				Admin:            http.StatusAccepted,
+				Anonymous:                   http.StatusAccepted,
+				MemberMustChange:            http.StatusAccepted,
+				MemberTotpPending:           http.StatusAccepted,
+				MemberMustChangeTotpPending: http.StatusAccepted,
+				Member:                      http.StatusAccepted,
+				Admin:                       http.StatusAccepted,
 			},
 		},
 		{
 			// A garbage token answers exactly as an expired, superseded or
-			// already-used one does: one code for all four, so a replayed link
-			// never reveals which of them it hit.
+			// already-used one does: one code for every principal, so a
+			// replayed link never reveals which of them it hit.
 			Method: http.MethodPost,
 			Path:   "/api/v1/auth/reset-complete",
 			Class:  ClassPublic,
@@ -407,22 +1115,26 @@ func Registry() []Entry {
 					`","new_password":"a matrix passphrase"}`
 			},
 			Want: map[Principal]int{
-				Anonymous:        http.StatusUnauthorized,
-				MemberMustChange: http.StatusUnauthorized,
-				Member:           http.StatusUnauthorized,
-				Admin:            http.StatusUnauthorized,
+				Anonymous:                   http.StatusUnauthorized,
+				MemberMustChange:            http.StatusUnauthorized,
+				MemberTotpPending:           http.StatusUnauthorized,
+				MemberMustChangeTotpPending: http.StatusUnauthorized,
+				Member:                      http.StatusUnauthorized,
+				Admin:                       http.StatusUnauthorized,
 			},
 			WantCode: map[Principal]string{
-				Anonymous:        "invalid_reset_token",
-				MemberMustChange: "invalid_reset_token",
-				Member:           "invalid_reset_token",
-				Admin:            "invalid_reset_token",
+				Anonymous:                   "invalid_reset_token",
+				MemberMustChange:            "invalid_reset_token",
+				MemberTotpPending:           "invalid_reset_token",
+				MemberMustChangeTotpPending: "invalid_reset_token",
+				Member:                      "invalid_reset_token",
+				Admin:                       "invalid_reset_token",
 			},
 		},
 
 		{
 			// Gated by the two-step challenge cookie, not a session. No fixture
-			// holds a challenge, so all four principals answer 401
+			// holds a challenge, so every principal answers 401
 			// not_authenticated — identically, the signed-in ones included.
 			// That uniformity IS the class: a session is not authority here,
 			// and only the half-authenticated state a 202 login mints is.
@@ -433,19 +1145,389 @@ func Registry() []Entry {
 			Path:   "/api/v1/auth/login/totp",
 			Class:  ClassChallengeCookie,
 			Want: map[Principal]int{
-				Anonymous:        http.StatusUnauthorized,
-				MemberMustChange: http.StatusUnauthorized,
-				Member:           http.StatusUnauthorized,
-				Admin:            http.StatusUnauthorized,
+				Anonymous:                   http.StatusUnauthorized,
+				MemberMustChange:            http.StatusUnauthorized,
+				MemberTotpPending:           http.StatusUnauthorized,
+				MemberMustChangeTotpPending: http.StatusUnauthorized,
+				Member:                      http.StatusUnauthorized,
+				Admin:                       http.StatusUnauthorized,
 			},
 			WantCode: map[Principal]string{
-				Anonymous:        "not_authenticated",
-				MemberMustChange: "not_authenticated",
-				Member:           "not_authenticated",
-				Admin:            "not_authenticated",
+				Anonymous:                   "not_authenticated",
+				MemberMustChange:            "not_authenticated",
+				MemberTotpPending:           "not_authenticated",
+				MemberMustChangeTotpPending: "not_authenticated",
+				Member:                      "not_authenticated",
+				Admin:                       "not_authenticated",
+			},
+		},
+
+		{
+			// Phase 1.6 single sign-on: the two public halves of the flow.
+			// The matrix server configures no provider, so both answer their
+			// honest fail-closed 503 to everybody, sessions and admins
+			// included. What these rows pin is the classification — no gate
+			// answers before the handler — and that the unconfigured state is
+			// one uniform code rather than anything about the caller. The
+			// configured flow's authorization story (state, nonce, the refusal
+			// of unknown identities) is pinned by the integration tests in
+			// internal/httpserver, which need a live fake provider no matrix
+			// fixture provisions.
+			Method: http.MethodGet,
+			Path:   "/api/v1/auth/oidc/start",
+			Class:  ClassPublic,
+			Want: map[Principal]int{
+				Anonymous:                   http.StatusServiceUnavailable,
+				MemberMustChange:            http.StatusServiceUnavailable,
+				MemberTotpPending:           http.StatusServiceUnavailable,
+				MemberMustChangeTotpPending: http.StatusServiceUnavailable,
+				Member:                      http.StatusServiceUnavailable,
+				Admin:                       http.StatusServiceUnavailable,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:                   "sso_unavailable",
+				MemberMustChange:            "sso_unavailable",
+				MemberTotpPending:           "sso_unavailable",
+				MemberMustChangeTotpPending: "sso_unavailable",
+				Member:                      "sso_unavailable",
+				Admin:                       "sso_unavailable",
+			},
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v1/auth/oidc/callback",
+			Class:  ClassPublic,
+			Want: map[Principal]int{
+				Anonymous:                   http.StatusServiceUnavailable,
+				MemberMustChange:            http.StatusServiceUnavailable,
+				MemberTotpPending:           http.StatusServiceUnavailable,
+				MemberMustChangeTotpPending: http.StatusServiceUnavailable,
+				Member:                      http.StatusServiceUnavailable,
+				Admin:                       http.StatusServiceUnavailable,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:                   "sso_unavailable",
+				MemberMustChange:            "sso_unavailable",
+				MemberTotpPending:           "sso_unavailable",
+				MemberMustChangeTotpPending: "sso_unavailable",
+				Member:                      "sso_unavailable",
+				Admin:                       "sso_unavailable",
+			},
+		},
+		{
+			// Linking is session work, and both account gates hold it: a user
+			// who owes a password change or an enrolment fixes that first. The
+			// signed-in cells then hit the unconfigured 503 — the session gate
+			// answered first, which is what the 401/403 cells prove.
+			Method: http.MethodPost,
+			Path:   "/api/v1/users/me/oidc",
+			Class:  ClassSession,
+			Want: map[Principal]int{
+				Anonymous:                   http.StatusUnauthorized,
+				MemberMustChange:            http.StatusForbidden,
+				MemberTotpPending:           http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusForbidden,
+				Member:                      http.StatusServiceUnavailable,
+				Admin:                       http.StatusServiceUnavailable,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:                   "not_authenticated",
+				MemberMustChange:            "password_change_required",
+				MemberTotpPending:           "totp_enrollment_required",
+				MemberMustChangeTotpPending: "password_change_required",
+				Member:                      "sso_unavailable",
+				Admin:                       "sso_unavailable",
+			},
+		},
+		{
+			// Unlinking needs no provider — it is a database delete — so the
+			// signed-in cells reach the real answer: nothing is linked, 404.
+			// Every cell acts only on the caller's own account; there is no
+			// id anywhere in the request to point at somebody else's link.
+			Method: http.MethodDelete,
+			Path:   "/api/v1/users/me/oidc",
+			Class:  ClassSession,
+			Want: map[Principal]int{
+				Anonymous:                   http.StatusUnauthorized,
+				MemberMustChange:            http.StatusForbidden,
+				MemberTotpPending:           http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusForbidden,
+				Member:                      http.StatusNotFound,
+				Admin:                       http.StatusNotFound,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:                   "not_authenticated",
+				MemberMustChange:            "password_change_required",
+				MemberTotpPending:           "totp_enrollment_required",
+				MemberMustChangeTotpPending: "password_change_required",
+				Member:                      "sso_not_linked",
+				Admin:                       "sso_not_linked",
 			},
 		},
 	}
+}
+
+// channelRegistry is the channel-scoped half of the matrix: every operation
+// whose contract path names a {channelId}, registered once per fixture kind.
+//
+// Every Want here is read off that operation's description in
+// docs/api/openapi.yaml. Three answers recur and are worth stating once:
+//
+//   - A non-member gets 404 channel_not_found, org admins included.
+//     Membership is the only visibility rule in Phase 1.2, so an admin
+//     outside a channel is a stranger to it and must not be able to tell it
+//     from a channel that does not exist.
+//   - A direct message refuses what its shape cannot carry with 400, not 403:
+//     its pair is fixed and it has no topic. That is a statement about the
+//     channel, not about the caller — and it is decided after membership, so
+//     the 400 never reaches somebody who should be seeing a 404.
+//   - Creating a channel is not moderating it. ChannelOwner gets the member's
+//     answer on every message operation; only authorship and instance-admin
+//     move those.
+func channelRegistry() []Entry {
+	var (
+		read      = success(http.StatusOK)
+		created   = success(http.StatusCreated)
+		done      = success(http.StatusNoContent)
+		dmFixed   = refusal(http.StatusBadRequest, "dm_membership_fixed")
+		notOwner  = refusal(http.StatusForbidden, "forbidden")
+		notAuthor = refusal(http.StatusForbidden, "not_message_author")
+		notMod    = refusal(http.StatusForbidden, "not_message_author_or_admin")
+		// A direct message has no topic, so PATCHing one is a 400. It is the
+		// single 400 in this surface the contract states without naming a
+		// code; pinned here to the generic request-validation code the server
+		// already writes and the contract-generated webapp mock already
+		// answers. A handler that wants a specific code changes openapi.yaml
+		// first — this value is not the place to settle it.
+		dmNoTopic = refusal(http.StatusBadRequest, "invalid_request")
+	)
+
+	readable := members(read, read, read)
+	entries := bothKinds(http.MethodGet, channelPath, nil, readable)
+
+	// The public tripwire (ADR 002). In Phase 1.2 membership is the only
+	// visibility rule for every kind, so this row is what turns red if
+	// somebody later opens public channels up without a contract change.
+	// One row, not a third full kind: proving sameness twice buys nothing.
+	entries = append(entries,
+		channelEntry(http.MethodGet, channelPath, storage.ChannelKindPublic, nil, readable))
+
+	topicBody := func(Fixture) string { return `{"topic":"a matrix topic"}` }
+	entries = append(entries,
+		channelEntry(http.MethodPatch, channelPath, storage.ChannelKindPrivate, topicBody,
+			members(read, read, read)),
+		channelEntry(http.MethodPatch, channelPath, storage.ChannelKindDM, topicBody,
+			members(dmNoTopic, dmNoTopic, dmNoTopic)))
+
+	entries = append(entries, bothKinds(http.MethodGet, membersPath, nil, readable)...)
+
+	// Any member may invite; a DM's pair is fixed.
+	entries = append(entries,
+		channelEntry(http.MethodPost, membersPath, storage.ChannelKindPrivate, userIDBody,
+			members(done, done, done)),
+		channelEntry(http.MethodPost, membersPath, storage.ChannelKindDM, userIDBody,
+			members(dmFixed, dmFixed, dmFixed)))
+
+	// Removing somebody else: the creator, or an admin who is a member. The
+	// fixture targets a member who is not the acting user, so no cell here is
+	// the always-allowed case of leaving, and the channel keeps a member
+	// either way — the contract's last_member refusal is never in play.
+	entries = append(entries,
+		channelEntry(http.MethodDelete, memberPath, storage.ChannelKindPrivate, nil,
+			members(notOwner, done, done)),
+		channelEntry(http.MethodDelete, memberPath, storage.ChannelKindDM, nil,
+			members(dmFixed, dmFixed, dmFixed)))
+
+	entries = append(entries, bothKinds(http.MethodGet, messagesPath, nil, readable)...)
+
+	sendBody := func(Fixture) string {
+		return fmt.Sprintf(`{"client_msg_id":%q,"content":"a matrix message"}`, matrixClientMsgID)
+	}
+	entries = append(entries, bothKinds(http.MethodPost, messagesPath, sendBody,
+		members(created, created, created))...)
+
+	// Editing is author-only, admins included: rewriting somebody else's
+	// words is impersonation, and no role makes that acceptable. Deleting is
+	// the author, or an admin who is a member of this channel — deletion
+	// removes words, it does not put new ones in somebody's mouth. That
+	// difference is the whole reason both rows declare MemberAuthor and the
+	// two admin columns: it is only visible where the same principal gets
+	// different answers from the two operations.
+	//
+	// Both handlers landed in slice 1.2b, so these are the contract's real
+	// answers now, asked of a real server.
+	editBody := func(Fixture) string { return `{"content":"an edited matrix message"}` }
+	entries = append(entries, bothKinds(http.MethodPatch, messagePath, editBody,
+		plus(members(notAuthor, notAuthor, notAuthor), MemberAuthor, read))...)
+
+	entries = append(entries, bothKinds(http.MethodDelete, messagePath, nil,
+		plus(members(notMod, notMod, done), MemberAuthor, done))...)
+
+	// A read position is the caller's own, so every member may move theirs
+	// and a stranger still gets the channel's 404.
+	entries = append(entries, bothKinds(http.MethodPut, readPath, readBody,
+		members(done, done, done))...)
+
+	// Uploading a file into a channel: any member, and a stranger gets the
+	// channel's own 404 like everywhere else. The cell posts a real one-pixel
+	// PNG, so a 201 here means the whole pipeline ran — membership, the
+	// sniff, the strip, the row — rather than a handler that agreed to
+	// something it never did.
+	//
+	// The route is where a file's authorization is settled for its whole
+	// life (ADR 003): the file belongs to this channel from birth and is
+	// readable by its members, so these five columns are the only membership
+	// check the bytes will ever get.
+	uploads := bothKinds(http.MethodPost, "/api/v1/channels/{channelId}/files",
+		uploadBody, members(created, created, created))
+	for i := range uploads {
+		uploads[i].ContentType = uploadContentType
+	}
+	entries = append(entries, uploads...)
+
+	// Phase 2 calls (ADR 005). The matrix server configures no media plane,
+	// which is what makes these two rows say different things.
+	//
+	// The state read is a 200 for every member either way: an instance with
+	// no media server has no call, and `active: false` is the truth about it.
+	// The contract reserves no 503 there for exactly that reason.
+	//
+	// The ticket is where the boundary is pinned. A member reaches the
+	// handler and gets the unconfigured instance's honest 503; a stranger —
+	// an org admin among them — gets the channel's 404 and never learns
+	// whether the channel exists, let alone whether calls are configured.
+	// That ordering is the property: 404 before 503, so the refusal is about
+	// the channel and never about the instance. A DM is registered beside the
+	// named channel because a DM's call is where 1:1 ringing lives, and a
+	// stranger to somebody's DM must be refused exactly as hard.
+	entries = append(entries, bothKinds(http.MethodGet, callPath, nil, readable)...)
+	callsOff := refusal(http.StatusServiceUnavailable, "calls_unavailable")
+	entries = append(entries, bothKinds(http.MethodPost, callTokenPath, nil,
+		members(callsOff, callsOff, callsOff))...)
+
+	entries = append(entries, mlsEntries()...)
+	return entries
+}
+
+// mlsEntries is the E2EE transport's channel-scoped half (ADR 006).
+//
+// Every fixture channel is plaintext, which is what makes these rows say
+// something: the member cells land on the transport's own refusals — no group
+// here, and this channel is not encrypted — while the two non-member cells
+// get the channel's 404. Both are 404 on the group read, and the codes are
+// what tells them apart: a stranger must not learn whether a channel is
+// encrypted, and a member must learn that there is no group yet, because that
+// is the signal to create one.
+//
+// Membership is the whole rule on all five. Reading or moving a channel's
+// group state is exactly as privileged as reading the channel, so creating a
+// channel confers nothing extra and neither does being an org admin outside
+// it — the two admin columns pin that from both sides, as everywhere else.
+func mlsEntries() []Entry {
+	var (
+		read         = success(http.StatusOK)
+		noGroup      = refusal(http.StatusNotFound, "mls_group_not_found")
+		notEncrypted = refusal(http.StatusBadRequest, "e2ee_not_enabled")
+	)
+
+	entries := bothKinds(http.MethodGet, mlsGroupPath, nil, members(noGroup, noGroup, noGroup))
+
+	// Creating a group on a channel that is not e2ee is refused, and the
+	// refusal is a 400 rather than a 403 for the reason dm_membership_fixed
+	// is: it says something about the channel's shape, not about who is
+	// asking. That it is decided AFTER membership is what keeps a stranger
+	// on the 404.
+	groupBody := func(Fixture) string { return fmt.Sprintf(`{"group_id":%q}`, mlsBlob) }
+	entries = append(entries, bothKinds(http.MethodPost, mlsGroupPath, groupBody,
+		members(notEncrypted, notEncrypted, notEncrypted))...)
+
+	// Claiming names a real member of the cell's own channel, so the refusal
+	// a member reaches is the channel's mode and nothing else: a claim
+	// consumes a single-use key package, and on a channel that can never
+	// have a group it would be a free pool-drain against anyone you share a
+	// plaintext room with. That the two non-member columns still answer 404
+	// is the ordering this row pins — the mode gate runs after membership,
+	// so it cannot become a way to probe which channels exist.
+	claimBody := func(fx Fixture) string { return fmt.Sprintf(`{"user_id":%q}`, fx.MemberUserID) }
+	entries = append(entries, bothKinds(http.MethodPost, mlsClaimsPath, claimBody,
+		members(notEncrypted, notEncrypted, notEncrypted))...)
+
+	// The commit log of a channel with no group is empty rather than absent:
+	// there is nothing to apply, which is what a caught-up client sees too.
+	entries = append(entries,
+		channelEntry(http.MethodGet, mlsCommitsPath, storage.ChannelKindPrivate, nil, members(read, read, read)),
+		channelEntry(http.MethodGet, mlsCommitsPath, storage.ChannelKindDM, nil, members(read, read, read)))
+	for i := range entries {
+		if entries[i].Method == http.MethodGet && entries[i].Path == mlsCommitsPath {
+			// after_epoch is required by the contract, and the generated
+			// router refuses the request with 400 before the security
+			// middleware runs if it is missing — which would pin request
+			// validation instead of an authorization answer.
+			entries[i].RequestTarget = mlsCommitsPath + "?after_epoch=0"
+		}
+	}
+
+	// Submitting a commit to a channel with no group is 404
+	// mls_group_not_found, and a stranger's 404 carries channel_not_found.
+	// Two 404s with different codes is the shape this whole surface has, and
+	// the codes are the only thing separating them.
+	commitBody := func(Fixture) string { return fmt.Sprintf(`{"epoch":0,"message":%q}`, mlsBlob) }
+	entries = append(entries, bothKinds(http.MethodPost, mlsCommitsPath, commitBody,
+		members(noGroup, noGroup, noGroup))...)
+
+	// The member-device directory (ADR 007 decision 2), and the row exists
+	// for the two non-member columns rather than the member ones. This read
+	// is the allow-list an eviction sweep trusts: every leaf whose key it
+	// does not name is evicted. A stranger who could read it would learn the
+	// whole roster of a channel they cannot see — every member's id, and how
+	// many devices each has — so the 404 these cells pin is the boundary that
+	// keeps the directory a thing only members can assemble.
+	//
+	// The member cells land on the mode refusal because every fixture channel
+	// is plaintext, and that they do is the ordering this row pins: a channel
+	// with no group has no tree to sweep, but a stranger must reach the
+	// channel's own 404 first and learn nothing about the mode either way.
+	entries = append(entries, bothKinds(http.MethodGet, mlsDevicesPath, nil,
+		members(notEncrypted, notEncrypted, notEncrypted))...)
+
+	return entries
+}
+
+// matrixBoundary is the fixed multipart boundary the upload cells use. It is
+// fixed so the entry's Content-Type can be a constant.
+const matrixBoundary = "hamlaneh-authz-matrix-boundary"
+
+// uploadContentType is the header that goes with uploadBody.
+const uploadContentType = "multipart/form-data; boundary=" + matrixBoundary
+
+// uploadBody is the smallest thing the upload endpoint can be asked with
+// that a member is genuinely entitled to a 201 for: one `file` part holding
+// a real 1×1 PNG, declared as one.
+//
+// It has to be real. The handler sniffs the bytes before it stores anything,
+// so a placeholder body would answer 415 for every principal and the row
+// would pin nothing about who may upload.
+func uploadBody(Fixture) string {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if err := mw.SetBoundary(matrixBoundary); err != nil {
+		panic("authztest: set multipart boundary: " + err.Error())
+	}
+
+	header := textproto.MIMEHeader{}
+	header.Set("Content-Disposition", `form-data; name="file"; filename="matrix.png"`)
+	header.Set("Content-Type", "image/png")
+	part, err := mw.CreatePart(header)
+	if err != nil {
+		panic("authztest: create multipart part: " + err.Error())
+	}
+	if err := png.Encode(part, image.NewGray(image.Rect(0, 0, 1, 1))); err != nil {
+		panic("authztest: encode fixture PNG: " + err.Error())
+	}
+	if err := mw.Close(); err != nil {
+		panic("authztest: close multipart writer: " + err.Error())
+	}
+	return body.String()
 }
 
 // Operation identifies one (method, path) pair of the API contract.
@@ -460,6 +1542,9 @@ func (op Operation) String() string { return op.Method + " " + op.Path }
 // missing lists spec operations without a matrix entry (the CI-failing
 // case), extra lists registry entries for operations the spec no longer
 // has. Both come back sorted for stable failure output.
+//
+// One operation may have several entries (one per fixture kind); that is a
+// coverage question, answered by the kind-coverage gate, not this one.
 func DiffRegistry(specOps []Operation, entries []Entry) (missing, extra []string) {
 	inRegistry := map[Operation]bool{}
 	for _, e := range entries {
@@ -480,4 +1565,41 @@ func DiffRegistry(specOps []Operation, entries []Entry) (missing, extra []string
 	sort.Strings(missing)
 	sort.Strings(extra)
 	return missing, extra
+}
+
+// DiffNotImplemented compares the registry's 501 expectations against the
+// operations allowed to carry one (notImplementedOperations).
+//
+// unlisted names the cells expecting a 501 for an operation nobody listed —
+// the CI-failing case that keeps "no handler exists" a deliberate statement
+// rather than a shortcut. stale names listed operations no cell expects a 501
+// for any more: the handler landed and the list outlived it. Both come back
+// sorted for stable failure output.
+func DiffNotImplemented(allowed []Operation, entries []Entry) (unlisted, stale []string) {
+	isAllowed := map[Operation]bool{}
+	for _, op := range allowed {
+		isAllowed[op] = true
+	}
+
+	expectsStub := map[Operation]bool{}
+	for _, e := range entries {
+		op := Operation{Method: e.Method, Path: e.Path}
+		for _, principal := range e.Principals() {
+			if e.Want[principal] != http.StatusNotImplemented {
+				continue
+			}
+			expectsStub[op] = true
+			if !isAllowed[op] {
+				unlisted = append(unlisted, fmt.Sprintf("%s [%s] as %s", op, e.Kind, principal))
+			}
+		}
+	}
+	for _, op := range allowed {
+		if !expectsStub[op] {
+			stale = append(stale, op.String())
+		}
+	}
+	sort.Strings(unlisted)
+	sort.Strings(stale)
+	return unlisted, stale
 }

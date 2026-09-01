@@ -15,6 +15,8 @@ export type LinkPreview = components["schemas"]["LinkPreview"];
 export type SearchPage = components["schemas"]["SearchPage"];
 export type SearchResult = components["schemas"]["SearchResult"];
 export type User = components["schemas"]["User"];
+export type ChannelCall = components["schemas"]["ChannelCall"];
+export type CallParticipant = components["schemas"]["CallParticipant"];
 
 /**
  * A message the user composed that the server has not confirmed yet.
@@ -26,6 +28,13 @@ export type User = components["schemas"]["User"];
 export interface PendingMessage {
   clientMsgId: string;
   content: string;
+  /**
+   * Files already uploaded and waiting to be attached by the send. Kept on
+   * the pending message rather than only in the composer because the offline
+   * queue replays from here — dropping them would send the text alone once
+   * the connection returned, which is the bug the queue exists to prevent.
+   */
+  attachments: Attachment[];
   createdAt: string;
   /** "sending" — a request is in flight. "queued" — waiting for the connection. */
   status: "sending" | "queued";

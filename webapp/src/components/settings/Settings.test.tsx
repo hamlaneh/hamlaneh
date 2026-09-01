@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import App from "../../App";
@@ -10,7 +11,9 @@ import fa from "../../locales/fa/common.json";
 import {
   enableMockTotp,
   FIXTURE_CREDENTIALS,
+  FIXTURE_MEMBER_CREDENTIALS,
   FIXTURE_RECOVERY_CODES,
+  FIXTURE_RETRY_AFTER_SECONDS,
   FIXTURE_TOTP_CODE,
   resetMockAuth,
 } from "../../mocks/handlers";
@@ -30,18 +33,25 @@ afterAll(() => {
   server.close();
 });
 
-/** Signs in and opens the settings panel from the sidebar gear. */
-async function openSettings(user: UserEvent, locale: typeof en | typeof fa = en) {
+/**
+ * Signs in and opens the settings panel from the sidebar gear.
+ *
+ * The account decides the language from sign-in on (i18n/useLanguage.ts), so
+ * a case that wants a Persian panel signs in as the account that reads
+ * Persian rather than only choosing Persian on the sign-in screen.
+ */
+async function openSettings(
+  user: UserEvent,
+  locale: typeof en | typeof fa = en,
+  credentials: { identifier: string; password: string } = FIXTURE_CREDENTIALS,
+) {
   render(<App />);
   await screen.findByRole("heading", { name: locale.login.title });
   await user.type(
     screen.getByLabelText(locale.login.identifierLabel),
-    FIXTURE_CREDENTIALS.identifier,
+    credentials.identifier,
   );
-  await user.type(
-    screen.getByLabelText(locale.login.passwordLabel),
-    FIXTURE_CREDENTIALS.password,
-  );
+  await user.type(screen.getByLabelText(locale.login.passwordLabel), credentials.password);
   await user.click(screen.getByRole("button", { name: locale.login.submit }));
   await screen.findByRole("navigation", { name: locale.chat.sidebar.label });
   await user.click(screen.getByRole("button", { name: locale.chat.footer.account }));
@@ -88,11 +98,14 @@ describe("settings panel", () => {
 
     expect(panel).toHaveAttribute("aria-modal", "true");
     // The section nav is a tab list; Security is the section the artboards draw.
+    // Meetings is appended after the drawn three, which is what keeps the three
+    // in the positions the artboard gives them.
     const tabs = within(panel).getAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual([
       en.settings.nav.language,
       en.settings.nav.security,
       en.settings.nav.appearance,
+      en.settings.nav.meetings,
     ]);
     expect(
       within(panel).getByRole("tab", { name: en.settings.nav.security }),
@@ -212,6 +225,256 @@ describe("two-step verification setup", () => {
   });
 });
 
+/**
+ * Answers `path`'s 429 with `header` as its Retry-After, or with none at all
+ * when it is undefined — the shapes a server that cannot say when the door
+ * reopens produces. Every account-security 429 carries the header for real
+ * (spec: RateLimited).
+ */
+function rateLimitedWith(path: string, header?: string) {
+  server.use(
+    http.post(path, () =>
+      HttpResponse.json(
+        { error: { code: "rate_limited", message: "Too many attempts." } },
+        {
+          status: 429,
+          ...(header === undefined ? {} : { headers: { "Retry-After": header } }),
+        },
+      ),
+    ),
+  );
+}
+
+/** A count-carrying sentence as i18next renders it in English. */
+function counted(template: string, count: number): string {
+  return template.replace("{{count, number}}", new Intl.NumberFormat("en").format(count));
+}
+
+/** Every quiet live region on screen: the panel's own and the chat's behind it. */
+function noticeBanners(): HTMLElement[] {
+  return screen
+    .queryAllByRole("status")
+    .filter((notice) => notice.classList.contains("hm-banner"));
+}
+
+/**
+ * The form-level notice banner. Several quiet regions share `role="status"` —
+ * the composer behind the panel, the setup step's loading note — so the banner
+ * is picked out by the component's own class rather than by role alone.
+ */
+async function findNoticeBanner(): Promise<HTMLElement> {
+  return waitFor(() => {
+    const [banner] = noticeBanners();
+    if (banner === undefined) {
+      throw new Error("no notice banner on screen");
+    }
+    return banner;
+  });
+}
+
+/** Opens the disable prompt on an account that has two-step on, and confirms it. */
+async function confirmDisable(user: UserEvent) {
+  await user.click(await screen.findByRole("button", { name: en.settings.totp.disable }));
+  const dialog = await screen.findByRole("dialog", {
+    name: en.settings.totp.disablePrompt.title,
+  });
+  await user.type(
+    within(dialog).getByLabelText(en.settings.totp.confirmPasswordLabel),
+    FIXTURE_CREDENTIALS.password,
+  );
+  await user.click(
+    within(dialog).getByRole("button", { name: en.settings.totp.disablePrompt.confirm }),
+  );
+  return dialog;
+}
+
+describe("rate limiting in account security", () => {
+  it("states the wait the password prompt's 429 names rather than guessing at it", async () => {
+    const user = userEvent.setup({ delay: null });
+    enableMockTotp();
+    await openSettings(user);
+    rateLimitedWith("/api/v1/users/me/totp/disable", String(FIXTURE_RETRY_AFTER_SECONDS));
+
+    const dialog = await confirmDisable(user);
+
+    const notice = await within(dialog).findByRole("alert");
+    expect(notice).toHaveTextContent(
+      counted(
+        en.login.error.rateLimitedMinutes_other,
+        Math.ceil(FIXTURE_RETRY_AFTER_SECONDS / 60),
+      ),
+    );
+    // The undated wording is what this replaces, not what it repeats.
+    expect(notice).not.toHaveTextContent(en.settings.totp.error.rateLimited);
+  });
+
+  it.each([
+    ["carries no Retry-After", undefined],
+    ["carries a Retry-After of zero", "0"],
+    ["carries a non-numeric Retry-After", "soon"],
+    ["carries an HTTP-date Retry-After", "Wed, 21 Oct 2026 07:28:00 GMT"],
+    ["carries an absurd Retry-After", "999999999"],
+  ])("falls back to the undated prompt wording when the 429 %s", async (_case, header) => {
+    const user = userEvent.setup({ delay: null });
+    enableMockTotp();
+    await openSettings(user);
+    rateLimitedWith("/api/v1/users/me/totp/disable", header);
+
+    const dialog = await confirmDisable(user);
+
+    const notice = await within(dialog).findByRole("alert");
+    expect(notice).toHaveTextContent(en.settings.totp.error.rateLimited);
+    // Never a number the response did not support — and never "NaN".
+    expect(notice.textContent).not.toMatch(/\d|NaN/u);
+  });
+
+  it("keeps the prompt's own way out, and reopens it clean", async () => {
+    const user = userEvent.setup({ delay: null });
+    enableMockTotp();
+    await openSettings(user);
+    rateLimitedWith("/api/v1/users/me/totp/disable", String(FIXTURE_RETRY_AFTER_SECONDS));
+
+    const dialog = await confirmDisable(user);
+    await within(dialog).findByRole("alert");
+
+    // Cancel still closes it — a stated wait must not trap anyone in a dialog.
+    await user.click(within(dialog).getByRole("button", { name: en.settings.cancel }));
+    expect(
+      screen.queryByRole("dialog", { name: en.settings.totp.disablePrompt.title }),
+    ).not.toBeInTheDocument();
+
+    // Reopened, it carries no leftover notice, and the action still works once
+    // the server's window has slid.
+    server.resetHandlers();
+    await confirmDisable(user);
+    expect(await screen.findByText(en.settings.totp.off)).toBeInTheDocument();
+  });
+
+  it("lifts the prompt's notice by itself once the stated wait has passed", async () => {
+    const user = userEvent.setup({ delay: null });
+    enableMockTotp();
+    await openSettings(user);
+    // One second, so the countdown runs out inside the test rather than being
+    // simulated: what is asserted is that the timer really ends the state.
+    rateLimitedWith("/api/v1/users/me/totp/disable", "1");
+
+    const dialog = await confirmDisable(user);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      counted(en.login.error.rateLimitedSeconds_one, 1),
+    );
+
+    await waitFor(
+      () => {
+        expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+      },
+      { timeout: 3000 },
+    );
+    // The dialog is still open and still usable — only the notice went.
+    expect(
+      within(dialog).getByRole("button", { name: en.settings.totp.disablePrompt.confirm }),
+    ).toBeEnabled();
+  });
+
+  it("states the wait a setup 429 names, and keeps the way back to Security", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openSettings(user);
+    rateLimitedWith("/api/v1/users/me/totp/setup", "45");
+
+    await user.click(screen.getByRole("button", { name: en.settings.totp.setUp }));
+
+    // Under a minute the notice counts seconds, exactly as the sign-in screen
+    // does — the same sentence, only the number is new.
+    const notice = await findNoticeBanner();
+    expect(notice).toHaveTextContent(counted(en.login.error.rateLimitedSeconds_other, 45));
+    expect(notice).not.toHaveTextContent(en.settings.totp.error.rateLimited);
+
+    // The step header's back link is still the way out it always was.
+    await user.click(screen.getByRole("button", { name: en.settings.nav.security }));
+    expect(
+      await screen.findByRole("button", { name: en.settings.totp.setUp }),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ["carries no Retry-After", undefined],
+    ["carries a non-numeric Retry-After", "soon"],
+    ["carries an absurd Retry-After", "999999999"],
+  ])("falls back to the undated setup wording when the 429 %s", async (_case, header) => {
+    const user = userEvent.setup({ delay: null });
+    await openSettings(user);
+    rateLimitedWith("/api/v1/users/me/totp/setup", header);
+
+    await user.click(screen.getByRole("button", { name: en.settings.totp.setUp }));
+
+    const notice = await findNoticeBanner();
+    expect(notice).toHaveTextContent(en.settings.totp.error.rateLimited);
+    expect(notice.textContent).not.toMatch(/\d|NaN/u);
+  });
+
+  it("states the wait a verify 429 names and lifts it when the code is retyped", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openSettings(user);
+    await user.click(screen.getByRole("button", { name: en.settings.totp.setUp }));
+    await screen.findByRole("heading", { name: en.settings.totp.scan.title });
+    await user.click(screen.getByRole("button", { name: en.settings.totp.scan.continue }));
+    rateLimitedWith("/api/v1/users/me/totp/verify", String(FIXTURE_RETRY_AFTER_SECONDS));
+
+    await enterSetupCode(user, FIXTURE_TOTP_CODE);
+    await user.click(screen.getByRole("button", { name: en.settings.totp.verify.submit }));
+
+    const notice = await findNoticeBanner();
+    expect(notice).toHaveTextContent(
+      counted(
+        en.login.error.rateLimitedMinutes_other,
+        Math.ceil(FIXTURE_RETRY_AFTER_SECONDS / 60),
+      ),
+    );
+
+    // The pending setup survives, exactly as it did before the countdown: the
+    // cells cleared, typing again lifts the notice, and the code goes through
+    // once the server's window has slid.
+    server.resetHandlers();
+    await enterSetupCode(user, FIXTURE_TOTP_CODE);
+    expect(noticeBanners()).toEqual([]);
+    await user.click(screen.getByRole("button", { name: en.settings.totp.verify.submit }));
+
+    expect(
+      await screen.findByRole("heading", { name: en.settings.totp.codes.title }),
+    ).toBeInTheDocument();
+  });
+
+  it("says why the automatic restart failed instead of repeating the expiry notice", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openSettings(user);
+    await user.click(screen.getByRole("button", { name: en.settings.totp.setUp }));
+    await screen.findByRole("heading", { name: en.settings.totp.scan.title });
+    await user.click(screen.getByRole("button", { name: en.settings.totp.scan.continue }));
+
+    // The pending setup expires while the code is being typed, so the screen
+    // says "start again" and fetches a fresh secret by itself — and that fetch
+    // is refused. Every non-200 there used to be dropped, leaving the user
+    // following an instruction that could not work, with nothing saying so.
+    server.use(
+      http.post("/api/v1/users/me/totp/verify", () =>
+        HttpResponse.json(
+          { error: { code: "totp_setup_expired", message: "That setup expired." } },
+          { status: 409 },
+        ),
+      ),
+    );
+    rateLimitedWith("/api/v1/users/me/totp/setup", "45");
+
+    await enterSetupCode(user, FIXTURE_TOTP_CODE);
+    await user.click(screen.getByRole("button", { name: en.settings.totp.verify.submit }));
+
+    const notice = await findNoticeBanner();
+    expect(notice).toHaveTextContent(counted(en.login.error.rateLimitedSeconds_other, 45));
+    // The refusal is the newer fact, so it replaces the expiry line rather
+    // than leaving both on screen contradicting each other.
+    expect(notice).not.toHaveTextContent(en.settings.totp.error.setupExpired);
+  });
+});
+
 describe("sessions", () => {
   it("marks the current device and gives it no sign-out control of its own", async () => {
     const user = userEvent.setup({ delay: null });
@@ -305,7 +568,7 @@ describe("language and appearance", () => {
   it("renders the panel mirrored, in Persian, when the language is fa", async () => {
     const user = userEvent.setup({ delay: null });
     await i18n.changeLanguage("fa");
-    const panel = await openSettings(user, fa);
+    const panel = await openSettings(user, fa, FIXTURE_MEMBER_CREDENTIALS);
 
     expect(document.documentElement.dir).toBe("rtl");
     expect(document.documentElement.lang).toBe("fa");

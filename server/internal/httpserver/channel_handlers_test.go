@@ -1,0 +1,1394 @@
+package httpserver_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/hamlaneh/hamlaneh/server/internal/api"
+	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
+	"github.com/hamlaneh/hamlaneh/server/internal/storage"
+)
+
+// Fixture ids for the conversation surface.
+const (
+	testChannelID = "cccccccc-0000-0000-0000-000000000001"
+	testMessageID = "dddddddd-0000-0000-0000-000000000001"
+	testPeerID    = "eeeeeeee-0000-0000-0000-000000000001"
+)
+
+func channelUUID() uuid.UUID { return uuid.MustParse(testChannelID) }
+func peerUUID() uuid.UUID    { return uuid.MustParse(testPeerID) }
+
+// channelPath is the request target of a channel-scoped route.
+func channelPath(suffix string) string {
+	return "/api/v1/channels/" + testChannelID + suffix
+}
+
+// fixtureChannel is a public channel the fixture user created, carrying the
+// caller-scoped counts only ChannelForUser and its siblings can fill.
+func fixtureChannel() storage.Channel {
+	slug := "deploys"
+	creator := fixtureUser().ID
+	lastMessage := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	return storage.Channel{
+		ID:            channelUUID(),
+		Kind:          storage.ChannelKindPublic,
+		Slug:          &slug,
+		Topic:         "ship it",
+		CreatedBy:     &creator,
+		MemberCount:   3,
+		UnreadCount:   2,
+		MentionCount:  1,
+		LastMessageAt: &lastMessage,
+		CreatedAt:     time.Date(2026, 8, 20, 8, 0, 0, 0, time.UTC),
+	}
+}
+
+// fixtureDM is the direct message between the fixture user and the peer.
+func fixtureDM() storage.Channel {
+	ch := fixtureChannel()
+	ch.Kind = storage.ChannelKindDM
+	ch.Slug = nil
+	ch.Topic = ""
+	ch.MemberCount = 2
+	a, b := fixtureUser().ID, peerUUID()
+	ch.DMUserA, ch.DMUserB = &a, &b
+	ch.DMPeer = &storage.DMPeer{ID: peerUUID(), Username: "peer", DisplayName: "Display peer"}
+	return ch
+}
+
+// peerUser is the stored account the membership events name. It reuses the
+// directory fixture, so it carries everything a UserSummary must never
+// publish: an address, the admin flag, a password change still owed, and the
+// hash itself.
+func peerUser() storage.User {
+	u := directoryUser(1, "peer")
+	u.ID = peerUUID()
+	return u
+}
+
+// channelStore wires a fakeStore that authenticates user, answers ch for
+// every channel read, and reports the caller's membership.
+func channelStore(user storage.User, ch storage.Channel, member bool) *fakeStore {
+	store := authedStore(user)
+	store.channelForUser = func(context.Context, uuid.UUID, uuid.UUID) (storage.Channel, error) {
+		return ch, nil
+	}
+	store.isChannelMember = func(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+		return member, nil
+	}
+	return store
+}
+
+// memberStore is channelStore for a plain member of the fixture channel.
+func memberStore() *fakeStore {
+	return channelStore(fixtureUser(), fixtureChannel(), true)
+}
+
+// dmPerParticipant answers ChannelForUser the way storage does for a direct
+// message: each participant's row names the OTHER one as the peer.
+func dmPerParticipant() func(context.Context, uuid.UUID, uuid.UUID) (storage.Channel, error) {
+	return func(_ context.Context, _, userID uuid.UUID) (storage.Channel, error) {
+		ch := fixtureDM()
+		if userID == peerUUID() {
+			caller := fixtureUser()
+			ch.DMPeer = &storage.DMPeer{
+				ID:          caller.ID,
+				Username:    caller.Username,
+				DisplayName: caller.DisplayName,
+			}
+		}
+		return ch, nil
+	}
+}
+
+// announcementTo finds the channel_created addressed to exactly one user.
+func announcementTo(events []recordedChannelCreated, userID uuid.UUID) (storage.Channel, bool) {
+	for _, ev := range events {
+		if len(ev.userIDs) == 1 && ev.userIDs[0] == userID {
+			return ev.channel, true
+		}
+	}
+	return storage.Channel{}, false
+}
+
+// recordingRealtime captures what a handler announced, so a test can assert
+// both that an event fired and that it carried the right payload.
+type recordingRealtime struct {
+	mu             sync.Mutex
+	messageCreated []storage.Message
+	channelCreated []recordedChannelCreated
+	channelUpdated []storage.Channel
+	memberAdded    []recordedMemberEvent
+	memberRemoved  []recordedMemberEvent
+	channelRemoved []recordedChannelRemoved
+	readPositions  []recordedReadPosition
+	calls          []recordedCallEvent
+	mlsCommits     []recordedMlsCommit
+	mlsWelcomes    []uuid.UUID
+}
+
+// recordedMlsCommit is one mls_commit announcement: the channel and the epoch
+// the group reached.
+type recordedMlsCommit struct {
+	channelID uuid.UUID
+	epoch     int64
+}
+
+// recordedCallEvent is one of the three call events: which one it was, the
+// channel it named, and what it carried.
+type recordedCallEvent struct {
+	event        string
+	channelID    uuid.UUID
+	startedBy    uuid.UUID
+	participants []api.CallParticipant
+}
+
+// recordedMemberEvent is one member_added or member_removed: the channel it
+// was announced on and the person it named.
+type recordedMemberEvent struct {
+	channelID uuid.UUID
+	user      storage.User
+}
+
+type recordedChannelCreated struct {
+	userIDs []uuid.UUID
+	channel storage.Channel
+}
+
+type recordedChannelRemoved struct{ userID, channelID uuid.UUID }
+
+type recordedReadPosition struct {
+	userID, channelID, messageID uuid.UUID
+	readAt                       time.Time
+}
+
+func (rt *recordingRealtime) MessageCreated(_ uuid.UUID, m storage.Message) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.messageCreated = append(rt.messageCreated, m)
+}
+
+func (rt *recordingRealtime) ChannelCreated(userIDs []uuid.UUID, ch storage.Channel) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.channelCreated = append(rt.channelCreated, recordedChannelCreated{userIDs: userIDs, channel: ch})
+}
+
+func (rt *recordingRealtime) ChannelUpdated(_ uuid.UUID, ch storage.Channel) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.channelUpdated = append(rt.channelUpdated, ch)
+}
+
+func (rt *recordingRealtime) MemberAdded(channelID uuid.UUID, user storage.User) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.memberAdded = append(rt.memberAdded, recordedMemberEvent{channelID: channelID, user: user})
+}
+
+func (rt *recordingRealtime) MemberRemoved(channelID uuid.UUID, user storage.User) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.memberRemoved = append(rt.memberRemoved, recordedMemberEvent{channelID: channelID, user: user})
+}
+
+func (rt *recordingRealtime) ChannelRemoved(userID, channelID uuid.UUID) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.channelRemoved = append(rt.channelRemoved, recordedChannelRemoved{userID: userID, channelID: channelID})
+}
+
+func (rt *recordingRealtime) ReadPosition(userID, channelID, messageID uuid.UUID, readAt time.Time) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.readPositions = append(rt.readPositions,
+		recordedReadPosition{userID: userID, channelID: channelID, messageID: messageID, readAt: readAt})
+}
+
+// The three call events. They are recorded as one ordered list of names plus
+// their payloads, because what the webhook tests assert is WHICH event a
+// fresh read produced — call_started and call_updated are the same fact
+// announced under two labels, and getting the label wrong is the bug.
+func (rt *recordingRealtime) CallStarted(channelID, startedBy uuid.UUID, participants []api.CallParticipant) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.calls = append(rt.calls, recordedCallEvent{
+		event: "call_started", channelID: channelID,
+		startedBy: startedBy, participants: participants,
+	})
+}
+
+func (rt *recordingRealtime) CallUpdated(channelID uuid.UUID, participants []api.CallParticipant) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.calls = append(rt.calls, recordedCallEvent{
+		event: "call_updated", channelID: channelID, participants: participants,
+	})
+}
+
+func (rt *recordingRealtime) CallEnded(channelID uuid.UUID) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.calls = append(rt.calls, recordedCallEvent{event: "call_ended", channelID: channelID})
+}
+
+func (rt *recordingRealtime) MlsCommit(channelID uuid.UUID, epoch int64) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.mlsCommits = append(rt.mlsCommits, recordedMlsCommit{channelID: channelID, epoch: epoch})
+}
+
+func (rt *recordingRealtime) MlsWelcome(userID uuid.UUID) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.mlsWelcomes = append(rt.mlsWelcomes, userID)
+}
+
+// mlsEvents returns the two E2EE transport announcements made so far.
+func (rt *recordingRealtime) mlsEvents() ([]recordedMlsCommit, []uuid.UUID) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return append([]recordedMlsCommit{}, rt.mlsCommits...), append([]uuid.UUID{}, rt.mlsWelcomes...)
+}
+
+// callEvents returns the call events announced so far.
+func (rt *recordingRealtime) callEvents() []recordedCallEvent {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return append([]recordedCallEvent{}, rt.calls...)
+}
+
+// doRealtime serves req against store with rt attached.
+func doRealtime(t *testing.T, store httpserver.Store, rt httpserver.Realtime, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
+	return doHandler(t, httpserver.Handler(store, httpserver.WithRealtime(rt)), req)
+}
+
+func TestGetChannel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a member gets the channel with their own counts", func(t *testing.T) {
+		t.Parallel()
+		rec := do(t, memberStore(), request(http.MethodGet, channelPath(""), "", withSessionCookie("tok")))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+
+		var got api.Channel
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("body is not the contract Channel shape: %v", err)
+		}
+		if got.Id != channelUUID() {
+			t.Errorf("id = %s, want %s", got.Id, channelUUID())
+		}
+		if got.UnreadCount != 2 || got.MentionCount != 1 {
+			t.Errorf("counts = (%d, %d), want (2, 1) — a caller-scoped read fills them",
+				got.UnreadCount, got.MentionCount)
+		}
+		if got.MemberCount != 3 {
+			t.Errorf("member_count = %d, want 3", got.MemberCount)
+		}
+		if got.Slug == nil || *got.Slug != "deploys" {
+			t.Errorf("slug = %v, want deploys", got.Slug)
+		}
+	})
+
+	t.Run("a non-member gets 404, never 403", func(t *testing.T) {
+		t.Parallel()
+		store := channelStore(fixtureUser(), fixtureChannel(), false)
+		rec := do(t, store, request(http.MethodGet, channelPath(""), "", withSessionCookie("tok")))
+		wantError(t, rec, http.StatusNotFound, "channel_not_found")
+	})
+
+	t.Run("an org admin who is not a member gets the same 404", func(t *testing.T) {
+		t.Parallel()
+		admin := fixtureUser()
+		admin.IsAdmin = true
+		store := channelStore(admin, fixtureChannel(), false)
+		rec := do(t, store, request(http.MethodGet, channelPath(""), "", withSessionCookie("tok")))
+		wantError(t, rec, http.StatusNotFound, "channel_not_found")
+	})
+
+	t.Run("a channel id that is not a uuid is 400", func(t *testing.T) {
+		t.Parallel()
+		// channelForUser stays unwired: the router rejects the path before
+		// any handler runs, which is the contract's 400 on this route.
+		rec := do(t, authedStore(fixtureUser()),
+			request(http.MethodGet, "/api/v1/channels/not-a-uuid", "", withSessionCookie("tok")))
+		wantError(t, rec, http.StatusBadRequest, "invalid_request")
+	})
+
+	t.Run("an unknown channel is the same answer as a hidden one", func(t *testing.T) {
+		t.Parallel()
+		store := authedStore(fixtureUser())
+		store.channelForUser = func(context.Context, uuid.UUID, uuid.UUID) (storage.Channel, error) {
+			return storage.Channel{}, storage.ErrChannelNotFound
+		}
+		unknown := do(t, store, request(http.MethodGet, channelPath(""), "", withSessionCookie("tok")))
+		hidden := do(t, channelStore(fixtureUser(), fixtureChannel(), false),
+			request(http.MethodGet, channelPath(""), "", withSessionCookie("tok")))
+		assertIdentical(t, "unknown vs hidden channel", unknown, hidden)
+	})
+}
+
+// TestChannelDMPeer is the sidebar's label for a direct message, and the leak
+// test around it. A DM has no slug, so dm_peer is the only name the row has —
+// and it is a UserSummary and nothing else. The assertion is on the key set
+// of the encoded JSON rather than on a decoded api.UserSummary, which would
+// silently drop an extra field instead of failing.
+func TestChannelDMPeer(t *testing.T) {
+	t.Parallel()
+
+	// channelObject serves one channel and decodes it as a bare JSON object,
+	// so absent keys stay absent and unexpected ones stay visible.
+	channelObject := func(t *testing.T, ch storage.Channel) map[string]any {
+		t.Helper()
+		rec := do(t, channelStore(fixtureUser(), ch, true),
+			request(http.MethodGet, channelPath(""), "", withSessionCookie("tok")))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var got map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("body is not a channel object: %v", err)
+		}
+		return got
+	}
+
+	t.Run("a direct message names its peer, as a UserSummary and no more", func(t *testing.T) {
+		t.Parallel()
+		peer, ok := channelObject(t, fixtureDM())["dm_peer"].(map[string]any)
+		if !ok {
+			t.Fatal("the direct message carries no dm_peer object")
+		}
+		for key := range peer {
+			switch key {
+			case "id", "username", "display_name":
+			default:
+				t.Errorf("dm_peer carries %q; UserSummary is id, username and display_name only", key)
+			}
+		}
+		if peer["id"] != testPeerID {
+			t.Errorf("dm_peer id = %v, want %s", peer["id"], testPeerID)
+		}
+		if peer["username"] != "peer" || peer["display_name"] != "Display peer" {
+			t.Errorf("dm_peer = %v, want the peer's name row", peer)
+		}
+	})
+
+	t.Run("a named channel carries no dm_peer key at all", func(t *testing.T) {
+		t.Parallel()
+		if peer, present := channelObject(t, fixtureChannel())["dm_peer"]; present {
+			t.Errorf("a public channel carries dm_peer = %v", peer)
+		}
+	})
+
+	t.Run("the sidebar carries it on every direct message row", func(t *testing.T) {
+		t.Parallel()
+		store := authedStore(fixtureUser())
+		store.listChannelsForUser = func(context.Context, uuid.UUID, storage.ListChannelsParams) ([]storage.Channel, error) {
+			return []storage.Channel{fixtureChannel(), fixtureDM()}, nil
+		}
+
+		rec := do(t, store, request(http.MethodGet, "/api/v1/channels", "", withSessionCookie("tok")))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var page api.ChannelPage
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatalf("body is not the contract ChannelPage shape: %v", err)
+		}
+		if len(page.Channels) != 2 {
+			t.Fatalf("page has %d channels, want 2", len(page.Channels))
+		}
+		if page.Channels[0].DmPeer != nil {
+			t.Errorf("the public row names %+v as a dm peer", page.Channels[0].DmPeer)
+		}
+		if page.Channels[1].DmPeer == nil || page.Channels[1].DmPeer.Username != "peer" {
+			t.Errorf("the direct message row = %+v, want a dm_peer named peer", page.Channels[1].DmPeer)
+		}
+	})
+}
+
+func TestListChannels(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns the caller's sidebar", func(t *testing.T) {
+		t.Parallel()
+		store := authedStore(fixtureUser())
+		var gotUser uuid.UUID
+		store.listChannelsForUser = func(_ context.Context, userID uuid.UUID, _ storage.ListChannelsParams) ([]storage.Channel, error) {
+			gotUser = userID
+			return []storage.Channel{fixtureChannel()}, nil
+		}
+
+		rec := do(t, store, request(http.MethodGet, "/api/v1/channels", "", withSessionCookie("tok")))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		if gotUser != fixtureUser().ID {
+			t.Errorf("storage scoped to %s, want the authenticated caller %s", gotUser, fixtureUser().ID)
+		}
+
+		var page api.ChannelPage
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatalf("body is not a ChannelPage: %v", err)
+		}
+		if len(page.Channels) != 1 {
+			t.Fatalf("page has %d channels, want 1", len(page.Channels))
+		}
+		if page.NextCursor != nil {
+			t.Error("page has a next_cursor although the set is exhausted")
+		}
+	})
+
+	t.Run("pages with a keyset cursor", func(t *testing.T) {
+		t.Parallel()
+		all := make([]storage.Channel, 3)
+		base := time.Date(2026, 8, 20, 8, 0, 0, 0, time.UTC)
+		for i := range all {
+			all[i] = fixtureChannel()
+			all[i].ID = uuid.MustParse(fmt.Sprintf("%08d-0000-0000-0000-000000000000", i+1))
+			all[i].CreatedAt = base.Add(time.Duration(i) * time.Second)
+		}
+
+		store := authedStore(fixtureUser())
+		var gotParams []storage.ListChannelsParams
+		store.listChannelsForUser = func(_ context.Context, _ uuid.UUID, params storage.ListChannelsParams) ([]storage.Channel, error) {
+			gotParams = append(gotParams, params)
+			start := 0
+			if params.After != nil {
+				for i, ch := range all {
+					if ch.ID == params.After.ID {
+						start = i + 1
+					}
+				}
+			}
+			return all[start:min(start+params.Limit, len(all))], nil
+		}
+		handler := httpserver.Handler(store)
+
+		first := doHandler(t, handler, request(http.MethodGet, "/api/v1/channels?limit=2", "", withSessionCookie("tok")))
+		var page1 api.ChannelPage
+		if err := json.Unmarshal(first.Body.Bytes(), &page1); err != nil {
+			t.Fatalf("first page is not a ChannelPage: %v", err)
+		}
+		if len(page1.Channels) != 2 || page1.NextCursor == nil {
+			t.Fatalf("first page: %d channels, cursor %v; want 2 and a cursor", len(page1.Channels), page1.NextCursor)
+		}
+		if gotParams[0].Limit != 3 {
+			t.Errorf("storage asked for limit %d, want limit+1 = 3", gotParams[0].Limit)
+		}
+
+		second := doHandler(t, handler, request(http.MethodGet,
+			"/api/v1/channels?limit=2&cursor="+url.QueryEscape(*page1.NextCursor), "", withSessionCookie("tok")))
+		var page2 api.ChannelPage
+		if err := json.Unmarshal(second.Body.Bytes(), &page2); err != nil {
+			t.Fatalf("second page is not a ChannelPage: %v", err)
+		}
+		if len(page2.Channels) != 1 || page2.NextCursor != nil {
+			t.Fatalf("second page: %d channels, cursor %v; want 1 and none", len(page2.Channels), page2.NextCursor)
+		}
+		if gotParams[1].After == nil {
+			t.Fatal("second call reached storage without a cursor")
+		}
+		if gotParams[1].After.ID != all[1].ID || !gotParams[1].After.CreatedAt.Equal(all[1].CreatedAt) {
+			t.Errorf("cursor decoded to (%v, %s), want (%v, %s)",
+				gotParams[1].After.CreatedAt, gotParams[1].After.ID, all[1].CreatedAt, all[1].ID)
+		}
+	})
+
+	t.Run("rejects malformed paging", func(t *testing.T) {
+		t.Parallel()
+		for _, query := range []string{"?limit=0", "?limit=201", "?limit=-1", "?cursor=%21%21%21"} {
+			t.Run(query, func(t *testing.T) {
+				t.Parallel()
+				rec := do(t, authedStore(fixtureUser()),
+					request(http.MethodGet, "/api/v1/channels"+query, "", withSessionCookie("tok")))
+				wantError(t, rec, http.StatusBadRequest, "invalid_request")
+			})
+		}
+	})
+}
+
+func TestCreateChannel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("creates the channel and announces it to its creator", func(t *testing.T) {
+		t.Parallel()
+		store := authedStore(fixtureUser())
+		var got storage.NewChannel
+		store.createChannel = func(_ context.Context, nc storage.NewChannel) (storage.Channel, error) {
+			got = nc
+			return fixtureChannel(), nil
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPost, "/api/v1/channels",
+			`{"slug":"deploys","kind":"private","topic":"ship it"}`, withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+		}
+		if got.Slug != "deploys" || got.Kind != storage.ChannelKindPrivate || got.Topic != "ship it" {
+			t.Errorf("storage got %+v, want the request's slug, kind and topic", got)
+		}
+		if got.CreatedBy != fixtureUser().ID {
+			t.Errorf("created_by = %s, want the authenticated caller", got.CreatedBy)
+		}
+		if len(rt.channelCreated) != 1 {
+			t.Fatalf("announced %d ChannelCreated events, want 1", len(rt.channelCreated))
+		}
+		if len(rt.channelCreated[0].userIDs) != 1 || rt.channelCreated[0].userIDs[0] != fixtureUser().ID {
+			t.Errorf("announced to %v, want only the creator", rt.channelCreated[0].userIDs)
+		}
+	})
+
+	t.Run("a taken slug is 409 channel_slug_taken", func(t *testing.T) {
+		t.Parallel()
+		store := authedStore(fixtureUser())
+		store.createChannel = func(context.Context, storage.NewChannel) (storage.Channel, error) {
+			return storage.Channel{}, storage.ErrChannelSlugTaken
+		}
+		rec := do(t, store, request(http.MethodPost, "/api/v1/channels",
+			`{"slug":"deploys","kind":"public"}`, withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusConflict, "channel_slug_taken")
+	})
+
+	t.Run("rejects malformed requests", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			name string
+			body string
+		}{
+			{"empty object", `{}`},
+			{"slug too short", `{"slug":"a","kind":"public"}`},
+			{"slug too long", `{"slug":"` + strings.Repeat("a", 65) + `","kind":"public"}`},
+			{"slug uppercase", `{"slug":"Deploys","kind":"public"}`},
+			{"slug starts with dash", `{"slug":"-deploys","kind":"public"}`},
+			{"slug has a space", `{"slug":"two words","kind":"public"}`},
+			{"slug has a dot", `{"slug":"a.b","kind":"public"}`},
+			{"kind dm is opened through /api/v1/dms", `{"slug":"deploys","kind":"dm"}`},
+			{"unknown kind", `{"slug":"deploys","kind":"secret"}`},
+			{"topic too long", `{"slug":"deploys","kind":"public","topic":"` + strings.Repeat("t", 251) + `"}`},
+			{"not json", `{`},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+				// createChannel stays unwired: a rejected request must never
+				// reach storage.
+				rec := do(t, authedStore(fixtureUser()), request(http.MethodPost, "/api/v1/channels",
+					tt.body, withSessionCookie("tok"), withCSRF()))
+				wantError(t, rec, http.StatusBadRequest, "invalid_request")
+			})
+		}
+	})
+}
+
+func TestOpenDirectMessage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a new direct message reaches each participant with their own row", func(t *testing.T) {
+		t.Parallel()
+		store := authedStore(fixtureUser())
+		var gotCaller, gotPeer uuid.UUID
+		store.openDirectMessage = func(_ context.Context, caller, peer uuid.UUID, _ bool) (storage.Channel, bool, error) {
+			gotCaller, gotPeer = caller, peer
+			return fixtureDM(), true, nil
+		}
+		store.channelForUser = dmPerParticipant()
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPost, "/api/v1/dms",
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+		}
+		if gotCaller != fixtureUser().ID || gotPeer != peerUUID() {
+			t.Errorf("storage got (%s, %s), want (caller, peer)", gotCaller, gotPeer)
+		}
+
+		// Two events, not one to both: dm_peer is the only thing that names a
+		// direct message, and it is caller-scoped. One shared row would name
+		// the peer's own conversation after the peer.
+		if len(rt.channelCreated) != 2 {
+			t.Fatalf("announced %d events, want one per participant: %v", len(rt.channelCreated), rt.channelCreated)
+		}
+		for _, want := range []struct {
+			recipient uuid.UUID
+			peerName  string
+		}{
+			{recipient: fixtureUser().ID, peerName: "Display peer"},
+			{recipient: peerUUID(), peerName: fixtureUser().DisplayName},
+		} {
+			got, ok := announcementTo(rt.channelCreated, want.recipient)
+			if !ok {
+				t.Fatalf("no channel_created for %s: %v", want.recipient, rt.channelCreated)
+			}
+			if got.DMPeer == nil || got.DMPeer.DisplayName != want.peerName {
+				t.Errorf("%s was told the peer is %v, want %q — the OTHER participant",
+					want.recipient, got.DMPeer, want.peerName)
+			}
+		}
+	})
+
+	t.Run("a peer row that cannot be read costs only the peer's announcement", func(t *testing.T) {
+		t.Parallel()
+		store := authedStore(fixtureUser())
+		store.openDirectMessage = func(context.Context, uuid.UUID, uuid.UUID, bool) (storage.Channel, bool, error) {
+			return fixtureDM(), true, nil
+		}
+		store.channelForUser = func(context.Context, uuid.UUID, uuid.UUID) (storage.Channel, error) {
+			return storage.Channel{}, errors.New("the read failed after the channel was created")
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPost, "/api/v1/dms",
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		// The channel exists; a broadcast that failed is not a reason to
+		// report the write that already happened as an error.
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+		}
+		if len(rt.channelCreated) != 1 {
+			t.Fatalf("announced %d events, want only the caller's: %v", len(rt.channelCreated), rt.channelCreated)
+		}
+	})
+
+	t.Run("an existing direct message is 200 and announces nothing", func(t *testing.T) {
+		t.Parallel()
+		store := authedStore(fixtureUser())
+		store.openDirectMessage = func(context.Context, uuid.UUID, uuid.UUID, bool) (storage.Channel, bool, error) {
+			return fixtureDM(), false, nil
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPost, "/api/v1/dms",
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		if len(rt.channelCreated) != 0 {
+			t.Errorf("announced %d events for a direct message that already existed, want 0", len(rt.channelCreated))
+		}
+	})
+
+	t.Run("a direct message with yourself is 400", func(t *testing.T) {
+		t.Parallel()
+		store := authedStore(fixtureUser())
+		store.openDirectMessage = func(context.Context, uuid.UUID, uuid.UUID, bool) (storage.Channel, bool, error) {
+			return storage.Channel{}, false, storage.ErrDMWithSelf
+		}
+		rec := do(t, store, request(http.MethodPost, "/api/v1/dms",
+			`{"user_id":"`+fixtureUser().ID.String()+`"}`, withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusBadRequest, "invalid_request")
+	})
+
+	t.Run("an unknown peer is 404 user_not_found", func(t *testing.T) {
+		t.Parallel()
+		store := authedStore(fixtureUser())
+		store.openDirectMessage = func(context.Context, uuid.UUID, uuid.UUID, bool) (storage.Channel, bool, error) {
+			return storage.Channel{}, false, storage.ErrNotFound
+		}
+		rec := do(t, store, request(http.MethodPost, "/api/v1/dms",
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusNotFound, "user_not_found")
+	})
+
+	t.Run("rejects a missing or malformed user_id", func(t *testing.T) {
+		t.Parallel()
+		for _, body := range []string{`{}`, `{"user_id":"not-a-uuid"}`, `{`} {
+			t.Run(body, func(t *testing.T) {
+				t.Parallel()
+				rec := do(t, authedStore(fixtureUser()), request(http.MethodPost, "/api/v1/dms",
+					body, withSessionCookie("tok"), withCSRF()))
+				wantError(t, rec, http.StatusBadRequest, "invalid_request")
+			})
+		}
+	})
+}
+
+func TestUpdateChannel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a member sets the topic and the broadcast carries no caller counts", func(t *testing.T) {
+		t.Parallel()
+		store := memberStore()
+		var gotTopic string
+		// UpdateChannelTopic has no caller in scope, so it answers with the
+		// counts zeroed — exactly the row that may be broadcast.
+		store.updateChannelTopic = func(_ context.Context, _ uuid.UUID, topic string) (storage.Channel, error) {
+			gotTopic = topic
+			ch := fixtureChannel()
+			ch.Topic = topic
+			ch.UnreadCount, ch.MentionCount, ch.LastReadMessageID = 0, 0, nil
+			return ch, nil
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPatch, channelPath(""),
+			`{"topic":"new topic"}`, withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		if gotTopic != "new topic" {
+			t.Errorf("stored topic %q, want %q", gotTopic, "new topic")
+		}
+
+		// The response is the caller-scoped re-read, so it carries their counts.
+		var got api.Channel
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("body is not a Channel: %v", err)
+		}
+		if got.UnreadCount != 2 || got.MentionCount != 1 {
+			t.Errorf("response counts = (%d, %d), want the caller's (2, 1)", got.UnreadCount, got.MentionCount)
+		}
+
+		if len(rt.channelUpdated) != 1 {
+			t.Fatalf("announced %d ChannelUpdated events, want 1", len(rt.channelUpdated))
+		}
+		if rt.channelUpdated[0].UnreadCount != 0 || rt.channelUpdated[0].MentionCount != 0 {
+			t.Errorf("broadcast carried the actor's counts (%d, %d) to every member",
+				rt.channelUpdated[0].UnreadCount, rt.channelUpdated[0].MentionCount)
+		}
+		if rt.channelUpdated[0].Topic != "new topic" {
+			t.Errorf("broadcast topic %q, want the new one", rt.channelUpdated[0].Topic)
+		}
+	})
+
+	t.Run("a direct message has no topic: 400, not 403", func(t *testing.T) {
+		t.Parallel()
+		store := channelStore(fixtureUser(), fixtureDM(), true)
+		store.updateChannelTopic = func(context.Context, uuid.UUID, string) (storage.Channel, error) {
+			return storage.Channel{}, storage.ErrDMHasNoTopic
+		}
+		rec := do(t, store, request(http.MethodPatch, channelPath(""),
+			`{"topic":"nope"}`, withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusBadRequest, "invalid_request")
+	})
+
+	t.Run("a non-member gets 404", func(t *testing.T) {
+		t.Parallel()
+		store := channelStore(fixtureUser(), fixtureChannel(), false)
+		rec := do(t, store, request(http.MethodPatch, channelPath(""),
+			`{"topic":"nope"}`, withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusNotFound, "channel_not_found")
+	})
+
+	t.Run("rejects malformed requests", func(t *testing.T) {
+		t.Parallel()
+		for name, body := range map[string]string{
+			"topic too long": `{"topic":"` + strings.Repeat("t", 251) + `"}`,
+			"not json":       `{`,
+			"wrong type":     `{"topic":42}`,
+		} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				// updateChannelTopic stays unwired: nothing must be stored.
+				rec := do(t, memberStore(), request(http.MethodPatch, channelPath(""),
+					body, withSessionCookie("tok"), withCSRF()))
+				wantError(t, rec, http.StatusBadRequest, "invalid_request")
+			})
+		}
+	})
+}
+
+func TestListChannelMembers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns the public face of each member", func(t *testing.T) {
+		t.Parallel()
+		store := memberStore()
+		store.listChannelMembers = func(context.Context, uuid.UUID, storage.ListChannelMembersParams) ([]storage.User, error) {
+			member := fixtureUser()
+			member.Email = ptr("member@example.com")
+			return []storage.User{member}, nil
+		}
+
+		rec := do(t, store, request(http.MethodGet, channelPath("/members"), "", withSessionCookie("tok")))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var page api.MemberPage
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatalf("body is not a MemberPage: %v", err)
+		}
+		if len(page.Members) != 1 || page.Members[0].Username != "member" {
+			t.Fatalf("page = %+v, want the one member", page.Members)
+		}
+		for _, leaked := range []string{"member@example.com", "argon2id", "is_admin", "must_change_password"} {
+			if strings.Contains(rec.Body.String(), leaked) {
+				t.Errorf("member list leaked %q: %s", leaked, rec.Body.String())
+			}
+		}
+	})
+
+	t.Run("pages by username", func(t *testing.T) {
+		t.Parallel()
+		store := memberStore()
+		var gotParams []storage.ListChannelMembersParams
+		store.listChannelMembers = func(_ context.Context, _ uuid.UUID, params storage.ListChannelMembersParams) ([]storage.User, error) {
+			gotParams = append(gotParams, params)
+			if params.After != nil {
+				return []storage.User{fixtureUser()}, nil
+			}
+			first, second := fixtureUser(), fixtureUser()
+			second.ID = peerUUID()
+			second.Username = "zoe"
+			// One row beyond the page proves a next page exists.
+			return []storage.User{first, second, fixtureUser()}, nil
+		}
+		handler := httpserver.Handler(store)
+
+		first := doHandler(t, handler, request(http.MethodGet, channelPath("/members")+"?limit=2", "", withSessionCookie("tok")))
+		var page1 api.MemberPage
+		if err := json.Unmarshal(first.Body.Bytes(), &page1); err != nil {
+			t.Fatalf("first page is not a MemberPage: %v", err)
+		}
+		if len(page1.Members) != 2 || page1.NextCursor == nil {
+			t.Fatalf("first page: %d members, cursor %v; want 2 and a cursor", len(page1.Members), page1.NextCursor)
+		}
+
+		doHandler(t, handler, request(http.MethodGet,
+			channelPath("/members")+"?cursor="+url.QueryEscape(*page1.NextCursor), "", withSessionCookie("tok")))
+		if len(gotParams) != 2 || gotParams[1].After == nil {
+			t.Fatalf("second call reached storage with %+v, want a cursor", gotParams)
+		}
+		if gotParams[1].After.Username != "zoe" || gotParams[1].After.UserID != peerUUID() {
+			t.Errorf("cursor decoded to (%q, %s), want (zoe, %s)",
+				gotParams[1].After.Username, gotParams[1].After.UserID, peerUUID())
+		}
+	})
+
+	t.Run("a non-member gets 404", func(t *testing.T) {
+		t.Parallel()
+		store := channelStore(fixtureUser(), fixtureChannel(), false)
+		rec := do(t, store, request(http.MethodGet, channelPath("/members"), "", withSessionCookie("tok")))
+		wantError(t, rec, http.StatusNotFound, "channel_not_found")
+	})
+
+	t.Run("rejects malformed paging", func(t *testing.T) {
+		t.Parallel()
+		for _, query := range []string{"?limit=0", "?limit=101", "?cursor=%21%21%21"} {
+			t.Run(query, func(t *testing.T) {
+				t.Parallel()
+				rec := do(t, memberStore(), request(http.MethodGet, channelPath("/members")+query, "", withSessionCookie("tok")))
+				wantError(t, rec, http.StatusBadRequest, "invalid_request")
+			})
+		}
+	})
+}
+
+func TestAddChannelMember(t *testing.T) {
+	t.Parallel()
+
+	t.Run("any member may invite anybody", func(t *testing.T) {
+		t.Parallel()
+		store := memberStore()
+		var gotChannel, gotUser, gotAddedBy uuid.UUID
+		store.addChannelMember = func(_ context.Context, channelID, userID, addedBy uuid.UUID) error {
+			gotChannel, gotUser, gotAddedBy = channelID, userID, addedBy
+			return nil
+		}
+
+		rec := do(t, store, request(http.MethodPost, channelPath("/members"),
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+		}
+		if gotChannel != channelUUID() || gotUser != peerUUID() || gotAddedBy != fixtureUser().ID {
+			t.Errorf("storage got (%s, %s, %s), want (channel, peer, caller)", gotChannel, gotUser, gotAddedBy)
+		}
+	})
+
+	t.Run("the new member is announced by name", func(t *testing.T) {
+		t.Parallel()
+		store := memberStore()
+		store.addChannelMember = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error { return nil }
+		var lookedUp uuid.UUID
+		store.userByID = func(_ context.Context, id uuid.UUID) (storage.User, error) {
+			lookedUp = id
+			return peerUser(), nil
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPost, channelPath("/members"),
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+		}
+		if lookedUp != peerUUID() {
+			t.Errorf("looked up %s, want the invited user", lookedUp)
+		}
+		if len(rt.memberAdded) != 1 {
+			t.Fatalf("announced %d member_added events, want 1", len(rt.memberAdded))
+		}
+		got := rt.memberAdded[0]
+		if got.channelID != channelUUID() || got.user.ID != peerUUID() || got.user.Username != "peer" {
+			t.Errorf("member_added = (%s, %s/%s), want the channel and the invited user",
+				got.channelID, got.user.ID, got.user.Username)
+		}
+	})
+
+	t.Run("the invited member is told about the channel, as they see it", func(t *testing.T) {
+		t.Parallel()
+		// ws-protocol.md §4: channel_created is what adds the sidebar row for
+		// somebody an invite just made a member. Without it an invitation was
+		// invisible to them until the next reload.
+		store := memberStore()
+		store.addChannelMember = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error { return nil }
+		store.userByID = func(context.Context, uuid.UUID) (storage.User, error) { return peerUser(), nil }
+		invitee := fixtureChannel()
+		invitee.UnreadCount, invitee.MentionCount = 0, 0
+		var scopedTo uuid.UUID
+		store.channelForUser = func(_ context.Context, _, userID uuid.UUID) (storage.Channel, error) {
+			if userID == peerUUID() {
+				scopedTo = userID
+				return invitee, nil
+			}
+			return fixtureChannel(), nil
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPost, channelPath("/members"),
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+		}
+		if scopedTo != peerUUID() {
+			t.Error("the announced row was not read for the invited user")
+		}
+		got, ok := announcementTo(rt.channelCreated, peerUUID())
+		if !ok {
+			t.Fatalf("announced %v, want a channel_created to the invited user", rt.channelCreated)
+		}
+		// The inviter's counts must not travel to the invitee: every count on
+		// a Channel is caller-scoped.
+		if got.UnreadCount != 0 || got.MentionCount != 0 {
+			t.Errorf("the invitee was told (%d, %d), want the row read for them",
+				got.UnreadCount, got.MentionCount)
+		}
+	})
+
+	t.Run("a channel read that fails costs the invitation event, not the invite", func(t *testing.T) {
+		t.Parallel()
+		store := memberStore()
+		var added bool
+		store.addChannelMember = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
+			added = true
+			return nil
+		}
+		store.userByID = func(context.Context, uuid.UUID) (storage.User, error) { return peerUser(), nil }
+		store.channelForUser = func(_ context.Context, _, userID uuid.UUID) (storage.Channel, error) {
+			if userID == peerUUID() {
+				return storage.Channel{}, errors.New("the read failed after the membership committed")
+			}
+			return fixtureChannel(), nil
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPost, channelPath("/members"),
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204 — the membership is committed (body %s)",
+				rec.Code, rec.Body.String())
+		}
+		if !added {
+			t.Error("the membership was never written")
+		}
+		if len(rt.channelCreated) != 0 {
+			t.Errorf("announced %+v with a row it could not read", rt.channelCreated)
+		}
+		// The other half of the announcement is unaffected.
+		if len(rt.memberAdded) != 1 {
+			t.Errorf("announced %d member_added events, want 1", len(rt.memberAdded))
+		}
+	})
+
+	t.Run("a lookup that fails costs the announcement, not the invite", func(t *testing.T) {
+		t.Parallel()
+		store := memberStore()
+		var added bool
+		store.addChannelMember = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
+			added = true
+			return nil
+		}
+		store.userByID = func(context.Context, uuid.UUID) (storage.User, error) {
+			return storage.User{}, errors.New("the user read failed after the membership committed")
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPost, channelPath("/members"),
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204 — the membership is committed (body %s)",
+				rec.Code, rec.Body.String())
+		}
+		if !added {
+			t.Error("the membership was never written")
+		}
+		if len(rt.memberAdded) != 0 {
+			t.Errorf("announced %+v with a user it could not name", rt.memberAdded)
+		}
+	})
+
+	t.Run("a direct message's membership is fixed: 400", func(t *testing.T) {
+		t.Parallel()
+		store := channelStore(fixtureUser(), fixtureDM(), true)
+		store.addChannelMember = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
+			return storage.ErrDMMembershipFixed
+		}
+		rec := do(t, store, request(http.MethodPost, channelPath("/members"),
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusBadRequest, "dm_membership_fixed")
+	})
+
+	t.Run("an unknown user is 404 user_not_found", func(t *testing.T) {
+		t.Parallel()
+		store := memberStore()
+		store.addChannelMember = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
+			return storage.ErrNotFound
+		}
+		rec := do(t, store, request(http.MethodPost, channelPath("/members"),
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusNotFound, "user_not_found")
+	})
+
+	t.Run("a channel that vanished mid-request is 404 channel_not_found", func(t *testing.T) {
+		t.Parallel()
+		store := memberStore()
+		store.addChannelMember = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
+			return storage.ErrChannelNotFound
+		}
+		rec := do(t, store, request(http.MethodPost, channelPath("/members"),
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusNotFound, "channel_not_found")
+	})
+
+	t.Run("a non-member cannot invite, and learns nothing", func(t *testing.T) {
+		t.Parallel()
+		// addChannelMember stays unwired: the refusal must happen first.
+		store := channelStore(fixtureUser(), fixtureChannel(), false)
+		rec := do(t, store, request(http.MethodPost, channelPath("/members"),
+			`{"user_id":"`+testPeerID+`"}`, withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusNotFound, "channel_not_found")
+	})
+
+	t.Run("rejects a missing or malformed user_id", func(t *testing.T) {
+		t.Parallel()
+		for _, body := range []string{`{}`, `{"user_id":"not-a-uuid"}`, `{`} {
+			t.Run(body, func(t *testing.T) {
+				t.Parallel()
+				rec := do(t, memberStore(), request(http.MethodPost, channelPath("/members"),
+					body, withSessionCookie("tok"), withCSRF()))
+				wantError(t, rec, http.StatusBadRequest, "invalid_request")
+			})
+		}
+	})
+}
+
+func TestRemoveChannelMember(t *testing.T) {
+	t.Parallel()
+
+	// leavePath removes the fixture user themselves; removePath removes the peer.
+	leavePath := channelPath("/members/" + fixtureUser().ID.String())
+	removePath := channelPath("/members/" + testPeerID)
+
+	t.Run("leaving is always allowed to a member", func(t *testing.T) {
+		t.Parallel()
+		// A plain member of a channel somebody else created.
+		ch := fixtureChannel()
+		ch.CreatedBy = ptr(peerUUID())
+		store := channelStore(fixtureUser(), ch, true)
+		var gotUser uuid.UUID
+		store.removeChannelMember = func(_ context.Context, _, userID uuid.UUID) error {
+			gotUser = userID
+			return nil
+		}
+		store.userByID = func(context.Context, uuid.UUID) (storage.User, error) { return fixtureUser(), nil }
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodDelete, leavePath, "", withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+		}
+		if gotUser != fixtureUser().ID {
+			t.Errorf("removed %s, want the caller", gotUser)
+		}
+		if len(rt.channelRemoved) != 1 || rt.channelRemoved[0].userID != fixtureUser().ID {
+			t.Errorf("announced %v, want ChannelRemoved to the departing user", rt.channelRemoved)
+		}
+		// The room they left still hears about it: leaving and being removed
+		// are one code path and one pair of events.
+		if len(rt.memberRemoved) != 1 || rt.memberRemoved[0].user.ID != fixtureUser().ID {
+			t.Errorf("announced %+v, want member_removed naming the departing member", rt.memberRemoved)
+		}
+	})
+
+	// Removal is two events because the audiences are disjoint
+	// (ws-protocol.md §4): the members that remain get member_removed, and
+	// the removed user — who is no longer one of them, so no
+	// membership-scoped event may reach them — gets channel_removed. The
+	// gateway resolves each audience; what the handler owes is both events,
+	// each naming the right person.
+	t.Run("removing somebody announces both halves", func(t *testing.T) {
+		t.Parallel()
+		// The fixture channel's creator is the fixture user, so the caller
+		// may remove the peer.
+		store := channelStore(fixtureUser(), fixtureChannel(), true)
+		store.removeChannelMember = func(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+		var lookedUp uuid.UUID
+		store.userByID = func(_ context.Context, id uuid.UUID) (storage.User, error) {
+			lookedUp = id
+			return peerUser(), nil
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodDelete, removePath, "", withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+		}
+		if lookedUp != peerUUID() {
+			t.Errorf("looked up %s, want the removed user", lookedUp)
+		}
+		if len(rt.memberRemoved) != 1 {
+			t.Fatalf("announced %d member_removed events, want 1", len(rt.memberRemoved))
+		}
+		got := rt.memberRemoved[0]
+		if got.channelID != channelUUID() || got.user.ID != peerUUID() || got.user.Username != "peer" {
+			t.Errorf("member_removed = (%s, %s/%s), want the channel and the removed user",
+				got.channelID, got.user.ID, got.user.Username)
+		}
+		if len(rt.channelRemoved) != 1 || rt.channelRemoved[0].userID != peerUUID() ||
+			rt.channelRemoved[0].channelID != channelUUID() {
+			t.Errorf("announced %v, want channel_removed to the removed user alone", rt.channelRemoved)
+		}
+	})
+
+	t.Run("a lookup that fails costs the announcement, not the removal", func(t *testing.T) {
+		t.Parallel()
+		store := channelStore(fixtureUser(), fixtureChannel(), true)
+		store.removeChannelMember = func(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+		store.userByID = func(context.Context, uuid.UUID) (storage.User, error) {
+			return storage.User{}, errors.New("the user read failed after the removal committed")
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodDelete, removePath, "", withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204 — the removal is committed (body %s)",
+				rec.Code, rec.Body.String())
+		}
+		if len(rt.memberRemoved) != 0 {
+			t.Errorf("announced %+v with a user it could not name", rt.memberRemoved)
+		}
+		// The departing half needs no name, so it still goes out.
+		if len(rt.channelRemoved) != 1 {
+			t.Errorf("announced %v, want channel_removed regardless of the lookup", rt.channelRemoved)
+		}
+	})
+
+	t.Run("removing somebody else needs the creator or an admin member", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			name       string
+			creator    uuid.UUID
+			admin      bool
+			wantStatus int
+			wantCode   string
+		}{
+			{"the channel's creator", fixtureUser().ID, false, http.StatusNoContent, ""},
+			{"an admin who is a member", peerUUID(), true, http.StatusNoContent, ""},
+			{"a plain member", peerUUID(), false, http.StatusForbidden, "forbidden"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+				user := fixtureUser()
+				user.IsAdmin = tt.admin
+				ch := fixtureChannel()
+				ch.CreatedBy = &tt.creator
+				store := channelStore(user, ch, true)
+				store.removeChannelMember = func(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+
+				rec := do(t, store, request(http.MethodDelete, removePath, "", withSessionCookie("tok"), withCSRF()))
+				if tt.wantCode != "" {
+					wantError(t, rec, tt.wantStatus, tt.wantCode)
+					return
+				}
+				if rec.Code != tt.wantStatus {
+					t.Fatalf("got status %d, want %d (body %s)", rec.Code, tt.wantStatus, rec.Body.String())
+				}
+			})
+		}
+	})
+
+	t.Run("an admin who is not a member gets 404, not 403", func(t *testing.T) {
+		t.Parallel()
+		admin := fixtureUser()
+		admin.IsAdmin = true
+		store := channelStore(admin, fixtureChannel(), false)
+		rec := do(t, store, request(http.MethodDelete, removePath, "", withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusNotFound, "channel_not_found")
+	})
+
+	t.Run("a direct message's membership is fixed: 400", func(t *testing.T) {
+		t.Parallel()
+		store := channelStore(fixtureUser(), fixtureDM(), true)
+		store.removeChannelMember = func(context.Context, uuid.UUID, uuid.UUID) error {
+			return storage.ErrDMMembershipFixed
+		}
+		rec := do(t, store, request(http.MethodDelete, leavePath, "", withSessionCookie("tok"), withCSRF()))
+		wantError(t, rec, http.StatusBadRequest, "dm_membership_fixed")
+	})
+
+	// The last member is refused whether they are leaving or being removed,
+	// and both answers are the same 400 last_member — the refusal is about
+	// the channel, so it cannot depend on which of the two the caller asked
+	// for. Leaving reaches it through ChannelRead, which every member holds,
+	// so the 400 is the only thing standing between the caller and an empty
+	// channel.
+	t.Run("emptying a channel is refused: 400 last_member", func(t *testing.T) {
+		t.Parallel()
+		for name, path := range map[string]string{"leaving": leavePath, "removing somebody": removePath} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				store := channelStore(fixtureUser(), fixtureChannel(), true)
+				store.removeChannelMember = func(context.Context, uuid.UUID, uuid.UUID) error {
+					return storage.ErrLastMember
+				}
+				rt := &recordingRealtime{}
+
+				rec := doRealtime(t, store, rt, request(http.MethodDelete, path, "", withSessionCookie("tok"), withCSRF()))
+				wantError(t, rec, http.StatusBadRequest, "last_member")
+
+				// Nothing happened, so nothing is announced: a member_removed
+				// event here would tell every client to drop a member who is
+				// still in the channel.
+				if len(rt.memberRemoved) != 0 || len(rt.channelRemoved) != 0 {
+					t.Errorf("announced %+v / %+v on a refused removal", rt.memberRemoved, rt.channelRemoved)
+				}
+			})
+		}
+	})
+}
+
+// ptr is the address of a value, for the optional fields of a fixture.
+func ptr[T any](v T) *T { return &v }
+
+// TestMembershipEventsAreAnnounced covers the two events that were specified,
+// implemented in the gateway, and never emitted: a sidebar cannot add or
+// remove a row for a change it is never told about.
+//
+// The audiences matter more than the payloads. member_removed is delivered on
+// the channel, where only the members who remain can receive it; the person
+// who left gets channel_removed on their own sockets instead. They are two
+// events precisely because a membership-scoped event cannot legally reach
+// somebody who is no longer a member.
+func TestMembershipEventsAreAnnounced(t *testing.T) {
+	t.Parallel()
+
+	invitee := storage.User{
+		ID:          uuid.MustParse("cccccccc-0000-4000-8000-00000000000c"),
+		Username:    "invitee",
+		DisplayName: "Invitee",
+	}
+
+	storeWithMember := func() *fakeStore {
+		store := authedStore(fixtureUser())
+		store.channelForUser = func(context.Context, uuid.UUID, uuid.UUID) (storage.Channel, error) {
+			return fixtureChannel(), nil
+		}
+		store.isChannelMember = func(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+			return true, nil
+		}
+		store.userByID = func(context.Context, uuid.UUID) (storage.User, error) {
+			return invitee, nil
+		}
+		return store
+	}
+
+	t.Run("adding a member announces member_added", func(t *testing.T) {
+		t.Parallel()
+		store := storeWithMember()
+		store.addChannelMember = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error { return nil }
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPost,
+			"/api/v1/channels/"+channelUUID().String()+"/members",
+			`{"user_id":"`+invitee.ID.String()+`"}`, withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+		}
+		if len(rt.memberAdded) != 1 {
+			t.Fatalf("announced %d MemberAdded events, want 1", len(rt.memberAdded))
+		}
+		if rt.memberAdded[0].user.ID != invitee.ID || rt.memberAdded[0].channelID != channelUUID() {
+			t.Errorf("announced %s on %s, want %s on %s",
+				rt.memberAdded[0].user.ID, rt.memberAdded[0].channelID, invitee.ID, channelUUID())
+		}
+	})
+
+	t.Run("removing somebody announces both halves to their own audiences", func(t *testing.T) {
+		t.Parallel()
+		store := storeWithMember()
+		store.removeChannelMember = func(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodDelete,
+			"/api/v1/channels/"+channelUUID().String()+"/members/"+invitee.ID.String(),
+			"", withSessionCookie("tok"), withCSRF()))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+		}
+		if len(rt.memberRemoved) != 1 {
+			t.Fatalf("announced %d MemberRemoved events, want 1", len(rt.memberRemoved))
+		}
+		if rt.memberRemoved[0].user.ID != invitee.ID {
+			t.Errorf("member_removed named %s, want %s", rt.memberRemoved[0].user.ID, invitee.ID)
+		}
+		if len(rt.channelRemoved) != 1 {
+			t.Fatalf("announced %d ChannelRemoved events, want 1", len(rt.channelRemoved))
+		}
+		if rt.channelRemoved[0].userID != invitee.ID {
+			t.Errorf("channel_removed went to %s, want the departing %s",
+				rt.channelRemoved[0].userID, invitee.ID)
+		}
+	})
+
+	t.Run("a failed lookup costs the announcement, never the write", func(t *testing.T) {
+		t.Parallel()
+		store := storeWithMember()
+		store.addChannelMember = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error { return nil }
+		store.userByID = func(context.Context, uuid.UUID) (storage.User, error) {
+			return storage.User{}, errors.New("the directory is down")
+		}
+		rt := &recordingRealtime{}
+
+		rec := doRealtime(t, store, rt, request(http.MethodPost,
+			"/api/v1/channels/"+channelUUID().String()+"/members",
+			`{"user_id":"`+invitee.ID.String()+`"}`, withSessionCookie("tok"), withCSRF()))
+
+		// The membership was stored. Announcing it is a fast path, and the
+		// socket is not the source of truth — a REST reload shows the change.
+		// Failing the request here would undo nothing and lose the write.
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("got status %d, want 204 (body %s)", rec.Code, rec.Body.String())
+		}
+		if len(rt.memberAdded) != 0 {
+			t.Errorf("announced %d MemberAdded events with no user to name, want 0", len(rt.memberAdded))
+		}
+	})
+}

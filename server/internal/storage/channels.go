@@ -31,6 +31,11 @@ var (
 	// ErrDMWithSelf reports an attempt to open a direct message with
 	// oneself.
 	ErrDMWithSelf = errors.New("storage: a direct message needs two different users")
+	// ErrLastMember reports an attempt to remove a channel's only remaining
+	// member. An empty channel is unreachable — nobody can open it and
+	// nobody can be invited back into it — so the contract refuses the
+	// removal that would produce one (code last_member).
+	ErrLastMember = errors.New("storage: a channel cannot be left with no members")
 )
 
 // ChannelKind is the flat channel taxonomy of ADR 001 — the instance is the
@@ -65,21 +70,36 @@ const (
 // scope — that zero means "nobody asked", not "nothing unread", and anything
 // serving a channel to a user must go through a caller-scoped read instead.
 //
+// DMPeer belongs to the same family and is filled by the same paths, for a
+// sharper reason: it is the *other* participant, and "other" is undefined
+// without somebody to be other than. One direct message names bob to alice
+// and alice to bob. So a caller-less read leaves it nil — a nil that means
+// "nobody asked", never "this conversation has no peer" — and so does a read
+// by somebody who is in neither half of the pair, who is owed no name at
+// all. It is nil on every named channel, which has a slug to draw instead.
+//
 // LastMessageAt needs no caller — the newest message in a channel is the same
 // fact whoever asks — so every path fills it. It is nil in an empty channel,
 // and it counts a deleted message: history keeps the row's place, so it is
 // still the last thing that happened there.
 //
-// Slug is nil exactly for a direct message, which the client labels with the
-// other participant's name instead; DMUserA and DMUserB are set exactly for
-// a direct message, canonicalized by the database as DMUserA < DMUserB so
-// one pair can only ever have one channel. CreatedBy is nil once that
-// account is gone (ON DELETE SET NULL).
+// Slug is nil exactly for a direct message, which the client labels with
+// DMPeer's name instead; DMUserA and DMUserB are set exactly for a direct
+// message, canonicalized by the database as DMUserA < DMUserB so one pair
+// can only ever have one channel. CreatedBy is nil once that account is gone
+// (ON DELETE SET NULL).
 type Channel struct {
-	ID                uuid.UUID
-	Kind              ChannelKind
-	Slug              *string
-	Topic             string
+	ID    uuid.UUID
+	Kind  ChannelKind
+	Slug  *string
+	Topic string
+	// E2EE is fixed at creation and has no update path anywhere in this
+	// package: no statement here names the column outside the two INSERTs
+	// that create a channel, which is what makes "never toggled" a property
+	// of the code rather than a rule somebody has to remember. Flipping it
+	// either way on a live conversation is the silent mode-switch the
+	// downgrade test forbids (migration 0017).
+	E2EE              bool
 	DMUserA           *uuid.UUID
 	DMUserB           *uuid.UUID
 	CreatedBy         *uuid.UUID
@@ -87,9 +107,24 @@ type Channel struct {
 	UnreadCount       int
 	MentionCount      int
 	LastReadMessageID *uuid.UUID
+	DMPeer            *DMPeer
 	LastMessageAt     *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+}
+
+// DMPeer is the other participant of a direct message: the name row a client
+// draws where a named channel draws its slug, and nothing else.
+//
+// It is deliberately not a User. The channel queries select three columns of
+// the peer, so a User here would be a User with an empty password hash, no
+// address and a false admin flag — a row that looks whole and is not. These
+// three fields are also exactly the contract's UserSummary, which is the
+// only thing about another person a channel response may ever carry.
+type DMPeer struct {
+	ID          uuid.UUID
+	Username    string
+	DisplayName string
 }
 
 // NewChannel carries the fields for creating a named channel. Validation is
@@ -98,9 +133,13 @@ type NewChannel struct {
 	// Kind must be public or private — a direct message is opened through
 	// OpenDirectMessage, which is the only path that can canonicalize its
 	// pair.
-	Kind      ChannelKind
-	Slug      string
-	Topic     string
+	Kind  ChannelKind
+	Slug  string
+	Topic string
+	// E2EE opts this channel into end-to-end encryption at birth. It is the
+	// only moment it can be decided: there is no update path, here or in the
+	// contract.
+	E2EE      bool
 	CreatedBy uuid.UUID
 }
 
@@ -138,9 +177,9 @@ type ListChannelMembersParams struct {
 // INSERT and UPDATE can do that too (INSERT INTO channels AS c).
 //
 // The head and tail exist so the two lists cannot drift apart: they differ in
-// exactly the three caller-scoped columns and nowhere else.
+// exactly the six caller-scoped columns and nowhere else.
 const (
-	channelColumnsHead = `c.id, c.kind, c.slug, c.topic, c.dm_user_a, c.dm_user_b, c.created_by,
+	channelColumnsHead = `c.id, c.kind, c.slug, c.topic, c.dm_user_a, c.dm_user_b, c.created_by, c.e2ee,
 	        (SELECT count(*) FROM channel_members mc WHERE mc.channel_id = c.id)::int, `
 
 	channelColumnsTail = `,
@@ -150,13 +189,17 @@ const (
 	// channelColumns is what a query selects when it knows who is asking. It
 	// requires the caller's user id bound as $1 and the joins in callerJoins.
 	channelColumns = channelColumnsHead +
-		`counts.unread, counts.mentions, rp.last_read_message_id` +
+		`counts.unread, counts.mentions, rp.last_read_message_id,
+	        peer.id, peer.username, peer.display_name` +
 		channelColumnsTail
 
 	// unscopedChannelColumns is what a query selects when there is no caller:
-	// literal zeros and a null, never a computed value. See ChannelByID on
+	// literal zeros and nulls, never a computed value. See ChannelByID on
 	// why they are not an answer to anything.
-	unscopedChannelColumns = channelColumnsHead + `0, 0, NULL::uuid` + channelColumnsTail
+	unscopedChannelColumns = channelColumnsHead +
+		`0, 0, NULL::uuid,
+	        NULL::uuid, NULL::text, NULL::text` +
+		channelColumnsTail
 )
 
 // callerJoins resolve everything about a channel that depends on who is
@@ -182,8 +225,21 @@ const (
 // once through message_mentions_user_id_idx instead of probing the primary
 // key once per unread message, which measures ~40x fewer buffers on a
 // channel with a thousand unread.
+//
+// The peer is the last of them, and it is a join rather than a lookup per
+// row for the reason the member count is a subquery: a sidebar with forty
+// direct messages in it must cost one query, not forty-one. The join key is
+// a CASE with no ELSE, so it is null — and the LEFT JOIN therefore finds
+// nobody — in all three cases where there is no other participant to name: a
+// named channel, whose dm columns are null; a direct message read by
+// somebody in neither half of the pair; and any row where the caller is both
+// halves, which the schema forbids. Matching on users' primary key makes it
+// one index probe per direct message on the page.
 const callerJoins = `LEFT JOIN channel_read_positions rp
 	            ON rp.channel_id = c.id AND rp.user_id = $1
+	     LEFT JOIN users peer
+	            ON peer.id = CASE WHEN c.dm_user_a = $1 THEN c.dm_user_b
+	                              WHEN c.dm_user_b = $1 THEN c.dm_user_a END
 	     LEFT JOIN LATERAL (
 	         SELECT count(*)::int AS unread,
 	                count(mn.message_id)::int AS mentions
@@ -197,11 +253,6 @@ const callerJoins = `LEFT JOIN channel_read_positions rp
 	           AND msg.deleted_at IS NULL
 	           AND msg.author_id <> $1
 	     ) counts ON true`
-
-// memberUserColumns is userColumns qualified for the joins in this file; it
-// must stay in the order scanUser expects.
-const memberUserColumns = `u.id, u.username, u.email, u.display_name, u.password_hash,
-	        u.locale, u.is_admin, u.must_change_password, u.created_at, u.updated_at`
 
 // CreateChannel inserts a public or private channel and makes its creator
 // the first member, in one transaction: a channel nobody belongs to is
@@ -220,10 +271,10 @@ func (s *Store) CreateChannel(ctx context.Context, nc NewChannel) (Channel, erro
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var id uuid.UUID
 		err := tx.QueryRow(ctx,
-			`INSERT INTO channels (kind, slug, topic, created_by)
-			 VALUES ($1, $2, $3, $4)
+			`INSERT INTO channels (kind, slug, topic, e2ee, created_by)
+			 VALUES ($1, $2, $3, $4, $5)
 			 RETURNING id`,
-			string(nc.Kind), nc.Slug, nc.Topic, nc.CreatedBy,
+			string(nc.Kind), nc.Slug, nc.Topic, nc.E2EE, nc.CreatedBy,
 		).Scan(&id)
 		if err != nil {
 			return mapChannelConflict(err)
@@ -253,12 +304,16 @@ func (s *Store) CreateChannel(ctx context.Context, nc NewChannel) (Channel, erro
 // on membership — IsChannelMember, or the authz package — before handing any
 // of it to a user; ListChannelsForUser is the scoped counterpart for lists.
 //
-// There is no caller here, so UnreadCount and MentionCount come back 0 and
-// LastReadMessageID nil — not because the channel is read, but because
-// "unread" is a question about a person and this function was not told one.
+// There is no caller here, so UnreadCount and MentionCount come back 0,
+// LastReadMessageID nil and DMPeer nil — not because the channel is read and
+// not because a direct message has nobody in it, but because "unread" and
+// "the other one" are questions about a person and this function was not
+// told one. Naming a peer here would mean picking a side of the pair at
+// random, and being right half the time is worse than being silent.
 // Anything that serves a channel to a user must read it through
-// ChannelForUser, or it will render a zero nobody computed. LastMessageAt is
-// filled: it needs no caller.
+// ChannelForUser, or it will render a zero nobody computed and a direct
+// message labelled with whoever sorted first. LastMessageAt is filled: it
+// needs no caller.
 func (s *Store) ChannelByID(ctx context.Context, id uuid.UUID) (Channel, error) {
 	ch, err := scanChannel(s.pool.QueryRow(ctx,
 		`SELECT `+unscopedChannelColumns+` FROM channels c WHERE c.id = $1`, id))
@@ -295,10 +350,11 @@ func (s *Store) ChannelForUser(ctx context.Context, channelID, userID uuid.UUID)
 // contract. A direct message has no topic to set (ErrDMHasNoTopic), and an
 // unknown channel is ErrChannelNotFound.
 //
-// The returned Channel carries no caller-scoped counts, for the reason
+// The returned Channel carries no caller-scoped fields, for the reason
 // ChannelByID gives: an update statement is not told who ran it. A handler
 // that answers with the whole channel should re-read it through
-// ChannelForUser rather than serve this row's zeros.
+// ChannelForUser rather than serve this row's zeros. DMPeer is moot here in
+// any case — a direct message has no topic, so this never returns one.
 func (s *Store) UpdateChannelTopic(ctx context.Context, id uuid.UUID, topic string) (Channel, error) {
 	kind, err := s.channelKind(ctx, id)
 	if err != nil {
@@ -388,7 +444,13 @@ func (s *Store) ListChannelsForUser(ctx context.Context, userID uuid.UUID, param
 //
 // Opening a direct message with oneself is ErrDMWithSelf; a peer who does
 // not exist is ErrNotFound.
-func (s *Store) OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID) (Channel, bool, error) {
+//
+// e2ee applies only when this call is the one that creates the channel.
+// Reopening an existing direct message returns it as it is, whatever the flag
+// says: get-or-create is idempotent, and a flag cannot re-decide a
+// conversation that already exists — which is the same rule as "fixed at
+// creation, never toggled" seen from the get-or-create side.
+func (s *Store) OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID, e2ee bool) (Channel, bool, error) {
 	if callerID == peerID {
 		return Channel{}, false, fmt.Errorf("open direct message: %w", ErrDMWithSelf)
 	}
@@ -400,11 +462,11 @@ func (s *Store) OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUI
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var id uuid.UUID
 		err := tx.QueryRow(ctx,
-			`INSERT INTO channels (kind, dm_user_a, dm_user_b, created_by)
-			 VALUES ('dm', least($1::uuid, $2::uuid), greatest($1::uuid, $2::uuid), $1)
+			`INSERT INTO channels (kind, dm_user_a, dm_user_b, e2ee, created_by)
+			 VALUES ('dm', least($1::uuid, $2::uuid), greatest($1::uuid, $2::uuid), $3, $1)
 			 ON CONFLICT (dm_user_a, dm_user_b) WHERE kind = 'dm' DO NOTHING
 			 RETURNING id`,
-			callerID, peerID,
+			callerID, peerID, e2ee,
 		).Scan(&id)
 
 		// No row back means the pair already had a channel; read it.
@@ -482,23 +544,68 @@ func (s *Store) AddChannelMember(ctx context.Context, channelID, userID, addedBy
 // for. A direct message's membership is fixed (ErrDMMembershipFixed), and an
 // unknown channel is ErrChannelNotFound.
 //
-// Whether the caller is allowed to remove this particular member, and
-// whether the channel may be left with nobody in it, are policy questions
-// for the authz layer; this method enforces the shape of the data, not the
-// rules about who may change it.
+// Who may remove this particular member stays the authz layer's question.
+// What the membership may become is this method's: removing the only
+// remaining member is ErrLastMember, refused for the caller leaving exactly
+// as for the caller removing somebody else, because an empty channel is a
+// property of the data rather than of who asked. It is enforced here because
+// nothing above storage can hold a count and a delete together, and two
+// members leaving at the same instant is precisely the case the rule exists
+// for.
+//
+// That case is also why this is a transaction with a lock in it rather than
+// a count followed by a delete. The two removals delete two different rows,
+// so under READ COMMITTED nothing brings them into conflict and both read a
+// member count of two — write skew, which only a shared lock prevents. The
+// channels row is that shared lock, and its strength is the whole design:
+// see the "# Lock order: the messaging tables" section in storage.go for why
+// it is FOR NO KEY UPDATE and why FOR UPDATE deadlocks.
 func (s *Store) RemoveChannelMember(ctx context.Context, channelID, userID uuid.UUID) error {
-	kind, err := s.channelKind(ctx, channelID)
-	if err != nil {
-		return fmt.Errorf("remove channel member: %w", err)
-	}
-	if kind == ChannelKindDM {
-		return fmt.Errorf("remove channel member: %w", ErrDMMembershipFixed)
-	}
+	// READ COMMITTED is asked for rather than inherited from the server
+	// default. The refusal below is correct because the count runs as a new
+	// statement — and so on a new snapshot — once the lock is granted; under
+	// REPEATABLE READ it would read the snapshot from before the wait and
+	// both removers would pass it.
+	err := pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
+		// One statement for three jobs: the channel exists, here is the kind
+		// the direct-message guard tests, and the row is now locked against
+		// another removal of this channel.
+		var kind ChannelKind
+		err := tx.QueryRow(ctx,
+			`SELECT kind FROM channels WHERE id = $1 FOR NO KEY UPDATE`, channelID).Scan(&kind)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrChannelNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("lock channel: %w", err)
+		}
+		if kind == ChannelKindDM {
+			return ErrDMMembershipFixed
+		}
 
-	if _, err := s.pool.Exec(ctx,
-		`DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
-		channelID, userID,
-	); err != nil {
+		// "Is this user the only member" — one question, not two. A count of
+		// one is not enough on its own: removing a non-member from a
+		// one-member channel is still the idempotent no-op it has always
+		// been, and refusing it would break that.
+		var sole bool
+		err = tx.QueryRow(ctx,
+			`SELECT count(*) = 1 AND count(*) FILTER (WHERE user_id = $2) = 1
+			 FROM channel_members WHERE channel_id = $1`,
+			channelID, userID,
+		).Scan(&sole)
+		if err != nil {
+			return fmt.Errorf("count members: %w", err)
+		}
+		if sole {
+			return ErrLastMember
+		}
+
+		_, err = tx.Exec(ctx,
+			`DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
+			channelID, userID)
+		return err
+	})
+	if err != nil {
 		return fmt.Errorf("remove channel member: %w", err)
 	}
 	return nil
@@ -593,18 +700,30 @@ func channelForUser(ctx context.Context, q rowQuerier, channelID, userID uuid.UU
 // scanChannel scans one channelColumns (or unscopedChannelColumns) row.
 // pgx.ErrNoRows becomes ErrChannelNotFound.
 func scanChannel(row pgx.Row) (Channel, error) {
-	var ch Channel
+	var (
+		ch                            Channel
+		peerID                        *uuid.UUID
+		peerUsername, peerDisplayName *string
+	)
 	err := row.Scan(
 		&ch.ID, &ch.Kind, &ch.Slug, &ch.Topic, &ch.DMUserA, &ch.DMUserB,
-		&ch.CreatedBy, &ch.MemberCount,
-		&ch.UnreadCount, &ch.MentionCount, &ch.LastReadMessageID, &ch.LastMessageAt,
-		&ch.CreatedAt, &ch.UpdatedAt,
+		&ch.CreatedBy, &ch.E2EE, &ch.MemberCount,
+		&ch.UnreadCount, &ch.MentionCount, &ch.LastReadMessageID,
+		&peerID, &peerUsername, &peerDisplayName,
+		&ch.LastMessageAt, &ch.CreatedAt, &ch.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Channel{}, ErrChannelNotFound
 	}
 	if err != nil {
 		return Channel{}, err
+	}
+	// The peer's three columns arrive together or not at all — username and
+	// display_name are NOT NULL, so the only way any of them is null is the
+	// LEFT JOIN matching nobody. All three are checked anyway rather than
+	// dereferencing two of them on the strength of that argument.
+	if peerID != nil && peerUsername != nil && peerDisplayName != nil {
+		ch.DMPeer = &DMPeer{ID: *peerID, Username: *peerUsername, DisplayName: *peerDisplayName}
 	}
 	return ch, nil
 }

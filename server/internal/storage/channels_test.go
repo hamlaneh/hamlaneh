@@ -7,8 +7,12 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
@@ -23,7 +27,7 @@ func newChannel(slug string, kind storage.ChannelKind, createdBy uuid.UUID) stor
 	}
 }
 
-func mustCreateChannel(ctx context.Context, t *testing.T, store *storage.Store, nc storage.NewChannel) storage.Channel {
+func mustCreateChannel(ctx context.Context, t *testing.T, store testdb.Store, nc storage.NewChannel) storage.Channel {
 	t.Helper()
 
 	ch, err := store.CreateChannel(ctx, nc)
@@ -33,17 +37,17 @@ func mustCreateChannel(ctx context.Context, t *testing.T, store *storage.Store, 
 	return ch
 }
 
-func mustOpenDM(ctx context.Context, t *testing.T, store *storage.Store, caller, peer uuid.UUID) storage.Channel {
+func mustOpenDM(ctx context.Context, t *testing.T, store testdb.Store, caller, peer uuid.UUID) storage.Channel {
 	t.Helper()
 
-	ch, _, err := store.OpenDirectMessage(ctx, caller, peer)
+	ch, _, err := store.OpenDirectMessage(ctx, caller, peer, false)
 	if err != nil {
 		t.Fatalf("OpenDirectMessage(%s, %s): %v", caller, peer, err)
 	}
 	return ch
 }
 
-func mustListChannels(ctx context.Context, t *testing.T, store *storage.Store, userID uuid.UUID) []storage.Channel {
+func mustListChannels(ctx context.Context, t *testing.T, store testdb.Store, userID uuid.UUID) []storage.Channel {
 	t.Helper()
 
 	channels, err := store.ListChannelsForUser(ctx, userID, storage.ListChannelsParams{Limit: 100})
@@ -53,7 +57,7 @@ func mustListChannels(ctx context.Context, t *testing.T, store *storage.Store, u
 	return channels
 }
 
-func mustListMembers(ctx context.Context, t *testing.T, store *storage.Store, channelID uuid.UUID) []storage.User {
+func mustListMembers(ctx context.Context, t *testing.T, store testdb.Store, channelID uuid.UUID) []storage.User {
 	t.Helper()
 
 	members, err := store.ListChannelMembers(ctx, channelID, storage.ListChannelMembersParams{Limit: 100})
@@ -85,7 +89,7 @@ func usernamesOf(users []storage.User) []string {
 // the sidebar actually runs, rather than a single-row read that could quietly
 // compute the counts differently.
 func sidebarChannel(
-	ctx context.Context, t *testing.T, store *storage.Store, userID, channelID uuid.UUID,
+	ctx context.Context, t *testing.T, store testdb.Store, userID, channelID uuid.UUID,
 ) storage.Channel {
 	t.Helper()
 
@@ -140,9 +144,8 @@ func assertCounts(t *testing.T, ch storage.Channel, unread, mentions int, lastRe
 func TestChannelUnreadCountsIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("countalice"))
 	bob := mustCreateUser(ctx, t, store, newUser("countbob"))
@@ -278,9 +281,8 @@ func TestChannelUnreadCountsIntegration(t *testing.T) {
 func TestChannelUnreadCountsAfterReadPositionIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("readalice"))
 	bob := mustCreateUser(ctx, t, store, newUser("readbob"))
@@ -657,7 +659,7 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 	bob := mustCreateUser(ctx, t, store, newUser("bob"))
 
 	t.Run("the first open creates the channel", func(t *testing.T) {
-		dm, created, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID)
+		dm, created, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage: %v", err)
 		}
@@ -690,12 +692,12 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 	})
 
 	t.Run("opening it again from either side returns the same channel", func(t *testing.T) {
-		first, _, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID)
+		first, _, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage(alice, bob): %v", err)
 		}
 
-		again, created, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID)
+		again, created, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage(alice, bob) again: %v", err)
 		}
@@ -706,7 +708,7 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 			t.Errorf("repeat open returned %s, want %s", again.ID, first.ID)
 		}
 
-		reversed, created, err := store.OpenDirectMessage(ctx, bob.ID, alice.ID)
+		reversed, created, err := store.OpenDirectMessage(ctx, bob.ID, alice.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage(bob, alice): %v", err)
 		}
@@ -719,14 +721,14 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 	})
 
 	t.Run("a direct message with yourself is refused", func(t *testing.T) {
-		_, _, err := store.OpenDirectMessage(ctx, alice.ID, alice.ID)
+		_, _, err := store.OpenDirectMessage(ctx, alice.ID, alice.ID, false)
 		if !errors.Is(err, storage.ErrDMWithSelf) {
 			t.Errorf("got %v, want ErrDMWithSelf", err)
 		}
 	})
 
 	t.Run("an unknown peer is ErrNotFound", func(t *testing.T) {
-		_, _, err := store.OpenDirectMessage(ctx, alice.ID, uuid.New())
+		_, _, err := store.OpenDirectMessage(ctx, alice.ID, uuid.New(), false)
 		if !errors.Is(err, storage.ErrNotFound) {
 			t.Errorf("got %v, want ErrNotFound", err)
 		}
@@ -748,6 +750,110 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 	})
 }
 
+// assertDMPeer checks that a channel names exactly one person as its direct
+// message peer.
+func assertDMPeer(t *testing.T, ch storage.Channel, want storage.User) {
+	t.Helper()
+
+	if ch.DMPeer == nil {
+		t.Fatalf("channel %s names no dm peer, want %s", ch.ID, want.Username)
+	}
+	if ch.DMPeer.ID != want.ID {
+		t.Errorf("dm peer id = %s, want %s (%s)", ch.DMPeer.ID, want.ID, want.Username)
+	}
+	if ch.DMPeer.Username != want.Username {
+		t.Errorf("dm peer username = %q, want %q", ch.DMPeer.Username, want.Username)
+	}
+	if ch.DMPeer.DisplayName != want.DisplayName {
+		t.Errorf("dm peer display name = %q, want %q", ch.DMPeer.DisplayName, want.DisplayName)
+	}
+}
+
+// TestChannelDMPeerIntegration pins what dm_peer means: the *other*
+// participant, resolved against whoever is asking. A direct message has no
+// slug, so the peer is the only label the sidebar has for it — which makes
+// "the other one" a question about the caller, and makes a caller-less read
+// unable to answer it at all.
+func TestChannelDMPeerIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, _ := testdb.New(t)
+	ctx := context.Background()
+	alice := mustCreateUser(ctx, t, store, newUser("alice"))
+	bob := mustCreateUser(ctx, t, store, newUser("bob"))
+	carol := mustCreateUser(ctx, t, store, newUser("carol"))
+	dm := mustOpenDM(ctx, t, store, alice.ID, bob.ID)
+
+	// One channel, read from both sides: the peer is whoever the caller is
+	// not, so the same row must name a different person to each of them.
+	sides := []struct{ caller, peer storage.User }{
+		{caller: alice, peer: bob},
+		{caller: bob, peer: alice},
+	}
+	for _, side := range sides {
+		t.Run(side.caller.Username+" sees "+side.peer.Username, func(t *testing.T) {
+			ch, err := store.ChannelForUser(ctx, dm.ID, side.caller.ID)
+			if err != nil {
+				t.Fatalf("ChannelForUser: %v", err)
+			}
+			assertDMPeer(t, ch, side.peer)
+		})
+	}
+
+	t.Run("the sidebar's own query carries it", func(t *testing.T) {
+		assertDMPeer(t, sidebarChannel(ctx, t, store, alice.ID, dm.ID), bob)
+	})
+
+	t.Run("opening the direct message names the peer straight away", func(t *testing.T) {
+		opened, _, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID, false)
+		if err != nil {
+			t.Fatalf("OpenDirectMessage: %v", err)
+		}
+		assertDMPeer(t, opened, bob)
+	})
+
+	t.Run("a named channel has no peer to name", func(t *testing.T) {
+		for _, kind := range []storage.ChannelKind{storage.ChannelKindPublic, storage.ChannelKindPrivate} {
+			t.Run(string(kind), func(t *testing.T) {
+				created := mustCreateChannel(ctx, t, store, newChannel("peerless-"+string(kind), kind, alice.ID))
+				if created.DMPeer != nil {
+					t.Errorf("a %s channel names %+v as its dm peer", kind, created.DMPeer)
+				}
+				if got := sidebarChannel(ctx, t, store, alice.ID, created.ID); got.DMPeer != nil {
+					t.Errorf("the sidebar row of a %s channel names %+v as its dm peer", kind, got.DMPeer)
+				}
+			})
+		}
+	})
+
+	t.Run("a caller who is not in the pair is told nothing", func(t *testing.T) {
+		// ChannelForUser applies no visibility check — membership is the
+		// authz layer's call — so this is reachable, and answering it with
+		// either half of somebody else's pair would name a person to a
+		// stranger.
+		ch, err := store.ChannelForUser(ctx, dm.ID, carol.ID)
+		if err != nil {
+			t.Fatalf("ChannelForUser: %v", err)
+		}
+		if ch.DMPeer != nil {
+			t.Errorf("dm peer = %+v for a caller who is in neither half of the pair", ch.DMPeer)
+		}
+	})
+
+	t.Run("a caller-less read names nobody", func(t *testing.T) {
+		ch, err := store.ChannelByID(ctx, dm.ID)
+		if err != nil {
+			t.Fatalf("ChannelByID: %v", err)
+		}
+		if ch.DMPeer != nil {
+			t.Errorf("dm peer = %+v although ChannelByID was told no caller", ch.DMPeer)
+		}
+		if ch.DMUserA == nil || ch.DMUserB == nil {
+			t.Error("the stored pair is missing; only the derived peer is caller-scoped")
+		}
+	})
+}
+
 // TestOpenDirectMessageConcurrentIntegration is why the insert leans on the
 // partial unique index instead of a read-then-write: several people opening
 // the same pair at once must end up with one channel, one creator, and no
@@ -755,7 +861,7 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 func TestOpenDirectMessageConcurrentIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	bob := mustCreateUser(ctx, t, store, newUser("bob"))
@@ -782,7 +888,7 @@ func TestOpenDirectMessageConcurrentIntegration(t *testing.T) {
 				caller, peer = bob.ID, alice.ID
 			}
 			<-start
-			ch, created, err := store.OpenDirectMessage(ctx, caller, peer)
+			ch, created, err := store.OpenDirectMessage(ctx, caller, peer, false)
 			outcomes[i] = outcome{channelID: ch.ID, created: created, err: err}
 		}()
 	}
@@ -808,14 +914,18 @@ func TestOpenDirectMessageConcurrentIntegration(t *testing.T) {
 		t.Errorf("the openers landed on %d distinct channels, want 1", len(ids))
 	}
 
-	pool := assertPool(ctx, t, dsn)
+	// The pair is canonicalized here rather than by least()/greatest(), which
+	// SQLite spells min()/max(): both drivers order the pair by the uuid's own
+	// bytes, and the canonical text form compares the same way.
+	low, high := alice.ID, bob.ID
+	if high.String() < low.String() {
+		low, high = high, low
+	}
 	var rows int
-	err := pool.QueryRow(ctx,
-		`SELECT count(*)::int FROM channels
-		 WHERE kind = 'dm'
-		   AND dm_user_a = least($1::uuid, $2::uuid)
-		   AND dm_user_b = greatest($1::uuid, $2::uuid)`,
-		alice.ID, bob.ID,
+	err := raw.QueryRow(ctx,
+		`SELECT count(*) FROM channels
+		 WHERE kind = 'dm' AND dm_user_a = ? AND dm_user_b = ?`,
+		low, high,
 	).Scan(&rows)
 	if err != nil {
 		t.Fatalf("count dm rows: %v", err)
@@ -961,4 +1071,302 @@ func TestChannelMembersIntegration(t *testing.T) {
 			t.Errorf("got %d members, want none", len(got))
 		}
 	})
+}
+
+// memberCount is the channel's membership as the database has it, read
+// outside any of the calls under test.
+func memberCount(ctx context.Context, t *testing.T, store testdb.Store, channelID uuid.UUID) int {
+	t.Helper()
+
+	ch, err := store.ChannelByID(ctx, channelID)
+	if err != nil {
+		t.Fatalf("ChannelByID: %v", err)
+	}
+	return ch.MemberCount
+}
+
+// TestChannelLastMemberIntegration pins the contract's last_member refusal:
+// a channel may not be emptied.
+//
+// The storage layer is not told whether somebody is leaving or being
+// removed — it is one call either way — so the rule applies to both, which
+// is what the contract says. What it must not do is refuse anything else,
+// and the trap is a bare count: a one-member channel plus a removal request
+// naming somebody who is not in it is still the idempotent no-op it has
+// always been.
+func TestChannelLastMemberIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, _ := testdb.New(t)
+	ctx := context.Background()
+	owner := mustCreateUser(ctx, t, store, newUser("owner"))
+	invitee := mustCreateUser(ctx, t, store, newUser("invitee"))
+	stranger := mustCreateUser(ctx, t, store, newUser("stranger"))
+
+	t.Run("the only member cannot be removed", func(t *testing.T) {
+		ch := mustCreateChannel(ctx, t, store, newChannel("solo", storage.ChannelKindPrivate, owner.ID))
+
+		if err := store.RemoveChannelMember(ctx, ch.ID, owner.ID); !errors.Is(err, storage.ErrLastMember) {
+			t.Errorf("got %v, want ErrLastMember", err)
+		}
+		if got := memberCount(ctx, t, store, ch.ID); got != 1 {
+			t.Errorf("the channel has %d members after the refusal, want 1", got)
+		}
+	})
+
+	t.Run("the second-to-last may go, the last may not", func(t *testing.T) {
+		ch := mustCreateChannel(ctx, t, store, newChannel("two-then-one", storage.ChannelKindPrivate, owner.ID))
+		if err := store.AddChannelMember(ctx, ch.ID, invitee.ID, owner.ID); err != nil {
+			t.Fatalf("AddChannelMember: %v", err)
+		}
+
+		if err := store.RemoveChannelMember(ctx, ch.ID, invitee.ID); err != nil {
+			t.Fatalf("removing one of two members: %v", err)
+		}
+		if got := usernamesOf(mustListMembers(ctx, t, store, ch.ID)); !slices.Equal(got, []string{"owner"}) {
+			t.Errorf("members = %v, want the survivor [owner]", got)
+		}
+		if err := store.RemoveChannelMember(ctx, ch.ID, owner.ID); !errors.Is(err, storage.ErrLastMember) {
+			t.Errorf("removing the survivor: got %v, want ErrLastMember", err)
+		}
+	})
+
+	t.Run("removing a non-member from a one-member channel is still a no-op", func(t *testing.T) {
+		ch := mustCreateChannel(ctx, t, store, newChannel("no-op", storage.ChannelKindPrivate, owner.ID))
+
+		if err := store.RemoveChannelMember(ctx, ch.ID, stranger.ID); err != nil {
+			t.Errorf("got %v, want nil — a non-member is not the last member", err)
+		}
+		if got := memberCount(ctx, t, store, ch.ID); got != 1 {
+			t.Errorf("the channel has %d members, want 1", got)
+		}
+	})
+
+	t.Run("a direct message answers on its shape, not on the count", func(t *testing.T) {
+		// Both DM participants are still in it, so the count is two and the
+		// last-member rule has nothing to say; the DM guard must still be the
+		// one that answers, and must answer before any counting.
+		dm := mustOpenDM(ctx, t, store, owner.ID, invitee.ID)
+
+		if err := store.RemoveChannelMember(ctx, dm.ID, owner.ID); !errors.Is(err, storage.ErrDMMembershipFixed) {
+			t.Errorf("got %v, want ErrDMMembershipFixed", err)
+		}
+	})
+}
+
+// TestRemoveChannelMemberConcurrentIntegration is the reason the rule needed
+// a design pass: two members of a two-member channel leaving at the same
+// instant.
+//
+// Counting and then deleting does not survive it. The two removals delete
+// two different rows, so nothing brings them into conflict — under READ
+// COMMITTED both read a member count of two, both decide they are not the
+// last, and the channel ends up empty. Exactly one of them must be refused.
+//
+// Each round is a fresh channel, and there are many rounds because a lost
+// race is a scheduling accident: one round proves little, and a hundred that
+// all leave one member behind is the claim.
+func TestRemoveChannelMemberConcurrentIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, _ := testdb.New(t)
+	ctx := context.Background()
+	alice := mustCreateUser(ctx, t, store, newUser("alice"))
+	bob := mustCreateUser(ctx, t, store, newUser("bob"))
+	leavers := [...]uuid.UUID{alice.ID, bob.ID}
+
+	const rounds = 40
+	for round := range rounds {
+		ch := mustCreateChannel(ctx, t, store,
+			newChannel(fmt.Sprintf("both-leave-%02d", round), storage.ChannelKindPrivate, alice.ID))
+		if err := store.AddChannelMember(ctx, ch.ID, bob.ID, alice.ID); err != nil {
+			t.Fatalf("round %d: AddChannelMember: %v", round, err)
+		}
+
+		errs := make([]error, len(leavers))
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i, leaver := range leavers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				errs[i] = store.RemoveChannelMember(ctx, ch.ID, leaver)
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		refused := 0
+		for i, err := range errs {
+			switch {
+			case err == nil:
+			case errors.Is(err, storage.ErrLastMember):
+				refused++
+			default:
+				t.Fatalf("round %d: leaver %d: %v", round, i, err)
+			}
+		}
+		if refused != 1 {
+			t.Fatalf("round %d: %d of %d leavers were refused, want exactly 1",
+				round, refused, len(leavers))
+		}
+		if got := memberCount(ctx, t, store, ch.ID); got != 1 {
+			t.Fatalf("round %d: the channel has %d members, want exactly 1", round, got)
+		}
+	}
+}
+
+// TestRemoveChannelMemberDoesNotBlockOnAddIntegration is the lock-strength
+// regression, and the one test here that fails if the channel lock is ever
+// strengthened to FOR UPDATE.
+//
+// It holds an AddChannelMember open at its most dangerous instant: the
+// membership row inserted, the foreign key's KEY SHARE on the channels row
+// taken, nothing committed. That is exactly the state the deadlock in the
+// old # Lock order note needed — the adder holding a channel_members row and
+// a lock on channels — and a removal that wants FOR UPDATE on that row must
+// queue behind it, because KEY SHARE and FOR UPDATE conflict.
+//
+// The removal must not queue. FOR NO KEY UPDATE does not conflict with KEY
+// SHARE, so the remover is granted the row immediately and never waits on an
+// adder at all — which is what makes a cycle between the two impossible
+// rather than merely unlikely. Under FOR UPDATE this test hangs until its
+// deadline.
+func TestRemoveChannelMemberDoesNotBlockOnAddIntegration(t *testing.T) {
+	// PostgreSQL lock STRENGTH, which is the one thing single-writer SQLite
+	// makes false by design: there the uncommitted insert below holds the only
+	// write lock, so the removal correctly waits it out (ADR 012, decision 3).
+	testdb.RequiresPostgres(t, "FOR NO KEY UPDATE does not conflict with KEY SHARE — a lock-strength property SQLite has no rows locks for")
+	t.Parallel()
+
+	store, raw := testdb.New(t)
+	ctx := context.Background()
+	owner := mustCreateUser(ctx, t, store, newUser("owner"))
+	keeper := mustCreateUser(ctx, t, store, newUser("keeper"))
+	joiner := mustCreateUser(ctx, t, store, newUser("joiner"))
+
+	ch := mustCreateChannel(ctx, t, store, newChannel("contended", storage.ChannelKindPrivate, owner.ID))
+	if err := store.AddChannelMember(ctx, ch.ID, keeper.ID, owner.ID); err != nil {
+		t.Fatalf("AddChannelMember(keeper): %v", err)
+	}
+
+	// The add, mid-flight and uncommitted. It is spelled out rather than
+	// driven through AddChannelMember because the point is to hold the locks
+	// that method takes and then stop, which a method that commits cannot do.
+	pool := assertPool(ctx, t, raw.DSN())
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the in-flight add: %v", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			t.Errorf("roll back the in-flight add: %v", err)
+		}
+	}()
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO channel_members (channel_id, user_id, added_by) VALUES ($1, $2, $3)`,
+		ch.ID, joiner.ID, owner.ID,
+	); err != nil {
+		t.Fatalf("insert the in-flight membership row: %v", err)
+	}
+
+	// Bounded, because the failure this guards against is a wait rather than
+	// an error: without the deadline a regression here hangs the suite.
+	removeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	if err := store.RemoveChannelMember(removeCtx, ch.ID, keeper.ID); err != nil {
+		t.Fatalf("the removal waited on an uncommitted add: %v", err)
+	}
+	if member, err := store.IsChannelMember(ctx, ch.ID, keeper.ID); err != nil {
+		t.Fatalf("IsChannelMember: %v", err)
+	} else if member {
+		t.Error("the removal reported success but the member is still there")
+	}
+}
+
+// TestRemoveChannelMemberAddRaceIntegration runs the same collision at
+// volume: many removals and many adds on one channel, released together,
+// round after round.
+//
+// It is the coarse net rather than the sharp one — the lock strength is
+// pinned by the test above — and it catches anything that closes a cycle
+// under contention rather than in the single hand-built interleaving. The
+// assertion is not "it did not hang": PostgreSQL breaks a deadlock itself
+// after deadlock_timeout and reports 40P01 to whichever transaction it
+// aborts, so the test fails on that error, and the context deadline catches
+// a wait that produces no error at all.
+//
+// Each round removes and re-adds the same users, so the removals and the
+// adds contend both on the channels row (every add's foreign key check) and
+// on individual channel_members rows (an add and a remove naming the same
+// person).
+func TestRemoveChannelMemberAddRaceIntegration(t *testing.T) {
+	t.Parallel()
+
+	store, _ := testdb.New(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	owner := mustCreateUser(ctx, t, store, newUser("owner"))
+	ch := mustCreateChannel(ctx, t, store, newChannel("churn", storage.ChannelKindPrivate, owner.ID))
+	// A member who never leaves, alongside the creator: no round can reach
+	// the last-member refusal, so every error below is a real one.
+	keeper := mustCreateUser(ctx, t, store, newUser("keeper"))
+	if err := store.AddChannelMember(ctx, ch.ID, keeper.ID, owner.ID); err != nil {
+		t.Fatalf("seed keeper: %v", err)
+	}
+
+	const (
+		rounds  = 25
+		churner = 4
+	)
+	churners := make([]uuid.UUID, churner)
+	for i := range churners {
+		churners[i] = mustCreateUser(ctx, t, store, newUser(fmt.Sprintf("churner-%d", i))).ID
+	}
+
+	for round := range rounds {
+		for _, id := range churners {
+			if err := store.AddChannelMember(ctx, ch.ID, id, owner.ID); err != nil {
+				t.Fatalf("round %d: reset membership: %v", round, err)
+			}
+		}
+
+		// One remover and one adder per churner, all released together: the
+		// adder is inserting the very row the remover is deleting.
+		errs := make([]error, 2*churner)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i, id := range churners {
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				<-start
+				errs[2*i] = store.RemoveChannelMember(ctx, ch.ID, id)
+			}()
+			go func() {
+				defer wg.Done()
+				<-start
+				errs[2*i+1] = store.AddChannelMember(ctx, ch.ID, id, owner.ID)
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		for i, err := range errs {
+			if err == nil {
+				continue
+			}
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.DeadlockDetected {
+				t.Fatalf("round %d, worker %d: DEADLOCK between removal and add: %v", round, i, err)
+			}
+			t.Fatalf("round %d, worker %d: %v", round, i, err)
+		}
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("round %d: the round did not finish inside the deadline: %v", round, err)
+		}
+	}
 }

@@ -169,13 +169,172 @@ guidance to create the first users), `admin-create-user` (modal open), `admin-in
 
 ---
 
-## 5. Call / meeting view — Phase 2 (do NOT design yet — listed for completeness)
+## 5. Call / meeting view — Phase 2 (**design now**; Phase 2 started 2026-08-27)
 
-Participant grid with active-speaker emphasis; screen-share layout (share large, faces rail);
-control bar: mic, camera, screen share, leave (distinct/destructive), participants, chat
-side-panel toggle; pre-join screen (camera preview, device pickers, mic/cam toggles, "Join");
-states: connecting, reconnecting, participant muted/camera-off tiles. Full brief will be
-written when Phase 2 starts.
+Architecture these screens sit on: `docs/adr/005-calls-and-meetings.md`. Read it for what is and
+is not built — several things a call UI usually has are deliberately absent, and drawing them
+would describe a product that does not exist.
+
+### Screens
+
+| Artboard | What it is |
+|---|---|
+| `call-prejoin` | The step between clicking Join and being in the room |
+| `call-grid` | Everyone in the call, nobody sharing |
+| `call-screenshare` | Somebody is sharing; faces demoted to a rail |
+| `call-banner` | The strip in a channel saying a call is happening, for people not in it |
+| `call-ring` | The 1:1 incoming-call toast |
+| `meet-guest` | The page a conference link opens for somebody with no account |
+| `call-rtl-fa` | Full Persian mirror of `call-grid` — the direction check, not a translation |
+
+### `call-prejoin`
+
+Camera preview, microphone and camera toggles, device pickers for both, and Join. This screen
+exists because joining a call with the wrong camera on is the mistake everyone makes once.
+
+It must also carry the case where permission was refused or no device exists — a person on a
+desktop with no webcam still joins, audio-only, and the screen has to say so without reading as
+an error.
+
+### `call-grid`
+
+Participant tiles with active-speaker emphasis. What a tile shows when the camera is **off** is
+the important half, because in a real call most tiles are: name, and an avatar or initials — the
+identity treatment from the chat sidebar is the obvious source, and whether it is borrowed or
+restated is the designer's call.
+
+Per-tile states: speaking, muted, camera off, connection poor, and reconnecting. Muted and
+speaking are the two a person scans for constantly, so they need to survive at the smallest tile
+size the grid produces.
+
+**Control bar:** microphone, camera, screen share, participants, and leave. Leave is
+destructive-adjacent and must not sit where a mis-click reaches it — it ends the call for the
+person clicking, not for everyone, and the difference should be unmistakable.
+
+**Not drawn, because not built** (ADR 005): no raise-hand, no reactions, no moderator controls —
+there is no channel role model to hang them on — no recording indicator, no chat panel inside the
+call (chat stays in the channel behind it), no participant count badge on a call in progress
+beyond what the banner carries.
+
+The grid must answer what happens at 2, 3, 5, and roughly 12 participants, and what it does
+beyond that. A phone-width layout is a separate question the artboard has to answer explicitly
+rather than by shrinking.
+
+### `call-screenshare`
+
+Share large, faces in a rail. Two things to decide: where the rail goes at 1280 versus at phone
+width, and what the sharer themself sees — the "you are sharing" state is the one people forget
+and then leak a window they meant to close.
+
+### `call-banner`
+
+A call is happening in this channel and the reader is not in it. It carries who is in the call
+and a way to join. It appears and disappears on live events, so it needs an entry that does not
+shove the message list.
+
+This is the only call surface a person sees without having chosen to be in a call, so it is the
+one most able to annoy.
+
+### `call-ring`
+
+Somebody is calling in a DM. Caller identity, accept, dismiss.
+
+**Deliberately thin, per ADR 005:** there is no decline-versus-busy distinction, no missed-call
+message afterwards, and no ring timeout — dismissing is dismissing the toast, and the caller
+learns nothing about why. Draw what that honestly is rather than implying a state machine behind
+it.
+
+### `meet-guest`
+
+The page a conference link opens for somebody with **no account on this instance** — the only
+unauthenticated screen in the product besides sign-in.
+
+It asks for a display name and joins. It must not look like a sign-up, and must not imply the
+visitor is getting an account, because they are not: they get one room and nothing else.
+
+Also needed: the state where the link is dead. Unknown, expired and revoked all answer
+identically and the screen cannot tell them apart — one honest sentence and a way out, in the
+shape `RedeemInviteScreen`'s unusable state already uses.
+
+### `call-rtl-fa`
+
+Full Persian mirror of `call-grid`. The control bar order, the screen-share rail side, and the
+active-speaker emphasis all have a direction; the artboard is where that is settled rather than
+guessed in CSS.
+
+**Numerals:** ASCII digits, per the locked correction of 2026-08-21 (`CHAT_HANDOFF.md`).
+Participant counts and call durations are app-generated numbers and follow it.
+
+### States every screen needs
+
+Connecting, reconnecting after a drop, and the call ending because the server restarted — ADR 005
+says a LiveKit restart ends every call, so "the call ended and it was not you" is a real state, not
+an edge case.
+
+Empty conference: a link-holder arrives before anybody else. Waiting alone in a room is a state,
+and it should not read as broken.
+
+## Key verification (Phase 3, slice 3.3 — [ADR 008](../adr/008-key-verification.md))
+
+Two surfaces, both currently unbuilt and both carrying a security meaning that the visual design
+has to keep honest rather than soften.
+
+### `verification-sheet`
+
+Per person, reached from a conversation. Shows the safety number: sixty decimal digits in twelve
+five-digit groups, identical on both people's screens, plus a QR for same-room comparison. The
+number is the whole point, so it is the largest thing on the screen and must be readable aloud
+over a phone call — grouping and spacing carry that, not decoration.
+
+Three states it must draw, and they are not interchangeable: **unverified** (a number to compare,
+no badge), **pinned** (this device recorded these keys on first sight without a ceremony — real,
+weaker, and it must not look like verified), and **verified** (the humans compared and matched).
+The visual distance between pinned and verified is a security property: a design that renders
+them alike would make an unceremonied acceptance look like a proof.
+
+**Numerals:** ASCII digits in both locales, per the locked correction — a safety number read
+aloud in Persian has to be the same string the other person sees.
+
+### `verification-changed`
+
+Replaces the composer when a member's device keys have changed since this device accepted them.
+It has to say who, and what changed — a new device, or a replaced key — because those read very
+differently to a person deciding whether to worry.
+
+Two exits, and no third: run the ceremony, or accept explicitly. The design must not offer a
+dismiss, a "not now", or anything that returns the composer without a decision — ADR 008 calls
+each of those "silently encrypt to the new key wearing a delay". Reading and receiving continue
+normally in this state, so the warning belongs where the composer was, not over the history.
+
+The prompt about **your own account** (a device was registered to you; is it yours?) is the same
+component pointed at the reader, and it is the loudest one in the slice.
+
+## Media E2EE (Phase 3, slice 3.4 — [ADR 009](../adr/009-media-e2ee.md))
+
+Three surfaces, and all three exist to make a claim precise rather than to decorate a call.
+
+### `call-encrypted-indicator`
+
+On a DM or channel call: the media is end-to-end encrypted and the server relays what it cannot
+read. What it must **not** imply is metadata protection — the SFU still sees who is in the call,
+when, and who is speaking. The design problem is that a true claim about content sitting beside
+an absent claim about metadata reads, to most people, as a claim about both.
+
+### `conference-plain-label`
+
+A conference is not end-to-end encrypted, in either mode, because a guest has no key of their
+own. The join surface has to say the server can access audio and video, and the unqualified word
+"encrypted" may not appear on it — the call still uses TLS and SRTP, and saying "encrypted"
+without saying which kind is the overclaim §2.4 forbids. The design problem is stating that
+plainly without making a working, deliberate feature look broken or second-rate.
+
+### `call-publish-blocked`
+
+The mid-call form of slice 3.3's warning: somebody's device keys changed, so this device stops
+publishing until the person decides. Its two exits are the verification ceremony's, unchanged.
+The design problem is specific to a call: the user's own camera and microphone have just stopped
+for a reason that is not an error and not a network failure, and the screen has to say so fast
+enough that they do not start debugging their hardware.
 
 ---
 

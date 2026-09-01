@@ -4,14 +4,20 @@ Hamlaneh (هم‌لانه, "shared nest") is a self-hosted team communication pl
 sharing, voice/video calls, screen share, and conferencing. One-line install, secure by default,
 100% open source (AGPL-3.0), revenue from official hosting.
 
+**Address the user by name: Amir.**
+
 **Read before any non-trivial work:**
 - `docs/PLAN.md` — master plan: vision, architecture, security plan, business model. Strategy lives there.
 - `docs/ROADMAP.md` — executable phases with test gates. Execution lives there.
 
-**Current status:** Phase 1.1 in progress. Phase 0 is complete (hardened compose stack,
-contract-first codegen, CI); slice 1.1a shipped the identity core (argon2id, rotating sessions
-with reuse detection, CSRF, authz matrix harness). Next: 1.1b (password reset, TOTP).
-`docs/OVERVIEW.md` always carries the current picture — read it, not this line, for detail.
+**Current status:** Phase 0 through Phase 2 are code-complete. Phase 3 (MLS end-to-end
+encryption) has shipped five slices and the organisation's encryption mode, and Phase 4
+(packaging) is running alongside it rather than after it. Phase 3's open half is multi-device,
+encrypted attachments, and Compliance mode's server side — and the first two are why file
+sharing, though built, is unreachable on a fresh install. Two gates are outstanding and are the
+user's to run, not code tasks: Phase 2's manual NAT drill and Phase 1's two weeks of
+daily-driving. This paragraph is a signpost and goes stale by design; `docs/OVERVIEW.md` is
+updated per slice by the Definition of Done below, so read it, not this line, for detail.
 
 ## Tech stack (decided — see "Changing a decision" below for the only way to relitigate)
 
@@ -21,16 +27,25 @@ with reuse detection, CSRF, authz matrix harness). Next: 1.1b (password reset, T
 | Database | PostgreSQL (server mode) + SQLite (home mode) — one storage interface, two drivers |
 | Real-time | WebSockets |
 | Calls/video | LiveKit (SFU) + TURN (coturn / LiveKit embedded) |
-| E2EE | MLS (RFC 9420) via audited library (OpenMLS or libsignal — final pick at Phase 3 start; **never hand-rolled crypto**) |
+| E2EE | MLS (RFC 9420) via OpenMLS, exact-pinned, `openmls_rust_crypto` provider, compiled to WASM for the browser client — the server stays MLS-blind (ADR 006; **never hand-rolled crypto**) |
 | Web frontend | React + TypeScript + Vite + Tailwind |
 | Desktop | Tauri v2 wrapping the web UI |
 | TLS/proxy | Caddy (automatic HTTPS) |
 | Packaging | Docker Compose + `install.sh` (server); single binary (home) |
 | Migrations | golang-migrate; SQL files in `server/internal/storage/migrations/NNNN_desc.{up,down}.sql`; never edit an applied migration |
 
-**SQLite timing:** the SQLite driver is Phase 4 work. Until then: design against the storage
-interface, implement and test Postgres only. Do not write SQLite code or dual-driver tests before
-Phase 4. From Phase 4 on, the full storage-interface test suite runs against both drivers in CI.
+**SQLite timing:** Phase 4 has begun, so the SQLite driver is now live work
+([ADR 012](docs/adr/012-home-mode.md)). The seam is the **consumer-side** interface —
+`httpserver.Store` and `bootstrap.Store` — not a producer-side twin in `storage`; a second
+driver satisfies those. `storage.Store` itself stays the concrete Postgres implementation and
+keeps its Postgres-specific machinery (row locks, advisory locks, `pg_trgm`, arrays), because a
+lowest-common-denominator rewrite would degrade the mode real deployments use.
+
+From Phase 4 on the storage suite runs against both drivers in CI, with one exception written
+down rather than left to a silent skip: a handful of tests assert Postgres *mechanism* (that a
+removal does not queue behind an add, citext, `information_schema` shapes) which single-writer
+SQLite makes false by design. Those carry a `requiresPostgres(t, reason)` marker and a
+checked-in allow-list that CI diffs both ways, so a skip can never appear or vanish unnoticed.
 
 **Changing a decision:** material technical decisions (including any change to this table) get a
 one-page ADR in `docs/adr/NNN-slug.md` (context, decision, consequences) plus an update to this
@@ -56,6 +71,17 @@ Filled/updated by the Phase 0 scaffold PR — keep this section current; every a
 - Go: latest stable, pinned via `toolchain` in `go.mod`. Module: `github.com/hamlaneh/hamlaneh/server`
 - Node: current LTS + npm (lockfile committed, `npm ci` in CI)
 - Server: `go build ./...` · `go test -race ./...` · `golangci-lint run` (from `server/`)
+- **Covering both storage drivers takes two commands, and neither one is the pair.** A bare
+  `go test ./...` runs **SQLite** — that is the default so the suite needs no container. The
+  PostgreSQL leg needs `HAMLANEH_TEST_DSN` pointing at a real database; setting it is what
+  selects PostgreSQL, and `HAMLANEH_TEST_DRIVER` overrides both. So running once with
+  `HAMLANEH_TEST_DRIVER=sqlite` and once without it is **SQLite twice**, and the two runs are
+  indistinguishable from the output. Write both commands down when reporting a both-driver
+  pass, or the claim cannot be checked:
+  ```
+  HAMLANEH_TEST_DRIVER=sqlite go test ./...
+  HAMLANEH_TEST_DSN='postgres://...' go test ./...
+  ```
 - Webapp: `npm run dev` · `npm test` · `npm run lint` · `npm run typecheck` · `npm run i18n:check` · `npm run e2e` (all from `webapp/`)
 - E2e drives the **real stack**: `npm run e2e` builds and starts the compose stack under its own
   project name and runs Playwright against it over HTTPS. It never touches a running instance's
@@ -159,6 +185,44 @@ pins `model: "fable"` on individual security-critical subagents (security review
 auth/crypto diffs, contract design help). The contract-first step at each slice start is
 short — a brief Fable session (or Fable subagent) followed by Opus implementation is the
 economical default.
+
+#### Fable decides and audits; Opus builds
+
+Measured over Phase 1.6: 61% of Fable tokens went to *implementation*, and that is where it
+returned least — the phase's one critical bug (a forgeable link cookie in the OIDC flow) came
+out of a Fable implementation agent and was caught by a Fable review costing a quarter as much.
+Fable's edge is judgment-dense, low-output work: read a great deal, write a page. It is not
+writing tests, running verification, or typing out a design somebody already decided.
+
+So a security-critical slice gets **at most three Fable touchpoints**, and implementation is
+not one of them:
+
+1. **Contract and design**, before any implementation agent. Output is a written decision — an
+   ADR or a contract diff — never code.
+2. **Adversarial review**, after implementation and before merge. **Read-only.**
+3. **Escalation**, only when an implementation agent reports it is stuck, or a review finding
+   needs a call that changes the design.
+
+Everything else — handlers, storage, tests, matrix rows, route policies, mocks, the webapp —
+is Opus.
+
+Three rules keep a Fable call cheap, all three learned from the ones that were:
+
+- **Never let Fable run the verification suite.** The orchestrator or an Opus agent does that.
+  A Fable agent waiting on a containerized race pass is the single most expensive idle in this
+  project.
+- **Give it a reading list, not a directory.** "Read `middleware.go`, `ratelimits.go`,
+  `errors.go`" beats "you own `server/`" by roughly 4× in tool calls.
+- **Ask falsifiable questions.** "Confirm or refute: can the gate be walked around?" produces a
+  tight answer; "review this" sprawls.
+
+**The pre-flight test:** if the orchestrator cannot write three specific, falsifiable questions
+for the Fable agent, the task is not ready for one. Not being able to name the questions means
+the orchestrator has not understood the problem yet, and sending Fable to understand it is the
+most expensive way to find out.
+
+Phase 3 (E2EE) deliberately inverts this ratio, and should: library choice, group state,
+multi-device keys and the recovery path are decisions rather than typing.
 
 ### Testing policy (non-negotiable)
 

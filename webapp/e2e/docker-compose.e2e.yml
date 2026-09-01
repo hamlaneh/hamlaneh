@@ -7,10 +7,14 @@
 # on the same machine:
 #
 #   - the published ports move off 80/443 (a developer's own stack owns those)
+#   - the media server is told its own address instead of discovering one
 #
 # Everything else — images, hardening, health checks, the internal-only data
 # network — comes from deploy/docker-compose.yml unchanged, so the suite tests
-# the shipped topology and not a test-only variant of it.
+# the shipped topology and not a test-only variant of it. In particular the
+# published port list, the read-only filesystem, the dropped capabilities, the
+# UDP mux, embedded TURN and auto-create are all inherited untouched: the
+# relay test would prove nothing about the shipped stack otherwise.
 #
 # Isolation also depends on two things the runner passes, not on this file:
 # a distinct project name (`-p hamlaneh-e2e`, which namespaces the containers
@@ -31,3 +35,57 @@ services:
     # Requires Docker Compose v2.24+.
     ports: !override
       - "${HAMLANEH_E2E_HTTPS_PORT:-8443}:443"
+
+  # The media plane, with THREE lines changed and nothing else. Every one of
+  # them is here because the shipped default is written for a public address
+  # and a test machine has none; drill 001 §"What the harness changed" is the
+  # evidence that none of them alters the property under test.
+  #
+  #   1. use_external_ip: false + node_ip — the default discovers the public
+  #      address by STUN and advertises it. Locally that is a CGNAT address no
+  #      browser can reach, and on a cloud runner it is a NAT pool address the
+  #      machine does not own. The bridge gateway is the faithful stand-in
+  #      because it IS host-owned, exactly like a VPS's public address: the
+  #      three published ports reach the container through it and the TURN
+  #      relay range does not. That asymmetry is what the relay test measures,
+  #      so this override creates the condition rather than removing it.
+  #   2. allow_restricted_peer_cidrs — LiveKit's TURN refuses to relay toward
+  #      private peer addresses. In production the SFU's own candidate is
+  #      public and permitted by default; here it is 172.31.99.x, so without
+  #      this the relay test fails on the wrong thing.
+  #
+  # LIVEKIT_CONFIG is a whole config body, so it can only be replaced, not
+  # patched. Keep the rest of it identical to deploy/docker-compose.yml.
+  livekit:
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        bind_addresses:
+          - ""
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          use_external_ip: false
+          node_ip: ${HAMLANEH_E2E_LIVEKIT_NODE_IP:?written by webapp/e2e/support/stack.ts}
+        turn:
+          enabled: true
+          udp_port: 3478
+          allow_restricted_peer_cidrs:
+            - ${HAMLANEH_E2E_EDGE_SUBNET:?written by webapp/e2e/support/stack.ts}
+        room:
+          auto_create: true
+        webhook:
+          api_key: ${HAMLANEH_LIVEKIT_API_KEY:?written by webapp/e2e/support/stack.ts}
+          urls:
+            - http://server:8080/livekit/webhook
+        logging:
+          level: info
+
+networks:
+  # Pinned so the node IP above is known before the container boots. Compose
+  # merges this into the base network's definition; the driver stays bridge.
+  edge:
+    ipam:
+      config:
+        - subnet: ${HAMLANEH_E2E_EDGE_SUBNET:?written by webapp/e2e/support/stack.ts}
+          gateway: ${HAMLANEH_E2E_LIVEKIT_NODE_IP:?written by webapp/e2e/support/stack.ts}

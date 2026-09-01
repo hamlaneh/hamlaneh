@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 
 import { api } from "../api/client";
 import { RESET_TOKEN_TTL_MINUTES } from "../auth/passwordPolicy";
+import { useRateLimitNotice } from "../auth/rateLimit";
+import type { RateLimitKeys } from "../auth/rateLimit";
 import { AuthForm } from "../components/auth/AuthForm";
 import { AuthShell } from "../components/auth/AuthShell";
 import { BackLink } from "../components/auth/BackLink";
@@ -11,6 +13,18 @@ import { PrimaryButton } from "../components/auth/PrimaryButton";
 import { TextField } from "../components/auth/TextField";
 
 type RequestError = "none" | "invalidEmail" | "rateLimited" | "networkError" | "unexpected";
+
+/**
+ * This screen's own sentence family: what it counts down is a run of link
+ * requests, not failed attempts, so it says "Too many requests" where the
+ * sign-in screen says "Too many attempts" — the counted variants have to
+ * follow the undated wording they replace.
+ */
+const RATE_LIMIT_KEYS: RateLimitKeys = {
+  undated: "resetRequest.error.rateLimited",
+  seconds: "resetRequest.error.rateLimitedSeconds",
+  minutes: "resetRequest.error.rateLimitedMinutes",
+};
 
 interface ResetRequestScreenProps {
   onBackToSignIn: () => void;
@@ -32,6 +46,15 @@ export function ResetRequestScreen({ onBackToSignIn }: ResetRequestScreenProps) 
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<RequestError>("none");
   const [submitting, setSubmitting] = useState(false);
+  const {
+    message: rateLimitMessage,
+    start: startRateLimitWait,
+    clear: clearRateLimitWait,
+  } = useRateLimitNotice(RATE_LIMIT_KEYS, () => {
+    // The stated wait has passed, so the notice goes — but only if it is
+    // still the notice on screen; a later failure of its own must stand.
+    setError((current) => (current === "rateLimited" ? "none" : current));
+  });
 
   const submit = async () => {
     if (submitting) {
@@ -43,6 +66,8 @@ export function ResetRequestScreen({ onBackToSignIn }: ResetRequestScreenProps) 
     }
     setSubmitting(true);
     setError("none");
+    // A fresh attempt supersedes whatever wait the last 429 stated.
+    clearRateLimitWait();
     try {
       const { response } = await api.POST("/api/v1/auth/reset-request", {
         body: { email: email.trim() },
@@ -51,13 +76,15 @@ export function ResetRequestScreen({ onBackToSignIn }: ResetRequestScreenProps) 
         setSent(true);
         return;
       }
-      setError(
-        response.status === 429
-          ? "rateLimited"
-          : response.status === 400
-            ? "invalidEmail"
-            : "unexpected",
-      );
+      if (response.status === 429) {
+        // The spec's RateLimited response carries the wait; reading it is the
+        // difference between telling the user when the door reopens and
+        // inventing "a few minutes".
+        startRateLimitWait(response);
+        setError("rateLimited");
+        return;
+      }
+      setError(response.status === 400 ? "invalidEmail" : "unexpected");
     } catch (requestError) {
       console.warn("Password-reset request failed:", requestError);
       setError("networkError");
@@ -87,9 +114,11 @@ export function ResetRequestScreen({ onBackToSignIn }: ResetRequestScreenProps) 
   }
 
   const formError =
-    error === "rateLimited" || error === "networkError" || error === "unexpected"
-      ? t(`resetRequest.error.${error}`)
-      : undefined;
+    error === "rateLimited"
+      ? rateLimitMessage
+      : error === "networkError" || error === "unexpected"
+        ? t(`resetRequest.error.${error}`)
+        : undefined;
 
   return (
     <AuthShell>

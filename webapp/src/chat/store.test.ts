@@ -20,6 +20,7 @@ function channel(overrides: Partial<Channel> = {}): Channel {
   return {
     id: CHANNEL_ID,
     kind: "public",
+    e2ee: false,
     slug: "deploys",
     topic: "",
     member_count: 3,
@@ -61,6 +62,10 @@ function view(state: ChatState) {
 
 function unreadCount(state: ChatState): number {
   return state.channels.find((entry) => entry.id === CHANNEL_ID)?.unread_count ?? -1;
+}
+
+function mentionCount(state: ChatState): number {
+  return state.channels.find((entry) => entry.id === CHANNEL_ID)?.mention_count ?? -1;
 }
 
 function upsert(entry: Message, created: boolean): ChatAction {
@@ -117,6 +122,54 @@ describe("message/upsert", () => {
     expect(unreadCount(removed)).toBe(1);
   });
 
+  it("raises the mention badge for a message carrying the caller's token", () => {
+    // The server counted this one when it stored the message; no event carries
+    // a fresh Channel, so a live arrival that is not read here shows as plain
+    // unread until the next reload.
+    const ping = {
+      ...message("m3", OTHER, "2026-08-21T09:03:00.000Z"),
+      content: `<@${ME.id}> can you look?`,
+    };
+    const state = reduce(
+      initialChatState,
+      { type: "channels/loaded", channels: [channel()] },
+      upsert(ping, true),
+    );
+
+    expect(mentionCount(state)).toBe(1);
+    expect(unreadCount(state)).toBe(1);
+  });
+
+  it("does not raise the mention badge for somebody else's mention", () => {
+    const elsewhere = {
+      ...message("m4", OTHER, "2026-08-21T09:04:00.000Z"),
+      content: `<@${OTHER.id}> can you look?`,
+    };
+    const state = reduce(
+      initialChatState,
+      { type: "channels/loaded", channels: [channel()] },
+      upsert(elsewhere, true),
+    );
+
+    expect(mentionCount(state)).toBe(0);
+    expect(unreadCount(state)).toBe(1);
+  });
+
+  it("counts a duplicated mention once", () => {
+    const ping = {
+      ...message("m5", OTHER, "2026-08-21T09:05:00.000Z"),
+      content: `<@${ME.id}> again`,
+    };
+    const state = reduce(
+      initialChatState,
+      { type: "channels/loaded", channels: [channel()] },
+      upsert(ping, true),
+      upsert(ping, true),
+    );
+
+    expect(mentionCount(state)).toBe(1);
+  });
+
   it("does not count the caller's own message", () => {
     const state = reduce(
       initialChatState,
@@ -138,6 +191,7 @@ describe("message/upsert", () => {
         pending: {
           clientMsgId: stored.client_msg_id,
           content: stored.content,
+          attachments: [],
           createdAt: stored.created_at,
           status: "sending",
         },
@@ -370,5 +424,28 @@ describe("read/mark", () => {
     expect(updated?.unread_count).toBe(0);
     expect(updated?.mention_count).toBe(0);
     expect(updated?.last_read_message_id).toBe("m-newest");
+  });
+});
+
+describe("a link preview arriving by message_updated", () => {
+  const plain = { ...message("m1", OTHER, "2026-08-21T09:00:00.000Z"), content: "https://x.test/a" };
+
+  it("is kept when the enrichment lands, and dropped when the edit removes the URL", () => {
+    const enriched = { ...plain, link_preview: { url: "https://x.test/a", title: "A" } };
+    const withPreview = reduce(
+      initialChatState,
+      { type: "channels/loaded", channels: [channel()] },
+      upsert(plain, true),
+      // message_updated carries the whole message, so the upsert must replace
+      // rather than merge field by field — otherwise a preview could never
+      // arrive, and an edit could never take one away.
+      upsert(enriched, false),
+    );
+    expect(view(withPreview).messages[0]?.link_preview?.title).toBe("A");
+
+    const edited = reduce(withPreview, upsert({ ...plain, content: "never mind" }, false));
+    expect(view(edited).messages[0]?.link_preview).toBeUndefined();
+    // And the enrichment did not count as a new arrival.
+    expect(unreadCount(edited)).toBe(1);
   });
 });

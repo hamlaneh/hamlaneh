@@ -33,3 +33,47 @@ regexes = [
   '''^0123456789abcdef0123456789abcdef012345678$''',
   '''^KZ4W9TQR2MHD7FJXKZ4W9TQR2MHD7FJX$''',
 ]
+
+[[allowlists]]
+description = """
+The file-URL signing-key fixture: 32 bytes of 0-9a-f counted twice over,
+shared by the filesign tests and the files-origin tests. Structurally
+impossible as a secret and wired to nothing — the servers under test are
+constructed with it in-process, and the real key is generated at install
+into an untracked .env. Value-scoped like the other fixtures: any edit to
+the value fails the scan again, which is the point."""
+regexes = [
+  '''^0123456789abcdef0123456789abcdef$''',
+]
+
+[[allowlists]]
+description = """
+Two Rust CRATE NAMES, not a credential. webapp/src-mls/Cargo.lock records \
+that several libcrux crates depend on `libcrux-secrets`, and the word \
+"secrets" makes the generic-api-key rule read that as a keyword and take the \
+NEXT dependency entry, `libcrux-sha3`, as its value. Both are package names \
+cargo resolves against crates.io. The lockfile carries no credential at all: \
+its only opaque values are `checksum` digests, which are public content \
+hashes of published crates.
+
+Scoped as narrowly as the rule engine allows — three conditions that must ALL \
+hold (condition = "AND", each half verified against gitleaks 8.30.1 by \
+flipping it and watching the finding come back):
+
+  targetRules  only generic-api-key is exempted here; every other rule
+               (private-key, github-pat, aws-*, ...) still fires in this file
+  paths        only this one lockfile
+  regexes      regexTarget = "match" against the WHOLE matched text, anchored,
+               naming both crates literally
+
+So the exemption covers exactly one two-line shape in one file under one rule. \
+A real key pasted anywhere in this lockfile — including onto the line right \
+after `libcrux-secrets` — changes the matched text and fails the scan, and so \
+does a cargo update that reorders these dependencies. Re-approving it is then \
+a deliberate act, which is the point.\
+"""
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)webapp/src-mls/Cargo\.lock$''']
+regexTarget = "match"
+regexes = ['''^libcrux-secrets",\n "libcrux-sha3"$''']

@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { daySeparatorLabel, formatTime, isolateAuto, isolateLtr } from "../../chat/format";
+import { daySeparatorLabel, formatTime } from "../../chat/format";
+import { isolateAuto, isolateLtr } from "../../i18n/bidi";
 import type { MentionResolver } from "../../chat/mentions";
 import { buildTimeline } from "../../chat/timeline";
 import type { TimelineGroup } from "../../chat/timeline";

@@ -50,10 +50,16 @@ const (
 )
 
 // routePolicy classifies one contract endpoint. action names the authz
-// action for classAdmin routes.
+// action for classAdmin routes. totpEnrollmentAllowed marks the routes a
+// session flagged totp_enrollment_required may still reach — logout,
+// reading and patching users/me, and the TOTP enrolment endpoints (ADR
+// 004); everything else answers 403 totp_enrollment_required. It is a field
+// on the policy rather than a second table so a route's whole security
+// posture is decided in one entry.
 type routePolicy struct {
-	class  routeClass
-	action authz.Action
+	class                 routeClass
+	action                authz.Action
+	totpEnrollmentAllowed bool
 }
 
 // routePolicies is the route-level security table for every contract
@@ -74,15 +80,32 @@ var routePolicies = map[string]routePolicy{
 	"GET /readyz":                       {class: classPublic},
 	"POST /api/v1/auth/login":           {class: classPublic},
 	"POST /api/v1/auth/refresh":         {class: classRefreshCookie},
-	"POST /api/v1/auth/logout":          {class: classSessionMustChangeAllowed},
+	"POST /api/v1/auth/logout":          {class: classSessionMustChangeAllowed, totpEnrollmentAllowed: true},
 	"POST /api/v1/auth/change-password": {class: classSessionMustChangeAllowed},
-	"GET /api/v1/users/me":              {class: classSessionMustChangeAllowed},
-	"GET /api/v1/instance":              {class: classPublic},
-	"POST /api/v1/auth/reset-request":   {class: classPublic},
-	"POST /api/v1/auth/reset-complete":  {class: classPublic},
-	"POST /api/v1/auth/login/totp":      {class: classChallengeCookie},
-	"GET /api/v1/admin/users":           {class: classAdmin, action: authz.AdminUsersList},
-	"POST /api/v1/admin/users":          {class: classAdmin, action: authz.AdminUsersCreate},
+	"GET /api/v1/users/me":              {class: classSessionMustChangeAllowed, totpEnrollmentAllowed: true},
+	// The patch carries locale and nothing else, so both gates admit it:
+	// somebody whose account language is wrong must not be stuck on a
+	// forced screen they cannot read with the switcher inert (contract,
+	// User.totp_enrollment_required).
+	"PATCH /api/v1/users/me":           {class: classSessionMustChangeAllowed, totpEnrollmentAllowed: true},
+	"GET /api/v1/instance":             {class: classPublic},
+	"POST /api/v1/auth/reset-request":  {class: classPublic},
+	"POST /api/v1/auth/reset-complete": {class: classPublic},
+	"POST /api/v1/auth/login/totp":     {class: classChallengeCookie},
+	"GET /api/v1/admin/users":          {class: classAdmin, action: authz.AdminUsersList},
+	"POST /api/v1/admin/users":         {class: classAdmin, action: authz.AdminUsersCreate},
+
+	// Phase 1.6 single sign-on (ADR 004 slice 2). The two flow halves are
+	// public — start is the door into authentication and the callback is a
+	// cross-site navigation that carries no session by design (the
+	// transaction cookie, not a session, is its state). The Settings pair is
+	// plain session work: neither joins the must-change trio, and neither is
+	// reachable under the totp-enrolment gate — changing how an account
+	// signs in is not enrolment.
+	"GET /api/v1/auth/oidc/start":    {class: classPublic},
+	"GET /api/v1/auth/oidc/callback": {class: classPublic},
+	"POST /api/v1/users/me/oidc":     {class: classSession},
+	"DELETE /api/v1/users/me/oidc":   {class: classSession},
 
 	// Phase 1.2 messaging surface. Every one of these carries sessionCookie
 	// in the contract, none is admin-only, and none joins the must-change
@@ -95,6 +118,7 @@ var routePolicies = map[string]routePolicy{
 	"GET /api/v1/channels/{channelId}/members":                 {class: classSession},
 	"POST /api/v1/channels/{channelId}/members":                {class: classSession},
 	"DELETE /api/v1/channels/{channelId}/members/{userId}":     {class: classSession},
+	"POST /api/v1/channels/{channelId}/files":                  {class: classSession},
 	"GET /api/v1/channels/{channelId}/messages":                {class: classSession},
 	"POST /api/v1/channels/{channelId}/messages":               {class: classSession},
 	"PATCH /api/v1/channels/{channelId}/messages/{messageId}":  {class: classSession},
@@ -103,19 +127,129 @@ var routePolicies = map[string]routePolicy{
 	"POST /api/v1/dms":                                         {class: classSession},
 	"GET /api/v1/search":                                       {class: classSession},
 
+	// Phase 2 calls (ADR 005). Both are ordinary channel-scoped session
+	// routes: the class carries no resource-level meaning, and membership is
+	// an explicit authz.Can call inside each handler. The media server's own
+	// webhook is deliberately absent — it is not a contract route, it carries
+	// no session, and it is mounted outside this middleware entirely
+	// (call_handlers.go).
+	"GET /api/v1/channels/{channelId}/call":        {class: classSession},
+	"POST /api/v1/channels/{channelId}/call/token": {class: classSession},
+
+	// Phase 2 conferences (ADR 005). The three signed-in routes are ordinary
+	// session work — making a conference needs no permission beyond a
+	// session, and who may revoke one is a resource-level authz.Can call
+	// inside the handler, because it turns on who made it.
+	//
+	// The two /meet routes are public and MUST be: a conference link is for
+	// somebody with no account on this instance, which is the feature. Being
+	// public leaks nothing — every unusable link answers one 404 on both, and
+	// a session neither helps nor hinders, exactly as on the invite pair.
+	// What keeps the door narrow is not this table but what the link buys: a
+	// ticket to one media room, no session, and no other route in this table
+	// honouring it.
+	"GET /api/v1/conferences":                   {class: classSession},
+	"POST /api/v1/conferences":                  {class: classSession},
+	"DELETE /api/v1/conferences/{conferenceId}": {class: classSession},
+	"GET /api/v1/meet/{token}":                  {class: classPublic},
+	"POST /api/v1/meet/{token}/join":            {class: classPublic},
+
+	// Phase 3 slice 1: the E2EE transport (ADR 006). Every one of the eight
+	// is ordinary session work, and neither gate lets a flagged account past:
+	// somebody who owes a password change or an enrolment fixes that before
+	// registering a device or moving a group's epoch.
+	//
+	// The class carries no resource-level meaning here either. The five
+	// channel-scoped ones are membership decisions made by an explicit
+	// authz.Can call inside the handler (mls_handlers.go), and the four under
+	// /users/me are decided by the session alone — their subject IS the
+	// session's user, and no request on them names another.
+	"POST /api/v1/users/me/mls/device":                         {class: classSession},
+	"PUT /api/v1/users/me/mls/devices/{deviceId}/key-packages": {class: classSession},
+	"GET /api/v1/users/me/mls/welcomes":                        {class: classSession},
+	"DELETE /api/v1/users/me/mls/welcomes/{welcomeId}":         {class: classSession},
+	"GET /api/v1/channels/{channelId}/mls/group":               {class: classSession},
+	"POST /api/v1/channels/{channelId}/mls/group":              {class: classSession},
+	"POST /api/v1/channels/{channelId}/mls/key-package-claims": {class: classSession},
+	"GET /api/v1/channels/{channelId}/mls/commits":             {class: classSession},
+	"POST /api/v1/channels/{channelId}/mls/commits":            {class: classSession},
+
+	// Phase 3 slice 2: the member-device directory (ADR 007). Same class as
+	// the five above and for the same reason — membership is the whole rule,
+	// asked by an explicit authz.Can inside the handler. The information is
+	// the class co-members already learn at claim time, so nothing about the
+	// gate changes because the read is the one an eviction sweep trusts.
+	"GET /api/v1/channels/{channelId}/mls/member-devices": {class: classSession},
+
+	// Phase 3 slice 5: encrypted backups (ADR 010). Four more own-account
+	// routes, decided by the session alone for the reason the four above them
+	// are — the subject IS the session's user, and the one path parameter here
+	// is scoped inside the query rather than checked beside it.
+	//
+	// Neither gate lets a flagged account past. Deregistering a lost device is
+	// the one that invites an exception, and it does not get one: an account
+	// that owes a password change is an account whose sign-in may already be
+	// somebody else's, which is a reason to finish the change first rather
+	// than a reason to hand it a directory write.
+	"PUT /api/v1/users/me/mls/backup":                {class: classSession},
+	"GET /api/v1/users/me/mls/backup":                {class: classSession},
+	"DELETE /api/v1/users/me/mls/backup":             {class: classSession},
+	"DELETE /api/v1/users/me/mls/devices/{deviceId}": {class: classSession},
+
 	// Phase 1.1b self-service security. All session-gated; none joins the
 	// must-change trio, because a user who owes a password change fixes that
 	// before touching their second factor or their device list.
-	"GET /api/v1/users/me/totp":                    {class: classSession},
-	"POST /api/v1/users/me/totp/setup":             {class: classSession},
-	"POST /api/v1/users/me/totp/verify":            {class: classSession},
-	"POST /api/v1/users/me/totp/activate":          {class: classSession},
+	//
+	// The first four are the enrolment path — status, setup, verify,
+	// activate — and stay reachable under the totp-enrolment gate: they ARE
+	// the way out of it. disable and recovery-codes are deliberately not:
+	// the gate exists to make an account grow a second factor, and neither
+	// removing one nor minting fresh sign-in codes is enrolment.
+	"GET /api/v1/users/me/totp":                    {class: classSession, totpEnrollmentAllowed: true},
+	"POST /api/v1/users/me/totp/setup":             {class: classSession, totpEnrollmentAllowed: true},
+	"POST /api/v1/users/me/totp/verify":            {class: classSession, totpEnrollmentAllowed: true},
+	"POST /api/v1/users/me/totp/activate":          {class: classSession, totpEnrollmentAllowed: true},
 	"POST /api/v1/users/me/totp/disable":           {class: classSession},
 	"POST /api/v1/users/me/totp/recovery-codes":    {class: classSession},
 	"GET /api/v1/users/me/sessions":                {class: classSession},
 	"DELETE /api/v1/users/me/sessions/{familyId}":  {class: classSession},
 	"POST /api/v1/users/me/sessions/revoke-others": {class: classSession},
 	"GET /api/v1/ws":                               {class: classSession},
+
+	// Phase 1.4 administration. Every dashboard route is classAdmin, so the
+	// admin check is made once, in one place, before any handler runs.
+	"PATCH /api/v1/admin/users/{userId}":               {class: classAdmin, action: authz.AdminUsersUpdate},
+	"POST /api/v1/admin/users/{userId}/reset-password": {class: classAdmin, action: authz.AdminUsersResetPassword},
+	"GET /api/v1/admin/invites":                        {class: classAdmin, action: authz.AdminInvitesList},
+	"POST /api/v1/admin/invites":                       {class: classAdmin, action: authz.AdminInvitesCreate},
+	"DELETE /api/v1/admin/invites/{inviteId}":          {class: classAdmin, action: authz.AdminInvitesRevoke},
+	"GET /api/v1/admin/org":                            {class: classAdmin, action: authz.AdminOrgRead},
+	"PATCH /api/v1/admin/org":                          {class: classAdmin, action: authz.AdminOrgUpdate},
+	// Phase 3: the encryption mode (ADR 011). Its own route rather than a
+	// field on the patch above, and the same instance-settings authority —
+	// changing what conversations are born as is an org-settings write.
+	"PUT /api/v1/admin/org/encryption-mode": {class: classAdmin, action: authz.AdminOrgUpdate},
+	// Read-only, and the only read in the table that is also the record of
+	// every other route above it.
+	"GET /api/v1/admin/audit": {class: classAdmin, action: authz.AdminAuditList},
+
+	// Phase 1.6 SCIM provisioning tokens (ADR 004 slice 3). These three are
+	// ordinary admin contract routes and go through every gate above. The
+	// provisioning surface they mint credentials FOR is not in this table at
+	// all: /scim/v2 is mounted outside this middleware and authenticates by
+	// bearer token alone, which is what makes a session cookie worthless
+	// there and one of these tokens worthless here (scim.md §3).
+	"GET /api/v1/admin/scim/tokens":              {class: classAdmin, action: authz.AdminScimTokensList},
+	"POST /api/v1/admin/scim/tokens":             {class: classAdmin, action: authz.AdminScimTokensCreate},
+	"DELETE /api/v1/admin/scim/tokens/{tokenId}": {class: classAdmin, action: authz.AdminScimTokensRevoke},
+
+	// The two public halves of an invitation. They must be reachable before
+	// anybody has an account — that is what an invitation is for — and they
+	// are the only routes in this table that a signed-in session neither
+	// helps nor hinders. Every unusable token answers one 404 on both, so
+	// being public leaks nothing a guesser can use.
+	"GET /api/v1/invites/{token}":  {class: classPublic},
+	"POST /api/v1/invites/{token}": {class: classPublic},
 }
 
 // principal is the authenticated caller: the user plus the session that
@@ -142,9 +276,9 @@ func principalFrom(ctx context.Context) (principal, bool) {
 
 // securityMiddleware enforces the route-level security policy on every
 // contract endpoint, in order: CSRF double-submit, session authentication,
-// the must-change-password gate, and the admin authz gate. Handlers behind
-// it receive the principal via the request context and perform only their
-// own resource-level authz.Can checks.
+// the must-change-password gate, the totp-enrolment gate, and the admin
+// authz gate. Handlers behind it receive the principal via the request
+// context and perform only their own resource-level authz.Can checks.
 //
 // The policy is looked up by the matched route pattern. A request that
 // reached a handler without one — an empty Pattern, or a pattern nobody
@@ -180,6 +314,22 @@ func (s *apiServer) securityMiddleware(next http.Handler) http.Handler {
 		if prin.user.MustChangePassword && pol.class != classSessionMustChangeAllowed {
 			writeError(w, r, http.StatusForbidden, codePasswordChangeRequired,
 				"password change required before using this endpoint")
+			return
+		}
+		// The totp-enrolment gate mirrors the must-change gate: the flag was
+		// decided ONCE, when this session was minted — the middleware only
+		// reads it off the session row, never org settings, which is what
+		// keeps "at the next sign-in, never mid-session" true (ADR 004).
+		//
+		// It yields to an active must-change gate: an account carrying both
+		// flags changes its password first (reachable above), then enrols —
+		// gating change-password here instead would deadlock the account out
+		// of both obligations. It runs before the admin check so a flagged
+		// admin is gated exactly like a flagged member.
+		if !prin.user.MustChangePassword && prin.session.TotpEnrollmentRequired &&
+			!pol.totpEnrollmentAllowed {
+			writeError(w, r, http.StatusForbidden, codeTOTPEnrollmentRequired,
+				"two-step verification must be set up before using this endpoint")
 			return
 		}
 		if pol.class == classAdmin && !authz.Can(r.Context(), &prin.user, pol.action, nil) {
@@ -254,14 +404,35 @@ func (s *apiServer) requireSession(w http.ResponseWriter, r *http.Request) (prin
 // records. It returns the address (invalid when unparseable) and a
 // non-empty rate-limit key.
 //
-// Trust model: the server sits behind Caddy on a private compose network,
-// so X-Forwarded-For is consulted ONLY when the direct peer is a private,
-// loopback, or link-local address. Caddy (v2.5+) drops client-supplied
-// X-Forwarded-For values from untrusted sources by default, so the first
-// hop of the header is the real client address as Caddy saw it. Any peer
-// reaching the server directly is identified by its own address and its
-// headers are ignored.
-func clientIP(r *http.Request) (netip.Addr, string) {
+// # Trust model
+//
+// X-Forwarded-For is a header anybody who can open a socket to this process
+// can write, so it names the client only where something is actually
+// forwarding. That is a fact about the DEPLOYMENT, and this server is told it
+// rather than guessing: WithTrustedProxy, which the compose stack sets and
+// the single binary does not (cmd/hamlaneh-server/home.go trustsForwardedFor).
+// Unset — the default, and what every test fixture and every future
+// deployment shape gets until somebody decides otherwise — the direct peer is
+// the client and the header is not read at all.
+//
+// Where the option IS set, the peer must still look like the proxy: private
+// (RFC 1918 / ULA), loopback, or link-local, the compose network Caddy lives
+// on. Caddy (v2.5+) drops client-supplied X-Forwarded-For values from
+// untrusted sources by default, so the first hop of the header is the real
+// client address as Caddy saw it.
+//
+// This deliberately does NOT infer trust from the peer's address shape alone.
+// It used to, and the inference was false in home mode: that deployment binds
+// loopback with no proxy in front of it, so every local process was a
+// "trusted proxy" and could pick its own rate-limit key for sign-in, password
+// reset, invite redemption, the SSO flow and the WebSocket connect budget,
+// plus the address written into session records and the audit log.
+//
+// Known and NOT closed by this: inside the compose network, any container
+// that can reach server:8080 still passes the address-shape check. Closing
+// that needs the proxy identified by something it holds rather than by where
+// it sits, which is a deploy-side change and an ADR, not an edit here.
+func (s *apiServer) clientIP(r *http.Request) (netip.Addr, string) {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
@@ -275,7 +446,7 @@ func clientIP(r *http.Request) (netip.Addr, string) {
 	}
 	peer = peer.Unmap()
 
-	if isTrustedProxy(peer) {
+	if s.trustProxy && isProxyShaped(peer) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			first, _, _ := strings.Cut(xff, ",")
 			if fwd, fwdErr := netip.ParseAddr(strings.TrimSpace(first)); fwdErr == nil {
@@ -287,9 +458,9 @@ func clientIP(r *http.Request) (netip.Addr, string) {
 	return peer, peer.String()
 }
 
-// isTrustedProxy reports whether the direct peer may speak for the client
-// via X-Forwarded-For: private (RFC 1918 / ULA), loopback, or link-local
-// addresses — the compose network Caddy lives on.
-func isTrustedProxy(a netip.Addr) bool {
+// isProxyShaped reports whether the direct peer sits where the reverse proxy
+// sits: private (RFC 1918 / ULA), loopback, or link-local. It is the second
+// half of the check, never the whole of it — see clientIP.
+func isProxyShaped(a netip.Addr) bool {
 	return a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast()
 }

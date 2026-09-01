@@ -87,47 +87,82 @@ type WSEntry struct {
 // WSRegistry returns the WebSocket authorization registry: one entry per row
 // of the operation table in docs/api/ws-protocol.md §10.
 //
-// Every entry is WSNotImplemented today. Phase 1.2's gateway does not exist
-// yet — GET /api/v1/ws answers 501 like the rest of the messaging surface,
-// so no frame of any kind is served and nothing enforces these rules at
-// runtime. Authz records the rule the gateway must enforce when it lands,
-// and the completeness gate keeps this list and the protocol document from
-// drifting apart in the meantime.
-//
-// When the gateway ships, each entry flips to WSEnforced and the WS security
-// suite asserts its rule per principal — non-member sockets never receiving a
+// Every entry is WSEnforced: internal/wsgateway's security suite asserts
+// each rule against a real socket — non-member sockets never receiving a
 // private channel's events, presence limited to DM peers, read positions
-// delivered only to the user's own sockets. Until then, do not read
-// WSNotImplemented as "allowed".
+// delivered only to the same user's other sockets, and the two removal
+// events reaching disjoint audiences.
+//
+// message_updated and message_deleted joined them in slice 1.2b, licensed by
+// TestEditAndDeleteEventsNeverReachANonMember and TestEditAndDeleteStopAtRemoval
+// (internal/wsgateway/delivery_test.go): the first proves a stranger's socket
+// receives neither event while a member's receives both, the second that the
+// audience is read at send time, so a user removed mid-socket stops hearing
+// them. WSEnforced means exactly that — a test asserts the rule — and it is
+// not a claim to make ahead of one.
 func WSRegistry() []WSEntry {
 	return []WSEntry{
 		// Client → server.
-		wsStub("connect", C2S, WSSession),
-		wsStub("hello", C2S, WSSession),
-		wsStub("subscribe", C2S, WSMember),
-		wsStub("unsubscribe", C2S, WSMember),
-		wsStub("typing", C2S, WSMember),
-		wsStub("presence", C2S, WSSession),
-		wsStub("ping", C2S, WSSession),
-		wsStub("pong", C2S, WSSession),
+		wsEnforced("connect", C2S, WSSession),
+		wsEnforced("hello", C2S, WSSession),
+		wsEnforced("subscribe", C2S, WSMember),
+		wsEnforced("unsubscribe", C2S, WSMember),
+		wsEnforced("typing", C2S, WSMember),
+		wsEnforced("presence", C2S, WSSession),
+		wsEnforced("ping", C2S, WSSession),
+		wsEnforced("pong", C2S, WSSession),
 
 		// Server → client.
-		wsStub("hello_ok", S2C, WSSession),
-		wsStub("subscribed", S2C, WSMember),
-		wsStub("unsubscribed", S2C, WSMember),
-		wsStub("message_created", S2C, WSMember),
-		wsStub("message_updated", S2C, WSMember),
-		wsStub("message_deleted", S2C, WSMember),
-		wsStub("channel_created", S2C, WSMember),
-		wsStub("channel_updated", S2C, WSMember),
-		wsStub("member_added", S2C, WSMember),
-		wsStub("read_position", S2C, WSSelf),
-		wsStub("typing", S2C, WSMember),
-		wsStub("presence", S2C, WSMemberDM),
-		wsStub("resync", S2C, WSMember),
-		wsStub("ping", S2C, WSSession),
-		wsStub("pong", S2C, WSSession),
-		wsStub("error", S2C, WSSession),
+		wsEnforced("hello_ok", S2C, WSSession),
+		wsEnforced("subscribed", S2C, WSMember),
+		wsEnforced("unsubscribed", S2C, WSMember),
+		wsEnforced("message_created", S2C, WSMember),
+		wsEnforced("message_updated", S2C, WSMember),
+		wsEnforced("message_deleted", S2C, WSMember),
+		wsEnforced("channel_created", S2C, WSMember),
+		wsEnforced("channel_updated", S2C, WSMember),
+		wsEnforced("member_added", S2C, WSMember),
+		// Removal is two events because the audiences are disjoint: the
+		// remaining members may hear who left; the removed user is no longer
+		// a member, so the only thing a socket of theirs may be told is that
+		// the channel is gone for them (ws-protocol.md §4).
+		wsEnforced("member_removed", S2C, WSMember),
+		wsEnforced("channel_removed", S2C, WSSelf),
+		wsEnforced("read_position", S2C, WSSelf),
+		wsEnforced("typing", S2C, WSMember),
+		wsEnforced("presence", S2C, WSMemberDM),
+		wsEnforced("resync", S2C, WSMember),
+		// The three call events (ADR 005). Membership scope, like every other
+		// channel event: a stranger to a channel must not learn that a call
+		// is happening in it, which is as much a disclosure as its messages.
+		// TestCallEventsNeverReachANonMember and TestCallEventsStopAtRemoval
+		// (internal/wsgateway/call_delivery_test.go) are what licenses
+		// WSEnforced here — the first proves a non-member's socket receives
+		// none of the three while a member's receives all three, the second
+		// that the audience is read at send time.
+		wsEnforced("call_started", S2C, WSMember),
+		wsEnforced("call_updated", S2C, WSMember),
+		wsEnforced("call_ended", S2C, WSMember),
+		// The two E2EE transport events (ADR 006). mls_commit is
+		// membership-scoped like every other channel event: a stranger must
+		// not learn that a channel's group moved, which is as much a
+		// disclosure as learning a message was sent.
+		//
+		// mls_welcome is `self` rather than `member`, and it is the one event
+		// in this table where that is not a weaker rule but the only correct
+		// one: a Welcome exists precisely because its recipient is NOT in the
+		// group yet, so a membership check would refuse the event the design
+		// depends on. It carries no payload, so the fan-out to a person's
+		// other devices reveals only that they have something to fetch.
+		//
+		// TestMlsEventsNeverReachANonMember and TestMlsWelcomeReachesOnlyItsOwnUser
+		// (internal/wsgateway/mls_delivery_test.go) are what licenses
+		// WSEnforced on both.
+		wsEnforced("mls_commit", S2C, WSMember),
+		wsEnforced("mls_welcome", S2C, WSSelf),
+		wsEnforced("ping", S2C, WSSession),
+		wsEnforced("pong", S2C, WSSession),
+		wsEnforced("error", S2C, WSSession),
 	}
 }
 
@@ -137,6 +172,16 @@ func wsStub(op string, direction WSDirection, rule WSAuthz) WSEntry {
 		Op:     WSOperation{Op: op, Direction: direction},
 		Authz:  rule,
 		Status: WSNotImplemented,
+	}
+}
+
+// wsEnforced registers an operation whose rule internal/wsgateway's security
+// suite asserts against a real socket.
+func wsEnforced(op string, direction WSDirection, rule WSAuthz) WSEntry {
+	return WSEntry{
+		Op:     WSOperation{Op: op, Direction: direction},
+		Authz:  rule,
+		Status: WSEnforced,
 	}
 }
 

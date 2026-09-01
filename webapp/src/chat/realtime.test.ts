@@ -445,6 +445,15 @@ describe("fullJitterDelay", () => {
     expect(fullJitterDelay(20, () => 1)).toBe(30_000);
     expect(fullJitterDelay(5, () => 0)).toBe(0);
   });
+
+  it("takes a caller's own base and cap", () => {
+    // The MLS retry's shape (useChat): 5 s base, 3 min cap. Doubling from the
+    // base has to reach the cap and stop there rather than overshoot it.
+    expect(fullJitterDelay(0, () => 1, 5000, 180_000)).toBe(5000);
+    expect(fullJitterDelay(3, () => 1, 5000, 180_000)).toBe(40_000);
+    expect(fullJitterDelay(6, () => 1, 5000, 180_000)).toBe(180_000);
+    expect(fullJitterDelay(99, () => 1, 5000, 180_000)).toBe(180_000);
+  });
 });
 
 describe("parseServerFrame", () => {

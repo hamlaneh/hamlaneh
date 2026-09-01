@@ -1,0 +1,336 @@
+package wsgateway
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/google/uuid"
+
+	"github.com/hamlaneh/hamlaneh/server/internal/api"
+	"github.com/hamlaneh/hamlaneh/server/internal/storage"
+)
+
+// Frame types (§3 client -> server, §4 server -> client). typing, ping and
+// pong appear in both directions.
+const (
+	typeHello        = "hello"
+	typeHelloOK      = "hello_ok"
+	typeSubscribe    = "subscribe"
+	typeSubscribed   = "subscribed"
+	typeUnsubscribe  = "unsubscribe"
+	typeUnsubscribed = "unsubscribed"
+	typeTyping       = "typing"
+	typePresence     = "presence"
+	typePing         = "ping"
+	typePong         = "pong"
+	typeResync       = "resync"
+	typeError        = "error"
+
+	typeMessageCreated = "message_created"
+	typeMessageUpdated = "message_updated"
+	typeMessageDeleted = "message_deleted"
+	typeChannelCreated = "channel_created"
+	typeChannelUpdated = "channel_updated"
+	typeChannelRemoved = "channel_removed"
+	typeMemberAdded    = "member_added"
+	typeMemberRemoved  = "member_removed"
+	typeReadPosition   = "read_position"
+
+	typeCallStarted = "call_started"
+	typeCallUpdated = "call_updated"
+	typeCallEnded   = "call_ended"
+
+	typeMlsCommit  = "mls_commit"
+	typeMlsWelcome = "mls_welcome"
+)
+
+// Close codes (§8). The 1000-range pair are the standard ones; the
+// 4400-range are this protocol's.
+const (
+	closeNormal        websocket.StatusCode = 1000
+	closeGoingAway     websocket.StatusCode = 1001
+	closeProtocolError websocket.StatusCode = 4400
+	closeUnauthorized  websocket.StatusCode = 4401
+	closeHeartbeat     websocket.StatusCode = 4408
+	closeFrameTooLarge websocket.StatusCode = 4413
+)
+
+// 4429 (rate limited) is deliberately absent, and now permanently so. The
+// connect budget lives in this package (connectbudget.go) and refuses before
+// the upgrade, where there is no socket to close and the answer is an HTTP
+// 429; the per-frame budgets keep the socket open and reply with an error
+// frame, because a subscribe-storm is a client bug rather than grounds to
+// drop a connection somebody is reading in. §8 records the same conclusion —
+// the code is reserved for a future rule that does close a socket.
+
+// Error frame codes. channel_not_found is deliberately the answer to both
+// "no such channel" and "not yours" (§3), the same non-leaking answer the
+// REST paths give — a socket must not become the one place a channel's
+// existence leaks.
+const (
+	codeChannelNotFound = "channel_not_found"
+	codeRateLimited     = "rate_limited"
+	codeInternalError   = "internal_error"
+)
+
+// Presence states (§4). offline is server-derived and a client that claims
+// it is ignored.
+const (
+	presenceOnline  = "online"
+	presenceAway    = "away"
+	presenceOffline = "offline"
+)
+
+// maxCorrelationID is the §2 bound on the client's echoed correlation id.
+const maxCorrelationID = 64
+
+// errMalformed marks a frame that must close the socket with 4400. There is
+// no partial-parse recovery: an ambiguous frame is a bug or an attack, and
+// neither deserves a best-effort interpretation (§2).
+var errMalformed = errors.New("malformed frame")
+
+// inFrame is a decoded client frame. Every field is validated by parseFrame
+// before a handler sees it.
+type inFrame struct {
+	Type string          `json:"type"`
+	ID   string          `json:"id"`
+	Chan *uuid.UUID      `json:"chan"`
+	TS   *time.Time      `json:"ts"`
+	Data json.RawMessage `json:"data"`
+}
+
+// outFrame is a server frame. Chan and Seq are pointers so they are omitted
+// from the frames that do not carry them rather than sent as zero values.
+type outFrame struct {
+	Type string     `json:"type"`
+	ID   string     `json:"id,omitempty"`
+	Chan *uuid.UUID `json:"chan,omitempty"`
+	Seq  *uint64    `json:"seq,omitempty"`
+	TS   time.Time  `json:"ts"`
+	Data any        `json:"data"`
+}
+
+// channelScoped reports whether a client operation must carry chan (§3).
+func channelScoped(frameType string) bool {
+	switch frameType {
+	case typeSubscribe, typeUnsubscribe, typeTyping:
+		return true
+	default:
+		return false
+	}
+}
+
+// parseFrame decodes and validates one client frame. Every failure it
+// reports is fatal to the socket; a frame whose only problem is an
+// unrecognised type parses fine and is ignored by the caller.
+func parseFrame(raw []byte) (inFrame, error) {
+	var f inFrame
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return inFrame{}, fmt.Errorf("%w: %w", errMalformed, err)
+	}
+	switch {
+	case f.Type == "":
+		return inFrame{}, fmt.Errorf("%w: missing type", errMalformed)
+	case f.TS == nil:
+		return inFrame{}, fmt.Errorf("%w: missing ts", errMalformed)
+	case len(f.ID) > maxCorrelationID:
+		return inFrame{}, fmt.Errorf("%w: id too long", errMalformed)
+	case !isJSONObject(f.Data):
+		return inFrame{}, fmt.Errorf("%w: data is not an object", errMalformed)
+	case channelScoped(f.Type) && f.Chan == nil:
+		return inFrame{}, fmt.Errorf("%w: %s without chan", errMalformed, f.Type)
+	}
+	return f, nil
+}
+
+// isJSONObject reports whether raw is a JSON object. data is required on
+// every frame and is never null and never a bare scalar (§2).
+func isJSONObject(raw json.RawMessage) bool {
+	trimmed := trimJSONSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == '{'
+}
+
+func trimJSONSpace(raw json.RawMessage) json.RawMessage {
+	for len(raw) > 0 {
+		switch raw[0] {
+		case ' ', '\t', '\r', '\n':
+			raw = raw[1:]
+		default:
+			return raw
+		}
+	}
+	return raw
+}
+
+// encode renders a server frame. The server's ts is authoritative and always
+// UTC (§2); data is an object even when there is nothing to carry.
+func encode(f outFrame) ([]byte, error) {
+	f.TS = f.TS.UTC()
+	if f.Data == nil {
+		f.Data = struct{}{}
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return nil, fmt.Errorf("encode %s frame: %w", f.Type, err)
+	}
+	return b, nil
+}
+
+// encodeOrLog renders a frame the gateway itself built. Every call site
+// marshals a fixed struct of scalars, uuids and times, so a failure would be
+// a programming error rather than a runtime condition; it is logged and the
+// frame is dropped rather than taking the process down or failing the write
+// that produced it.
+func encodeOrLog(f outFrame) []byte {
+	b, err := encode(f)
+	if err != nil {
+		slog.Error("ws encode frame", "type", f.Type, "error", err)
+		return nil
+	}
+	return b
+}
+
+// Payloads for the frames this gateway sends.
+
+type helloOKData struct {
+	ProtocolVersion          int             `json:"protocol_version"`
+	UserID                   uuid.UUID       `json:"user_id"`
+	SessionFamilyID          uuid.UUID       `json:"session_family_id"`
+	HeartbeatIntervalSeconds int             `json:"heartbeat_interval_seconds"`
+	MaxFrameBytes            int             `json:"max_frame_bytes"`
+	Resumed                  []resumedCursor `json:"resumed"`
+	Resync                   []uuid.UUID     `json:"resync"`
+}
+
+type resumedCursor struct {
+	Chan uuid.UUID `json:"chan"`
+	Seq  uint64    `json:"seq"`
+}
+
+type helloData struct {
+	ProtocolVersion int             `json:"protocol_version"`
+	Resume          []resumedCursor `json:"resume"`
+}
+
+type presenceData struct {
+	State string `json:"state"`
+}
+
+type errorData struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type messageData struct {
+	Message api.Message `json:"message"`
+}
+
+type channelData struct {
+	Channel api.Channel `json:"channel"`
+}
+
+type memberData struct {
+	Chan uuid.UUID       `json:"chan"`
+	User api.UserSummary `json:"user"`
+}
+
+type chanData struct {
+	Chan uuid.UUID `json:"chan"`
+}
+
+type readPositionData struct {
+	Chan      uuid.UUID `json:"chan"`
+	MessageID uuid.UUID `json:"message_id"`
+	ReadAt    time.Time `json:"read_at"`
+}
+
+type typingData struct {
+	UserID uuid.UUID `json:"user_id"`
+}
+
+type presenceEventData struct {
+	UserID uuid.UUID `json:"user_id"`
+	State  string    `json:"state"`
+}
+
+// The three call events (§4). None carries a seq: they are hints that
+// something changed, never the state itself, and a replayed one would paint a
+// banner for a call that ended five minutes ago. call_ended needs no payload
+// beyond the channel, so it reuses chanData.
+type callStartedData struct {
+	Chan         uuid.UUID             `json:"chan"`
+	StartedBy    uuid.UUID             `json:"started_by"`
+	Participants []api.CallParticipant `json:"participants"`
+}
+
+type callUpdatedData struct {
+	Chan         uuid.UUID             `json:"chan"`
+	Participants []api.CallParticipant `json:"participants"`
+}
+
+// The two E2EE transport events (§4). Neither carries a seq and neither is
+// replayed: both are notifications that something changed, and what is true
+// comes from REST — the commit log and the welcome list, both durable where
+// the replay buffer is not.
+//
+// mls_commit carries the epoch and no blob, because a commit can approach
+// 256 KiB and no frame under the 64 KiB cap could hold one. mls_welcome
+// carries nothing at all: naming the device would say which of a person's
+// devices was added, and the recipient can read that off the list it is being
+// told to fetch.
+type mlsCommitData struct {
+	Epoch int64 `json:"epoch"`
+}
+
+type mlsWelcomeData struct{}
+
+// The contract shapes an event carries. These mirror httpserver's apiMessage,
+// apiChannel and apiUserSummary; they are duplicated rather than shared
+// because those live unexported in the handler package. Any change to the
+// Message or Channel schema has to be made in both places until a slice
+// moves them somewhere both can import.
+
+// apiMessage maps a stored message onto the contract's Message.
+//
+// It delegates to api.MessageOf, the one shared mapping. This package used
+// to keep its own copy, which hard-coded an empty attachments array and knew
+// nothing about link previews — so a message with files arrived live with no
+// cards, and an enrichment announced a preview its own frame did not carry.
+func apiMessage(m storage.Message, signer api.FileURLSigner) api.Message {
+	return api.MessageOf(m, signer)
+}
+
+// apiChannel carries dm_peer for the same reason the REST mapping does: a
+// direct message has no slug, so dm_peer is the only thing that names it, and
+// a channel_created without one puts a nameless row in the recipient's
+// sidebar. It is caller-scoped, which is why every caller of this must hand
+// over a row read for the recipient of the event — see
+// httpserver.announceInvitation.
+func apiChannel(ch storage.Channel) api.Channel {
+	out := api.Channel{
+		Id:                ch.ID,
+		Kind:              api.ChannelKind(ch.Kind),
+		E2ee:              ch.E2EE,
+		Slug:              ch.Slug,
+		Topic:             ch.Topic,
+		MemberCount:       ch.MemberCount,
+		UnreadCount:       ch.UnreadCount,
+		MentionCount:      ch.MentionCount,
+		LastReadMessageId: ch.LastReadMessageID,
+		LastMessageAt:     ch.LastMessageAt,
+		CreatedBy:         ch.CreatedBy,
+		CreatedAt:         ch.CreatedAt,
+	}
+	if peer := ch.DMPeer; peer != nil {
+		out.DmPeer = &api.UserSummary{Id: peer.ID, Username: peer.Username, DisplayName: peer.DisplayName}
+	}
+	return out
+}
+
+func apiUserSummary(u storage.User) api.UserSummary {
+	return api.UserSummary{Id: u.ID, Username: u.Username, DisplayName: u.DisplayName}
+}

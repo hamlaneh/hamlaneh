@@ -7,11 +7,20 @@ import (
 
 // Budgets the external tests assert against. Mirroring the numbers in a
 // test would let the two drift silently — a weakened limit would still
-// "pass" — so the tests read the production constants themselves.
-const (
+// "pass" — so the tests read the production table itself.
+var (
 	// TotpSettingsRateLimit is the per-account budget shared by the four
 	// two-step settings endpoints.
-	TotpSettingsRateLimit = totpSettingsRateLimit
+	TotpSettingsRateLimit = budgetSpecs[budgetTotpSettings].limit
+	// SearchRateLimit is the per-account search budget.
+	SearchRateLimit = budgetSpecs[budgetSearch].limit
+	// MessageSendRateLimit is the per-account message-send budget.
+	MessageSendRateLimit = budgetSpecs[budgetMessageSend].limit
+	// ConversationWriteRateLimit is the per-account budget shared by channel
+	// creation, opening a direct message, and adding a channel member.
+	ConversationWriteRateLimit = budgetSpecs[budgetConversationWrite].limit
+	// DirectoryRateLimit is the per-account user-directory budget.
+	DirectoryRateLimit = budgetSpecs[budgetDirectory].limit
 )
 
 // ContentSecurityPolicy is the CSP this binary serves. The

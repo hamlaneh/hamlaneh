@@ -8,38 +8,22 @@ import {
   formatFileSize,
   formatResultStamp,
   formatTime,
-  isolateAuto,
-  isolateLtr,
   linkPreviewHost,
 } from "./format";
 
 /**
- * The digit-shaping split here is the artboard's, not a default: times and
- * counts are Latin in Persian, file sizes follow the locale. It is recorded as
- * an open question to the designer, so these tests pin what is drawn today and
- * will be the thing that fails when the answer changes it.
+ * Digit shaping is settled: every app-generated number is Latin in Persian.
+ * The earlier split (times and counts Latin, file sizes following the locale)
+ * was recorded as an open question; the designer's locked correction of
+ * 2026-08-21 answered it — see docs/design/CHAT_HANDOFF.md, "Numerals".
  */
 
 const NOW = new Date("2026-08-21T12:00:00.000Z");
-
-/** By code point, not literal: the isolates are invisible in source. */
-const LRI = String.fromCodePoint(0x2066);
-const FSI = String.fromCodePoint(0x2068);
-const PDI = String.fromCodePoint(0x2069);
 
 /** Everything the string has left once the ASCII digits are removed. */
 function digitsOnly(value: string): string {
   return value.replace(/\D/g, "");
 }
-
-describe("bidi isolation", () => {
-  it("wraps a value in an isolate rather than adding markup", () => {
-    // LRI ... PDI, so a slug stays an LTR run inside a Persian sentence.
-    expect(isolateLtr("#deploys")).toBe(`${LRI}#deploys${PDI}`);
-    // FSI ... PDI, so a name takes the direction of its own first letter.
-    expect(isolateAuto("Parisa")).toBe(`${FSI}Parisa${PDI}`);
-  });
-});
 
 describe("formatTime", () => {
   it("is 24-hour and zero-padded", () => {
@@ -108,18 +92,33 @@ describe("formatResultStamp", () => {
 });
 
 describe("formatFileSize", () => {
+  // The unit is now a translation key rather than a baked-in "KB": the Persian
+  // artboard writes it out as a word ("کیلوبایت"), so it cannot be a suffix.
   it("drops the fraction on bytes and on large values", () => {
-    expect(formatFileSize(248, "en")).toBe("248 B");
-    expect(formatFileSize(248 * 1024, "en")).toBe("248 KB");
-    expect(formatFileSize(Math.round(1.2 * 1024 * 1024), "en")).toBe("1.2 MB");
+    expect(formatFileSize(248, "en")).toEqual({ value: "248", unitKey: "chat.fileSize.b" });
+    expect(formatFileSize(248 * 1024, "en")).toEqual({
+      value: "248",
+      unitKey: "chat.fileSize.kb",
+    });
+    expect(formatFileSize(Math.round(1.2 * 1024 * 1024), "en")).toEqual({
+      value: "1.2",
+      unitKey: "chat.fileSize.mb",
+    });
   });
 
   it("never reports a negative size", () => {
-    expect(formatFileSize(-5, "en")).toBe("0 B");
+    expect(formatFileSize(-5, "en")).toEqual({ value: "0", unitKey: "chat.fileSize.b" });
   });
 
   it("stops climbing at the largest unit it knows", () => {
-    expect(formatFileSize(1024 ** 6, "en")).toMatch(/TB$/);
+    expect(formatFileSize(1024 ** 6, "en").unitKey).toBe("chat.fileSize.tb");
+  });
+
+  it("keeps Latin digits in Persian, like every other app-generated number", () => {
+    // Was the one formatter that followed the locale's own numbering system;
+    // the designer's locked correction (CHAT_HANDOFF.md, "Numerals") names file
+    // sizes explicitly, so it now pins `latn` like formatTime and formatCount.
+    expect(digitsOnly(formatFileSize(248 * 1024, "fa").value)).toBe("248");
   });
 });
 

@@ -29,10 +29,18 @@ var errFakeUnwired = errors.New("fakeStore: method not wired in this test")
 type fakeStore struct {
 	ready                   func(ctx context.Context) error
 	userByIdentifier        func(ctx context.Context, identifier string) (storage.User, error)
+	userByEmail             func(ctx context.Context, email string) (storage.User, error)
+	userByOidcIdentity      func(ctx context.Context, issuer, subject string) (storage.User, error)
+	linkOidcIdentity        func(ctx context.Context, userID uuid.UUID, issuer, subject string, emailAtLink *string) error
+	unlinkOidcIdentity      func(ctx context.Context, userID uuid.UUID) error
+	createOidcUser          func(ctx context.Context, nu storage.NewOidcUser) (storage.User, error)
+	createOidcLinkRequest   func(ctx context.Context, stateHash, secretHash []byte, userID uuid.UUID, ttl time.Duration) error
+	consumeOidcLinkRequest  func(ctx context.Context, stateHash, secretHash []byte) (uuid.UUID, error)
 	createUser              func(ctx context.Context, nu storage.NewUser) (storage.User, error)
 	updatePassword          func(ctx context.Context, userID uuid.UUID, hash string, keepFamilyID uuid.UUID) error
 	updatePasswordHash      func(ctx context.Context, userID uuid.UUID, hash string) error
 	listUsers               func(ctx context.Context, params storage.ListUsersParams) ([]storage.User, error)
+	listDirectory           func(ctx context.Context, params storage.ListDirectoryParams) ([]storage.User, error)
 	createSession           func(ctx context.Context, ns storage.NewSession) (storage.Session, error)
 	sessionUserByAccessHash func(ctx context.Context, accessHash []byte) (storage.Session, storage.User, error)
 	rotateSession           func(ctx context.Context, refreshHash []byte, next storage.SessionTokens) (storage.Session, storage.RotateOutcome, error)
@@ -52,6 +60,63 @@ type fakeStore struct {
 	createTotpChallenge          func(ctx context.Context, userID uuid.UUID, tokenHash []byte, ttl time.Duration) error
 	totpChallengeUserByTokenHash func(ctx context.Context, tokenHash []byte) (uuid.UUID, error)
 	completeTotpChallenge        func(ctx context.Context, att storage.TotpChallengeAttempt) (storage.User, storage.Session, storage.TotpChallengeOutcome, error)
+
+	userByID            func(ctx context.Context, id uuid.UUID) (storage.User, error)
+	updateUserProfile   func(ctx context.Context, userID uuid.UUID, upd storage.UserProfileUpdate) (storage.User, error)
+	createChannel       func(ctx context.Context, nc storage.NewChannel) (storage.Channel, error)
+	channelForUser      func(ctx context.Context, channelID, userID uuid.UUID) (storage.Channel, error)
+	updateChannelTopic  func(ctx context.Context, id uuid.UUID, topic string) (storage.Channel, error)
+	listChannelsForUser func(ctx context.Context, userID uuid.UUID, params storage.ListChannelsParams) ([]storage.Channel, error)
+	openDirectMessage   func(ctx context.Context, callerID, peerID uuid.UUID, e2ee bool) (storage.Channel, bool, error)
+	addChannelMember    func(ctx context.Context, channelID, userID, addedBy uuid.UUID) error
+	removeChannelMember func(ctx context.Context, channelID, userID uuid.UUID) error
+	listChannelMembers  func(ctx context.Context, channelID uuid.UUID, params storage.ListChannelMembersParams) ([]storage.User, error)
+	isChannelMember     func(ctx context.Context, channelID, userID uuid.UUID) (bool, error)
+	createMessage       func(ctx context.Context, nm storage.NewMessage) (storage.Message, bool, error)
+	listMessages        func(ctx context.Context, params storage.ListMessagesParams) (storage.MessagePage, error)
+	setReadPosition     func(ctx context.Context, channelID, userID, messageID uuid.UUID) error
+	createAttachment    func(ctx context.Context, na storage.NewAttachment) (storage.Attachment, error)
+
+	updateUserAdmin       func(ctx context.Context, userID uuid.UUID, upd storage.AdminUserUpdate) (storage.User, error)
+	setTemporaryPassword  func(ctx context.Context, userID uuid.UUID, hash string) (storage.User, error)
+	createInvite          func(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string, ttl time.Duration) (storage.Invite, error)
+	listOpenInvites       func(ctx context.Context, params storage.ListInvitesParams) ([]storage.Invite, error)
+	revokeInvite          func(ctx context.Context, id uuid.UUID) error
+	openInviteByTokenHash func(ctx context.Context, tokenHash []byte) (storage.Invite, error)
+	redeemInvite          func(ctx context.Context, tokenHash []byte, nu storage.NewUser) (storage.User, error)
+	orgSettings           func(ctx context.Context) (storage.OrgSettings, error)
+	updateOrgSettings     func(ctx context.Context, patch storage.OrgSettingsPatch) (storage.OrgSettings, error)
+	encryptionMode        func(ctx context.Context) (string, error)
+	setEncryptionMode     func(ctx context.Context, mode string) (storage.OrgSettings, error)
+
+	createScimToken func(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string) (storage.ScimToken, error)
+	listScimTokens  func(ctx context.Context) ([]storage.ScimToken, error)
+	revokeScimToken func(ctx context.Context, id uuid.UUID) error
+
+	createConference          func(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, title string, expiresAt *time.Time) (storage.Conference, error)
+	listConferences           func(ctx context.Context, ownerID uuid.UUID, all bool) ([]storage.Conference, error)
+	conferenceByID            func(ctx context.Context, id uuid.UUID) (storage.Conference, error)
+	revokeConference          func(ctx context.Context, id uuid.UUID) error
+	liveConferenceByTokenHash func(ctx context.Context, tokenHash []byte) (storage.Conference, error)
+
+	appendAuditEntry func(ctx context.Context, e storage.AuditEntry, seal func(storage.AuditEntry) []byte) (storage.AuditEntry, error)
+	listAuditEntries func(ctx context.Context, params storage.ListAuditParams) ([]storage.AuditEntry, error)
+
+	registerMlsDevice     func(ctx context.Context, userID uuid.UUID, signatureKey []byte) (storage.MlsDevice, bool, error)
+	replaceMlsKeyPackages func(ctx context.Context, userID, deviceID uuid.UUID, packages [][]byte) (int, error)
+	mlsGroupByChannel     func(ctx context.Context, channelID uuid.UUID) (storage.MlsGroup, error)
+	createMlsGroup        func(ctx context.Context, channelID uuid.UUID, groupID []byte) (storage.MlsGroup, error)
+	claimMlsKeyPackages   func(ctx context.Context, channelID, targetUserID uuid.UUID) ([]storage.MlsKeyPackageClaim, []uuid.UUID, error)
+	listMlsMemberDevices  func(ctx context.Context, channelID uuid.UUID, after *uuid.UUID, limit int) ([]storage.MlsMemberDevice, error)
+	submitMlsCommit       func(ctx context.Context, nc storage.NewMlsCommit) (storage.MlsCommitOutcome, error)
+	listMlsCommits        func(ctx context.Context, channelID uuid.UUID, afterEpoch int64, limit int) ([]storage.MlsCommit, error)
+	listMlsWelcomes       func(ctx context.Context, userID uuid.UUID) ([]storage.MlsWelcome, error)
+	deleteMlsWelcome      func(ctx context.Context, userID, welcomeID uuid.UUID) error
+
+	putMlsBackup        func(ctx context.Context, userID uuid.UUID, envelope []byte, counter int64) error
+	mlsBackupByUser     func(ctx context.Context, userID uuid.UUID) (storage.MlsBackup, error)
+	deleteMlsBackup     func(ctx context.Context, userID uuid.UUID) error
+	deregisterMlsDevice func(ctx context.Context, userID, deviceID uuid.UUID) error
 }
 
 var _ httpserver.Store = (*fakeStore)(nil)
@@ -68,6 +133,55 @@ func (f *fakeStore) UserByIdentifier(ctx context.Context, identifier string) (st
 		return storage.User{}, errFakeUnwired
 	}
 	return f.userByIdentifier(ctx, identifier)
+}
+
+func (f *fakeStore) UserByEmail(ctx context.Context, email string) (storage.User, error) {
+	if f.userByEmail == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.userByEmail(ctx, email)
+}
+
+func (f *fakeStore) UserByOidcIdentity(ctx context.Context, issuer, subject string) (storage.User, error) {
+	if f.userByOidcIdentity == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.userByOidcIdentity(ctx, issuer, subject)
+}
+
+func (f *fakeStore) LinkOidcIdentity(ctx context.Context, userID uuid.UUID, issuer, subject string, emailAtLink *string) error {
+	if f.linkOidcIdentity == nil {
+		return errFakeUnwired
+	}
+	return f.linkOidcIdentity(ctx, userID, issuer, subject, emailAtLink)
+}
+
+func (f *fakeStore) UnlinkOidcIdentity(ctx context.Context, userID uuid.UUID) error {
+	if f.unlinkOidcIdentity == nil {
+		return errFakeUnwired
+	}
+	return f.unlinkOidcIdentity(ctx, userID)
+}
+
+func (f *fakeStore) CreateOidcUser(ctx context.Context, nu storage.NewOidcUser) (storage.User, error) {
+	if f.createOidcUser == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.createOidcUser(ctx, nu)
+}
+
+func (f *fakeStore) CreateOidcLinkRequest(ctx context.Context, stateHash, secretHash []byte, userID uuid.UUID, ttl time.Duration) error {
+	if f.createOidcLinkRequest == nil {
+		return errFakeUnwired
+	}
+	return f.createOidcLinkRequest(ctx, stateHash, secretHash, userID, ttl)
+}
+
+func (f *fakeStore) ConsumeOidcLinkRequest(ctx context.Context, stateHash, secretHash []byte) (uuid.UUID, error) {
+	if f.consumeOidcLinkRequest == nil {
+		return uuid.Nil, errFakeUnwired
+	}
+	return f.consumeOidcLinkRequest(ctx, stateHash, secretHash)
 }
 
 func (f *fakeStore) CreateUser(ctx context.Context, nu storage.NewUser) (storage.User, error) {
@@ -96,6 +210,13 @@ func (f *fakeStore) ListUsers(ctx context.Context, params storage.ListUsersParam
 		return nil, errFakeUnwired
 	}
 	return f.listUsers(ctx, params)
+}
+
+func (f *fakeStore) ListDirectory(ctx context.Context, params storage.ListDirectoryParams) ([]storage.User, error) {
+	if f.listDirectory == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listDirectory(ctx, params)
 }
 
 func (f *fakeStore) CreateSession(ctx context.Context, ns storage.NewSession) (storage.Session, error) {
@@ -237,7 +358,10 @@ var fixtureHash = sync.OnceValue(func() string {
 	return password.Hash(fixturePassword)
 })
 
-// fixtureUser is a member account with the fixture password.
+// fixtureUser is an active member account with the fixture password.
+// IsActive is set because that is what an account is: login refuses a
+// deactivated one, so a fixture without it would fail every sign-in test for
+// a reason none of them is about.
 func fixtureUser() storage.User {
 	return storage.User{
 		ID:           uuid.MustParse("11111111-1111-1111-1111-111111111111"),
@@ -245,6 +369,7 @@ func fixtureUser() storage.User {
 		DisplayName:  "Member",
 		PasswordHash: fixtureHash(),
 		Locale:       "en",
+		IsActive:     true,
 	}
 }
 
@@ -392,4 +517,368 @@ func assertIdentical(t *testing.T, what string, a, b *httptest.ResponseRecorder)
 			}
 		}
 	}
+}
+
+func (f *fakeStore) CreateChannel(ctx context.Context, nc storage.NewChannel) (storage.Channel, error) {
+	if f.createChannel == nil {
+		return storage.Channel{}, errFakeUnwired
+	}
+	return f.createChannel(ctx, nc)
+}
+
+func (f *fakeStore) ChannelForUser(ctx context.Context, channelID, userID uuid.UUID) (storage.Channel, error) {
+	if f.channelForUser == nil {
+		return storage.Channel{}, errFakeUnwired
+	}
+	return f.channelForUser(ctx, channelID, userID)
+}
+
+func (f *fakeStore) UpdateChannelTopic(ctx context.Context, id uuid.UUID, topic string) (storage.Channel, error) {
+	if f.updateChannelTopic == nil {
+		return storage.Channel{}, errFakeUnwired
+	}
+	return f.updateChannelTopic(ctx, id, topic)
+}
+
+func (f *fakeStore) ListChannelsForUser(ctx context.Context, userID uuid.UUID, params storage.ListChannelsParams) ([]storage.Channel, error) {
+	if f.listChannelsForUser == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listChannelsForUser(ctx, userID, params)
+}
+
+func (f *fakeStore) OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID, e2ee bool) (storage.Channel, bool, error) {
+	if f.openDirectMessage == nil {
+		return storage.Channel{}, false, errFakeUnwired
+	}
+	return f.openDirectMessage(ctx, callerID, peerID, e2ee)
+}
+
+func (f *fakeStore) AddChannelMember(ctx context.Context, channelID, userID, addedBy uuid.UUID) error {
+	if f.addChannelMember == nil {
+		return errFakeUnwired
+	}
+	return f.addChannelMember(ctx, channelID, userID, addedBy)
+}
+
+func (f *fakeStore) RemoveChannelMember(ctx context.Context, channelID, userID uuid.UUID) error {
+	if f.removeChannelMember == nil {
+		return errFakeUnwired
+	}
+	return f.removeChannelMember(ctx, channelID, userID)
+}
+
+func (f *fakeStore) ListChannelMembers(ctx context.Context, channelID uuid.UUID, params storage.ListChannelMembersParams) ([]storage.User, error) {
+	if f.listChannelMembers == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listChannelMembers(ctx, channelID, params)
+}
+
+func (f *fakeStore) IsChannelMember(ctx context.Context, channelID, userID uuid.UUID) (bool, error) {
+	if f.isChannelMember == nil {
+		return false, errFakeUnwired
+	}
+	return f.isChannelMember(ctx, channelID, userID)
+}
+
+func (f *fakeStore) CreateMessage(ctx context.Context, nm storage.NewMessage) (storage.Message, bool, error) {
+	if f.createMessage == nil {
+		return storage.Message{}, false, errFakeUnwired
+	}
+	return f.createMessage(ctx, nm)
+}
+
+func (f *fakeStore) ListMessages(ctx context.Context, params storage.ListMessagesParams) (storage.MessagePage, error) {
+	if f.listMessages == nil {
+		return storage.MessagePage{}, errFakeUnwired
+	}
+	return f.listMessages(ctx, params)
+}
+
+func (f *fakeStore) SetReadPosition(ctx context.Context, channelID, userID, messageID uuid.UUID) error {
+	if f.setReadPosition == nil {
+		return errFakeUnwired
+	}
+	return f.setReadPosition(ctx, channelID, userID, messageID)
+}
+
+func (f *fakeStore) CreateAttachment(ctx context.Context, na storage.NewAttachment) (storage.Attachment, error) {
+	if f.createAttachment == nil {
+		return storage.Attachment{}, errFakeUnwired
+	}
+	return f.createAttachment(ctx, na)
+}
+
+func (f *fakeStore) AppendAuditEntry(ctx context.Context, e storage.AuditEntry, seal func(storage.AuditEntry) []byte) (storage.AuditEntry, error) {
+	if f.appendAuditEntry == nil {
+		return storage.AuditEntry{}, errFakeUnwired
+	}
+	return f.appendAuditEntry(ctx, e, seal)
+}
+
+func (f *fakeStore) ListAuditEntries(ctx context.Context, params storage.ListAuditParams) ([]storage.AuditEntry, error) {
+	if f.listAuditEntries == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listAuditEntries(ctx, params)
+}
+
+func (f *fakeStore) UserByID(ctx context.Context, id uuid.UUID) (storage.User, error) {
+	if f.userByID == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.userByID(ctx, id)
+}
+
+func (f *fakeStore) UpdateUserProfile(ctx context.Context, userID uuid.UUID, upd storage.UserProfileUpdate) (storage.User, error) {
+	if f.updateUserProfile == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.updateUserProfile(ctx, userID, upd)
+}
+
+func (f *fakeStore) UpdateUserAdmin(ctx context.Context, userID uuid.UUID, upd storage.AdminUserUpdate) (storage.User, error) {
+	if f.updateUserAdmin == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.updateUserAdmin(ctx, userID, upd)
+}
+
+func (f *fakeStore) SetTemporaryPassword(ctx context.Context, userID uuid.UUID, hash string) (storage.User, error) {
+	if f.setTemporaryPassword == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.setTemporaryPassword(ctx, userID, hash)
+}
+
+func (f *fakeStore) CreateInvite(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string, ttl time.Duration) (storage.Invite, error) {
+	if f.createInvite == nil {
+		return storage.Invite{}, errFakeUnwired
+	}
+	return f.createInvite(ctx, createdBy, tokenHash, note, ttl)
+}
+
+func (f *fakeStore) ListOpenInvites(ctx context.Context, params storage.ListInvitesParams) ([]storage.Invite, error) {
+	if f.listOpenInvites == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listOpenInvites(ctx, params)
+}
+
+func (f *fakeStore) RevokeInvite(ctx context.Context, id uuid.UUID) error {
+	if f.revokeInvite == nil {
+		return errFakeUnwired
+	}
+	return f.revokeInvite(ctx, id)
+}
+
+func (f *fakeStore) OpenInviteByTokenHash(ctx context.Context, tokenHash []byte) (storage.Invite, error) {
+	if f.openInviteByTokenHash == nil {
+		return storage.Invite{}, errFakeUnwired
+	}
+	return f.openInviteByTokenHash(ctx, tokenHash)
+}
+
+func (f *fakeStore) RedeemInvite(ctx context.Context, tokenHash []byte, nu storage.NewUser) (storage.User, error) {
+	if f.redeemInvite == nil {
+		return storage.User{}, errFakeUnwired
+	}
+	return f.redeemInvite(ctx, tokenHash, nu)
+}
+
+func (f *fakeStore) OrgSettings(ctx context.Context) (storage.OrgSettings, error) {
+	if f.orgSettings == nil {
+		return storage.OrgSettings{}, errFakeUnwired
+	}
+	return f.orgSettings(ctx)
+}
+
+func (f *fakeStore) UpdateOrgSettings(ctx context.Context, patch storage.OrgSettingsPatch) (storage.OrgSettings, error) {
+	if f.updateOrgSettings == nil {
+		return storage.OrgSettings{}, errFakeUnwired
+	}
+	return f.updateOrgSettings(ctx, patch)
+}
+
+// EncryptionMode is the one method here that answers instead of failing when
+// a test did not wire it. The organisation's mode is a property of the
+// INSTANCE rather than of anything a test is the subject of, every test runs
+// against an instance, and every instance's is strict until an administrator
+// says otherwise — so unwired means the default rather than "undefined", and
+// a test that cares about the mode still sets it.
+func (f *fakeStore) EncryptionMode(ctx context.Context) (string, error) {
+	if f.encryptionMode == nil {
+		return storage.EncryptionModeStrict, nil
+	}
+	return f.encryptionMode(ctx)
+}
+
+func (f *fakeStore) SetEncryptionMode(ctx context.Context, mode string) (storage.OrgSettings, error) {
+	if f.setEncryptionMode == nil {
+		return storage.OrgSettings{}, errFakeUnwired
+	}
+	return f.setEncryptionMode(ctx, mode)
+}
+
+func (f *fakeStore) CreateScimToken(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string) (storage.ScimToken, error) {
+	if f.createScimToken == nil {
+		return storage.ScimToken{}, errFakeUnwired
+	}
+	return f.createScimToken(ctx, createdBy, tokenHash, note)
+}
+
+func (f *fakeStore) ListScimTokens(ctx context.Context) ([]storage.ScimToken, error) {
+	if f.listScimTokens == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listScimTokens(ctx)
+}
+
+func (f *fakeStore) RevokeScimToken(ctx context.Context, id uuid.UUID) error {
+	if f.revokeScimToken == nil {
+		return errFakeUnwired
+	}
+	return f.revokeScimToken(ctx, id)
+}
+
+func (f *fakeStore) CreateConference(ctx context.Context, createdBy uuid.UUID, tokenHash []byte,
+	title string, expiresAt *time.Time,
+) (storage.Conference, error) {
+	if f.createConference == nil {
+		return storage.Conference{}, errFakeUnwired
+	}
+	return f.createConference(ctx, createdBy, tokenHash, title, expiresAt)
+}
+
+func (f *fakeStore) ListConferences(ctx context.Context, ownerID uuid.UUID, all bool) ([]storage.Conference, error) {
+	if f.listConferences == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listConferences(ctx, ownerID, all)
+}
+
+func (f *fakeStore) ConferenceByID(ctx context.Context, id uuid.UUID) (storage.Conference, error) {
+	if f.conferenceByID == nil {
+		return storage.Conference{}, errFakeUnwired
+	}
+	return f.conferenceByID(ctx, id)
+}
+
+func (f *fakeStore) RevokeConference(ctx context.Context, id uuid.UUID) error {
+	if f.revokeConference == nil {
+		return errFakeUnwired
+	}
+	return f.revokeConference(ctx, id)
+}
+
+func (f *fakeStore) LiveConferenceByTokenHash(ctx context.Context, tokenHash []byte) (storage.Conference, error) {
+	if f.liveConferenceByTokenHash == nil {
+		return storage.Conference{}, errFakeUnwired
+	}
+	return f.liveConferenceByTokenHash(ctx, tokenHash)
+}
+
+// The E2EE transport half of the store (ADR 006). Same shape as everything
+// above: an unwired method fails loudly rather than returning a zero value a
+// test could mistake for an answer.
+
+func (f *fakeStore) RegisterMlsDevice(ctx context.Context, userID uuid.UUID, signatureKey []byte) (storage.MlsDevice, bool, error) {
+	if f.registerMlsDevice == nil {
+		return storage.MlsDevice{}, false, errFakeUnwired
+	}
+	return f.registerMlsDevice(ctx, userID, signatureKey)
+}
+
+func (f *fakeStore) ReplaceMlsKeyPackages(ctx context.Context, userID, deviceID uuid.UUID, packages [][]byte) (int, error) {
+	if f.replaceMlsKeyPackages == nil {
+		return 0, errFakeUnwired
+	}
+	return f.replaceMlsKeyPackages(ctx, userID, deviceID, packages)
+}
+
+func (f *fakeStore) MlsGroupByChannel(ctx context.Context, channelID uuid.UUID) (storage.MlsGroup, error) {
+	if f.mlsGroupByChannel == nil {
+		return storage.MlsGroup{}, errFakeUnwired
+	}
+	return f.mlsGroupByChannel(ctx, channelID)
+}
+
+func (f *fakeStore) CreateMlsGroup(ctx context.Context, channelID uuid.UUID, groupID []byte) (storage.MlsGroup, error) {
+	if f.createMlsGroup == nil {
+		return storage.MlsGroup{}, errFakeUnwired
+	}
+	return f.createMlsGroup(ctx, channelID, groupID)
+}
+
+func (f *fakeStore) ClaimMlsKeyPackages(ctx context.Context, channelID, targetUserID uuid.UUID) ([]storage.MlsKeyPackageClaim, []uuid.UUID, error) {
+	if f.claimMlsKeyPackages == nil {
+		return nil, nil, errFakeUnwired
+	}
+	return f.claimMlsKeyPackages(ctx, channelID, targetUserID)
+}
+
+func (f *fakeStore) ListMlsMemberDevices(ctx context.Context, channelID uuid.UUID, after *uuid.UUID, limit int) ([]storage.MlsMemberDevice, error) {
+	if f.listMlsMemberDevices == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listMlsMemberDevices(ctx, channelID, after, limit)
+}
+
+func (f *fakeStore) SubmitMlsCommit(ctx context.Context, nc storage.NewMlsCommit) (storage.MlsCommitOutcome, error) {
+	if f.submitMlsCommit == nil {
+		return storage.MlsCommitOutcome{}, errFakeUnwired
+	}
+	return f.submitMlsCommit(ctx, nc)
+}
+
+func (f *fakeStore) ListMlsCommits(ctx context.Context, channelID uuid.UUID, afterEpoch int64, limit int) ([]storage.MlsCommit, error) {
+	if f.listMlsCommits == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listMlsCommits(ctx, channelID, afterEpoch, limit)
+}
+
+func (f *fakeStore) ListMlsWelcomes(ctx context.Context, userID uuid.UUID) ([]storage.MlsWelcome, error) {
+	if f.listMlsWelcomes == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listMlsWelcomes(ctx, userID)
+}
+
+func (f *fakeStore) DeleteMlsWelcome(ctx context.Context, userID, welcomeID uuid.UUID) error {
+	if f.deleteMlsWelcome == nil {
+		return errFakeUnwired
+	}
+	return f.deleteMlsWelcome(ctx, userID, welcomeID)
+}
+
+// The recovery surface (ADR 010).
+
+func (f *fakeStore) PutMlsBackup(ctx context.Context, userID uuid.UUID, envelope []byte, counter int64) error {
+	if f.putMlsBackup == nil {
+		return errFakeUnwired
+	}
+	return f.putMlsBackup(ctx, userID, envelope, counter)
+}
+
+func (f *fakeStore) MlsBackupByUser(ctx context.Context, userID uuid.UUID) (storage.MlsBackup, error) {
+	if f.mlsBackupByUser == nil {
+		return storage.MlsBackup{}, errFakeUnwired
+	}
+	return f.mlsBackupByUser(ctx, userID)
+}
+
+func (f *fakeStore) DeleteMlsBackup(ctx context.Context, userID uuid.UUID) error {
+	if f.deleteMlsBackup == nil {
+		return errFakeUnwired
+	}
+	return f.deleteMlsBackup(ctx, userID)
+}
+
+func (f *fakeStore) DeregisterMlsDevice(ctx context.Context, userID, deviceID uuid.UUID) error {
+	if f.deregisterMlsDevice == nil {
+		return errFakeUnwired
+	}
+	return f.deregisterMlsDevice(ctx, userID, deviceID)
 }

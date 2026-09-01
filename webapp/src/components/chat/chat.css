@@ -81,8 +81,13 @@
   border-block-end: 1px solid var(--color-border-subtle);
 }
 
-/* Only the drawer has anything to close. */
-.hm-sidebar__close {
+/* Only the drawer has anything to close.
+ *
+ * The class list has to win against .hm-icon-button's own `display: flex`,
+ * which carries the same specificity and comes later in this file — so a bare
+ * .hm-sidebar__close lost, and the drawer's close button sat on the desktop
+ * sidebar. Both classes, then: higher specificity, no !important. */
+.hm-icon-button.hm-sidebar__close {
   display: none;
 }
 
@@ -1118,6 +1123,31 @@
   gap: 7px; /* off-scale (artboard) */
 }
 
+/* UNDESIGNED — no artboard draws a file waiting in the composer. Layout only:
+   the cards inside are the delivered ones, and nothing here introduces a
+   colour, radius or type value the token sheet does not already carry. */
+.hm-composer__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hm-composer__attachment {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* The cards carry their own top margin for the space under a bubble; inside
+   the tray the list gap already provides it. */
+.hm-composer__attachment .hm-card,
+.hm-composer__attachment .hm-image-card {
+  margin-block-start: 0;
+}
+
 .hm-composer__box {
   display: flex;
   align-items: flex-end;
@@ -1500,18 +1530,83 @@
 
 /* ── plumbing surfaces (no design yet — docs/design/STATUS.md) ─────── */
 
-/* Create channel, invite people, the DM picker, the mention picker and the
- * account menu are not drawn anywhere in the mockup. Per the UI pipeline they
+/*
+ * Create channel, invite people, the DM picker, the mention picker, the
+ * account menu, the encryption notice, the verification surfaces and the
+ * backup offer are not drawn anywhere in the mockup. Per the UI pipeline they
  * are plain semantic HTML with no styling beyond structure; they get their
- * appearance when a design lands. */
+ * appearance when a design lands.
+ *
+ * THE BASE CLASS DOES NOT POSITION ANYTHING, and that is the whole point of
+ * splitting it. It went the other way for three slices and cost a control
+ * every time:
+ *
+ *   1. `E2eeNotice` took the base class, which floated, and the notice covered
+ *      the call strip — media E2EE could not be started from the UI at all.
+ *      Patched with an `--inline` opt-out.
+ *   2. `BackupPlumbing` took the base class, which floated, and the backup
+ *      offer covered the invite dialog and ate its clicks. Patched with a
+ *      `--beneath` stacking order.
+ *   3. The same offer, still floating, still covered the call strip — because
+ *      `--beneath` only said "below the dialogs" and said nothing about the
+ *      chrome underneath it. Encryption became the default, so the offer now
+ *      greeted every new account and the call button was unreachable again.
+ *
+ * Every one of those was the same bug: a class that means "this has no design
+ * yet" also meant "this floats". CLAUDE.md says an undesigned surface is
+ * "plain semantic HTML, no custom styling beyond structure", so the default
+ * has to be the plain one — a box in the document flow, which cannot cover
+ * anything by construction. Floating is now a deliberate opt-in for the
+ * handful of surfaces that really are popovers, and a surface that forgets to
+ * ask for it lays out harmlessly instead of eating a click.
+ *
+ * `webapp/e2e/layout/plumbing-overlap.layout.ts` holds that line in a real
+ * browser, which is the other half of why this kept coming back: no unit test
+ * lays anything out, so nothing failed any of the three times.
+ */
 .hm-plumbing {
+  padding: var(--spacing-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+}
+
+/*
+ * The other half of making the flow safe, and the answer to the objection the
+ * old comment recorded: put these in flow and they collapse the conversation.
+ *
+ * They do, if nothing stops them. The backup offer is five paragraphs and
+ * three buttons, and stacked under the encryption notice on a laptop-height
+ * window it left the message list a hundred pixels — on a shorter one it would
+ * reach zero, which is the failure the objection named. A banner that has not
+ * been drawn yet does not get to do that: it stops at a share of the column
+ * and scrolls inside itself, and `overflow` is also what lets flex shrink it
+ * at all, since a flex item's automatic minimum is its content until the box
+ * says otherwise.
+ *
+ * A fraction rather than a pixel height on purpose — it is a floor under the
+ * conversation, not a size for the banner, and an artboard will replace the
+ * whole rule rather than tune the number.
+ */
+.hm-plumbing:not(.hm-plumbing--overlay) {
+  max-block-size: 25%;
+  overflow: auto;
+}
+
+/*
+ * The popover treatment, for the surfaces that genuinely sit over the
+ * conversation: the account and channel menus, the create dialog, the people
+ * picker, the verification sheet. Each is opened by a control the person just
+ * pressed, so covering what is behind it is the intent.
+ *
+ * A notice is never one of these, and neither is an account-level prompt: it
+ * arrives unasked, so the one thing it must not do is land on top of whatever
+ * the person was about to press.
+ */
+.hm-plumbing--overlay {
   position: absolute;
   inset-block-start: var(--hm-region-block-size);
   inset-inline-start: 0;
   z-index: 5;
-  padding: var(--spacing-3);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-control);
 }
 
 .hm-plumbing--footer {
@@ -1575,7 +1670,10 @@
 
   .hm-chat-header__drawer-toggle,
   .hm-chat-header__search-toggle,
-  .hm-sidebar__close {
+  /* Two classes, matching the rule that hides it above: a media query adds no
+   * specificity, so a bare .hm-sidebar__close here would lose to it and the
+   * drawer would have no way out. */
+  .hm-icon-button.hm-sidebar__close {
     display: flex;
     border-radius: var(--radius-md);
     color: var(--color-text-primary);

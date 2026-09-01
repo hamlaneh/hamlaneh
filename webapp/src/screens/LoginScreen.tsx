@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { api, retryAfterSeconds } from "../api/client";
+import { api } from "../api/client";
 import type { components } from "../api/schema";
+import { useRateLimitNotice } from "../auth/rateLimit";
+import type { RateLimitKeys } from "../auth/rateLimit";
+import { OIDC_START_PATH } from "../auth/sso";
+import { isolateAuto } from "../i18n/bidi";
 import { AuthForm } from "../components/auth/AuthForm";
 import { AuthShell } from "../components/auth/AuthShell";
 import { NoticeBanner } from "../components/auth/NoticeBanner";
@@ -34,12 +38,27 @@ interface LoginScreenProps {
 }
 
 export interface LoginNotice {
-  tone: "success" | "warning";
+  /**
+   * `danger` joined the two politely-announced tones when single sign-on
+   * started landing back here: the other notices report something that
+   * finished, this one reports a sign-in that did not happen, and `role="alert"`
+   * is what tells a screen-reader user why the form came back. It still does
+   * not take focus — only a failure raised on this screen does.
+   */
+  tone: "success" | "warning" | "danger";
   message: string;
 }
 
-/** From this wait up the notice counts whole minutes; below it, whole seconds. */
-const SECONDS_PER_MINUTE = 60;
+/**
+ * The sign-in screen's rate-limit sentence family. Four other screens borrow
+ * the counted variants: their undated wording is this same sentence, so the
+ * count-carrying forms are shared rather than copied per namespace.
+ */
+const RATE_LIMIT_KEYS: RateLimitKeys = {
+  undated: "login.error.rateLimited",
+  seconds: "login.error.rateLimitedSeconds",
+  minutes: "login.error.rateLimitedMinutes",
+};
 
 /**
  * Sign-in against POST /api/v1/auth/login, in the delivered design
@@ -68,39 +87,18 @@ export function LoginScreen({
   // Bumped on every failure so a repeated identical failure still moves focus.
   const [failureCount, setFailureCount] = useState(0);
   const [submitting, setSubmitting] = useState(false);
-  // When the server's stated wait runs out, and how much of it is left. Both
-  // are null/0 whenever the 429 named no wait this client would act on.
-  const [retryAt, setRetryAt] = useState<number | null>(null);
-  const [remaining, setRemaining] = useState(0);
   const alertRef = useRef<HTMLDivElement>(null);
+  const {
+    message: rateLimitMessage,
+    start: startRateLimitWait,
+    clear: clearRateLimitWait,
+  } = useRateLimitNotice(RATE_LIMIT_KEYS, () => {
+    // The wait the server named has passed: the notice goes with the
+    // condition it described and the form is live again.
+    setError((current) => (current === "rateLimited" ? "none" : current));
+  });
 
   const rateLimited = error === "rateLimited";
-
-  /**
-   * The countdown re-reads the clock instead of decrementing a counter: a
-   * throttled background tab fires the interval late, and a count that drifts
-   * with it would be the same guess this screen just stopped making.
-   */
-  useEffect(() => {
-    if (retryAt === null) {
-      return undefined;
-    }
-    const timer = setInterval(() => {
-      const left = Math.ceil((retryAt - Date.now()) / 1000);
-      if (left > 0) {
-        setRemaining(left);
-        return;
-      }
-      // The wait the server named has passed: the notice goes with the
-      // condition it described and the form is live again.
-      setRetryAt(null);
-      setRemaining(0);
-      setError("none");
-    }, 1000);
-    return () => {
-      clearInterval(timer);
-    };
-  }, [retryAt]);
 
   useEffect(() => {
     // A form-level failure is announced by role="alert" and takes focus, so
@@ -129,28 +127,8 @@ export function LoginScreen({
   const clearRateLimitNotice = () => {
     if (rateLimited) {
       setError("none");
-      setRetryAt(null);
-      setRemaining(0);
+      clearRateLimitWait();
     }
-  };
-
-  /**
-   * The rate-limit notice: the wait the server stated, counted down, or the
-   * undated wording when it stated none this client would act on (see
-   * `retryAfterSeconds`). One sentence either way — only the number is new.
-   */
-  const rateLimitMessage = (): string => {
-    if (remaining <= 0) {
-      return t("login.error.rateLimited");
-    }
-    if (remaining < SECONDS_PER_MINUTE) {
-      return t("login.error.rateLimitedSeconds", { count: remaining });
-    }
-    // Rounded up: telling someone four minutes when four and a half are left
-    // just buys them another refusal.
-    return t("login.error.rateLimitedMinutes", {
-      count: Math.ceil(remaining / SECONDS_PER_MINUTE),
-    });
   };
 
   const submit = async () => {
@@ -185,9 +163,7 @@ export function LoginScreen({
         // The spec's RateLimited response carries the wait; reading it is the
         // difference between telling the user when the door reopens and
         // inventing "a few minutes".
-        const wait = retryAfterSeconds(response);
-        setRetryAt(wait === null ? null : Date.now() + wait * 1000);
-        setRemaining(wait ?? 0);
+        startRateLimitWait(response);
         fail("rateLimited");
       } else if (response.status === 401) {
         fail("invalidCredentials");
@@ -219,7 +195,7 @@ export function LoginScreen({
           <NoticeBanner
             ref={alertRef}
             tone={rateLimited ? "warning" : "danger"}
-            message={rateLimited ? rateLimitMessage() : t(`login.error.${error}`)}
+            message={rateLimited ? rateLimitMessage : t(`login.error.${error}`)}
           />
         )}
         <div className="hm-form__fields">
@@ -264,6 +240,40 @@ export function LoginScreen({
           busy={submitting}
           disabled={rateLimited}
         />
+        {/* UNDESIGNED SURFACE — no artboard draws a second way in, so this is
+            plain semantic HTML with no styling beyond structure
+            (docs/design/STATUS.md, "Single sign-on button on sign-in").
+
+            A link, not a button with an onClick: `GET /auth/oidc/start` is a
+            browser navigation. The server answers 302 to the provider and sets
+            a transaction cookie that the callback — a top-level cross-site
+            navigation back — must carry. A fetch would follow those redirects
+            invisibly and end up holding the provider's HTML.
+
+            Instance policy decides whether it exists at all, exactly as
+            `password_reset_available` does for the reset link, and for the same
+            stated reason: never offer a door that goes nowhere. Absent while
+            the instance document is still loading, so it never appears and
+            then vanishes. */}
+        {loaded && info.sso?.enabled === true ? (
+          <p>
+            <a href={OIDC_START_PATH}>
+              {t("login.sso.continueWith", {
+                // The provider's display name is data, not translation. FSI…PDI
+                // so a Latin name keeps its own direction inside the Persian
+                // sentence, and a Persian one is not forced the other way.
+                //
+                // The fallback is for the type, not for the server: the
+                // contract says provider_name is present whenever enabled is
+                // true, but OpenAPI cannot express a conditionally-required
+                // field without a oneOf that would read worse than the prose,
+                // so the generated type keeps it optional and this branch has
+                // to exist. It should never be reached.
+                provider: isolateAuto(info.sso.provider_name ?? t("sso.provider")),
+              })}
+            </a>
+          </p>
+        ) : null}
       </AuthForm>
     </AuthShell>
   );

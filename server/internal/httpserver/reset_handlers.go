@@ -52,7 +52,7 @@ func (s *apiServer) RequestPasswordReset(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_, ipKey := clientIP(r)
+	_, ipKey := s.clientIP(r)
 	err := s.reset.Request(r.Context(), ipKey, email)
 	var limited *passwordreset.RateLimitedError
 	switch {
@@ -106,7 +106,7 @@ func (s *apiServer) CompletePasswordReset(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	_, ipKey := clientIP(r)
+	_, ipKey := s.clientIP(r)
 	err := s.reset.Complete(r.Context(), ipKey, req.Token, req.NewPassword)
 	var limited *passwordreset.RateLimitedError
 	switch {
@@ -133,13 +133,51 @@ func writeInvalidResetToken(w http.ResponseWriter, r *http.Request) {
 // session, to learn the password policy and whether reset is even
 // available.
 //
-// password_min_length comes from internal/uservalidate — the same constant
-// the server validates against, so the form and the check can never drift.
+// password_min_length comes from internal/uservalidate and
+// max_file_size_bytes from the constant UploadFile enforces — the same
+// constants the server validates against, so the form and the check can
+// never drift.
 // password_reset_available is false when no mail transport is configured,
 // so the screen omits a link that would go nowhere.
+//
+// encryption_mode is the one field here that is read rather than configured.
+// It belongs on this document because every member's channel and direct
+// message creation needs it and the admin settings document answers them
+// 403 — and it is not a secret: an instance's encryption posture is a
+// product characteristic its own users are entitled to know before they type
+// anything into it.
 func (s *apiServer) GetInstance(w http.ResponseWriter, r *http.Request) {
-	writeJSONValue(w, r, http.StatusOK, api.InstanceInfo{
+	store, ok := s.requireStore(w, r)
+	if !ok {
+		return
+	}
+	mode, err := store.EncryptionMode(r.Context())
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
+
+	info := api.InstanceInfo{
+		MaxFileSizeBytes:       maxUploadBytes,
 		PasswordMinLength:      uservalidate.MinPasswordLen,
 		PasswordResetAvailable: s.reset != nil && s.reset.Available(),
-	})
+		EncryptionMode:         api.EncryptionMode(mode),
+		// sso.enabled follows CONFIGURATION, not the provider's health: the
+		// button exists whenever the door does, and a provider that is down
+		// answers 503 at the door rather than hiding it.
+		Sso: &api.SsoStatus{Enabled: s.sso != nil},
+	}
+	// calls follows the same rule and for the same reason: the flag says a
+	// media server is configured, so the UI omits call controls rather than
+	// offering a door that goes nowhere (ADR 005). A configured media server
+	// that is down answers 503 at the token endpoint.
+	callsEnabled := s.calls.Enabled()
+	info.Calls = &callsEnabled
+	if s.sso != nil {
+		// Present whenever enabled (the contract): ProviderName defaults
+		// rather than returning empty, so the pair cannot desynchronize.
+		name := s.sso.ProviderName()
+		info.Sso.ProviderName = &name
+	}
+	writeJSONValue(w, r, http.StatusOK, info)
 }

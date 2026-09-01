@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 
 import { api } from "../api/client";
 import type { components } from "../api/schema";
+import { useRateLimitNotice } from "../auth/rateLimit";
+import type { RateLimitKeys } from "../auth/rateLimit";
 import { AuthForm } from "../components/auth/AuthForm";
 import { AuthShell } from "../components/auth/AuthShell";
 import { BackLink } from "../components/auth/BackLink";
@@ -36,6 +38,18 @@ type ChallengeError =
   | "rateLimited"
   | "networkError"
   | "unexpected";
+
+/**
+ * This screen's undated wording, with the counted variants borrowed from the
+ * sign-in screen: `totp.error.rateLimited` and `login.error.rateLimited` are
+ * the same sentence, and the counted forms are that sentence with the vague
+ * tail replaced by the number the server gave.
+ */
+const RATE_LIMIT_KEYS: RateLimitKeys = {
+  undated: "totp.error.rateLimited",
+  seconds: "login.error.rateLimitedSeconds",
+  minutes: "login.error.rateLimitedMinutes",
+};
 
 /**
  * Reduces a typed recovery code to the form the contract describes:
@@ -98,6 +112,15 @@ export function TotpChallengeScreen({
   const [focusRequest, setFocusRequest] = useState(0);
   const firstCellRef = useRef<HTMLInputElement>(null);
   const recoveryRef = useRef<HTMLInputElement>(null);
+  const {
+    message: rateLimitMessage,
+    start: startRateLimitWait,
+    clear: clearRateLimitWait,
+  } = useRateLimitNotice(RATE_LIMIT_KEYS, () => {
+    // The stated wait has passed, so the notice goes — but only if it is
+    // still the notice on screen; a later failure of its own must stand.
+    setError((current) => (current === "rateLimited" ? "none" : current));
+  });
 
   useEffect(() => {
     if (focusRequest === 0) {
@@ -124,6 +147,7 @@ export function TotpChallengeScreen({
     setCode("");
     setRecoveryCode("");
     setError("none");
+    clearRateLimitWait();
     requestFocus();
   };
 
@@ -160,7 +184,15 @@ export function TotpChallengeScreen({
         }
         return;
       }
-      reject(response.status === 429 ? "rateLimited" : "unexpected");
+      if (response.status === 429) {
+        // The spec's RateLimited response carries the wait; reading it is the
+        // difference between telling the user when the door reopens and
+        // inventing "a few minutes".
+        startRateLimitWait(response);
+        reject("rateLimited");
+        return;
+      }
+      reject("unexpected");
     } catch (requestError) {
       console.warn("Two-step verification request failed:", requestError);
       reject("networkError");
@@ -175,6 +207,7 @@ export function TotpChallengeScreen({
   const clearError = () => {
     if (error !== "none") {
       setError("none");
+      clearRateLimitWait();
     }
   };
 
@@ -191,9 +224,11 @@ export function TotpChallengeScreen({
         )
       : undefined;
   const formError =
-    error === "rateLimited" || error === "networkError" || error === "unexpected"
-      ? t(`totp.error.${error}`)
-      : undefined;
+    error === "rateLimited"
+      ? rateLimitMessage
+      : error === "networkError" || error === "unexpected"
+        ? t(`totp.error.${error}`)
+        : undefined;
 
   return (
     <AuthShell>

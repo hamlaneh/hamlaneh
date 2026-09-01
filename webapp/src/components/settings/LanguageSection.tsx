@@ -15,6 +15,10 @@ const DIRECTION_TAG: Record<Language, string> = { en: "LTR", fa: "RTL" };
  * A single choice, so it commits on selection and shows the inline Saved mark
  * rather than waiting for a Save button. Selecting flips the whole interface
  * direction; nothing typed is lost, because only `dir` and the font stack move.
+ *
+ * The choice is also saved to the account, in the background and centrally
+ * (i18n/useLanguage.ts) — the mark deliberately does not wait for that round
+ * trip, and a save that fails leaves the chosen language in place.
  */
 export function LanguageSection() {
   const { t } = useTranslation();

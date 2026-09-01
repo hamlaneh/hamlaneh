@@ -209,7 +209,12 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change your own account settings.
+         * @description Locale belongs on the account rather than only in the browser: a person who reads Persian reads it on their phone too, and a preference that lives in localStorage silently reverts on every new device and every cleared browser. The client still applies its local choice immediately — the round trip must not make the interface wait — and this is what makes the choice follow the person.
+         *     Unlike its siblings this stays open while must_change_password is set. The forced-change screen renders the language switcher, so refusing the save there would leave a control that appears to work and silently does not; and choosing which language to read the password rules in is not something the gate exists to prevent.
+         */
+        patch: operations["updateCurrentUser"];
         trace?: never;
     };
     "/api/v1/users/me/totp": {
@@ -289,6 +294,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/oidc/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Begin single sign-on.
+         * @description Redirects to the configured identity provider's authorization endpoint with a fresh state, nonce and PKCE challenge, and sets a short-lived transaction cookie holding the values the callback must compare against.
+         *     That cookie is SameSite=Lax, and it is the one place this server departs from Strict: the callback arrives as a top-level cross-site navigation from the provider, and a Strict cookie would not be sent with it. It carries only server-minted randomness, so it discloses nothing and is compared rather than trusted.
+         *     There is no return-to parameter. The flow always lands on the application root, which removes the open-redirect class outright rather than defending against it.
+         */
+        get: operations["startOidcSignIn"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Return from the identity provider.
+         * @description Verifies the transaction cookie's state against the query parameter, exchanges the code with the PKCE verifier, validates the identity token's issuer, audience, signature and expiry, and compares its nonce to the cookie's. The cookie is single-use and is cleared either way.
+         *     Every outcome is a redirect, because this is a browser navigation rather than a client call, and every one of them lands on the application root. What differs is one query parameter, which the client reads once and strips from the address bar:
+         *     * signed in - no parameter. The session cookies are set. * `?sso=totp` - the account has a second factor. The two-step
+         *       challenge cookie is set and the client shows the challenge screen.
+         *       The value names the method so the parameter survives WebAuthn
+         *       arriving beside totp, the way TwoFactorChallenge.methods does.
+         *       Nothing else is needed: the challenge travels in the cookie, so the
+         *       screen sends only the code.
+         *     * `?sso_error=<code>` - it did not work, with exactly one of
+         *       sso_account_exists (the identity's email belongs to a local
+         *       password account), sso_account_unknown (it matches nobody and
+         *       just-in-time provisioning is off), or sso_failed (anything else).
+         *
+         *     Landing everything on the root rather than on distinct paths keeps the server's enumerated route list unchanged, and means a stale or shared callback URL can never resolve to a screen that implies a state the visitor is not in.
+         *     Text supplied by the provider is never reflected into the URL or the page; it goes to the server log. The three codes are a closed set, so a client meeting an unrecognised value treats it as sso_failed.
+         *     Which account a verified identity resolves to is decided in this order, and the order is the security property:
+         *     1. The identity is already linked - sign that account in. Email is
+         *        never consulted once a link exists, because emails are mutable at
+         *        the provider and subjects are not.
+         *     2. No link, but the email names an account the directory manages (its
+         *        SCIM external id is set) - link it and sign in. Both sides of that
+         *        match come from an authority an administrator already granted: the
+         *        administrator minted the SCIM token that let the directory adopt
+         *        the account, and the same provider is now asserting the email.
+         *     3. No link, and the email names a local password account - refuse with
+         *        sso_account_exists, whatever sso_jit_provisioning says. Its owner
+         *        signs in with their password and connects single sign-on from
+         *        Settings. Auto-linking here would fuse the weakest email assertion
+         *        on either side into a session, and creating a second account for an
+         *        address that already has one is worse.
+         *     4. No match at all, and sso_jit_provisioning is on - create an active
+         *        account with no password, its username derived from the identity,
+         *        and sign in. Recorded in the audit log as a creation, not merely a
+         *        sign-in.
+         *     5. No match at all, and it is off - refuse with sso_account_unknown.
+         *        Nothing is created.
+         *
+         *     A created account is subject to every policy an invited one is: the organisation's two-step requirement applies at that first sign-in, because the session goes through the same mint.
+         */
+        get: operations["completeOidcSignIn"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/oidc": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect single sign-on to this account.
+         * @description Answers with the provider redirect the browser should follow, and sets the same transaction cookie the sign-in flow uses, carrying the intent to link and the id of the signed-in account. The callback then records the identity against that account instead of minting a session.
+         *     Binding the account id into a server-minted HttpOnly cookie, and the state into both the cookie and the URL, is what makes link fixation fail: the transaction exists only in the browser that started it.
+         */
+        post: operations["linkOidcIdentity"];
+        /**
+         * Disconnect single sign-on from this account.
+         * @description Refused when the account has no password, because unlinking would leave it with no way in at all. The recovery path for such an account is an administrator issuing a temporary password, which is also the break-glass door when the provider is unreachable.
+         */
+        delete: operations["unlinkOidcIdentity"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/me/totp/disable": {
         parameters: {
             query?: never;
@@ -301,6 +410,7 @@ export interface paths {
         /**
          * Turn two-step verification off.
          * @description Re-asks for the password (the design's confirm dialog). Removes the secret and invalidates every recovery code. Sessions are deliberately NOT revoked: the threat is a hijacked session entrenching itself, and revoking other families would punish only the legitimate user's devices while the attacker's own session survives. The password prompt, the rate limit and the audit log are the defences.
+         *     Refused outright while the organisation requires two-step verification. Enforcement binds when a session is minted, so without this an account could enrol, sign in unflagged, switch the factor back off and keep refreshing — the policy would hold for everyone except the people it is aimed at.
          */
         post: operations["disableTotp"];
         delete?: never;
@@ -433,6 +543,226 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/users/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Deactivate, reactivate, or change a user's role.
+         * @description The row-action menu on the users table. Deactivation is the offboarding switch: it ends every session and closes every socket the user holds, and the confirm says so because that is the difference between it and a forced password reset, which deliberately leaves the session alive.
+         *     Reactivation is the inverse and only that — it restores the ability to sign in, never the sessions that were killed.
+         *     Removing the last admin is refused (409 last_admin), not warned about afterwards: an instance nobody can administer is unrecoverable without database access, and the dashboard must not be able to produce that state. Demoting yourself is likewise refused while you are the only admin. Deactivating yourself is refused outright (409 self_deactivation) — locking yourself out is never the intent the click expressed.
+         */
+        patch: operations["updateUserAdmin"];
+        trace?: never;
+    };
+    "/api/v1/admin/users/{userId}/reset-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a new temporary password for a user.
+         * @description Answers with the generated password **once**, in the only response that will ever carry it — it is stored as an argon2id hash like any other, so nothing can show it again. The account is marked must_change_password, and the user's existing session deliberately survives: this is the unlock path for somebody who forgot their password, not the offboarding path, and killing their session would make the two indistinguishable.
+         */
+        post: operations["forcePasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/scim/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Provisioning tokens.
+         * @description The tokens an identity provider's sync engine authenticates with. Never the tokens themselves — only their metadata, exactly as the invite list never carries a link.
+         *     More than one live token is deliberate rather than an oversight: rotating a credential an external system holds needs an overlap, so an administrator mints the new one, updates the provider, and revokes the old one afterwards.
+         */
+        get: operations["listScimTokens"];
+        put?: never;
+        /**
+         * Mint a provisioning token.
+         * @description Answers with the token **once**. Only its hash is stored, as invite links and reset tokens are, so a stolen database yields no usable credential and nothing can redisplay a value somebody closed the dialog on.
+         *     This is a second door into the instance with its own credential, and it is not a session: it carries no cookie, no CSRF header, and it is refused everywhere under /api. A session cookie is equally worthless at the provisioning endpoints. Two doors, two credentials, neither usable at the other.
+         */
+        post: operations["createScimToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/scim/tokens/{tokenId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke a provisioning token.
+         * @description Takes effect immediately. The provider's next sync fails authentication, which is the intended way to cut off a system that should no longer be provisioning.
+         */
+        delete: operations["revokeScimToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Open invite links.
+         * @description Only links that are still usable — an accepted or expired invite leaves the list, because the table's purpose is "what can still be redeemed", and the audit log is where the history lives. Ordered by expiry, soonest first, which is what the design flags.
+         */
+        get: operations["listInvites"];
+        put?: never;
+        /**
+         * Generate a single-use invite link.
+         * @description Answers with the link **once**. Only its hash is stored, exactly as password-reset tokens are, so a stolen database yields no usable invitation and nothing can redisplay a link somebody closed the dialog on. Single-use and expiring; redeeming it creates the account and consumes the invite in one transaction, so two people racing the same link produce one account and one honest refusal.
+         */
+        post: operations["createInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/invites/{inviteId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke an open invite.
+         * @description Idempotent: revoking one that is already gone answers 204, because the outcome the caller wanted is the outcome that holds.
+         */
+        delete: operations["revokeInvite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/invites/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What this invite offers, before signing up.
+         * @description Public: the redemption screen needs the org's name before anybody has an account. It answers only what the screen draws and never who issued it or for whom. An unknown, expired, revoked or already-used token answers the same 404, so a guessed token cannot be told from a spent one.
+         */
+        get: operations["previewInvite"];
+        put?: never;
+        /**
+         * Create an account from an invite.
+         * @description Public, and the only way a user comes into existence when registration is closed. The invite is consumed in the same transaction that creates the account, so a link cannot make two people. Answers 404 for every unusable token, exactly as the preview does, and 409 username_taken when the name is gone.
+         */
+        post: operations["redeemInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/org/encryption-mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change which kind of conversation this instance creates.
+         * @description adminOnly. Deliberately its own endpoint rather than a field on the settings PATCH: that screen saves as you type, and this is a decision an administrator should have to mean — it is audited (`org.encryption_mode_changed`) and the UI confirms it, which a field among a dozen others cannot be.
+         *     It changes the rule for conversations born from now on and nothing else. No existing conversation is converted in either direction, and that is the design rather than a limitation: a strict-to-compliance switch could not decrypt what is already encrypted even if it wanted to, because the server holds no key, and a compliance-to-strict switch cannot un-store plaintext that has already been written. Selecting `compliance` answers 409 encryption_mode_locked until the server-side half it promises exists.
+         */
+        put: operations["setOrgEncryptionMode"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/org": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The instance's own settings. */
+        get: operations["getOrgSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the instance's settings.
+         * @description Saved immediately, field by field — the design has no Save button, because a button is a thing to forget. Only the fields present are changed.
+         *     Turning 2FA enforcement on does not lock anybody out mid-session: it takes effect at the next sign-in, and the accounts without a second factor are reported so the admin can see who it will affect rather than discovering it from support requests.
+         */
+        patch: operations["updateOrgSettings"];
+        trace?: never;
+    };
+    "/api/v1/admin/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The audit log.
+         * @description Append-only and hash-chained: every entry carries the hash of the one before it, so an edited or deleted row breaks the chain from that point on. `chain_valid` reports the verification of the returned page, and a false there is not a display concern — it means somebody reached the database directly.
+         *     Newest first, older/newer paging rather than numbered pages, because entries arrive while a page is being read.
+         */
+        get: operations["listAuditEntries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels": {
         parameters: {
             query?: never;
@@ -555,6 +885,139 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/conferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your conference rooms.
+         * @description Yours, or every one on the instance if you administer it — an administrator must be able to find what they may revoke.
+         */
+        get: operations["listConferences"];
+        put?: never;
+        /**
+         * Make a room anyone with the link can join.
+         * @description Answers with the link. Only its hash is stored, as invite links and provisioning tokens are, so a stolen database yields nothing that can be presented.
+         *     The link does not expire unless you ask it to. Expiry by default argues for itself until you look at how these are used: the common one is a standing weekly meeting, and a link that dies unannounced drives worse behaviour — a fresh link minted for every meeting and pasted into more places than the last. It is always revocable, always visible to an administrator, and its creation and revocation are audited.
+         */
+        post: operations["createConference"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conferences/{conferenceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Kill the link, and the meeting behind it.
+         * @description The link stops admitting anybody, and the room it admitted to ends — a revocation that let the current meeting run on would not be a revocation.
+         *     Its owner or an administrator. Anyone else gets the same 404 they would get for a conference that does not exist, because a distinct refusal would confirm one does.
+         */
+        delete: operations["revokeConference"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meet/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What is behind this link.
+         * @description Enough to draw a join screen: the title, and whether anybody is in there. Holding the link is the entitlement to know that much.
+         *     Unknown, expired and revoked are one answer, indistinguishable, as they are for an invitation. A visitor learns whether their link works, never why it does not.
+         */
+        get: operations["previewConference"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meet/{token}/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Join as a guest.
+         * @description Mints a join ticket for this conference's room and nothing else. No session is created, no account is created or read, and no other endpoint honours this link.
+         *     Somebody with no account on this instance may join — that is what a conference link is for. An instance with registration closed stays exactly as closed: a guest holds a ticket to one room, not a way in.
+         *     The display name is whatever the guest types, so a guest can present as anyone. That is inherent to anonymous meetings and is mitigated by the people in the room, not by this endpoint. Said here rather than left to be discovered.
+         */
+        post: operations["joinConference"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/call": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What is happening in this channel's call.
+         * @description Live state, read from the media server rather than from a table. There is no calls table: the media server's own room state is the truth, and a copy in the database would be a cache to invalidate for nothing (ADR 005).
+         *     Clients call this on opening a channel and after a reconnect. The three call events on the WebSocket are hints that something changed, never the state itself -- a five-minute-old call event is worthless or wrong, so it carries no sequence number and is never replayed.
+         */
+        get: operations["getChannelCall"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/call/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A ticket to join this channel's call.
+         * @description Mints a short-lived join ticket for the media server. It is scoped to one room and one identity and lives about two minutes, because a ticket has no business outliving the click that asked for it.
+         *     It is not a session and grants nothing else: it cannot enumerate rooms, cannot eject anyone, and cannot open a data channel -- chat stays on the one write path with the one authorization choke point.
+         *     A ticket can outlive the membership that justified it, briefly, and that is bounded rather than denied. Minted-but-unused is bounded by the expiry. Already-joined is bounded by the server ejecting the participant when membership or the account ends. Both windows and their residue are written out in ADR 005.
+         *     The media server's address is not in the answer: its signal endpoint is same-origin, so a client derives it the way it derives everything else. Nothing about the media plane is ever told to a client beyond one boolean on the instance document.
+         */
+        post: operations["createCallToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels/{channelId}/messages": {
         parameters: {
             query?: never;
@@ -610,6 +1073,29 @@ export interface paths {
         patch: operations["editMessage"];
         trace?: never;
     };
+    "/api/v1/channels/{channelId}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload one file into a channel.
+         * @description Backs the composer's paperclip. One file per request — the composer uploads several as several requests, each with its own progress and its own failure. The file is scoped to this channel from birth: membership is checked here, the later message references it by id, and a file never attached to a message is swept after 24 hours. That one rule — a file is readable exactly by the members of its channel — keeps the authorization story identical to every other channel resource.
+         *     The declared content type is kept as the card's label, but the server trusts the bytes, not the label: a declared image/* whose bytes do not sniff as that image type is refused (415, content_type_mismatch), because images are the one kind served inline. Everything else is stored as an opaque blob and always served as a download — Content-Disposition attachment, nosniff, sandboxing CSP — so an uploaded SVG, HTML page or anything else that can carry script is a file the reader saves, never a page their browser runs. Images have their metadata stripped at ingest: EXIF carries GPS coordinates, and a photo shared in a chat must not quietly say where its author lives.
+         *     ON AN E2EE CHANNEL the bytes are already ciphertext and none of the paragraph above can apply — the server cannot sniff what it cannot read (ADR 013). So the metadata must not arrive in the clear either: the `file` part must declare its filename as exactly `encrypted` and its content type as absent or `application/octet-stream`. Anything else is a 400 `e2ee_metadata_in_clear`, refused rather than stored, because a real filename beside an encrypted body would leak the one thing the encryption was for. The real name, type and dimensions travel inside the attaching message's ciphertext.
+         *     An optional second part named `thumb` may follow `file` on an e2ee channel: a client-derived, client-encrypted thumbnail, at most 1 MiB. It is a 400 `invalid_request` beyond that size or on a plaintext channel, where the server derives thumbnails itself. The effective request-body cap on an e2ee channel is therefore `max_file_size_bytes` + 1 MiB; `max_file_size_bytes` itself is unchanged and applies to the uploaded ciphertext, so a client budgets its plaintext at the cap minus 28 bytes of nonce and tag.
+         */
+        post: operations["uploadFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels/{channelId}/read": {
         parameters: {
             query?: never;
@@ -633,6 +1119,243 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/me/mls/device": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register this client instance as an MLS device.
+         * @description An MLS leaf is a device, not a user, from the first group ever created — one signature key per browser profile, because sharing a signature key across devices means exporting private key material between browsers, and retrofitting device-ness later is a group-state migration inside every user's storage. Idempotent on (user, signature_public_key): re-registering the same key returns 200 with the existing device, so a client can call this on every startup without bookkeeping. The server stores the key as an opaque identifier; it never verifies a signature with it.
+         */
+        post: operations["registerMlsDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/mls/devices/{deviceId}/key-packages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deviceId: components["parameters"]["MlsDeviceId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace this device's pool of unclaimed key packages.
+         * @description Replace-all semantics, deliberately: a key package embeds its own expiry, which the server cannot read, so instead of the server guessing at staleness the client publishes a fresh batch on every connect and the previous unclaimed pool is deleted in the same transaction. Claimed packages are already gone (claims are consuming). Scoped to the caller's own devices — another user's device id answers 404 mls_device_not_found. Which of your own devices you publish under is not the server's to police: a session is not bound to a device, so it cannot tell, and does not need to — packages published under the wrong own-device, like garbage packages, only break your own addability. The server never validates that a package matches the device's signature key for the same reason.
+         */
+        put: operations["replaceMlsKeyPackages"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/mls/group": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The channel's MLS group, if one exists.
+         * @description Members only — a non-member gets the same channel_not_found 404 as on every channel-scoped path. A member of an e2ee channel with no group yet gets 404 mls_group_not_found, which is the signal to create one. The epoch is the server's sequencing claim, not cryptographic truth — clients trust their own group state and use this value to know how far behind the commit log they are.
+         */
+        get: operations["getMlsGroup"];
+        put?: never;
+        /**
+         * Create the channel's MLS group.
+         * @description Called by the first member whose client finds an e2ee channel with no group. The creator creates the group locally containing only itself, registers it here, then adds the other members by claiming their key packages and committing. Exactly one group per channel, enforced structurally — a concurrent second create answers 409 mls_group_exists, and that loser's client waits to be added instead. Refused on a channel without e2ee (400 e2ee_not_enabled).
+         */
+        post: operations["createMlsGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/mls/member-devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Every current member's registered device signature keys.
+         * @description The allow-list a client sweeps the MLS tree against (ADR 007). A leaf whose signature key does not appear here belongs to nobody who is currently in this channel, and reconciliation evicts it — which is what makes removal hold against a leaf credentialed under somebody else's id, since the credential is a string the enrolling client chose and is never again read for a security decision. Deliberately the whole roster in one answer rather than a per-user lookup: the sweep is "evict what is not allowed", and a per-user question can only ever confirm keys the directory already attributes correctly — the planted leaf is precisely the one no per-user answer names. Members only, so the same 404 as every channel-scoped path, and refused on a channel without e2ee (400 e2ee_not_enabled) since a channel with no group has no tree to sweep. Co-members already learn device ids at claim time, so this exposes the same information class and adds no reach. The keys are the server's claim, not a proof: the directory is written under an authenticated session and never signature-verified, and closing that residue is the verification slice's job, not this endpoint's.
+         */
+        get: operations["listMlsMemberDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/mls/key-package-claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim one key package per device of a member, to add them.
+         * @description Consuming read — each returned package is deleted in the same transaction and can never be handed out twice, because a key package is single-use by protocol and reusing one across groups is the bug this endpoint exists to make impossible. Deliberately channel-scoped rather than a public directory: the caller must be a member and the target must be a member of this channel, which kills the enumerate-and-exhaust surface a Signal-style open fetch would carry — on a closed instance nobody needs to claim packages of a person they share no conversation with. A target device whose pool is empty appears in missing_device_ids; a target with no devices at all returns both lists empty, and the client renders "cannot add yet" rather than pretending. The target being a non-member answers 404 member_not_found. Refused on a channel without e2ee (400 e2ee_not_enabled): a claim exists to add someone to this channel's group, and a channel with no possible group would make this endpoint a free pool-drain against anyone you share a plaintext channel with.
+         */
+        post: operations["claimMlsKeyPackages"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/mls/commits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The commit log after a given epoch, ascending.
+         * @description How a client catches up: it holds group state at epoch N and fetches every commit after N, in order, applying each. A brand-new joiner needs nothing here — its Welcome is self-contained. Pages by epoch: the last epoch received is the next after_epoch, and an empty page means caught up. The log is durable, unlike the WS replay buffer, because a device offline for a week must still be able to advance. A channel whose group does not exist yet answers a 200 empty page — the log of a group that is not there holds nothing, and the client flow has already asked GET …/mls/group before it gets here.
+         */
+        get: operations["listMlsCommits"];
+        put?: never;
+        /**
+         * Submit a commit — first-wins per epoch.
+         * @description The sequencing point of the whole design (ADR 006). The client names the epoch its commit was built at; the server accepts it only if that is still the group's current epoch, advancing the group by exactly one — a compare-and-swap, so of two concurrent committers exactly one wins and the other gets 409 mls_epoch_conflict, refetches the log, merges and retries. Welcomes for members this commit adds ride in the same request and are stored in the same transaction, because a committed add whose Welcome was lost is a forked group — atomicity here is group-integrity, not tidiness. Membership is checked but the blob is not parsed: the server cannot tell a real commit from noise, and does not need to — a garbage commit that wins an epoch is rejected by every member's own MLS validation, and the group repairs by committing past it.
+         */
+        post: operations["submitMlsCommit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/mls/backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch this account's sealed backup, if one exists.
+         * @description Owner only, and the only thing that can open it is a recovery key the server has never seen. 404 mls_backup_not_found when there is none — which is a state a person can genuinely be in, and the restore screen says so rather than implying a lost key.
+         */
+        get: operations["getMlsBackup"];
+        /**
+         * Store this account's sealed verification backup.
+         * @description One envelope per account, replaced in place (ADR 010). The server stores bytes it cannot read and never could: the key that opens them is derived from a recovery key generated on the device, shown once, and never sent here in any form — there is no reset, because a server that could reset it could read the backup, which is the entire thing this defends.
+         *     `counter` is a convenience copy of the value sealed inside the envelope's authenticated header, and the server refuses one that does not move forward (409 mls_backup_stale). That refusal is not the security control — the client checks the sealed counter against its own floor, which is what a lying server cannot forge — it is what stops an ordinary lost update between two of the owner's own devices.
+         */
+        put: operations["putMlsBackup"];
+        post?: never;
+        /**
+         * Forget this account's backup.
+         * @description Idempotent — deleting one that is not there is still 204. Deleting is the honest end of "I no longer want a copy of this off my device", and it is the one direction the server can take unilaterally anyway, so offering it changes nothing about what the server can do and quite a lot about what a person can.
+         */
+        delete: operations["deleteMlsBackup"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/mls/devices/{deviceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deviceId: components["parameters"]["MlsDeviceId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Drop one of this account's devices from the directory.
+         * @description The lost-device path. Without it a stolen or discarded device's signature key stays in the directory, and therefore stays inside every group's allow-list, for as long as the account exists — ADR 007's sweep evicts exactly what the directory stops listing, so this write is what makes the sweep able to act.
+         *     Owner only. Anything that is not currently one of the caller's devices answers 404 mls_device_not_found — another account's, one that never existed, and one this caller already deregistered are a single answer, so a guessed id confirms nothing. **A client retrying after a network failure must treat that 404 as success**: the device is gone either way, and the only thing the two answers distinguish is which attempt did it.
+         *     It does not revoke sessions and does not touch messages; it removes the key from the mapping other members' clients sweep against, and their next reconcile does the eviction. That is deliberately a separate act from signing the device out, because the two answer different questions and a person who has lost a laptop needs both.
+         */
+        delete: operations["deregisterMlsDevice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/mls/welcomes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Welcomes waiting for any of the caller's devices.
+         * @description Fetched on every connect and on the mls_welcome nudge. A Welcome is encrypted to one device's key package, so listing all of a user's pending Welcomes on any of their sockets reveals nothing — a sibling device holds bytes it cannot open. Explicit acknowledgement (the DELETE below) rather than delete-on-read, because a client that fetches and crashes before joining must find the Welcome still there.
+         */
+        get: operations["listMlsWelcomes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/mls/welcomes/{welcomeId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                welcomeId: components["parameters"]["MlsWelcomeId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Acknowledge a Welcome after successfully joining.
+         * @description Always 204. The DELETE is scoped to the caller's own devices' rows, so an id naming another user's Welcome, or nothing at all, deletes nothing and answers exactly like an already-acknowledged one — a guessed id can neither remove foreign state nor learn whether it named any. (An earlier draft answered 404 for foreign ids, which read as non-leaking and was not: nothing-vs-404 was a distinguisher. Uniform 204 is what makes the claim true.)
+         */
+        delete: operations["acknowledgeMlsWelcome"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/search": {
         parameters: {
             query?: never;
@@ -643,6 +1366,8 @@ export interface paths {
         /**
          * Search messages (and, from Phase 1.3, files).
          * @description Backs the search column. Scope is enforced inside the query by joining channel membership, so results, counts and snippets can never come from a conversation the caller is not in. Snippets are a parts array of {text, match} — the server never renders HTML; the design's highlight is drawn client-side from `match`. `total` is exact up to 200 and reports total_capped beyond that. `kind=files` is accepted now and returns an empty page until the Phase 1.3 upload pipeline exists; its result shape arrives with that slice.
+         *     Results are newest-first. Chat search is almost always a hunt for something recent, and the alternative — relevance ranking — is not available under the substring matching this endpoint uses; migration 0006's header records why that was chosen over a language-specific configuration.
+         *     Rate limited per account rather than per address, because what a search costs depends on how many messages the caller can reach: a needle shorter than three characters cannot use the trigram index and scans instead, and the contract allows one that short on purpose, since one- and two-character words are ordinary in Persian.
          */
         get: operations["search"];
         put?: never;
@@ -705,8 +1430,16 @@ export interface components {
             /** @enum {string} */
             locale: "en" | "fa";
             is_admin: boolean;
-            /** @description True until the user replaces their admin-assigned temporary password. While true, every endpoint except change-password, logout, and users/me returns 403 with code password_change_required. */
+            /** @description True until the user replaces their admin-assigned temporary password. While true, every endpoint except change-password, logout, reading and patching users/me returns 403 with code password_change_required. */
             must_change_password: boolean;
+            /** @description Whether this account has a single sign-on identity attached. It is what the settings screen offers Connect or Disconnect from. */
+            sso_linked: boolean;
+            /**
+             * @description True when this session was minted while the organisation requires two-step verification and this account has none activated. While true, every endpoint except logout, reading and patching users/me, and the TOTP enrolment endpoints returns 403 with code totp_enrollment_required, and the WebSocket refuses the upgrade. Patching is admitted for the same reason the password gate admits it: the only field it carries is locale, and somebody whose account language is wrong would otherwise be stuck reading a screen they cannot change in a language they cannot read.
+             *     It is a property of the session rather than of the account, which is what makes "at the next sign-in, never mid-session" true: turning the policy on strands nobody who is already working, including the administrator who turned it on.
+             *     The two gates are sequential, not simultaneous: while must_change_password is also true, only that gate applies. An account an administrator created on an instance that requires two-step carries both flags on its first sign-in, and the two allow-lists intersect at almost nothing -- enforcing both at once would leave that person able to do neither thing being demanded of them. The password comes first because a temporary password is a credential its holder does not yet exclusively hold, and changing it revokes every other session, so enrolment then happens on a session nobody else could be sharing.
+             */
+            totp_enrollment_required: boolean;
             /** Format: date-time */
             created_at: string;
         };
@@ -739,10 +1472,29 @@ export interface components {
             /** @default false */
             is_admin?: boolean;
         };
-        /** @description What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere. */
+        /** @description What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere. encryption_mode is here rather than only on the admin settings document because every member's creation surfaces need it and that document answers 403 to them. It is not withheld as a secret: an instance's encryption posture is a product characteristic its own users are entitled to know before they type anything into it, and a client that had to guess would guess wrong somewhere. */
         InstanceInfo: {
+            encryption_mode: components["schemas"]["EncryptionMode"];
+            /**
+             * Format: int64
+             * @description The per-file upload cap, published so a client can refuse a file before spending the user's bandwidth on a doomed request. The server enforces it regardless; this is a courtesy, not the check.
+             */
+            max_file_size_bytes: number;
             password_min_length: number;
             password_reset_available: boolean;
+            sso?: components["schemas"]["SsoStatus"];
+            /** @description False when no media server is configured -- a development server without the stack, or an install that has not enabled calls. The UI omits call controls rather than offering a door that goes nowhere, the same discipline password_reset_available follows. */
+            calls?: boolean;
+        };
+        OidcRedirect: {
+            /** @description The provider authorization URL to send the browser to. */
+            redirect_url: string;
+        };
+        SsoStatus: {
+            /** @description False when no provider is configured. The sign-in screen renders the button only when the door exists, rather than offering one that goes nowhere. */
+            enabled: boolean;
+            /** @description What to call the provider on the button. Present whenever enabled is true, and absent otherwise - a configured provider always has a name, defaulting to a generic one, so a client never has to render a button it cannot label. */
+            provider_name?: string;
         };
         /** @description The 202 login answer for an account with two-step verification on. methods lists how the challenge may be completed; totp is the only method until WebAuthn arrives. */
         TwoFactorChallenge: {
@@ -842,11 +1594,85 @@ export interface components {
          * @enum {string}
          */
         ChannelKind: "public" | "private" | "dm";
+        /** @description A conference as its owner or an administrator sees it. Never the link. */
+        Conference: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            /** @description Null when the account that made it is gone. */
+            created_by: components["schemas"]["UserSummary"] | null;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Null means it does not expire. See createConference.
+             */
+            expires_at?: string | null;
+            /** @description Whether anybody is in the room right now. */
+            active: boolean;
+        };
+        ConferencePage: {
+            conferences: components["schemas"]["Conference"][];
+        };
+        CreateConferenceRequest: {
+            /** @description What to call it. Guests see this before they join. */
+            title?: string;
+            /**
+             * Format: date-time
+             * @description Optional, for a link genuinely meant to be short-lived. Absent means it does not expire.
+             */
+            expires_at?: string | null;
+        };
+        CreatedConference: {
+            conference: components["schemas"]["Conference"];
+            /** @description The link, shown once. Only its hash is kept, so nothing can redisplay it — send it somewhere you trust. */
+            url: string;
+        };
+        /**
+         * @description What a link-holder may see before joining. Deliberately thin: whose instance is hosting, what the meeting is called, and whether anybody is in there. Not who created it, not who is in it, and nothing else about the instance.
+         *     `org_name` was left out of the first draft, on the reasoning that a preview should say as little as possible. That was wrong in a way the contract could have caught itself: `InvitePreview` carries the same field for the equally unauthenticated redemption screen, so the precedent already existed. And the cost of withholding it lands on the visitor — somebody following a link from a chat message, with no way to tell whose meeting they are about to walk into. A link-holder who can see the meeting's title learns nothing dangerous from the name of the organisation hosting it.
+         */
+        ConferencePreview: {
+            org_name: string;
+            title: string;
+            active: boolean;
+        };
+        JoinConferenceRequest: {
+            /** @description What the room calls you. Not verified, and cannot be. */
+            display_name: string;
+        };
+        CallParticipant: {
+            user: components["schemas"]["UserSummary"];
+            /** Format: date-time */
+            joined_at: string;
+            /** @description Whether this participant is publishing a screen share. */
+            screen_sharing?: boolean;
+        };
+        /** @description A channel's live call. `active` false means nobody is in it, and the other fields are absent rather than stale. */
+        ChannelCall: {
+            active: boolean;
+            /** Format: date-time */
+            started_at?: string;
+            participants?: components["schemas"]["CallParticipant"][];
+        };
+        CallToken: {
+            /** @description The join ticket, for the media client. Short-lived, single room, single identity. Never store it; ask again on the next join. */
+            token: string;
+            /** @description The room to join. Derived from the channel, and safe to hand back because no ticket this server mints can enumerate rooms -- the only people who ever see this name are already members of the channel it names. */
+            room: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
         /** @description One conversation. Only members ever receive a Channel — every channel-scoped path answers 404 to everyone else. */
         Channel: {
             /** Format: uuid */
             id: string;
             kind: components["schemas"]["ChannelKind"];
+            /**
+             * @description Fixed at creation, never toggled — flipping it either way on a live conversation is exactly the silent mode-switch the downgrade test forbids. In an e2ee channel every message carries the mls envelope and empty content, so the server holds nothing it can read. Two consequences a client renders honestly rather than papering over: no link previews, and no server-side search — unread counts are row counts and survive.
+             *     Mentions do work, by a different route: the sender declares them in mls.mentions, because the server cannot parse content it cannot read (ADR 014). Attachments work too — the bytes are opaque and every key travels inside the ciphertext (ADR 013), so a file in an encrypted conversation is encrypted rather than a lie.
+             */
+            e2ee: boolean;
             /** @description The name the sidebar renders after "#". Unique across non-DM channels; null for a direct message, which the client labels with dm_peer.display_name instead. */
             slug?: string | null;
             /** @description Empty string when unset — the header renders its own "No topic set" copy. Always empty for a direct message. */
@@ -900,6 +1726,8 @@ export interface components {
             kind: "public" | "private";
             /** @default  */
             topic?: string;
+            /** @description Omit it and the organisation's encryption mode decides (ADR 011). Send it and it must agree with that mode: under `strict`, false is refused with 400 e2ee_required_by_org; under `compliance`, true is refused with 400 e2ee_forbidden_by_org. There is no per-conversation opt-out, because one would be a hole in exactly the guarantee the mode exists to state. Immutable after creation — the flag is never updated, which is what makes a later mode switch unable to touch this conversation either way. */
+            e2ee?: boolean;
         };
         UpdateChannelRequest: {
             /** @description Empty string clears the topic. */
@@ -911,6 +1739,8 @@ export interface components {
              * @description The other person. Must not be the caller.
              */
             user_id: string;
+            /** @description Applies only when this call CREATES the DM; reopening an existing one returns it as it is, whatever this says — get-or-create is idempotent and a flag cannot re-decide a conversation that already exists, which is also why a mode switch cannot. On creation the organisation's encryption mode decides when this is omitted, and a value that disagrees with the mode is refused exactly as on channel creation (400 e2ee_required_by_org / e2ee_forbidden_by_org). */
+            e2ee?: boolean;
         };
         AddChannelMemberRequest: {
             /** Format: uuid */
@@ -921,7 +1751,191 @@ export interface components {
             /** @description Present when another page exists. */
             next_cursor?: string;
         };
-        /** @description A file card in the message list. Read-only on Message: attachments are created by the Phase 1.3 upload pipeline, so until that slice lands the array is always empty. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both. */
+        /** @description Only the fields present are changed. Locale is the only one: a screen that edits your own display name does not exist yet, and an endpoint that accepts a field nothing sends is a field nothing tests. */
+        UpdateCurrentUserRequest: {
+            /** @enum {string} */
+            locale?: "en" | "fa";
+        };
+        AdminUserPage: {
+            users: components["schemas"]["AdminUser"][];
+            /** @description Present when another page exists. */
+            next_cursor?: string;
+        };
+        /** @description A row of the users table. Carries what the dashboard shows and nothing more — never a password hash, never a session token. */
+        AdminUser: {
+            /** Format: uuid */
+            id: string;
+            username: string;
+            email?: string | null;
+            display_name: string;
+            is_admin: boolean;
+            /** @description False for a deactivated account — it cannot sign in and holds no sessions. */
+            is_active: boolean;
+            must_change_password: boolean;
+            /** @description Whether the account has a second factor. The org-settings screen uses it to say who enforcement will affect. */
+            has_totp?: boolean;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @description Only the fields present are changed. */
+        UpdateUserAdminRequest: {
+            is_admin?: boolean;
+            is_active?: boolean;
+        };
+        /** @description Shown once and never again — the password is stored only as an argon2id hash, so there is nothing to redisplay. */
+        TemporaryCredentials: {
+            username: string;
+            temporary_password: string;
+        };
+        CreateInviteRequest: {
+            /** @default 168 */
+            expires_in_hours?: number;
+            /** @description What this link is for; shown in the table, never to the invitee. */
+            note?: string;
+        };
+        /** @description The link is in this response and nowhere else: only its hash is stored, exactly as password-reset tokens are. */
+        CreatedInvite: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description `{base}/invite#token=<token>`. The token rides the **fragment**, which no browser sends to any server, so it cannot reach an access log, a Referer header or a proxy's history — the same reasoning the emailed reset link follows.
+             *     The shape is written down here because leaving it unsaid is not free: this field said only "string" for two phases, the two halves drifted into a path form on the client and a fragment form on the server, and every real invitation landed on the sign-in screen with nothing failing loudly.
+             */
+            url: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        /** @description A provisioning token as the table lists it. Never the token. */
+        ScimToken: {
+            /** Format: uuid */
+            id: string;
+            note?: string | null;
+            created_by: components["schemas"]["UserSummary"];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Null until the provider first authenticates with it. It is how an administrator tells a token that was configured from one that was minted and forgotten.
+             */
+            last_used_at?: string | null;
+        };
+        ScimTokenPage: {
+            tokens: components["schemas"]["ScimToken"][];
+        };
+        CreateScimTokenRequest: {
+            /** @description Optional, and only administrators see it. It exists so a list of opaque tokens can say which system holds which. */
+            note?: string;
+        };
+        CreatedScimToken: {
+            /** @description Shown once and never again. Only its hash is kept. */
+            token: string;
+            scim: components["schemas"]["ScimToken"];
+        };
+        /** @description An open invite, as the table lists it. Never the link itself. */
+        Invite: {
+            /** Format: uuid */
+            id: string;
+            created_by: components["schemas"]["UserSummary"];
+            note?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        InvitePage: {
+            invites: components["schemas"]["Invite"][];
+            next_cursor?: string;
+        };
+        /** @description What the redemption screen draws before anybody has an account. Deliberately says nothing about who issued the invite or for whom. */
+        InvitePreview: {
+            org_name: string;
+        };
+        RedeemInviteRequest: {
+            username: string;
+            /** @description The same bound every other password field carries. A shorter one here would refuse a passphrase at redemption that the account could set five minutes later. */
+            password: string;
+            display_name?: string;
+        };
+        /**
+         * @description How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
+         * @enum {string}
+         */
+        RegistrationMode: "invite" | "open";
+        SetEncryptionModeRequest: {
+            encryption_mode: components["schemas"]["EncryptionMode"];
+        };
+        /**
+         * @description Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+         * @enum {string}
+         */
+        EncryptionMode: "strict" | "compliance";
+        OrgSettings: {
+            encryption_mode: components["schemas"]["EncryptionMode"];
+            /** @description How many conversations this instance holds that are end-to-end encrypted. */
+            readonly encrypted_conversations: number;
+            /** @description How many are not. Both totals rather than one "outside the current mode" count, because the switch confirmation has to name what will be outside the mode being CHOSEN — which is the other set in each direction, so a single current-mode count would state the plaintext total as the encrypted one on a screen about encryption. Neither number ever moves on a switch: conversations are never converted, which is the whole of decision 2, so these are also the honest standing answer to "what does the mode not describe". */
+            readonly plaintext_conversations: number;
+            org_name: string;
+            /**
+             * @description The locale a new account starts in.
+             * @enum {string}
+             */
+            default_locale: "en" | "fa";
+            registration_mode: components["schemas"]["RegistrationMode"];
+            /** @description Enforced at the next sign-in, never mid-session — turning it on must not lock out the admin who turned it on. The mechanism is User.totp_enrollment_required, which is decided once when a session is minted; see that field. */
+            require_totp: boolean;
+            /** @description How many accounts enforcement would affect. Read-only, and the reason the screen can say who it hits before it is turned on. */
+            accounts_without_totp?: number;
+            /**
+             * @description Whether an identity the provider vouches for, matching no account here, creates one.
+             *     Off by default, and deliberately not inferred from registration_mode: that setting governs a self-serve password door, and "an administrator configured an identity provider" is not the same consent as "everyone in the directory may have an account here". While it is off, an unmatched identity creates nothing at all - the branch does not run, which is what makes single sign-on unable to walk around registration being closed.
+             *     An organisation provisioning through SCIM can leave this off entirely; it exists for organisations that want single sign-on without a sync engine.
+             */
+            sso_jit_provisioning: boolean;
+            /**
+             * @description How long a session may live before its refresh token expires, read at every mint, including the rotation a refresh performs. Shortening it does not retroactively end an already-issued window, so an idle session keeps the window it has.
+             *     Read what it governs carefully: it bounds how long a session may go UNUSED, not how long it may exist. A client that keeps refreshing renews its window each time and can stay signed in indefinitely — which is also why "enforced at the next sign-in" can, for a continuously active client, mean a long time. Ending a specific session now is what the device list and administrative deactivation are for. The server's own maximum is the ceiling, so a value above it is clamped rather than refused.
+             */
+            session_lifetime_hours: number;
+        };
+        /** @description Only the fields present are changed; each saves on its own. */
+        UpdateOrgSettingsRequest: {
+            org_name?: string;
+            /** @enum {string} */
+            default_locale?: "en" | "fa";
+            registration_mode?: components["schemas"]["RegistrationMode"];
+            require_totp?: boolean;
+            sso_jit_provisioning?: boolean;
+            session_lifetime_hours?: number;
+        };
+        /** @description One recorded action. `actor` is null for something the system did rather than a person. */
+        AuditEntry: {
+            /** Format: uuid */
+            id: string;
+            /** @description Namespaced verb, e.g. user.deactivated, invite.created. */
+            action: string;
+            actor?: components["schemas"]["UserSummary"] | null;
+            /** Format: uuid */
+            target_id?: string | null;
+            /** @description What the target was called when this happened, kept so the log still reads correctly after a rename or a deletion. */
+            target_label?: string | null;
+            detail?: {
+                [key: string]: unknown;
+            } | null;
+            ip?: string | null;
+            /** Format: date-time */
+            occurred_at: string;
+        };
+        AuditPage: {
+            entries: components["schemas"]["AuditEntry"][];
+            /** @description False means the hash chain over the returned entries does not verify — somebody edited or removed a row in the database. It is not a display concern. */
+            chain_valid: boolean;
+            next_cursor?: string;
+        };
+        /**
+         * @description A file card in the message list. Read-only on Message: a file becomes an attachment by being uploaded first and named in the send's attachment_ids, never by being written here.
+         *     On an e2ee channel these fields are placeholders, not description: `filename` is `encrypted`, `content_type` is `application/octet-stream`, `size_bytes` is the size of the ciphertext, and there are no dimensions — the server was never told the real ones. The card renders from metadata the client decrypts out of the message, so an unreadable message yields an unreadable card rather than a card that lies. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both.
+         */
         Attachment: {
             /** Format: uuid */
             id: string;
@@ -933,9 +1947,9 @@ export interface components {
             /** @description Images only — the card's "1600 × 900" line. */
             width?: number | null;
             height?: number | null;
-            /** @description Download target. Served from the cookie-less files origin (Phase 1.3). */
+            /** @description Download target on the cookie-less files origin. Signed and expiring (about an hour): that origin carries no cookies, so a fresh URL is the credential, minted every time an Attachment is serialized for somebody entitled to see it. Stale ones answer 404 — re-fetch the message for fresh links, never store these. */
             url: string;
-            /** @description Images only — the card's preview. */
+            /** @description Images only — the card's preview, signed and expiring like url. Thumbnails are derivatives generated at ingest from the stripped original, bounded to 512px on the long edge. */
             thumbnail_url?: string | null;
         };
         /** @description The link-preview card: image, title, description, and the host line the client derives from url. Read-only, and always absent until the Phase 1.3 egress preview proxy exists. */
@@ -943,6 +1957,7 @@ export interface components {
             url: string;
             title?: string | null;
             description?: string | null;
+            /** @description Always on this instance's own files origin, never the remote site: the preview image is fetched by the server through the same egress guard as the page, stored as a bounded derivative, and served signed like any attachment. A reader's browser must never be made to fetch a stranger's server — and the strict img-src 'self' CSP would refuse it anyway. */
             image_url?: string | null;
         };
         Message: {
@@ -970,10 +1985,12 @@ export interface components {
              * @description Non-null renders the dashed "Message removed" placeholder. The row keeps its place in history so the conversation never reshapes.
              */
             deleted_at?: string | null;
-            /** @description Always empty until the Phase 1.3 upload pipeline lands. */
+            /** @description The message's file cards, in the order the sender listed them in attachment_ids. Empty when the message carries no files. */
             attachments: components["schemas"]["Attachment"][];
             /** @description Absent until the Phase 1.3 preview proxy lands. */
             link_preview?: components["schemas"]["LinkPreview"];
+            /** @description Present on every message of an e2ee channel (until deletion erases it), absent everywhere else — content is empty exactly when this is present. */
+            mls?: components["schemas"]["MlsMessageEnvelope"];
         };
         /** @description One page of history, always ordered ascending by (created_at, id). The two cursors are the handles for the next scrollback and the next forward fetch; each is absent when there is nothing more in that direction. */
         MessagePage: {
@@ -985,15 +2002,28 @@ export interface components {
         };
         SendMessageRequest: {
             /**
+             * @description Files previously uploaded to this channel by this caller and not yet attached to any message, attached atomically with the send. An id that names anything else — another channel's file, another person's, one already attached — answers 404 attachment_not_found, one code for every miss so nothing about other people's uploads leaks. Duplicates in the list are a 400.
+             *     The ORDER of this list is significant and is preserved: a message's cards come back in it, on the send response and on every later read. It is the order the person arranged their files in, which is not the order the uploads finished — one request per file goes out concurrently, so completion order is a property of the network.
+             */
+            attachment_ids?: string[];
+            /**
              * Format: uuid
              * @description Generated by the client once per message and reused verbatim on every retry. Unique per (channel, author).
              */
             client_msg_id: string;
-            /** @description Markdown as authored, with one extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name. */
+            /** @description Markdown as authored. May be empty only when attachment_ids is non-empty — an image with no caption is an ordinary message, a message with neither text nor files is nothing (400). One extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name. */
             content: string;
+            /**
+             * @description Required on an e2ee channel, refused elsewhere — the write path enforces the boundary in both directions rather than trusting clients to keep it. On an e2ee channel content must be the empty string (400 e2ee_required); on a plaintext channel this field is a 400 e2ee_not_enabled. Idempotency by client_msg_id is unchanged.
+             *     attachment_ids is permitted beside this field (ADR 013). The ids must name opaque uploads to the same channel; every per-file key and the real filename, type and dimensions travel inside the ciphertext, so the server stores bytes it cannot open and metadata it was never given.
+             */
+            mls?: components["schemas"]["MlsMessageEnvelope"];
         };
         EditMessageRequest: {
+            /** @description Non-empty on a plaintext channel. On an e2ee channel it must be the empty string, with the new ciphertext in mls — same rule as send. */
             content: string;
+            /** @description The replacement ciphertext. Required on an e2ee channel, refused elsewhere — the same boundary as send, at the same choke point. */
+            mls?: components["schemas"]["MlsMessageEnvelope"];
         };
         SetReadPositionRequest: {
             /**
@@ -1002,8 +2032,163 @@ export interface components {
              */
             message_id: string;
         };
+        RegisterMlsDeviceRequest: {
+            /** @description Base64. The device's MLS signature public key — an opaque identifier to the server, the idempotency key of registration, and the handle other members' clients verify against. Sized for Ed25519 today with headroom for post-quantum suites. */
+            signature_public_key: string;
+        };
+        MlsDevice: {
+            /** Format: uuid */
+            id: string;
+            /** @description Base64, echoed as registered. */
+            signature_public_key: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ReplaceMlsKeyPackagesRequest: {
+            /** @description Base64 key packages, each single-use. The measured size today is ~275 bytes raw; the cap leaves room for post-quantum suites without renegotiating the contract. */
+            key_packages: string[];
+        };
+        MlsKeyPackagePool: {
+            /** @description Unclaimed packages now stored for this device — what the client checks on connect to decide whether to replenish. */
+            unclaimed_count: number;
+        };
+        CreateMlsGroupRequest: {
+            /** @description Base64, at most 64 raw bytes, chosen by the creating client — the MLS GroupId. Opaque to the server; unique across the instance. */
+            group_id: string;
+        };
+        MlsGroup: {
+            /** @description Base64, as registered at creation. */
+            group_id: string;
+            /**
+             * Format: int64
+             * @description The server's sequencing claim — how many commits the log holds — not cryptographic truth. Clients trust their own group state and use this to see how far behind they are.
+             */
+            epoch: number;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ClaimMlsKeyPackagesRequest: {
+            /**
+             * Format: uuid
+             * @description The member whose devices are being added. May be the caller — that is how a person's own second device gets added.
+             */
+            user_id: string;
+        };
+        PutMlsBackupRequest: {
+            /** @description Base64 of `header ‖ iv ‖ ciphertext` (ADR 010). The header is the magic HMLB, a version byte, and the length-prefixed framing of the counter and the user id, used verbatim as the AEAD's additional data — so a server that edits any of it produces a blob that will not open, rather than one that opens differently. The cap is ~512 KiB raw: verification records are kilobytes, and this endpoint is not a blob store. */
+            envelope: string;
+            /**
+             * Format: int64
+             * @description A readable copy of the counter sealed in the header. The server compares it only to refuse a backward write; the client compares the SEALED one against its own stored floor, which is the check a hostile server cannot pass by lying here.
+             */
+            counter: number;
+        };
+        MlsBackup: {
+            /** @description Base64, exactly as stored. */
+            envelope: string;
+            /** Format: int64 */
+            counter: number;
+            /**
+             * Format: date-time
+             * @description When the server last accepted a write. Shown to the person during a restore so a rolled-back envelope has a visible date to disagree with — the only defence available on a first restore, where the device that would hold the floor is the one that was lost.
+             */
+            updated_at: string;
+        };
+        /** @description One member and the signature keys of every device they have registered. A member with no devices yet appears with an empty list rather than being omitted, so a client can tell "has no device" from "is not a member" without a second question. */
+        MlsMemberDevice: {
+            /** Format: uuid */
+            user_id: string;
+            /** @description Base64, as registered. Opaque to the server. */
+            signature_public_keys: string[];
+        };
+        MlsMemberDevicePage: {
+            members: components["schemas"]["MlsMemberDevice"][];
+            /** @description Present when another page exists. A client must read every page before sweeping: an allow-list built from half the roster would evict the members it had not read yet. */
+            next_cursor?: string;
+        };
+        MlsKeyPackageClaim: {
+            /** Format: uuid */
+            device_id: string;
+            /** @description Base64. Consumed — this package will never be handed out again. */
+            key_package: string;
+        };
+        MlsKeyPackageClaims: {
+            claims: components["schemas"]["MlsKeyPackageClaim"][];
+            /** @description The target's devices whose pool was empty — they cannot be added until they replenish. Both lists empty means the target has no MLS devices at all; the client says "cannot add yet" rather than pretending. */
+            missing_device_ids: string[];
+        };
+        SubmitMlsCommitRequest: {
+            /**
+             * Format: int64
+             * @description The epoch this commit was built at. Accepted only while it is still current — the compare-and-swap that makes one commit win each epoch.
+             */
+            epoch: number;
+            /** @description Base64 MLSMessage carrying the commit. The cap (~256 KiB raw) bounds a commit for a large tree; measured today a two-member commit is under 1 KiB. */
+            message: string;
+            /** @description Welcomes for the devices this commit adds, stored atomically with the commit — a committed add whose Welcome was lost is a forked group. MLS produces ONE Welcome covering every member a commit adds, so a delivery names many devices and carries the blob once; a shape that repeated the blob per device would multiply a tree-sized payload by the member count, which is the 70 MB request the first implementation caught. The whole request is additionally bounded by an 8 MiB body cap on this endpoint, stated here so the per-item caps cannot be read as multiplying past it. */
+            welcomes?: components["schemas"]["MlsWelcomeDelivery"][];
+        };
+        MlsWelcomeDelivery: {
+            /** @description Every claimed device this Welcome covers. The server stores one pending-Welcome row per device; each recipient extracts its own secrets from the shared blob. */
+            device_ids: string[];
+            /** @description Base64 Welcome, encrypted to the claimed key packages of every device it names. */
+            welcome: string;
+        };
+        MlsCommit: {
+            /**
+             * Format: int64
+             * @description The epoch the group REACHED by this commit — the submitted epoch plus one. This is the only numbering under which after_epoch=<your epoch> returns exactly the commits you have not applied, and under which a fresh group at epoch 0 has an empty log.
+             */
+            epoch: number;
+            /** @description Base64, as submitted. */
+            message: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        MlsCommitPage: {
+            /** @description Ascending by epoch. The last epoch received is the next after_epoch; an empty page means caught up — epochs are the cursor, so there is no separate one. */
+            commits: components["schemas"]["MlsCommit"][];
+        };
+        MlsWelcome: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            channel_id: string;
+            /** @description Base64. */
+            group_id: string;
+            /**
+             * Format: uuid
+             * @description Which of the caller's devices this Welcome is encrypted to. The others hold bytes they cannot open.
+             */
+            device_id: string;
+            /** @description Base64. */
+            welcome: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        MlsWelcomeList: {
+            /** @description Oldest first. */
+            welcomes: components["schemas"]["MlsWelcome"][];
+        };
+        /** @description The encrypted half of a message in an e2ee channel. The server stores and echoes it without parsing; content is the empty string wherever this is present, so nothing the server can read ever carries the words. Deleting the message erases the ciphertext exactly as it erases content; editing replaces it and stamps edited_at as for any edit. */
+        MlsMessageEnvelope: {
+            /**
+             * Format: int64
+             * @description The group epoch the sender encrypted at — a routing hint for receivers holding older state, never a server-verified claim.
+             */
+            epoch: number;
+            /** @description Base64 MLSMessage (application message). Cap ~32 KiB raw: a 4000-character message plus MLS framing fits with room, and the resulting message_created frame stays far under the 64 KiB WebSocket cap. */
+            ciphertext: string;
+            /**
+             * @description Sender-declared notification routing for an encrypted message (ADR 014). The server cannot read the ciphertext, so it cannot derive mentions the way it does on a plaintext channel — the sender names them instead.
+             *     Ids that are not current members of the channel are dropped silently, duplicates collapse, and order is irrelevant: the write joins this list against channel_members, which is what keeps a declaration from naming a stranger. Trusting the sender here therefore widens nothing the membership join did not already bound.
+             *     Never echoed on reads. Recipients render mentions from the tokens in the decrypted content; this list exists only so the badge and any later notification can outlive the reader's ability to decrypt.
+             *     PRIVACY: this list is visible to the server. It is the one content-derived fact an encrypted message discloses — a directed sender-to-member edge — and it is named in the threat model rather than left implicit.
+             */
+            mentions?: string[];
+        };
         /**
-         * @description The two tabs above the results. `files` is accepted from Phase 1.2 but returns an empty page until the Phase 1.3 upload pipeline exists.
+         * @description The two tabs above the results. `files` searches filenames, scoped by channel membership exactly as messages are.
          * @default messages
          * @enum {string}
          */
@@ -1017,7 +2202,7 @@ export interface components {
         SearchSnippet: {
             parts: components["schemas"]["SearchSnippetPart"][];
         };
-        /** @description One message hit: where it was said, by whom, when, and the matching run of text. The result shape for kind=files arrives with Phase 1.3. */
+        /** @description One hit. For kind=messages: where it was said, by whom, when, and the matching run of text. For kind=files the same shape carries the attachment, and the snippet runs over the filename — same matching, same honesty about it (substrings, not stems). message_id points at the message the file rode in on, which is where a click lands. */
         SearchResult: {
             /** Format: uuid */
             message_id: string;
@@ -1026,6 +2211,8 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             snippet: components["schemas"]["SearchSnippet"];
+            /** @description Present exactly when kind is files. */
+            attachment?: components["schemas"]["Attachment"];
         };
         SearchPage: {
             kind: components["schemas"]["SearchKind"];
@@ -1075,10 +2262,10 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description Too many attempts; retry later. Carries Retry-After on the auth paths, so a client can show a real countdown instead of guessing — without it the sign-in form has no honest way to say when the door reopens. */
+        /** @description Too many attempts; retry later. Always carries Retry-After, so a client can show a real countdown instead of guessing — without it a form has no honest way to say when the door reopens. */
         RateLimited: {
             headers: {
-                /** @description Whole seconds until the caller's budget frees up. Present on the login, two-step and account-security 429s; the password-reset endpoints do not carry it yet (recorded in ROADMAP). */
+                /** @description Whole seconds until the caller's budget frees up. Present on every 429 this server sends: one function writes them all and it sets the header unconditionally, so carrying it is a property of the code rather than something each handler has to remember. */
                 "Retry-After"?: number;
                 [name: string]: unknown;
             };
@@ -1091,6 +2278,10 @@ export interface components {
         /** @description A channel or direct message the caller is a member of. */
         ChannelId: string;
         MessageId: string;
+        UserId: string;
+        MlsDeviceId: string;
+        MlsWelcomeId: string;
+        InviteId: string;
     };
     requestBodies: never;
     headers: never;
@@ -1387,6 +2578,33 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    updateCurrentUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCurrentUserRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated account. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
     getTotpStatus: {
         parameters: {
             query?: never;
@@ -1515,6 +2733,146 @@ export interface operations {
             };
         };
     };
+    startOidcSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Go to the identity provider. */
+            302: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["RateLimited"];
+            /** @description Single sign-on is not configured, or the provider's discovery document could not be fetched (code sso_unavailable). Password sign-in is unaffected. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    completeOidcSignIn: {
+        parameters: {
+            query?: {
+                code?: string;
+                state?: string;
+                error?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed in, challenged, or sent back with an error code. */
+            302: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["RateLimited"];
+            /** @description Single sign-on is not configured (code sso_unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    linkOidcIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Follow this to the provider. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OidcRedirect"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description This account already has an identity linked (code sso_already_linked). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            /** @description Single sign-on is not configured (code sso_unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    unlinkOidcIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The identity is no longer linked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Nothing was linked (code sso_not_linked). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The account has no password, so this is its only way in (code sso_unlink_no_password). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
     disableTotp: {
         parameters: {
             query?: never;
@@ -1537,7 +2895,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
-            /** @description Password incorrect (code invalid_current_password). */
+            /** @description Password incorrect (code invalid_current_password), or the organisation requires two-step verification (code totp_required_by_org). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -1728,13 +3086,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One page of users. */
+            /** @description One page of users, in the admin shape — the table draws an active/inactive column and the org-settings screen counts accounts without a second factor, so the list has to carry both. A list whose rows lack a column the same screen renders would leave the dashboard learning a user's state only from the row it just changed. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UserPage"];
+                    "application/json": components["schemas"]["AdminUserPage"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -1775,6 +3133,400 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    updateUserAdmin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUserAdminRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUser"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Refused on a rule the dashboard must not be able to break (last_admin, self_deactivation). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    forcePasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The temporary password, shown once. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemporaryCredentials"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listScimTokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every token that has not been revoked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScimTokenPage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createScimToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateScimTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description The token, shown once. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedScimToken"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    revokeScimToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tokenId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The token is dead. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listInvites: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Opaque pagination cursor from a previous response. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of open invites. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitePage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description The invite link, shown once. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedInvite"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    revokeInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                inviteId: components["parameters"]["InviteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked, or already gone. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    previewInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The invite token from the link. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The invitation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitePreview"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    redeemInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The invite token from the link. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description Account created; sign in normally. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+            /** @description That username is taken (code username_taken). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    setOrgEncryptionMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetEncryptionModeRequest"];
+            };
+        };
+        responses: {
+            /** @description The settings as they now stand. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description `compliance` was asked for while it is not yet available (code encryption_mode_locked). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getOrgSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettings"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateOrgSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateOrgSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description The settings as they now stand. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listAuditEntries: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Opaque pagination cursor from a previous response. */
+                cursor?: string;
+                /** @description Filter to one action. */
+                action?: string;
+                /** @description Filter to one actor. */
+                actor_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the log. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     listChannels: {
@@ -2041,6 +3793,205 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    listConferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The conferences you may see. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConferencePage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createConference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateConferenceRequest"];
+            };
+        };
+        responses: {
+            /** @description The conference, and its link. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedConference"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["RateLimited"];
+            /** @description Calls are not configured (code calls_unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    revokeConference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conferenceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link is dead and the room is closed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    previewConference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The conference behind the link. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConferencePreview"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    joinConference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JoinConferenceRequest"];
+            };
+        };
+        responses: {
+            /** @description The ticket. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallToken"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            /** @description Calls are not configured (code calls_unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getChannelCall: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The call, or that there is not one. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelCall"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createCallToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The ticket. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallToken"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            /** @description Calls are not configured on this instance (code calls_unavailable). Chat is unaffected. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     listMessages: {
         parameters: {
             query?: {
@@ -2182,6 +4133,67 @@ export interface operations {
             };
         };
     };
+    uploadFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Stored. The attachment's url and thumbnail_url are signed and expiring — the files origin is cookie-less, so possession of a fresh URL is the credential, and every serialization of an Attachment mints fresh ones. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Attachment"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such channel — including one the caller is not in. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The file exceeds max_file_size_bytes (code file_too_large). */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Declared image bytes that are not that image (code content_type_mismatch). */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
     setReadPosition: {
         parameters: {
             query?: never;
@@ -2208,6 +4220,406 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    registerMlsDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterMlsDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description This signature key is already registered; the existing device. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsDevice"];
+                };
+            };
+            /** @description Device registered. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsDevice"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    replaceMlsKeyPackages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deviceId: components["parameters"]["MlsDeviceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplaceMlsKeyPackagesRequest"];
+            };
+        };
+        responses: {
+            /** @description Pool replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsKeyPackagePool"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getMlsGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The group. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsGroup"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createMlsGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMlsGroupRequest"];
+            };
+        };
+        responses: {
+            /** @description Group registered at epoch 0. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsGroup"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            /** @description A group already exists for this channel (code mls_group_exists). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listMlsMemberDevices: {
+        parameters: {
+            query?: {
+                /** @description From a previous page's next_cursor. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of members and their device keys. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsMemberDevicePage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    claimMlsKeyPackages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimMlsKeyPackagesRequest"];
+            };
+        };
+        responses: {
+            /** @description The claimed packages, one per addressable device. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsKeyPackageClaims"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listMlsCommits: {
+        parameters: {
+            query: {
+                after_epoch: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Commits after the given epoch, ascending. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsCommitPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    submitMlsCommit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitMlsCommitRequest"];
+            };
+        };
+        responses: {
+            /** @description Commit accepted; the group advanced one epoch. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            /** @description The named epoch is no longer current (code mls_epoch_conflict). Fetch the commits you are missing and rebuild the commit. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getMlsBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sealed envelope. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsBackup"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    putMlsBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutMlsBackupRequest"];
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description The counter does not move forward (code mls_backup_stale). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    deleteMlsBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Gone, or already was. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    deregisterMlsDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deviceId: components["parameters"]["MlsDeviceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deregistered. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listMlsWelcomes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pending welcomes, oldest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsWelcomeList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    acknowledgeMlsWelcome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                welcomeId: components["parameters"]["MlsWelcomeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Acknowledged, already acknowledged, or never yours to acknowledge — indistinguishable by design. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
         };
     };
     search: {

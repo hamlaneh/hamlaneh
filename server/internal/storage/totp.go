@@ -30,6 +30,10 @@ var (
 	// ErrTotpNotEnabled reports an action that needs a live second factor on
 	// an account that has none.
 	ErrTotpNotEnabled = errors.New("storage: two-step verification not enabled")
+
+	// ErrTotpRequiredByOrg reports an attempt to switch off a second factor
+	// the organisation requires.
+	ErrTotpRequiredByOrg = errors.New("storage: two-step verification is required by the organisation")
 	// ErrTotpSetupNotVerified reports an activation with nothing to
 	// activate: no pending setup, one that never verified, or an expired one.
 	ErrTotpSetupNotVerified = errors.New("storage: two-step setup not verified")
@@ -260,20 +264,48 @@ func (s *Store) VerifyTotpSetup(ctx context.Context, v TotpSetupVerification) (T
 // the account cannot use: the setup must exist, be unexpired, have verified
 // an authenticator code, and hold at least one unused recovery code — the
 // fallback the user was shown at step 2.
+//
+// Activation also clears totp_enrollment_required on EVERY session of the
+// user, in the same transaction: the account now satisfies the org policy,
+// and a person who signed in on two devices under it must find both
+// unblocked, not just the one that ran the setup (ADR 004). The advisory
+// lock serializes this against concurrent session mints, so no login can
+// slip a freshly flagged session past the sweep.
 func (s *Store) ActivateTotp(ctx context.Context, userID uuid.UUID) (time.Time, error) {
 	var activatedAt time.Time
-	err := s.pool.QueryRow(ctx,
-		`UPDATE user_totp SET activated_at = now()
-		  WHERE user_id = $1
-		    AND activated_at IS NULL
-		    AND verified_at IS NOT NULL
-		    AND setup_expires_at > now()
-		    AND EXISTS (SELECT 1 FROM user_recovery_codes
-		                 WHERE user_id = $1 AND used_at IS NULL)
-		 RETURNING activated_at`,
-		userID,
-	).Scan(&activatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if lockErr := lockSessionMint(ctx, tx, userID); lockErr != nil {
+			return lockErr
+		}
+
+		err := tx.QueryRow(ctx,
+			`UPDATE user_totp SET activated_at = now()
+			  WHERE user_id = $1
+			    AND activated_at IS NULL
+			    AND verified_at IS NOT NULL
+			    AND setup_expires_at > now()
+			    AND EXISTS (SELECT 1 FROM user_recovery_codes
+			                 WHERE user_id = $1 AND used_at IS NULL)
+			 RETURNING activated_at`,
+			userID,
+		).Scan(&activatedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrTotpSetupNotVerified
+		}
+		if err != nil {
+			return fmt.Errorf("set activated: %w", err)
+		}
+
+		if _, err := tx.Exec(ctx,
+			`UPDATE sessions SET totp_enrollment_required = false
+			  WHERE user_id = $1 AND totp_enrollment_required`,
+			userID,
+		); err != nil {
+			return fmt.Errorf("clear enrollment flags: %w", err)
+		}
+		return nil
+	})
+	if errors.Is(err, ErrTotpSetupNotVerified) {
 		return time.Time{}, ErrTotpSetupNotVerified
 	}
 	if err != nil {
@@ -290,6 +322,22 @@ func (s *Store) ActivateTotp(ctx context.Context, userID uuid.UUID) (time.Time, 
 // survived. The password prompt in front of this call is the defence.
 func (s *Store) DisableTotp(ctx context.Context, userID uuid.UUID) error {
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		// The organisation's policy outranks the account's own preference,
+		// and it is read inside this transaction so an administrator turning
+		// it on cannot be raced by a disable that read the old value.
+		//
+		// Without this the enforcement built in 1.6 binds on everybody except
+		// the people it is aimed at: enrol, sign in without the flag, switch
+		// the second factor back off, and keep refreshing. The gate only ever
+		// looks at sessions minted since, so that account never sees it again.
+		var required bool
+		if err := tx.QueryRow(ctx, `SELECT require_totp FROM org_settings`).Scan(&required); err != nil {
+			return fmt.Errorf("read org policy: %w", err)
+		}
+		if required {
+			return ErrTotpRequiredByOrg
+		}
+
 		if _, err := tx.Exec(ctx, `DELETE FROM totp_challenges WHERE user_id = $1`, userID); err != nil {
 			return fmt.Errorf("drop challenges: %w", err)
 		}

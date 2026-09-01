@@ -24,7 +24,9 @@ const (
 	// AccessTTL bounds how long a stolen access token works.
 	AccessTTL = 15 * time.Minute
 	// RefreshTTL bounds how long a session survives without use; each
-	// rotation starts a fresh refresh window.
+	// rotation starts a fresh refresh window. Since ADR 004 it is the
+	// CEILING on that window, not the value: the org's configured
+	// session_lifetime_hours is read at each mint and clamped to it.
 	RefreshTTL = 30 * 24 * time.Hour
 )
 
@@ -65,6 +67,37 @@ func NewToken() (raw string, hash []byte) {
 func HashToken(raw string) []byte {
 	sum := sha256.Sum256([]byte(raw))
 	return sum[:]
+}
+
+// TokenLen is the exact length of every value NewToken produces: tokenBytes
+// base64url-encoded without padding.
+const TokenLen = (tokenBytes*8 + 5) / 6
+
+// PlausibleToken reports whether raw could have come from NewToken — the
+// right length, and nothing outside the base64url alphabet.
+//
+// It is a shape check and NOT an authentication decision: passing it means
+// only that a database lookup is worth doing. It exists so a caller that
+// authenticates an unauthenticated stream of guesses can throw the obvious
+// nonsense away without spending a query on it. Callers still resolve the
+// digest and still answer their single refusal for everything that does not.
+//
+// It lives here because this is where the format is decided. A copy of "43
+// characters of base64url" anywhere else would silently start rejecting
+// every real token the day tokenBytes changed.
+func PlausibleToken(raw string) bool {
+	if len(raw) != TokenLen {
+		return false
+	}
+	for i := range len(raw) {
+		c := raw[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // NewCSRFToken generates the per-login CSRF double-submit value. It is never
