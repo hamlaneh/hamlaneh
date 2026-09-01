@@ -15,6 +15,14 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 import type { Translate } from "./i18n";
 
+/** One stored attachment, as the upload's own 201 describes it. */
+export interface UploadedFile {
+  id: string;
+  filename: string;
+  content_type: string;
+  url: string;
+}
+
 /**
  * The writing direction the browser actually resolved for an element.
  *
@@ -237,7 +245,11 @@ export class App {
    * "attached" has to mean it, and a test that fails should fail where the
    * truth is — the same rule accounts.ts's `expectOk` follows.
    */
-  async attachFile(file: { name: string; mimeType: string; buffer: Buffer }): Promise<void> {
+  async attachFile(file: {
+    name: string;
+    mimeType: string;
+    buffer: Buffer;
+  }): Promise<UploadedFile> {
     const uploaded = this.page.waitForResponse(
       (response) =>
         /\/api\/v1\/channels\/[^/]+\/files$/.test(new URL(response.url()).pathname) &&
@@ -252,6 +264,12 @@ export class App {
         `file upload (${file.name}): ${String(response.status())} ${await response.text()}`,
       );
     }
+    // The 201 is the only place the signed URL appears. A spec whose subject
+    // is how the bytes come back OUT needs it, and this is now the only way
+    // to get one: the plaintext API upload it used to arrange with is refused
+    // outright in an encrypted conversation (`400 e2ee_required`), and since
+    // ADR 011 there is no other kind.
+    return (await response.json()) as UploadedFile;
   }
 
   /** Inserts a `<@{user_id}>` mention token through the composer's picker. */

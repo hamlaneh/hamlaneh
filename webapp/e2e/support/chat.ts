@@ -23,7 +23,7 @@
  */
 import { randomBytes } from "node:crypto";
 
-import { del, expectOk, post, postFile, type ApiSession, type TestAccount } from "./accounts";
+import { del, expectOk, post, type ApiSession, type TestAccount } from "./accounts";
 import type { App } from "./app";
 import type { OpenApp } from "./fixtures";
 
@@ -119,35 +119,6 @@ export async function seedMessages(
     await app.sendMessage(content);
   }
   return app;
-}
-
-/**
- * A stored attachment, reduced to the fields the file specs turn on. The URL
- * is signed and expiring (about an hour), so it is used immediately and never
- * kept — the contract's own rule.
- */
-export interface UploadedFile {
-  id: string;
-  filename: string;
-  content_type: string;
-  url: string;
-}
-
-/**
- * Uploads one file into a channel — arrangement for the specs whose subject is
- * how the bytes come back OUT. The upload driven through the composer, which
- * is the act, lives in the live-delivery spec.
- */
-export async function uploadFileApi(
-  session: ApiSession,
-  channelId: string,
-  file: { name: string; mimeType: string; buffer: Buffer },
-): Promise<UploadedFile> {
-  const response = await expectOk(
-    await postFile(session, `/api/v1/channels/${channelId}/files`, file),
-    `file upload (${file.name})`,
-  );
-  return (await response.json()) as UploadedFile;
 }
 
 /** Opens (or reuses) the direct message between this session's user and one other. */
