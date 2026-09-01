@@ -73,16 +73,20 @@ first screen. Repository code and documentation are English.
 
 ## Project status
 
-**Early development — Phase 4 (packaging polish).** Phases 0 through 3 are
+**Early development — Phase 4 (packaging polish).** Phases 0 through 2 are
 code-complete: install stack, identity and enterprise SSO, chat, DMs, files, search,
-admin dashboard, a bilingual UI, calls and conferences on LiveKit, and end-to-end
-encryption with MLS. Phase 4 is the work that makes it installable by a stranger, and
-public launch is gated on that phase's test gate rather than on a date.
+admin dashboard, a bilingual UI, and calls and conferences on LiveKit. Phase 3 (MLS
+end-to-end encryption) has shipped its core — encrypted conversations are the default
+and the only mode, encrypted attachments included — with key sync across a person's
+devices still open. Phase 4 built the packaging toolchain: the SQLite-backed home mode,
+signed releases with SBOM and anti-rollback verification, the auto-updater, operator
+backups, and a Tauri desktop shell that builds on all three OSes in CI. Public launch is
+gated on that phase's test gate rather than on a date.
 
 Not yet done, and stated here rather than discovered later: there is no tagged release,
-so the update pipeline has never run against a real tag; the desktop app does not build
-in CI yet; and the install has not been timed on real VMs across the distributions it
-claims. [docs/OVERVIEW.md](docs/OVERVIEW.md) is the living description of what exists.
+so the keyless half of the signing pipeline has never run against a real tag; and the
+install has not been timed on real VMs across the distributions it claims.
+[docs/OVERVIEW.md](docs/OVERVIEW.md) is the living description of what exists.
 The full plan, with phases and measurable test gates, lives in
 [docs/ROADMAP.md](docs/ROADMAP.md); strategy and rationale live in
 [docs/PLAN.md](docs/PLAN.md).
