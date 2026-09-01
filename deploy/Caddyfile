@@ -17,7 +17,15 @@
 # Note: this file is baked into the proxy image (Dockerfile.caddy).
 # After editing it, re-run: docker compose up -d --build
 
-{$HAMLANEH_DOMAIN:localhost} {
+# The https:// is load-bearing, not decoration. Without a scheme, Caddy
+# only applies automatic HTTPS to a site on its default HTTPS port — an
+# address carrying a custom port (the "443 was taken" installs write
+# HAMLANEH_DOMAIN as ip:port) came up as a PLAINTEXT HTTP server, measured:
+# TLS handshakes died with "wrong version number" while plain HTTP got an
+# answer on the same port. The explicit scheme makes every form of the
+# address — localhost, bare IP, domain, ip:port — a TLS site; for the
+# portless forms it changes nothing.
+https://{$HAMLANEH_DOMAIN:localhost} {
 	encode zstd gzip
 
 	# HEADER OWNERSHIP — read before adding anything here.
