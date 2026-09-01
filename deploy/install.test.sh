@@ -283,8 +283,8 @@ test_resolve_domain_prompt() {
   # wherever stdin points, which is also what makes this testable.
   # shellcheck disable=SC2016
   out="$(printf '\n' | run_in_subshell eval 'DOMAIN=""; NON_INTERACTIVE=0; resolve_domain; printf "%s" "$DOMAIN"')"
-  check_contains "empty prompt answer takes the detected address" "$expected" "$out"
-  check_contains "the prompt shows its default" "[${expected}]" "$out"
+  check_contains "empty prompt answer takes the detected address" "serving on: ${expected}" "$out"
+  check_contains "the menu names the detected address" "(${expected})" "$out"
 
   # A typed answer always wins over the detected default.
   # shellcheck disable=SC2016
@@ -298,11 +298,68 @@ test_resolve_domain_prompt() {
   check_contains "non-interactive default is still localhost" "localhost" "$out"
 }
 
+test_heartbeat_run() {
+  local out
+  # A fast command produces no beat and its status passes through — the
+  # helper must be free to wrap anything without changing its outcome.
+  check_eq "heartbeat passes success through" "0" "$(status_in_subshell heartbeat_run quick true)"
+  check_eq "heartbeat passes failure through" "1" "$(status_in_subshell heartbeat_run quick false)"
+  # With the interval seam at 1s, a 3s command must prove it is alive.
+  # shellcheck disable=SC2016
+  out="$(HAMLANEH_HEARTBEAT_INTERVAL=1 run_in_subshell heartbeat_run "long step" sleep 3)"
+  check_contains "a long command gets a heartbeat" "long step — still working" "$out"
+}
+
+test_resolve_ports() {
+  local out
+  # The snapshot and the stack probe are stubbed per branch: the subject is
+  # the conversation's logic, not this machine's sockets.
+
+  # Free ports: silence, defaults, DOMAIN untouched.
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; stack_exists() { return 1; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=1; resolve_ports; printf "%s %s %s" "$DOMAIN" "$HTTP_PORT" "$HTTPS_PORT"')"
+  check_contains "free web ports keep the defaults" "203.0.113.5 80 443" "$out"
+
+  # A taken port in non-interactive mode is a named refusal, never a silent
+  # port invention.
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:443 \n"; }; port_holder() { printf "nginx"; }; stack_exists() { return 1; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=1; resolve_ports')"
+  check_contains "non-interactive taken port names the holder" "443 (nginx)" "$out"
+  check_contains "non-interactive taken port names the way out" "HAMLANEH_HTTPS_PORT" "$out"
+
+  # The interactive path, choosing custom ports and accepting the defaults:
+  # the port lands inside DOMAIN, which is what Caddy, the server's Origin
+  # check and every printed link read.
+  # shellcheck disable=SC2016
+  out="$(printf '2\n\n\n' | run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:443 \n"; }; stack_exists() { return 1; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_ports; printf "RESULT %s %s %s" "$DOMAIN" "$HTTP_PORT" "$HTTPS_PORT"')"
+  check_contains "custom ports land inside the domain" "RESULT 203.0.113.5:8443 8080 8443" "$out"
+
+  # A domain with a port is refused whichever way it arrived: the trusted
+  # certificate it exists for cannot be issued off 80/443.
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'DOMAIN=chat.example.com:8443; NON_INTERACTIVE=1; resolve_ports')"
+  check_contains "a domain with a custom port is refused" "browser-trusted certificate" "$out"
+  check_eq "the domain-with-port refusal exits 1" "1" "$(status_in_subshell eval 'DOMAIN=chat.example.com:8443; NON_INTERACTIVE=1; resolve_ports')"
+
+  # A re-run reads its earlier choice back from deploy/.env.
+  local env_fixture="${WORK}/ports/.env"
+  mkdir -p "${WORK}/ports"
+  printf 'HAMLANEH_DOMAIN=203.0.113.5:8443\nHAMLANEH_HTTP_PORT=8080\nHAMLANEH_HTTPS_PORT=8443\n' > "$env_fixture"
+  # shellcheck disable=SC2016
+  out="$(TEST_ENV_FILE="$env_fixture" run_in_subshell eval 'stack_exists() { return 0; }; DOMAIN=203.0.113.5:8443; resolve_ports; printf "%s %s" "$HTTP_PORT" "$HTTPS_PORT"')"
+  check_contains "a re-run inherits its earlier ports" "8080 8443" "$out"
+}
+
 test_domain_kind() {
   check_eq "domain_kind localhost" "localhost" "$(run_in_subshell domain_kind localhost)"
   check_eq "domain_kind ipv4" "ipv4" "$(run_in_subshell domain_kind 203.0.113.5)"
   check_eq "domain_kind ipv6" "ipv6" "$(run_in_subshell domain_kind 2001:db8::1)"
   check_eq "domain_kind domain" "domain" "$(run_in_subshell domain_kind chat.example.com)"
+  # host:port pairs classify by the host, so the custom-port refusal for
+  # domains can name the real problem instead of calling it an IPv6.
+  check_eq "domain_kind ipv4:port" "ipv4" "$(run_in_subshell domain_kind 203.0.113.5:8443)"
+  check_eq "domain_kind localhost:port" "localhost" "$(run_in_subshell domain_kind localhost:8443)"
+  check_eq "domain_kind domain:port" "domain" "$(run_in_subshell domain_kind chat.example.com:8443)"
 }
 
 # The generated .env must carry a real value for every secret compose marks
@@ -804,7 +861,9 @@ main() {
   test_arg_parsing
   test_validate_domain
   test_bootstrap_guard
+  test_heartbeat_run
   test_resolve_domain_prompt
+  test_resolve_ports
   test_domain_kind
   test_write_env_generates_real_secrets
   test_idempotent_rerun

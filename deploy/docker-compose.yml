@@ -54,9 +54,17 @@ services:
       # Caddyfile block that reads it.
       HAMLANEH_FILES_DOMAIN: ${HAMLANEH_FILES_DOMAIN:-files.localhost}
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp" # HTTP/3 (QUIC)
+      # The web ports are host-configurable for one deployment shape: a
+      # server where something else already holds 80/443 (install.sh asks,
+      # and only offers it for an IP address — a domain's publicly trusted
+      # certificate is issued over 80/443, so a domain on custom ports would
+      # order a certificate that can never arrive). When HAMLANEH_HTTPS_PORT
+      # is custom, HAMLANEH_DOMAIN carries the same :port, which is what
+      # makes Caddy listen there and the server's allowed Origin match what
+      # browsers actually send — one value, three consumers, no drift.
+      - "${HAMLANEH_HTTP_PORT:-80}:80"
+      - "${HAMLANEH_HTTPS_PORT:-443}:${HAMLANEH_HTTPS_PORT:-443}"
+      - "${HAMLANEH_HTTPS_PORT:-443}:${HAMLANEH_HTTPS_PORT:-443}/udp" # HTTP/3 (QUIC)
     volumes:
       - caddy_data:/data # certificates and internal CA — must persist
       - caddy_config:/config
