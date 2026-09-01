@@ -174,7 +174,7 @@ func (s *Store) SearchMessages(ctx context.Context, params SearchMessagesParams)
 	// The wildcards are added here, so the parameter carries no pattern
 	// syntax of its own and a caller searching for "100%" searches for the
 	// character rather than for every message on the instance.
-	needle := foldSearchText(params.Query)
+	needle := FoldSearchText(params.Query)
 	pattern := "%" + escapeLike(needle) + "%"
 
 	// The count runs on the same predicate as the page and ignores the
@@ -250,11 +250,11 @@ func scanSearchResult(row pgx.Row, needle string) (SearchResult, error) {
 	if peerID != nil && peerUsername != nil && peerDisplayName != nil {
 		res.Channel.DMPeer = &DMPeer{ID: *peerID, Username: *peerUsername, DisplayName: *peerDisplayName}
 	}
-	res.Snippet = searchSnippet(content, needle)
+	res.Snippet = SearchSnippet(content, needle)
 	return res, nil
 }
 
-// searchSnippet splits content into alternating unmatched and matched runs.
+// SearchSnippet splits content into alternating unmatched and matched runs.
 //
 // It re-finds the needle in Go rather than asking PostgreSQL for a headline:
 // ts_headline returns a truncated fragment wrapped in markup, and the
@@ -272,7 +272,7 @@ func scanSearchResult(row pgx.Row, needle string) (SearchResult, error) {
 // only zero-width non-joiners — matches every message in SQL (ILIKE '%%')
 // and highlights none of it here, which is the honest rendering of a search
 // for no characters.
-func searchSnippet(content, needle string) []SearchSnippetPart {
+func SearchSnippet(content, needle string) []SearchSnippetPart {
 	target := []rune(needle)
 	if len(target) == 0 {
 		return []SearchSnippetPart{{Text: content}}
@@ -300,11 +300,11 @@ func searchSnippet(content, needle string) []SearchSnippetPart {
 	return parts
 }
 
-// foldSearchText applies the search normalization to a string. It is the Go
+// FoldSearchText applies the search normalization to a string. It is the Go
 // half of migration 0006's translate() expression plus the case folding
 // ILIKE performs, and the two are pinned to each other by
 // TestSearchFoldingMatchesSQLIntegration.
-func foldSearchText(s string) string {
+func FoldSearchText(s string) string {
 	return string(foldSearchRunes(s).runes)
 }
 

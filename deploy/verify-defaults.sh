@@ -15,7 +15,9 @@
 #   3. /healthz returns 200
 #   4. The files origin refuses to let an uploaded file behave like a
 #      document: attachment + nosniff + a sandboxing CSP (ADR 003)
-#   5. Postgres is NOT reachable from the host (localhost:5432 closed)
+#   5. The db container publishes no host port at all — checked as a port
+#      binding rather than probed, see check_db_not_exposed for why a probe
+#      would be the weaker test here
 #   6. caddy, server, livekit and db containers all run as a non-root UID
 #   7. The media plane exposes its signal path and nothing else (ADR 005):
 #      /rtc reaches LiveKit, its RoomService admin API and debug dumps do
@@ -27,7 +29,13 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="${SCRIPT_DIR}/.env"
+# The env file this deployment actually runs on. `deploy/.env` is where
+# install.sh puts it, so that stays the default; HAMLANEH_ENV_FILE names it
+# for a stack started with `--env-file` somewhere else, which is how CI runs
+# (its secrets live in the runner temp directory and never touch the tree).
+# Without the override the LiveKit leak check reads no file, finds no secret
+# and fails for want of an input rather than for a leak.
+ENV_FILE="${HAMLANEH_ENV_FILE:-${SCRIPT_DIR}/.env}"
 PROJECT_LABEL="com.docker.compose.project=hamlaneh"
 
 FAILURES=()
@@ -59,6 +67,21 @@ resolve_domain() {
     d="$(sed -n 's/^HAMLANEH_DOMAIN=//p' "$ENV_FILE" | tail -n 1)"
   fi
   printf '%s' "${d:-localhost}"
+}
+
+# The files origin's hostname, from the variable the proxy is actually
+# configured with. Never "files." glued onto HAMLANEH_DOMAIN: deploy/Caddyfile
+# calls that variable load-bearing and explains at length why gluing produced
+# a hostname nothing could certify. Gluing it here instead only moves the same
+# mistake into the checker, where it probes a name Caddy was never given.
+#
+# The default matches the Caddyfile's own: {$HAMLANEH_FILES_DOMAIN:files.localhost}.
+resolve_files_domain() {
+  local d=""
+  if [ -f "$ENV_FILE" ]; then
+    d="$(sed -n 's/^HAMLANEH_FILES_DOMAIN=//p' "$ENV_FILE" | tail -n 1)"
+  fi
+  printf '%s' "${d:-files.localhost}"
 }
 
 # All HTTPS checks connect to 127.0.0.1:443 while sending the configured
@@ -127,7 +150,12 @@ check_security_headers() {
     failure "CSP frame-ancestors 'none' missing"
   fi
 
-  if grep -q "unsafe-inline\|unsafe-eval" <<<"$csp"; then
+  # The quotes are part of the match, deliberately: CSP keywords are quoted
+# tokens, and 'wasm-unsafe-eval' — which the app DOES carry so the MLS core
+# can compile (ADR 006) — contains the bare substring "unsafe-eval" while
+# being a strictly narrower allowance (wasm compilation only, no JS eval).
+# An unquoted grep here would fail the build for the wrong directive.
+if grep -q "'unsafe-inline'\|'unsafe-eval'" <<<"$csp"; then
     failure "CSP allows an unsafe source: ${csp}"
   else
     pass "CSP allows no 'unsafe-inline' or 'unsafe-eval'"
@@ -188,26 +216,23 @@ check_webapp_served() {
 #
 # The app origin is checked unconditionally, because bare-IP and home-mode
 # installs have no separate hostname and serve /files/* from it with the
-# identical headers. The separate origin is checked as well wherever one can
-# exist: it is defense in depth on top of these headers, never instead.
+# identical headers. The separate origin is checked as well: it is defense in
+# depth on top of these headers, never instead.
+#
+# Both are probed on every install, with no case analysis on the domain. The
+# Caddyfile declares the files site block unconditionally — at files.<domain>
+# where install.sh was given one, and at the files.localhost default where it
+# was not — so the hostname always answers and always has to carry the same
+# posture. Which of the two it is comes from HAMLANEH_FILES_DOMAIN, the
+# variable Caddy is configured with, and never from "files." glued onto
+# HAMLANEH_DOMAIN: gluing produced a name Caddy was never given, and doing it
+# here only moves that mistake into the checker.
 check_files_origin() {
   local probe="/files/00000000-0000-0000-0000-000000000000"
 
   assert_opaque_blob_headers "app origin" "https://${DOMAIN}${probe}" "${CONNECT[@]}"
-
-  case "$DOMAIN" in
-    *:*)
-      printf 'SKIP: %s
-' "separate files origin (IPv6 literal — files are served from the app origin, checked above)"
-      ;;
-    *[!0-9.]*)
-      assert_opaque_blob_headers "files origin" "https://files.${DOMAIN}${probe}"         --connect-to "files.${DOMAIN}:443:127.0.0.1:443"
-      ;;
-    *)
-      printf 'SKIP: %s
-' "separate files origin (HAMLANEH_DOMAIN is a bare IP — files are served from the app origin, checked above)"
-      ;;
-  esac
+  assert_opaque_blob_headers "files origin (${FILES_DOMAIN})" \
+    "https://${FILES_DOMAIN}${probe}" --connect-to "${FILES_DOMAIN}:443:127.0.0.1:443"
 }
 
 # assert_opaque_blob_headers checks one file URL for the three headers every
@@ -433,6 +458,7 @@ main() {
   require_tools
 
   DOMAIN="$(resolve_domain)"
+  FILES_DOMAIN="$(resolve_files_domain)"
   CONNECT=(--connect-to "${DOMAIN}:443:127.0.0.1:443")
   printf 'Verifying secure defaults for https://%s/ (via 127.0.0.1)\n\n' "$DOMAIN"
 

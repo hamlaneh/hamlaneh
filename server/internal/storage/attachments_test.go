@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -8,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
@@ -17,8 +17,8 @@ import (
 // attachmentWorld is one test's fixture: a store, a channel, and two users
 // who can upload into it.
 type attachmentWorld struct {
-	store  *storage.Store
-	conn   *pgx.Conn
+	store  testdb.Store
+	conn   *testdb.Raw
 	ctx    context.Context
 	people struct {
 		uploader storage.User
@@ -33,9 +33,8 @@ type attachmentWorld struct {
 func newAttachmentWorld(t *testing.T) attachmentWorld {
 	t.Helper()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	w := attachmentWorld{store: store, conn: conn, ctx: ctx}
 	w.people.uploader = mustCreateUser(ctx, t, store, newUser("uploader"))
@@ -75,6 +74,24 @@ func (w attachmentWorld) send(content string, ids ...uuid.UUID) (storage.Message
 	})
 }
 
+// stamp rewrites an upload's created_at, so a test can put two uploads a
+// minute apart, or in the very same instant, on purpose rather than by luck.
+func (w attachmentWorld) stamp(t *testing.T, id uuid.UUID, at time.Time) {
+	t.Helper()
+
+	w.conn.Exec(w.ctx, t, `UPDATE attachments SET created_at = ? WHERE id = ?`, at, id)
+}
+
+// attachmentIDs is a slice of cards reduced to the ids an order assertion
+// compares.
+func attachmentIDs(atts []storage.Attachment) []uuid.UUID {
+	ids := make([]uuid.UUID, len(atts))
+	for i, a := range atts {
+		ids[i] = a.ID
+	}
+	return ids
+}
+
 // messageIDOf reads an attachment's message_id straight from SQL, so the
 // claim assertions are about the table rather than about what the call
 // reported back.
@@ -82,7 +99,7 @@ func (w attachmentWorld) messageIDOf(t *testing.T, id uuid.UUID) *uuid.UUID {
 	t.Helper()
 
 	var messageID *uuid.UUID
-	err := w.conn.QueryRow(w.ctx, `SELECT message_id FROM attachments WHERE id = $1`, id).Scan(&messageID)
+	err := w.conn.QueryRow(w.ctx, `SELECT message_id FROM attachments WHERE id = ?`, id).Scan(&messageID)
 	if err != nil {
 		t.Fatalf("read message_id of %s: %v", id, err)
 	}
@@ -176,10 +193,76 @@ func TestSendClaimsItsAttachmentsIntegration(t *testing.T) {
 	if len(msg.Attachments) != 2 {
 		t.Fatalf("the sent message carries %d attachments, want 2", len(msg.Attachments))
 	}
-	// Oldest upload first, so the cards render in the order they were added.
+	// The order the sender listed them in — which here is also the order they
+	// were uploaded in. TestSendKeepsTheSendersAttachmentOrderIntegration is
+	// where the two come apart.
 	if msg.Attachments[0].ID != first.ID || msg.Attachments[1].ID != second.ID {
 		t.Errorf("attachments came back in the order %v", []uuid.UUID{
 			msg.Attachments[0].ID, msg.Attachments[1].ID})
+	}
+}
+
+// TestSendKeepsTheSendersAttachmentOrderIntegration pins which order a
+// message's cards come back in: the order the sender listed the files, not the
+// order their uploads happened to finish in.
+//
+// Those are two different orders. The composer uploads the picked files
+// concurrently, so a small file chosen second can land before a large one
+// chosen first, and a send that ordered by created_at would show the sender an
+// order they never chose. Only the first of the two is a promise worth making.
+//
+// Both cases ask for exactly the order the upload timestamps would NOT
+// produce, so a send that still sorted by them fails outright rather than
+// coin-flipping — including the second case, the same-instant tie that used to
+// make this flaky.
+func TestSendKeepsTheSendersAttachmentOrderIntegration(t *testing.T) {
+	t.Parallel()
+
+	w := newAttachmentWorld(t)
+	instant := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+
+	tests := map[string]struct{ firstAt, secondAt time.Time }{
+		"uploads a minute apart": {firstAt: instant, secondAt: instant.Add(time.Minute)},
+		"uploads in one instant": {firstAt: instant, secondAt: instant},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			one := w.upload(t, w.channelID, w.people.uploader.ID, "one.bin")
+			two := w.upload(t, w.channelID, w.people.uploader.ID, "two.bin")
+			w.stamp(t, one.ID, tc.firstAt)
+			w.stamp(t, two.ID, tc.secondAt)
+			one.CreatedAt, two.CreatedAt = tc.firstAt, tc.secondAt
+
+			// Sort by upload time, id breaking the tie — the order a send that
+			// read the clock would return — and then ask for the reverse.
+			listed := []storage.Attachment{one, two}
+			slices.SortFunc(listed, func(a, b storage.Attachment) int {
+				if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+					return c
+				}
+				return bytes.Compare(a.ID[:], b.ID[:])
+			})
+			slices.Reverse(listed)
+			want := attachmentIDs(listed)
+
+			msg, created, err := w.send("two files, listed my way", want...)
+			if err != nil || !created {
+				t.Fatalf("send: created=%v err=%v", created, err)
+			}
+			if got := attachmentIDs(msg.Attachments); !slices.Equal(got, want) {
+				t.Errorf("the send returned the cards as %v, want the sender's order %v", got, want)
+			}
+
+			// However the message is read again, the cards keep that order:
+			// the send and the reload must not disagree.
+			byMessage, err := w.store.AttachmentsByMessages(w.ctx, []uuid.UUID{msg.ID})
+			if err != nil {
+				t.Fatalf("AttachmentsByMessages: %v", err)
+			}
+			if got := attachmentIDs(byMessage[msg.ID]); !slices.Equal(got, want) {
+				t.Errorf("a reload returned the cards as %v, want the sender's order %v", got, want)
+			}
+		})
 	}
 }
 
@@ -367,11 +450,9 @@ func TestSweepOrphanAttachmentsIntegration(t *testing.T) {
 
 	// Age the abandoned one past the window. created_at is stamped by the
 	// database, so backdating is the only way to test the boundary.
-	if _, err := w.conn.Exec(w.ctx,
-		`UPDATE attachments SET created_at = now() - interval '25 hours' WHERE id = $1`, stale.ID,
-	); err != nil {
-		t.Fatalf("backdate the orphan: %v", err)
-	}
+	w.conn.Exec(w.ctx, t,
+		`UPDATE attachments SET created_at = ? WHERE id = ?`,
+		time.Now().UTC().Add(-25*time.Hour), stale.ID)
 
 	swept, err := w.store.SweepOrphanAttachments(w.ctx, 24*time.Hour)
 	if err != nil {

@@ -25,6 +25,29 @@ export function formatTime(iso: string, locale: string): string {
   }).format(value);
 }
 
+/**
+ * "3 March 2026" — a whole date, year always included.
+ *
+ * The year is not optional here, unlike on the day separator: this formats the
+ * sealed date a person confirms during a restore (ADR 010, decision 3), and
+ * "3 March" would be exactly as true of a backup from last year as of one from
+ * this week — which is the confusion the confirmation exists to prevent.
+ *
+ * Empty for an unparseable value, so a missing date renders as absent rather
+ * than as "Invalid Date".
+ */
+export function formatFullDate(iso: string, locale: string): string {
+  const value = new Date(iso);
+  if (Number.isNaN(value.getTime())) {
+    return "";
+  }
+  return new Intl.DateTimeFormat(latinDigitLocale(locale), {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(value);
+}
+
 /** Sidebar badges and member counts — Latin digits per the Persian artboard. */
 export function formatCount(count: number, locale: string): string {
   return new Intl.NumberFormat(latinDigitLocale(locale)).format(count);

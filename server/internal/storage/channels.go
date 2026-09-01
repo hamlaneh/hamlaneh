@@ -89,10 +89,17 @@ const (
 // can only ever have one channel. CreatedBy is nil once that account is gone
 // (ON DELETE SET NULL).
 type Channel struct {
-	ID                uuid.UUID
-	Kind              ChannelKind
-	Slug              *string
-	Topic             string
+	ID    uuid.UUID
+	Kind  ChannelKind
+	Slug  *string
+	Topic string
+	// E2EE is fixed at creation and has no update path anywhere in this
+	// package: no statement here names the column outside the two INSERTs
+	// that create a channel, which is what makes "never toggled" a property
+	// of the code rather than a rule somebody has to remember. Flipping it
+	// either way on a live conversation is the silent mode-switch the
+	// downgrade test forbids (migration 0017).
+	E2EE              bool
 	DMUserA           *uuid.UUID
 	DMUserB           *uuid.UUID
 	CreatedBy         *uuid.UUID
@@ -126,9 +133,13 @@ type NewChannel struct {
 	// Kind must be public or private — a direct message is opened through
 	// OpenDirectMessage, which is the only path that can canonicalize its
 	// pair.
-	Kind      ChannelKind
-	Slug      string
-	Topic     string
+	Kind  ChannelKind
+	Slug  string
+	Topic string
+	// E2EE opts this channel into end-to-end encryption at birth. It is the
+	// only moment it can be decided: there is no update path, here or in the
+	// contract.
+	E2EE      bool
 	CreatedBy uuid.UUID
 }
 
@@ -168,7 +179,7 @@ type ListChannelMembersParams struct {
 // The head and tail exist so the two lists cannot drift apart: they differ in
 // exactly the six caller-scoped columns and nowhere else.
 const (
-	channelColumnsHead = `c.id, c.kind, c.slug, c.topic, c.dm_user_a, c.dm_user_b, c.created_by,
+	channelColumnsHead = `c.id, c.kind, c.slug, c.topic, c.dm_user_a, c.dm_user_b, c.created_by, c.e2ee,
 	        (SELECT count(*) FROM channel_members mc WHERE mc.channel_id = c.id)::int, `
 
 	channelColumnsTail = `,
@@ -260,10 +271,10 @@ func (s *Store) CreateChannel(ctx context.Context, nc NewChannel) (Channel, erro
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var id uuid.UUID
 		err := tx.QueryRow(ctx,
-			`INSERT INTO channels (kind, slug, topic, created_by)
-			 VALUES ($1, $2, $3, $4)
+			`INSERT INTO channels (kind, slug, topic, e2ee, created_by)
+			 VALUES ($1, $2, $3, $4, $5)
 			 RETURNING id`,
-			string(nc.Kind), nc.Slug, nc.Topic, nc.CreatedBy,
+			string(nc.Kind), nc.Slug, nc.Topic, nc.E2EE, nc.CreatedBy,
 		).Scan(&id)
 		if err != nil {
 			return mapChannelConflict(err)
@@ -433,7 +444,13 @@ func (s *Store) ListChannelsForUser(ctx context.Context, userID uuid.UUID, param
 //
 // Opening a direct message with oneself is ErrDMWithSelf; a peer who does
 // not exist is ErrNotFound.
-func (s *Store) OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID) (Channel, bool, error) {
+//
+// e2ee applies only when this call is the one that creates the channel.
+// Reopening an existing direct message returns it as it is, whatever the flag
+// says: get-or-create is idempotent, and a flag cannot re-decide a
+// conversation that already exists — which is the same rule as "fixed at
+// creation, never toggled" seen from the get-or-create side.
+func (s *Store) OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID, e2ee bool) (Channel, bool, error) {
 	if callerID == peerID {
 		return Channel{}, false, fmt.Errorf("open direct message: %w", ErrDMWithSelf)
 	}
@@ -445,11 +462,11 @@ func (s *Store) OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUI
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var id uuid.UUID
 		err := tx.QueryRow(ctx,
-			`INSERT INTO channels (kind, dm_user_a, dm_user_b, created_by)
-			 VALUES ('dm', least($1::uuid, $2::uuid), greatest($1::uuid, $2::uuid), $1)
+			`INSERT INTO channels (kind, dm_user_a, dm_user_b, e2ee, created_by)
+			 VALUES ('dm', least($1::uuid, $2::uuid), greatest($1::uuid, $2::uuid), $3, $1)
 			 ON CONFLICT (dm_user_a, dm_user_b) WHERE kind = 'dm' DO NOTHING
 			 RETURNING id`,
-			callerID, peerID,
+			callerID, peerID, e2ee,
 		).Scan(&id)
 
 		// No row back means the pair already had a channel; read it.
@@ -690,7 +707,7 @@ func scanChannel(row pgx.Row) (Channel, error) {
 	)
 	err := row.Scan(
 		&ch.ID, &ch.Kind, &ch.Slug, &ch.Topic, &ch.DMUserA, &ch.DMUserB,
-		&ch.CreatedBy, &ch.MemberCount,
+		&ch.CreatedBy, &ch.E2EE, &ch.MemberCount,
 		&ch.UnreadCount, &ch.MentionCount, &ch.LastReadMessageID,
 		&peerID, &peerUsername, &peerDisplayName,
 		&ch.LastMessageAt, &ch.CreatedAt, &ch.UpdatedAt,

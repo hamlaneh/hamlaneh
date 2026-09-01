@@ -5,13 +5,20 @@
 > commit (enforced via the Definition of Done in CLAUDE.md). Strategy lives in
 > [PLAN.md](PLAN.md); task-level execution lives in [ROADMAP.md](ROADMAP.md).
 >
-> **Last updated:** 2026-08-21
+> **Last updated:** 2026-08-31
 
 ## What is Hamlaneh?
 
 Hamlaneh (هم‌لانه, "shared nest") is a self-hosted team communication platform: text channels,
 DMs, file sharing, 1:1 and group voice/video calls, screen sharing, and conferences. A company
 installs it on its own server with one command and owns its communication completely.
+
+One item on that list is a promise rather than a description today: **file sharing is built and
+unreachable on every install**, because the encryption mode a fresh instance comes up in refuses
+the only conversations there are to upload into. The mechanism is written out under *Files*
+below, where the code that causes it lives. It is named here rather than only there because this
+file is what external tools are handed, and a reader who takes the sentence above at face value
+would plan around a feature nobody can use.
 
 **The four promises:**
 1. **Installation is the product** — fresh VPS to working instance in under 5 minutes, one command.
@@ -43,15 +50,19 @@ installs it on its own server with one command and owns its communication comple
   CSP is ANDed by browsers, and a proxy-only policy would not exist in home mode.
 - The Go server also serves `/healthz` (liveness) and `/readyz`
   (DB + schema readiness), connects to Postgres via pgx, and **runs embedded migrations
-  automatically at startup** (0001 users, 0002 sessions, 0003 channels/messages,
-  0004 password reset + TOTP).
-- The API contract lives in [`docs/api/openapi.yaml`](api/openapi.yaml) — health, auth
-  (login/logout/refresh/reset/two-step), current user, account security (TOTP, sessions),
-  the public instance document, and admin user-management endpoints. Both sides generate
-  code from it (oapi-codegen for Go, openapi-typescript for the webapp); CI fails if
-  generated code drifts. The realtime half is [`docs/api/ws-protocol.md`](api/ws-protocol.md),
-  which OpenAPI cannot describe; its operation table is machine-read by the same completeness
-  gate. Every operation in the contract now has a handler behind it — nothing answers 501.
+  automatically at startup** — the series now runs from `0001_create_users` to
+  `0019_mls_backups`. `server/internal/storage/migrations/` is the list; naming them here
+  would be a copy that goes stale on the next slice, and the reason to look is usually a
+  specific one anyway (0006 records why search matches substrings, 0017 why an MLS leaf is a
+  device rather than a user, 0018 why Strict is the default).
+- The API contract lives in [`docs/api/openapi.yaml`](api/openapi.yaml) — 79 operations, from
+  health and auth through channels, messages, search, files, invites, admin, conferences, calls
+  and the MLS transport. Both sides generate code from it (oapi-codegen for Go,
+  openapi-typescript for the webapp); CI fails if generated code drifts. The realtime half is
+  [`docs/api/ws-protocol.md`](api/ws-protocol.md), which OpenAPI cannot describe; its operation
+  table is machine-read by the same completeness gate, and `docs/api/scim.md` is a third
+  machine-checked contract for the same reason. Every operation in the contract has a handler
+  behind it — nothing answers 501.
 - **Real authentication (Phase 1.1a identity core):** argon2id passwords; opaque
   access/refresh tokens in HttpOnly+Secure+SameSite=Strict cookies with rotation and
   reuse detection (a replayed refresh token revokes its whole session family); CSRF
@@ -85,10 +96,10 @@ installs it on its own server with one command and owns its communication comple
     inline as SVG — no external image service).
 - **The auth screens carry their delivered design** ("Quiet Nest", delivered 2026-08-21):
   sign-in, credential-error, rate-limited and forced-password-change states, in light and dark
-  themes and in a true RTL Persian mirror. Built from eleven design components (`AuthShell`,
+  themes and in a true RTL Persian mirror. Built from twelve design components — `AuthShell`,
   `InstanceIdentity`, `OrganizationLogoSlot`, `ProductWordmark`, `LanguageSwitcher`, `AuthForm`,
-  `TextField`, `PasswordField`, `PrimaryButton`, `NoticeBanner`, `PasswordRequirements`,
-  `PasswordStrengthMeter`) over
+  `TextField`, `PasswordField`, `PrimaryButton`, `NoticeBanner`, `PasswordRequirements` and
+  `PasswordStrengthMeter`, all but the switcher under `webapp/src/components/auth/` — over
   the token sheet in `webapp/src/tokens.css`. Fonts (Inter, Vazirmatn) are self-hosted via
   `@fontsource` — no CDN, as the strict CSP requires. Mockup and handoff are mirrored into
   `docs/design/`.
@@ -129,8 +140,14 @@ installs it on its own server with one command and owns its communication comple
   not the browser: `PATCH /api/v1/users/me` stores it, and localStorage answers only for the
   screens before sign-in.
 - `deploy/install.sh` v0 (OS detect, Docker install, secret generation) and
-  `deploy/verify-defaults.sh` (22 secure-default checks, all passing — including that the
-  served page is the real bundle and not a placeholder).
+  `deploy/verify-defaults.sh`, which prints 41 passes against a stack whose `HAMLANEH_DOMAIN`
+  is a DNS name — three fewer on a bare IP or an IPv6 literal, where there is no separate
+  `files.` origin to check and the script says it skipped rather than passing silently. The
+  count is a consequence of the eight check functions rather than a target: several of them
+  loop (four containers for a non-root UID, five LiveKit admin paths that must not answer
+  through the proxy, three signup paths that must not exist), so adding a service or an
+  endpoint moves the number without anybody editing it. Among what it asserts is that the
+  served page is the real bundle and not a placeholder.
 - **End-to-end tests (Playwright) against the real stack.** `npm run e2e` builds and starts the
   compose stack under its own project name — real Caddy, the real Go binary with the embedded
   bundle, a real PostgreSQL — and drives a browser over HTTPS. Nothing is mocked, and a developer's
@@ -149,9 +166,14 @@ installs it on its own server with one command and owns its communication comple
   `direction: rtl` and the sidebar actually on the right — not merely that Persian text appears.
   Per-PR runs `en` in full plus the `fa` smoke subset; a nightly workflow runs both in full.
   Failures upload traces, screenshots, video and the container logs.
-- CI pipeline (GitHub Actions, SHA-pinned): Go build/vet/lint/race-tests/gosec/govulncheck,
-  webapp typecheck/lint/tests/build, Playwright e2e, gitleaks, codegen drift checks, compose smoke
-  test. Activates when the GitHub remote exists.
+- CI pipeline (GitHub Actions, SHA-pinned), running against `github.com/hamlaneh/hamlaneh` since
+  the repository was created: `ci.yml` carries jobs for the Go server
+  (build/vet/lint/race-tests/gosec/govulncheck), the webapp (typecheck/lint/tests/build),
+  Playwright e2e, the release, backup and desktop tooling, gitleaks, codegen drift checks and a
+  compose smoke test, with a nightly workflow for the full bilingual e2e suite. Dependabot is
+  open against it. This line used to say "activates when the GitHub remote exists"; what has not
+  happened is branch protection on `main`, which GitHub does not offer on a private repository
+  outside a paid plan — so the ROADMAP box stays open for that reason and not for this one.
 
 - **Conversations, and a socket that carries them (Phase 1.2a).** Channels, private channels
   and 1:1 DMs, with membership as the only visibility rule: a non-member — an org admin
@@ -174,8 +196,23 @@ installs it on its own server with one command and owns its communication comple
   alive, and each confirm says which it is. The audit log is hash-chained with a key kept
   outside the database: that does not make it tamper-proof — anybody who can write to the
   database can rewrite rows — it makes a rewrite show.
-- **Files (Phase 1.3 server half).** Upload is channel-scoped from birth, so a file is readable
-  exactly by its channel's members — the same one rule, the same 404 for everyone else. Bytes
+- **Files (Phase 1.3) — built, and unreachable on every install.** Two decisions that are
+  each right on their own close the door between them. Strict is the schema default
+  (`0018_org_encryption_mode.up.sql`: `NOT NULL DEFAULT 'strict'`) and the only mode an
+  administrator can select — `admin_handlers.go` refuses `compliance` outright, because the
+  server-side half it promises is not built — so every channel and every DM is born encrypted.
+  And an encrypted conversation refuses attachments: `httpserver/e2ee.go` answers `400
+  e2ee_attachments_unsupported`, since storing an unencrypted file in an encrypted conversation
+  would be a lie about what the conversation is. Neither decision is wrong; together they mean
+  there is no conversation anywhere into which any file can be uploaded. What records this rather
+  than letting it rot is `webapp/e2e/specs/chat-files.e2e.ts`, which keeps all four of its tests
+  and every assertion in them and carries `test.fail()`: it goes red the moment uploading works,
+  so it cannot outlive the gap. Encrypted attachments are what close it — Phase 3 work that was
+  missed, not Phase 4 polish. Everything in the rest of this bullet exists and is tested; it is
+  the way in that is missing.
+
+  What is behind that door: upload is channel-scoped from birth, so a file is readable exactly
+  by its channel's members — the same one rule, the same 404 for everyone else. Bytes
   are sniffed and labels are decoration: only proven images are ever served inline; everything
   else, SVG and HTML included, is a download with nosniff and a sandboxing CSP, so uploaded
   content can never run script. Images lose their metadata at ingest — a photo shared in a chat
@@ -221,8 +258,14 @@ installs it on its own server with one command and owns its communication comple
   not find `deploy`. Rate limited per account, because a short needle cannot use the index and
   scans instead.
 - The **authorization matrix** now asks the question this phase turns on: *member of which
-  channel?* 263 cells over ten principals, private and DM channels alike, plus a WebSocket
-  registry whose completeness is checked against the protocol document. Designed in
+  channel?* Thirteen principals (`authztest.Principals`) — the six instance columns that decide
+  a route gate, plus the channel relations ADR 002 requires and the author and conference-owner
+  refinements on top of them. The cell count is deliberately not written down here: the
+  completeness gate parses `openapi.yaml` and fails on any operation with no entry, and it
+  demands every `{channelId}` operation in both a private channel and a DM, so the total is a
+  function of the contract's size and moves with every slice. What is worth knowing is that it
+  cannot be short by accident. A WebSocket registry checked against the protocol document and a
+  SCIM registry checked against `docs/api/scim.md` run the same way. Designed in
   [ADR 002](adr/002-channel-scoped-authz-matrix.md).
 
 Messages can be edited and deleted. Editing is the author's alone, admins included, because
@@ -232,8 +275,15 @@ keeps its place with its content erased, which is what the design's "Message rem
 placeholder renders, and a permalink resolves through a cursor that centres the page on the
 message it names.
 
-**Not yet built:** files; the admin dashboard (designed, not built); calls; E2EE — see the phase
-list below.
+**Five Phase 3 slices have shipped** — the MLS transport, eviction by leaf key, key verification,
+encrypted backups with a user-held recovery key, and media encryption — plus the organisation's
+encryption mode. **What is not built** is the multi-device half and two consequences of shipping
+encryption before the things that live next to it: one browser profile is still one MLS device
+(the tabs share a stored slot, and making them one device needs a SharedWorker owning it), a
+person's devices do not sync keys, encrypted attachments do not exist — which is what puts file
+sharing out of reach above — and Compliance mode has no server-side half to select, so encryption
+at rest, retention and export are all still absent. The sections below say what each shipped
+slice covers and, more usefully, what it does not.
 
 A DM now carries its peer, resolved by a join in the same query that draws the sidebar rather
 than a lookup per row; mentions are parsed from the contract's `<@{id}>` token when a message is
@@ -299,7 +349,7 @@ was not entitled to read the message it points at.
   match against nothing at all reaches creation. A created account is indistinguishable from an
   invited one afterwards — the same mint, so the organisation's two-step requirement binds at
   that first sign-in.
-- **Calls (Phase 2, in progress).** LiveKit is in the stack, the server mints join tickets, and
+- **Calls (Phase 2).** LiveKit is in the stack, the server mints join tickets, and
   the webapp joins, publishes and subscribes. A ticket is scoped to one room and one identity and
   lives about two minutes, because a ticket has no business outliving the click that asked for
   it; it grants nothing else — it cannot list rooms, cannot eject anyone, and cannot open a data
@@ -312,30 +362,203 @@ was not entitled to read the message it points at.
   changed; a REST read says what is true. That distinction is load-bearing rather than stylistic
   — the events carry no sequence number and are never replayed, so a client that trusted them
   would paint a banner for a call that ended while it was disconnected.
+- **Conference rooms (Phase 2).** A link anybody holding it can open, including somebody with no
+  account on this instance — that is the feature, and it is also the widest door in the product,
+  which is why it landed last. What confines it is that the link buys exactly one media room: no
+  session, no account, and no other endpoint honours it. An instance with registration closed
+  stays exactly as closed. Unknown, expired and revoked links answer identically, so a visitor
+  learns whether their link works and never why it does not.
+
+  Revoking a link ends the meeting behind it, and making that true took a second pass. Media
+  tokens are stateless, so deleting a room does not invalidate the tickets already out — and
+  while the media server was allowed to instantiate a room on demand, a revoked guest was
+  disconnected once, reconnected, rebuilt the room and stayed. The server is now the only thing
+  that can create a room, so a join for one that is gone is refused.
+
+- **End-to-end encrypted conversations (Phase 3, slice 1).** A channel or DM created with the
+  contract's `e2ee` flag carries MLS-encrypted messages: the browser runs OpenMLS compiled to
+  WebAssembly (`webapp/src-mls`, ~480 KB gzipped, loaded only when an encrypted conversation
+  exists), and the server stores, sequences and delivers blobs it cannot parse — device
+  registration, consuming channel-scoped key-package claims, one group per channel, a durable
+  first-wins commit log with Welcomes riding the commit transaction, and a message envelope
+  whose rule is enforced on the write path in both directions: content is empty exactly when
+  ciphertext is present, so nothing the server can read ever carries the words. Group state
+  persists in IndexedDB wrapped by AES-GCM under a non-extractable WebCrypto key, with the
+  honest statement of what that resists written where the code is. Named costs, recorded when
+  they were chosen: no mention badges, link previews, server-side search or attachments in an
+  encrypted conversation yet — and no history after a reload (forward secrecy deletes used
+  message keys; the local plaintext store is its own slice). Conference guests are outside
+  E2EE by decision, not omission (ADR 006).
+
+- **Removal that actually removes (Phase 3, slice 2, [ADR 007](adr/007-device-identity-and-verification.md)).**
+  A leaf's credential identity is a string the enrolling client chose, so evicting by it — which
+  is what slice 1 did — left a leaf credentialed under a *staying* member's id unremovable:
+  never stale, never selected, reading every epoch that followed. Membership reconciliation is
+  now an allow-list sweep instead. `GET /api/v1/channels/{id}/mls/member-devices` returns every
+  current member with the signature keys of their registered devices, and any leaf whose key is
+  not in that set is evicted before anyone is added. An allow-list rather than a per-user
+  lookup, because the planted leaf's key is precisely the one no per-user question names; read
+  whole or not at all, because a half-read roster would evict the members it had not reached.
+  The credential is demoted to a display hint and no longer decides anything.
+
+  What this changed, said plainly: the guarantee stopped resting on every past member having
+  been honest and now rests on the directory having been honest at reconcile time. It holds
+  against a removed member and against an insider — the attack slice 1's review demonstrated —
+  and it does **not** hold against a server that lies about whose key is whose. Only two humans
+  comparing key material out of band can close that, which is the verification slice; a
+  server-signed credential cannot, because under the threat model's compromised server the
+  signer is the adversary.
+
+- **Key verification (Phase 3, slice 3, [ADR 008](adr/008-key-verification.md)).** The residue
+  above, closed as far as anything can close it. Each conversation offers a safety number —
+  sixty digits, identical on both screens — computed over a person's whole set of device keys,
+  and the rule that makes the ceremony worth running is that **your own half never comes from
+  the server**: it is derived from the key your browser generated. Were both halves read from
+  the directory, a planted key would appear identically to both people, the numbers would match,
+  and comparing them would bless the attack instead of catching it.
+
+  Records of what you accepted live only in this browser, wrapped with the device state, and the
+  server never sees them — a verified flag the server could write would be one it could forge
+  about its own planted key. Keys are recorded on first sight, so a *change* is a visible event
+  even for people who never ran a ceremony. That first sight is trusted, and it is the honest
+  limit of the mechanism: a directory that lies from the very first answer is pinned as if true,
+  and only comparing the number out loud catches it. What recording buys is that the server
+  cannot change its story afterwards without saying so. When a change does happen, the
+  conversation keeps receiving
+  and decrypting normally and **stops being able to send**, because that is the only step MLS
+  leaves entirely to this client (a commit cannot be refused without forking off the log). There
+  are exactly two ways out — compare and match, or say you checked, which records the keys and
+  is shown as weaker than a comparison — and each decision covers only the keys it named, so one
+  acceptance never blesses the next change. Every legitimate new device also changes the number
+  and re-asks: from outside, a colleague's reinstall and a swapped key are the same observation,
+  and pretending otherwise would be the lie.
+
+  Not built yet: the QR for same-room comparison (the digits ship; the payload is computable),
+  and both surfaces are unstyled plumbing until their artboards land — `docs/design/STATUS.md`
+  carries what each one must answer.
+
+- **The release pipeline (Phase 4, [releasing.md](releasing.md)).** A `v*` tag builds the
+  binaries and the server image, generates an SPDX SBOM, and signs one `SHA256SUMS` covering
+  every file with keyless Sigstore/cosign — the certificate identity is the release workflow at
+  that tag, so there is no signing key to steal. `deploy/verify-release.sh` is what an operator
+  or the updater runs against a download: signature, full checksum coverage, SBOM presence, and
+  then a **refusal to install a version older than the one running** unless `--force` is passed.
+  That last check is not paperwork — an old release of ours is already validly signed, so a
+  downgrade needs no forgery at all, and it is how a patched instance gets walked back onto a
+  fixed vulnerability.
+
+  Its three negatives run on every pull request against a real cosign binary with locally
+  generated keys. **What has never run is the keyless half** — Fulcio, Rekor, and the identity
+  matching — because no tag has ever been pushed. The workflow verifies its own output with the
+  same script, so the first real tag is where a wrong identity pattern fails. This is the gate
+  the updater calls rather than the updater itself; `deploy/hamlaneh-update.sh` is the caller,
+  described under *Signed releases and the updater that applies them* below.
 
 ## What's next
 
-**Phase 1.6 — enterprise identity.** OIDC single sign-on first, free rather than paywalled
-(PLAN.md §6.3), with SAML held back unless a paying pre-sale asks for it; then SCIM
-provisioning, whose deprovision path has to kill every session and socket of the removed
-account, not merely mark it inactive. Two rules the slice exists to prove: an SSO-created
-account is still subject to the org's two-step policy, and single sign-on cannot walk around
-registration being off.
+**Phase 4 — packaging polish, and the gate public launch waits on.** Everything through Phase 2
+is code-complete, and Phase 3 is most of the way there: five slices and the encryption mode
+shipped, with the multi-device half, encrypted attachments and Compliance mode's server-side
+half still missing (the paragraph above says which is which). Phase 4 is running in parallel
+rather than after it, which is why the two lists overlap. Landed on the Phase 4 side:
 
-Then the Phase 1 gate, which is not a code task: two consecutive weeks of the project actually
-being used to run the project.
+- **A second storage driver.** `internal/sqlitestore` implements the same 102 methods as the
+  PostgreSQL store, behind the *consumer-side* interfaces that already existed rather than a
+  producer-side twin invented for it — so the compiler proves completeness. The whole module
+  passes on both drivers and CI runs a full `-race` leg per driver, because SQLite's
+  concurrency shape (one connection, a busy handler that retries rather than queues) is its
+  own and the PostgreSQL leg cannot reach a race in it. Six PostgreSQL-*mechanism* tests skip
+  under an allow-list whose gate was proved to fail in both directions.
+- **Home mode**, the single binary: `hamlaneh-server home` opens SQLite at a per-OS data
+  directory, binds loopback, refuses calls, compresses its own responses (there is no proxy in
+  front of it), mints its own signing and audit keys on first run, and creates a first admin
+  whose generated password is printed once and stored nowhere. It accepts both spellings of its
+  own loopback origin, because the WebSocket origin check is a single exact origin and a person
+  who types `localhost` rather than `127.0.0.1` would otherwise get a page that loads and a
+  chat that silently receives nothing.
+- **Signed releases and the updater that applies them.** A tag builds binaries, an SPDX SBOM
+  and `SHA256SUMS`, and signs the checksum file once rather than each artifact. The updater
+  contains no signature logic and no version ordering: `verify-release.sh`'s exit code is the
+  authority, so there is exactly one copy of that check to rot. An older validly-signed release
+  is refused unless forced.
+- **Operator backups and a restore that refuses rather than half-runs**, verifying before
+  anything is stopped or written. The encryption check is four assertions rather than one,
+  because gzip hides a literal string as well as a cipher does and a naive canary scan would
+  certify a plaintext archive as clean.
+- **An installer that covers four distribution families**, is idempotent, and installs the
+  cosign the other two depend on — without which "auto-update on by default" would have failed
+  on every fire of every stock install.
 
-**Everything through Phase 1.5 is done**, each proven by a Playwright suite against the real
-stack rather than against mocks — two browsers, two accounts, a message crossing live; and in
-Persian, five committed screenshots that fail on an unapproved pixel. Accepted limitations,
-recorded rather than left as unfinished work: search matches characters and not word stems in
-either language, and a search snippet is the whole message because the contract's parts array
-has to reconstruct it.
+- **A Docker-free layout test tier** (`npm run e2e:layout`), added because the same UI defect
+  reached its third occurrence: an undesigned surface covering an interactive control. The full
+  e2e suite needs the runner to be the Docker host, so on a developer's machine the specs that
+  would have caught it skip. This tier runs against `vite dev` and the MSW mocks in about twenty
+  seconds, and it asserts the *rule* — a surface whose computed position disagrees with whether
+  it opted into overlaying is named — rather than the symptom.
+
+**What is honestly not done in Phase 4:**
+
+- **The sub-5-minute install is at structural risk.** `install.sh` runs `compose up -d --build`,
+  which is a Go compile plus a web bundle on the stranger's own VPS; on a modest machine that
+  alone exceeds the gate, and on a 1 GB machine the web build is OOM-killed. The release
+  pipeline already builds and signs images nobody pulls. Pointing compose at the published
+  image is what this needs — and it also puts the signed-image supply chain on the path
+  operators actually take instead of leaving it theoretical.
+- **Keyless signing has never run.** Fulcio, Rekor and identity matching cannot be exercised
+  offline, so the first real tag is where a wrong identity pattern would surface. The pipeline
+  now verifies both halves of its own output, which is what makes that a CI failure rather than
+  an operator's.
+- **The desktop app builds in CI on all three platforms and is smoke-tested on none of them.**
+  `ci.yml`'s `desktop` job compiles the Tauri shell on Linux, macOS and Windows, so the gate's
+  build clause is met; the login-and-send e2e beside it is not, and cannot be written as scoped.
+  Tauri's WebDriver support is Linux and Windows only, so a third of the matrix could not run
+  such a test whatever we wrote, and the e2e stack's internal-CA certificate is refused by the
+  system webview with no in-app override — trusting a CA is the machine owner's decision, not an
+  application's. It needs the CA in each runner's trust store, or a home-mode HTTP instance for
+  the desktop leg. Two gaps are written into the workflow rather than left implicit: the macOS
+  leg is arm64 only, and every bundle is unsigned.
+- The install matrix has never run on real VMs (containers have no systemd and no Docker of
+  their own, so they prove detection and idempotency and nothing about installing), and
+  `get.hamlaneh.com` does not serve.
+
+Phase 0 through Phase 2 are proven, not merely written: each by a Playwright suite against the
+real stack rather than against mocks — two browsers, two accounts, a message crossing live; and
+in Persian, committed screenshots that fail on an unapproved pixel.
+
+**What is not code, and is not done:** Phase 2's gate needs a manual NAT drill across two
+genuinely hostile networks (`docs/drills/nat-drill.md` is written and waiting), and the Phase 1
+gate is two consecutive weeks of the project being used to run the project. Both are the user's
+to run; neither is blocked on anything in the tree.
+
+Accepted limitations, recorded rather than left as unfinished work: search matches characters
+and not word stems in either language, a search snippet is the whole message because the
+contract's parts array has to reconstruct it, and TOTP secrets are stored raw pending the
+key-management decision deferred to Phase 5.
 
 **Desktop designs are delivered for every Phase 1 screen** — auth, chat, admin dashboard, user
 settings. Phone-width artboards are not: `docs/design/STATUS.md` is the authority on which
 screens still say `awaiting-design`, and it is the file to read rather than this sentence,
 which cannot know what was delivered after it was written.
+
+- **The organisation's encryption mode ([ADR 011](adr/011-org-encryption-mode.md)).** An
+  instance is in one of two modes, and the mode decides what kind of conversation is *born* from
+  now on: Strict makes every new channel and DM end-to-end encrypted and refuses a plaintext one;
+  Compliance would do the reverse, so that server-side search, retention and export can exist.
+  Every install and every upgrade starts Strict.
+
+  It changes nothing that already exists, and that is the design rather than a shortcut. A
+  switch to Compliance cannot make an existing encrypted conversation readable — nobody but its
+  members holds a key, the server included — and a switch to Strict cannot un-store what was
+  already written in the clear. So the per-conversation flag stays fixed at creation, the
+  settings screen shows the standing count of what the current mode does not describe even when
+  that count is zero, and the confirmation an admin sees before switching names what will sit
+  outside the mode they are choosing. "Switching modes cannot silently decrypt or expose
+  history" is true here because nothing converts, not because a check forbids it.
+
+  **Compliance is defined but not selectable.** Choosing it answers a refusal, because encryption
+  at rest, a retention policy and compliance export do not exist yet, and a mode whose only
+  delivered effect was the absence of end-to-end encryption would be a toggle that lies. It is
+  shown rather than hidden, with the three missing pieces named.
 
 ## Architecture at a glance
 
@@ -343,11 +566,12 @@ which cannot know what was delivered after it was written.
 |---|---|---|
 | `server/` | Go (stdlib-first, pgx, golang-migrate) | Single static binary: API, WebSockets, auth, and the embedded web UI |
 | `webapp/` | React + TypeScript + Vite + Tailwind + i18next | Web UI, bilingual en/fa with RTL; built into the server binary at image build |
-| `desktop/` | Tauri v2 (planned, Phase 4) | Native desktop wrapper around the web UI |
+| `webapp/src-mls/` | Rust → WebAssembly (OpenMLS, ADR 006) | The MLS core the browser runs; Rust exists only in this client build stage — the server stays a single Go binary |
+| `desktop/` | Tauri v2 (built, three-OS CI job) | Shell that navigates to the instance — it embeds no copy of the web UI, because a bundle served from `tauri://localhost` would sit on an origin that can hold neither the session cookie nor the CSRF cookie |
 | `deploy/` | Docker Compose + Caddy + install.sh | The one-command install; Caddy owns TLS and HSTS only |
-| Database | PostgreSQL (server) / SQLite (home mode, Phase 4) | One storage interface, two drivers |
+| Database | PostgreSQL (server) / SQLite (home mode) | Two drivers behind the *consumer* interfaces; the whole suite runs against both |
 | Calls | LiveKit SFU + TURN (Phase 2) | Voice/video/screen share |
-| E2EE | MLS via audited library (Phase 3) | Compromised server sees only ciphertext |
+| E2EE | MLS via OpenMLS → WASM in the browser client (ADR 006; transport shipped, phase in progress) | Compromised server sees only ciphertext |
 
 Request flow: browser → Caddy (TLS, HSTS) → Go server (:8080 — web UI, API, security
 headers) → Postgres (internal network).
@@ -382,4 +606,7 @@ is created at install time; everyone else comes from the dashboard or invite lin
 | [design/STATUS.md](design/STATUS.md) | Which screens have delivered designs |
 | [design/BRIEFS.md](design/BRIEFS.md) | Functional design requirements per screen |
 | [design/LOGIN_HANDOFF.md](design/LOGIN_HANDOFF.md) | The delivered auth design contract (mockup in `design/mockups/`) |
-| [../SECURITY.md](../SECURITY.md) | Threat model, non-goals, disclosure policy |
+| [releasing.md](releasing.md) | How a release is cut, verified, and coordinated with an advisory |
+| [../SECURITY.md](../SECURITY.md) | Threat model, non-goals, disclosure policy, response and patch targets |
+| [hardening.md](hardening.md) | Optional extras on top of the secure defaults — admin allow-listing, proxy variants, key custody, what to monitor |
+| [security.txt](security.txt) | RFC 9116 security contact. Draft: not served anywhere until the website exists |

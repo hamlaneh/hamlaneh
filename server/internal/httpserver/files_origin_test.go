@@ -369,6 +369,76 @@ func TestFilesOriginWithoutPipelineStillCarriesHeaders(t *testing.T) {
 	assertHeader(t, resp, "X-Content-Type-Options", "nosniff")
 	assertHeader(t, resp, "Content-Security-Policy", "sandbox; default-src 'none'")
 	assertHeader(t, resp, "Content-Disposition", "attachment")
+	// deploy/verify-defaults.sh probes this on an install with nothing
+	// uploaded yet, so it has to be on the 404 too.
+	assertHeader(t, resp, "Access-Control-Allow-Origin", "*")
+}
+
+// TestFilesOriginAllowsCrossOriginReads is ADR 013's one serving change,
+// and the assertion below is really two.
+//
+// The first is that the header is there at all: an encrypted attachment is
+// decrypted by the app's own JavaScript, which has to fetch() the ciphertext
+// off this origin to do it, and without a CORS header the app can navigate
+// to a blob but never read one.
+//
+// The second is what keeps `*` honest: Access-Control-Allow-Credentials is
+// absent. This origin is deliberately cookie-less, so there is no ambient
+// authority for CORS to launder — the signed URL is the whole credential,
+// and a script that has one could already fetch what it names. Setting the
+// credentials header would be the change that turned that reasoning false,
+// so it is asserted absent rather than merely left unwritten.
+func TestFilesOriginAllowsCrossOriginReads(t *testing.T) {
+	t.Parallel()
+
+	f := newFilesFixture(t, imageAttachment("holiday.png", "image/png"))
+	targets := map[string]string{
+		"an image served inline":    f.signer.FileURL(f.id, blobstore.Original),
+		"a thumbnail":               f.signer.FileURL(f.id, blobstore.Thumbnail),
+		"an unsigned request's 404": "/files/" + uuid.New().String(),
+	}
+	for name, target := range targets {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			resp := f.get(t, target)
+			defer closeBody(t, resp)
+
+			assertHeader(t, resp, "Access-Control-Allow-Origin", "*")
+			if got := resp.Header.Get("Access-Control-Allow-Credentials"); got != "" {
+				t.Errorf("Access-Control-Allow-Credentials = %q; this origin has no credentialed state to share", got)
+			}
+		})
+	}
+}
+
+// TestFilesOriginOpaqueBlobIsReadableButNotEmbeddable is the pair of headers
+// an encrypted attachment rides out on, asserted together because each one
+// is wrong without the other.
+//
+// The blob may be READ cross-origin — that is the fetch() the decryption
+// needs — and it may still never be EMBEDDED: same-origin CORP keeps opaque
+// bytes out of any page as a subresource, which is what stops a stored HTML
+// or SVG payload from ever being loaded into a document.
+func TestFilesOriginOpaqueBlobIsReadableButNotEmbeddable(t *testing.T) {
+	t.Parallel()
+
+	// The shape an encrypted upload produces: the placeholder name, the
+	// opaque type, nothing measured.
+	f := newFilesFixture(t, storage.Attachment{
+		Filename: "encrypted", ContentType: "application/octet-stream",
+	})
+	resp := f.get(t, f.signer.FileURL(f.id, blobstore.Original))
+	defer closeBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	assertHeader(t, resp, "Access-Control-Allow-Origin", "*")
+	assertHeader(t, resp, "Cross-Origin-Resource-Policy", "same-origin")
+	assertHeader(t, resp, "Content-Type", "application/octet-stream")
+	assertHeader(t, resp, "X-Content-Type-Options", "nosniff")
+	assertHeader(t, resp, "Content-Security-Policy", "sandbox; default-src 'none'")
 }
 
 // TestFilesOriginRefusesWrites keeps the origin read-only: it is reachable

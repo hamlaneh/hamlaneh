@@ -25,7 +25,7 @@ func adminUser(name string) storage.NewUser {
 // liveFamilies counts the session families a user can still authenticate
 // with. Deactivation's promise is about these rows, not about the response
 // code, so the tests below assert on this rather than on a 200.
-func liveFamilies(ctx context.Context, t *testing.T, store *storage.Store, userID uuid.UUID) int {
+func liveFamilies(ctx context.Context, t *testing.T, store testdb.Store, userID uuid.UUID) int {
 	t.Helper()
 	families, err := store.ListSessionFamilies(ctx, userID, uuid.Nil)
 	if err != nil {

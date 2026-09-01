@@ -57,7 +57,7 @@ func TestLatestMigrationVersion(t *testing.T) {
 				fsys["migrations/"+f] = &fstest.MapFile{Data: []byte("SELECT 1;")}
 			}
 
-			got, err := latestMigrationVersion(fsys, "migrations")
+			got, err := LatestMigrationVersion(fsys, "migrations")
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("got error %v, want it to contain %q", err, tt.wantErr)
@@ -79,7 +79,7 @@ func TestLatestMigrationVersion(t *testing.T) {
 func TestLatestMigrationVersionEmbedded(t *testing.T) {
 	t.Parallel()
 
-	got, err := latestMigrationVersion(migrationFiles, migrationsDir)
+	got, err := LatestMigrationVersion(migrationFiles, migrationsDir)
 	if err != nil {
 		t.Fatalf("embedded migrations are invalid: %v", err)
 	}

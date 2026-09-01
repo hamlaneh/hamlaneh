@@ -1,4 +1,4 @@
-import { createChannelApi, sendMessageApi, uniqueSlug } from "../support/chat";
+import { createChannelApi, seedMessages, uniqueSlug } from "../support/chat";
 import { expect, test } from "../support/fixtures";
 
 /**
@@ -13,21 +13,51 @@ import { expect, test } from "../support/fixtures";
  *
  * The outsider has a conversation of their own, so "nothing is here" is a
  * statement about this channel rather than about an empty account.
+ *
+ * # Where the secret lives, and why it moved
+ *
+ * It used to be a message. Since ADR 011 a message is ciphertext the server
+ * cannot read, so "the outsider's socket never carried the secret" would have
+ * been true of a socket that leaked every frame in the channel — the strongest
+ * possible pass for the weakest possible reason. A vacuous assertion is worse
+ * than a missing one, because it reads like coverage.
+ *
+ * The secret is therefore the channel's TOPIC: prose a person typed that this
+ * server stores and serves in the clear BY DESIGN, and that rides inside the
+ * Channel payload of the very frames this test is about. That keeps the claim
+ * exactly what it was — the gateway does not hand a non-member content it
+ * holds in the clear — and takes encryption out of the argument entirely.
+ * e2ee-messaging.e2e.ts reaches for a topic as its plaintext control for the
+ * same reason.
+ *
+ * The message sends that remain are here for their ORDERING, which is the only
+ * job they ever really had: they are what gives the private channel's frame
+ * its chance to arrive before the absence below is read as evidence.
  */
 test.describe("channel isolation", () => {
   test("a non-member reaches nothing by URL and receives none of the channel's frames", async ({
     app,
     accounts,
+    openApp,
     t,
   }) => {
+    test.setTimeout(120_000);
+
     const insider = await accounts.createReady("e2einsider");
     const outsider = await accounts.createReady("e2eoutsider");
 
     const insiderApi = await accounts.open(insider.username, insider.password);
     const privateSlug = uniqueSlug("vault");
-    const privateId = await createChannelApi(insiderApi, privateSlug, "private");
     const secret = "The staging database password rotates on Friday.";
-    await sendMessageApi(insiderApi, privateId, secret);
+    const privateId = await createChannelApi(insiderApi, privateSlug, "private", {
+      topic: secret,
+    });
+    // The insider's own browser, because a message in an encrypted channel can
+    // only come from an MLS client (support/chat.ts). It stays open: the
+    // ordering barrier below needs a second send from it.
+    const insiderApp = await seedMessages(openApp, insider, privateId, [
+      "The rotation runbook is pinned above.",
+    ]);
 
     const outsiderApi = await accounts.open(outsider.username, outsider.password);
     const ownSlug = uniqueSlug("mine");
@@ -60,18 +90,30 @@ test.describe("channel isolation", () => {
     // arrival order, so once the second has been delivered the first has
     // already had its chance. Waiting on a real event rather than on a clock
     // is what makes the absence below evidence.
-    const laterSecret = "And the vault code changes with it.";
-    await sendMessageApi(insiderApi, privateId, laterSecret);
-    const marker = "A message I am allowed to read.";
-    await sendMessageApi(outsiderApi, ownId, marker);
+    await insiderApp.sendMessage("And the vault code changes with it.");
+    // The outsider's own send comes from their own composer, in their own
+    // channel — the one conversation on this page with a composer at all.
+    await app.conversationRow(ownSlug).click();
+    await app.sendMessage("A message I am allowed to read.");
 
+    // The barrier is the FRAME the outsider is entitled to, matched on its
+    // type and channel rather than on its text: their own message is
+    // ciphertext on the wire now, so the words are not in it to find. A
+    // `message_created` for their own channel is the same event it always
+    // was, and narrowing to that type keeps the subscribe chatter their click
+    // produces from satisfying the barrier before the insider's send.
     await expect
-      .poll(() => frames.some((frame) => frame.includes(marker)))
+      .poll(
+        () =>
+          frames
+            .map(parseFrame)
+            .some((frame) => frame.chan === ownId && frame.type === "message_created"),
+        { timeout: 30_000 },
+      )
       .toBe(true);
 
-    expect(frames.filter((frame) => frame.includes(secret) || frame.includes(laterSecret))).toEqual(
-      [],
-    );
+    // The secret the server really does hold in the clear, in none of them.
+    expect(frames.filter((frame) => frame.includes(secret))).toEqual([]);
     expect(frames.filter(carriesChannel(privateId)).map(typeOf)).toEqual([]);
 
     // The socket did answer about that channel — with the contract's

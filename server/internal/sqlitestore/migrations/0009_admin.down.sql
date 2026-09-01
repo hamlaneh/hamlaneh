@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS audit_entries;
+DROP TABLE IF EXISTS org_settings;
+DROP TABLE IF EXISTS invites;
