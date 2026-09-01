@@ -28,7 +28,7 @@ export function AccountMenu({ user, onLogout, onClose }: AccountMenuProps) {
 
   return (
     <section
-      className="hm-plumbing hm-plumbing--footer"
+      className="hm-plumbing hm-plumbing--overlay hm-plumbing--footer"
       role="dialog"
       aria-modal="false"
       aria-label={t("account.title")}

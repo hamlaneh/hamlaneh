@@ -67,6 +67,32 @@ func WithSCIM(h http.Handler) Option {
 	return func(s *apiServer) { s.scim = h }
 }
 
+// WithCompression gzips the embedded web build on the way out. It takes a
+// bool rather than being presence-means-on because the install decides it
+// from one environment variable (EnvCompressResponses), and a conditional
+// append at the only call site would read worse than this.
+//
+// It is off by default, and belongs to home mode: the compose stack fronts
+// this server with Caddy, which already runs `encode zstd gzip`. compress.go
+// carries the reasoning, including why no API response is compressed
+// whatever this is set to.
+func WithCompression(enabled bool) Option {
+	return func(s *apiServer) { s.compressAssets = enabled }
+}
+
+// WithTrustedProxy declares that a reverse proxy terminates connections in
+// front of this listener and may name the real client with X-Forwarded-For.
+//
+// It is off by default and must stay off by default: the header is writable
+// by anything that can open a socket to this process, so honouring it on a
+// deployment with nothing in front hands every caller the choice of its own
+// rate-limit key and its own address in the audit log. The compose stack sets
+// it because Caddy is there by construction; the single binary does not
+// (cmd/hamlaneh-server/home.go). middleware.go clientIP is the whole model.
+func WithTrustedProxy(trusted bool) Option {
+	return func(s *apiServer) { s.trustProxy = trusted }
+}
+
 // New returns an *http.Server bound to addr with the Hamlaneh router and
 // hardened timeouts configured. store backs everything stateful and may be
 // nil in unit tests (readyz then reports degraded and authenticated routes
@@ -82,27 +108,23 @@ func New(addr string, store Store, opts ...Option) *http.Server {
 	}
 }
 
-// Handler returns the root HTTP handler with every route registered:
+// Handler returns the root HTTP handler. What it serves, by owning file —
+// each of those files registers its own routes, so this is a map and not the
+// list (a list here would go stale the first time one of them added a path):
 //
-//	GET /, /reset, /c/*  the built React application (webapp.go)
-//	GET /assets/*        its content-hashed bundle
-//	GET /brand/*         its unhashed public files
-//	GET /files/{id}      the cookie-less files origin: signed, expiring
-//	                     URLs for uploaded bytes, outside the contract on
-//	                     purpose (files_origin.go)
-//	/scim/v2/*           the SCIM 2.0 provisioning surface, authenticated by
-//	                     bearer token alone and likewise outside the
-//	                     contract (internal/scim, docs/api/scim.md)
-//	POST /livekit/webhook the media server's webhook receiver, authenticated
-//	                     by verifying its signature over the request body and
-//	                     outside the contract for the same reason
-//	                     (call_handlers.go)
-//	GET /healthz         liveness probe, 200 {"status":"ok"}
-//	GET /readyz          readiness probe (database ping + schema version)
-//	/api/v1/*            contract endpoints (Phase 1.1 identity core; the
-//	                     Phase 1.2 messaging surface is routed and gated
-//	                     but still answers 501 — see messaging_stubs.go)
-//	/api/*               anything else under /api: the contract's JSON 404
+//	webapp.go       the built React application on every client-routed path,
+//	                its content-hashed bundle under /assets/, its unhashed
+//	                public files under /brand/, and the contract's JSON 404
+//	                for anything else under /api/
+//	files_origin.go the cookie-less files origin: signed, expiring URLs for
+//	                uploaded bytes, outside the contract on purpose
+//	server.go       /scim/v2/*, the SCIM 2.0 provisioning surface,
+//	                authenticated by bearer token alone and likewise outside
+//	                the contract (internal/scim, docs/api/scim.md)
+//	call_handlers.go the media server's webhook receiver, authenticated by
+//	                verifying its signature over the request body and outside
+//	                the contract for the same reason
+//	api (generated) /healthz, /readyz and every /api/v1 contract endpoint
 //
 // Contract routes are registered by the generated api package, so the router
 // can never drift from docs/api/openapi.yaml. Every contract route runs
@@ -122,9 +144,12 @@ func Handler(store Store, opts ...Option) http.Handler {
 // to be exercised against something that looks like a real one.
 func handler(store Store, web fs.FS, opts ...Option) http.Handler {
 	mux := http.NewServeMux()
-	routeWebapp(mux, web)
 
+	// Built before the web routes because one option — compression — decides
+	// how the build itself is served (compress.go).
 	s := newAPIServer(store, opts...)
+	routeWebapp(mux, web, s.compressAssets)
+
 	// Registered on the base mux, deliberately outside the contract router
 	// and its session middleware: the files origin carries no cookie to
 	// check (files_origin.go).

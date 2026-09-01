@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
 	"github.com/hamlaneh/hamlaneh/server/internal/audit"
@@ -28,8 +27,8 @@ const auditKey = "audit handler test key, 32+ bytes long"
 // auditFixture is a signed-in admin, a server that can verify its own log,
 // and the recorder that fills it.
 type auditFixture struct {
-	store   *storage.Store
-	dsn     string
+	store   testdb.Store
+	raw     *testdb.Raw
 	handler http.Handler
 	chain   *audit.Chain
 	rec     *audit.Recorder
@@ -40,7 +39,7 @@ type auditFixture struct {
 func newAuditFixture(t *testing.T) auditFixture {
 	t.Helper()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	chain, err := audit.New([]byte(auditKey))
 	if err != nil {
 		t.Fatalf("audit.New: %v", err)
@@ -59,7 +58,7 @@ func newAuditFixture(t *testing.T) auditFixture {
 	}
 
 	return auditFixture{
-		store: store, dsn: dsn, handler: handler, chain: chain,
+		store: store, raw: raw, handler: handler, chain: chain,
 		rec:     audit.NewRecorder(chain, store),
 		admin:   admin,
 		cookies: login(t, handler, "auditadmin", auditFixturePassword),
@@ -196,16 +195,7 @@ func TestAuditPageReportsTamperedRows(t *testing.T) {
 		t.Fatal("chain_valid is false before anything was tampered with")
 	}
 
-	conn, err := pgx.Connect(context.Background(), f.dsn)
-	if err != nil {
-		t.Fatalf("connect to the scratch database: %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close(context.Background()) })
-
-	if _, err = conn.Exec(context.Background(),
-		`UPDATE audit_entries SET action = 'test.rewritten' WHERE seq = 2`); err != nil {
-		t.Fatalf("tamper: %v", err)
-	}
+	f.raw.Exec(context.Background(), t, `UPDATE audit_entries SET action = ? WHERE seq = 2`, "test.rewritten")
 
 	page := f.page(t, "")
 	if page.ChainValid {
@@ -226,15 +216,7 @@ func TestAuditPageReportsDeletedRows(t *testing.T) {
 		f.record(t, fmt.Sprintf("test.action%d", i))
 	}
 
-	conn, err := pgx.Connect(context.Background(), f.dsn)
-	if err != nil {
-		t.Fatalf("connect to the scratch database: %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close(context.Background()) })
-
-	if _, err = conn.Exec(context.Background(), `DELETE FROM audit_entries WHERE seq = 2`); err != nil {
-		t.Fatalf("delete an entry: %v", err)
-	}
+	f.raw.Exec(context.Background(), t, `DELETE FROM audit_entries WHERE seq = 2`)
 
 	page := f.page(t, "")
 	if page.ChainValid {

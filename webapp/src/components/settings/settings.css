@@ -32,6 +32,15 @@
    * stack rather than inheriting the one on .hm-chat. */
   --hm-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 
+  /* `settings-meetings` reuses two delivered treatments whole rather than
+   * restating them: the admin records table, and the admin create-dialog the
+   * handoff points at by name ("exactly as Create invite link does"). Their
+   * rules are global; only these three metrics are scoped to `.hm-admin`, so
+   * the panel restates the metrics and nothing else. */
+  --hm-admin-row: 44px;
+  --hm-admin-table-header: 42px;
+  --hm-admin-modal: 560px;
+
   display: flex;
   flex-direction: column;
   inline-size: min(1040px, 100%);
@@ -553,6 +562,17 @@
   flex: 0 0 17px;
   margin-block-start: 1px;
   color: var(--color-info);
+}
+
+/* A standing fact rather than a piece of information the reader must act on —
+ * `settings-meetings` draws its note in the neutral tone, not the info one. */
+.hm-settings-note-banner[data-tone="neutral"] {
+  background: var(--color-surface-subtle);
+  border-color: var(--color-border-subtle);
+}
+
+.hm-settings-note-banner[data-tone="neutral"] .hm-settings-note-banner__icon {
+  color: var(--color-text-secondary);
 }
 
 /* ── step header ───────────────────────────────────────────────────── */
@@ -1221,6 +1241,89 @@
 .hm-settings-confirm__actions {
   display: flex;
   gap: var(--spacing-2);
+}
+
+/* ── meetings ──────────────────────────────────────────────────────── */
+
+/* The strip above the table: what the table is, when it was read, and the way
+ * to read it again. */
+.hm-meetings-tablehead {
+  display: flex;
+  align-items: center;
+  gap: 10px; /* off-scale (artboard) */
+  flex-wrap: wrap;
+}
+
+.hm-meetings-tablehead__label {
+  font: 600 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-meetings-tablehead__divider {
+  inline-size: 1px;
+  block-size: 14px; /* off-scale (artboard) */
+  background: var(--color-border-subtle);
+}
+
+.hm-meetings-tablehead__read {
+  font: 400 var(--text-caption) / 1.4 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-secondary);
+}
+
+.hm-meetings-tablehead__label:lang(fa),
+.hm-meetings-tablehead__read:lang(fa) {
+  line-height: 1.75;
+}
+
+/* Refresh sits at the far end of the strip, in both directions. */
+.hm-meetings-tablehead .hm-settings-button {
+  margin-inline-start: auto;
+}
+
+.hm-meetings-title {
+  font-weight: 600;
+}
+
+/* The artboard puts the row action at the start of its cell rather than flush
+ * to the table's edge, which is where the admin tables put theirs. */
+.hm-meetings-table td:last-child {
+  text-align: start;
+}
+
+/* "Someone is in it" / "Nobody in it": a filled dot with a ring, or a hollow
+ * one, plus the words. Shape and text, never colour alone — and deliberately
+ * no animation anywhere in here. Nothing feeds this screen live, so a pulse
+ * would promise a liveness the value does not have. */
+.hm-meetings-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px; /* off-scale (artboard) */
+  font: 400 12.5px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-meetings-presence:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-meetings-presence[data-active="true"] {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.hm-meetings-presence__dot {
+  flex: 0 0 9px; /* off-scale (artboard) */
+  inline-size: 9px;
+  block-size: 9px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--color-border-control);
+  border-radius: 50%;
+}
+
+.hm-meetings-presence[data-active="true"] .hm-meetings-presence__dot {
+  background: var(--color-success);
+  border-color: var(--color-success);
+  box-shadow: 0 0 0 3px var(--color-brand-soft);
 }
 
 /* ── below the drawn panel size ────────────────────────────────────── */

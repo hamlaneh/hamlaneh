@@ -83,6 +83,12 @@ const (
 	// message they wrote. Optional — declared only by operations whose
 	// contract distinguishes the author.
 	MemberAuthor Principal = "member-author"
+	// ConferenceOwner is the ownership refinement: a member acting on a
+	// conference they made. It is MemberAuthor's shape for the one resource
+	// in this server whose authority is ownership rather than membership, and
+	// it is what makes the plain Member column below it mean "somebody
+	// else's" instead of "anybody's" (ADR 005).
+	ConferenceOwner Principal = "conference-owner"
 )
 
 // Principals returns every matrix column in stable order. It is the universe
@@ -94,7 +100,7 @@ func Principals() []Principal {
 		Anonymous, Member, MemberMustChange, MemberTotpPending,
 		MemberMustChangeTotpPending, Admin,
 		ChannelNonMember, ChannelMember, ChannelOwner,
-		AdminNonMember, AdminMember, MemberAuthor,
+		AdminNonMember, AdminMember, MemberAuthor, ConferenceOwner,
 	}
 }
 
@@ -169,6 +175,11 @@ type Fixture struct {
 	// OutsiderUserID is a real user who belongs to no channel: the target of
 	// an invite, and the peer of a newly opened direct message.
 	OutsiderUserID string
+
+	// ConferenceID names the cell's own conference, made by the acting user
+	// for the ownership refinement and by somebody else for every other
+	// principal. Set for cells whose contract path names a {conferenceId}.
+	ConferenceID string
 }
 
 // Entry is one endpoint's row in the authorization matrix.
@@ -229,11 +240,17 @@ func (e Entry) Target(fx Fixture) string {
 		"{channelId}", fx.ChannelID,
 		"{messageId}", fx.MessageID,
 		"{userId}", fx.MemberUserID,
+		"{conferenceId}", fx.ConferenceID,
 	).Replace(target)
 }
 
 // ChannelScoped reports whether this entry acts on a fixture channel.
 func (e Entry) ChannelScoped() bool { return e.Kind != "" }
+
+// ConferenceScoped reports whether this entry acts on a fixture conference.
+// Unlike a channel entry it needs no kind — a conference has exactly one
+// shape — so the contract path is what says so.
+func (e Entry) ConferenceScoped() bool { return strings.Contains(e.Path, conferenceSegment) }
 
 // RequiredPrincipals returns the columns this entry's shape must declare.
 func (e Entry) RequiredPrincipals() []Principal {
@@ -413,11 +430,20 @@ func adminEntry(method, path, target string, body func(Fixture) string, want int
 	return e
 }
 
-// publicEntry builds the row of an endpoint that answers every principal
-// identically. That uniformity is not a shortcut — on the invite routes it IS
-// the security property, because a signed-in caller learning something an
-// anonymous one cannot would be the leak these rows exist to forbid.
-func publicEntry(method, path, target string, body func(Fixture) string, want int, code string) Entry {
+// publicEntry builds the row of a capability-URL endpoint asked with a token
+// that was never issued: every principal gets the same 404, carrying code.
+//
+// That uniformity is not a shortcut — on the invite and conference routes it
+// IS the security property, twice over. A signed-in caller learning something
+// an anonymous one cannot would be a leak, and so would a guesser learning
+// which of unknown, expired, revoked and spent their token was.
+//
+// The status is fixed rather than a parameter because there is only one
+// answer these rows may pin. A public endpoint that succeeds for everybody —
+// the health probes, the instance document — is a different shape and is
+// registered as a literal, so it cannot borrow this helper's uniformity
+// argument without stating its own.
+func publicEntry(method, path, target string, body func(Fixture) string, code string) Entry {
 	e := Entry{
 		Method:        method,
 		Path:          path,
@@ -428,10 +454,8 @@ func publicEntry(method, path, target string, body func(Fixture) string, want in
 		WantCode:      map[Principal]string{},
 	}
 	for _, p := range InstancePrincipals() {
-		e.Want[p] = want
-		if code != "" {
-			e.WantCode[p] = code
-		}
+		e.Want[p] = http.StatusNotFound
+		e.WantCode[p] = code
 	}
 	return e
 }
@@ -503,7 +527,53 @@ const (
 	readPath      = channelPath + "/read"
 	callPath      = channelPath + "/call"
 	callTokenPath = callPath + "/token"
+
+	// The E2EE transport's channel-scoped half (ADR 006).
+	mlsGroupPath   = channelPath + "/mls/group"
+	mlsClaimsPath  = channelPath + "/mls/key-package-claims"
+	mlsCommitsPath = channelPath + "/mls/commits"
+	mlsDevicesPath = channelPath + "/mls/member-devices"
 )
+
+// The E2EE transport's own-account half. Every one of these is decided by the
+// session alone: the subject is the caller, and no request on them names
+// another user.
+const (
+	mlsDevicePath   = "/api/v1/users/me/mls/device"
+	mlsPackagesPath = "/api/v1/users/me/mls/devices/{deviceId}/key-packages"
+	mlsWelcomesPath = "/api/v1/users/me/mls/welcomes"
+	mlsWelcomePath  = mlsWelcomesPath + "/{welcomeId}"
+
+	// The recovery surface (ADR 010). Same half of the matrix and for the same
+	// reason: the backup is keyed by the caller's own id, and the device id on
+	// the deregistration is scoped inside the query rather than checked beside
+	// it — so no request here can name another account's row.
+	mlsBackupPath          = "/api/v1/users/me/mls/backup"
+	mlsDeregisterPath      = "/api/v1/users/me/mls/devices/{deviceId}"
+	mlsUnknownDeviceTarget = "/api/v1/users/me/mls/devices/00000000-0000-4000-8000-0000000000d2"
+)
+
+// mlsBlob is a well-formed base64 payload for the rows that must get past
+// request validation to reach a security answer. It decodes to real bytes and
+// means nothing: the server never parses one, so a matrix row that sent
+// something "more realistic" would be pinning the same thing more slowly.
+const mlsBlob = "aGFtbGFuZWgtbWF0cml4"
+
+// The conference surface's contract paths, and the segment that makes an
+// operation conference-scoped.
+const (
+	conferenceSegment = "{conferenceId}"
+	conferencesPath   = "/api/v1/conferences"
+	conferencePath    = conferencesPath + "/" + conferenceSegment
+	meetPath          = "/api/v1/meet/{token}"
+	meetJoinPath      = meetPath + "/join"
+)
+
+// guessedToken is a well-formed link that was never issued: the shape of a
+// real one, so the rows that present it pin the answer to a GUESS rather
+// than to a malformed string. It is what both the invite and the conference
+// public rows ask with.
+var guessedToken = strings.Repeat("z", 43)
 
 // matrixClientMsgID is the send row's idempotency key. Every cell posts into
 // its own fresh channel and the key is unique per (channel, author), so one
@@ -769,6 +839,16 @@ func instanceRegistry() []Entry {
 		adminEntry(http.MethodPatch, "/api/v1/admin/org", "",
 			func(Fixture) string { return `{"require_totp":false}` },
 			http.StatusOK, ""),
+		// Phase 3: the encryption mode (ADR 011). It asks for strict, which
+		// every instance already is, so the row changes nothing and pins only
+		// who may ask — and the five refusals to its left are the point: this
+		// is the one setting that decides whether a conversation can ever be
+		// read by this server, and nobody below an administrator may move it.
+		// The 409 that compliance answers is asserted in internal/httpserver;
+		// it is a question about the value, not about the caller.
+		adminEntry(http.MethodPut, "/api/v1/admin/org/encryption-mode", "",
+			func(Fixture) string { return `{"encryption_mode":"strict"}` },
+			http.StatusOK, ""),
 
 		// The two public halves of an invitation, asked with a token of the
 		// right shape that was never issued. All four principals get one
@@ -777,14 +857,73 @@ func instanceRegistry() []Entry {
 		// security story, so the matrix pins them rather than trusting the
 		// handlers to agree.
 		publicEntry(http.MethodGet, "/api/v1/invites/{token}",
-			"/api/v1/invites/"+strings.Repeat("z", 43), nil,
-			http.StatusNotFound, "invite_not_found"),
+			"/api/v1/invites/"+guessedToken, nil, "invite_not_found"),
 		publicEntry(http.MethodPost, "/api/v1/invites/{token}",
-			"/api/v1/invites/"+strings.Repeat("z", 43),
+			"/api/v1/invites/"+guessedToken,
 			func(fx Fixture) string {
 				return fmt.Sprintf(`{"username":"redeem%s","password":"a matrix passphrase"}`, fx.Unique)
 			},
-			http.StatusNotFound, "invite_not_found"),
+			"invite_not_found"),
+
+		// Phase 2 conferences (ADR 005) — the widest door in the product, and
+		// the four rows that pin how narrow it stays.
+		//
+		// The two /meet rows are asked with a well-formed link that was never
+		// issued. Every principal gets one 404: unknown, expired and revoked
+		// are one answer, and a session neither helps nor hinders — the same
+		// two properties the invite rows above pin, and here they matter
+		// more, because these are the routes an anonymous stranger reaches.
+		//
+		// The join row also pins an ordering: the matrix server configures no
+		// media plane, so a live link would answer 503, and this row's 404
+		// proves the link is resolved BEFORE the instance's configuration is
+		// consulted. A guesser learns nothing about this instance.
+		publicEntry(http.MethodGet, meetPath, "/api/v1/meet/"+guessedToken, nil,
+			"conference_not_found"),
+		publicEntry(http.MethodPost, meetJoinPath, "/api/v1/meet/"+guessedToken+"/join",
+			func(Fixture) string { return `{"display_name":"A Guest"}` },
+			"conference_not_found"),
+
+		// Listing is the caller's own view; every signed-in caller gets a 200,
+		// and what differs is the rows inside it, which is a scope question
+		// rather than a status one and is pinned in internal/httpserver.
+		sessionEntry(http.MethodGet, conferencesPath, "", nil, http.StatusOK, ""),
+		// Creating one is the 503 of an instance with no media plane: a link
+		// to a room this instance cannot open is worse than a refusal. Unlike
+		// the channel ticket, there is no channel to be a stranger to, so the
+		// 503 IS the answer rather than something a 404 must come before.
+		sessionEntry(http.MethodPost, conferencesPath, "",
+			func(fx Fixture) string { return fmt.Sprintf(`{"title":"matrix %s"}`, fx.Unique) },
+			http.StatusServiceUnavailable, "calls_unavailable"),
+		// The revocation is the ownership distinction, and this row is the
+		// whole of ADR 005's revocation authority. Its owner or an
+		// administrator may; anybody else gets the same 404 a conference that
+		// does not exist gets — never a 403, which would confirm one does.
+		//
+		// It is built as a literal because Member and Admin answer
+		// differently here, which is exactly what sessionEntry's shape
+		// assumes they never do.
+		{
+			Method: http.MethodDelete,
+			Path:   conferencePath,
+			Class:  ClassSession,
+			Want: map[Principal]int{
+				Anonymous:                   http.StatusUnauthorized,
+				MemberMustChange:            http.StatusForbidden,
+				MemberTotpPending:           http.StatusForbidden,
+				MemberMustChangeTotpPending: http.StatusForbidden,
+				Member:                      http.StatusNotFound,
+				Admin:                       http.StatusNoContent,
+				ConferenceOwner:             http.StatusNoContent,
+			},
+			WantCode: map[Principal]string{
+				Anonymous:                   "not_authenticated",
+				MemberMustChange:            "password_change_required",
+				MemberTotpPending:           "totp_enrollment_required",
+				MemberMustChangeTotpPending: "password_change_required",
+				Member:                      "conference_not_found",
+			},
+		},
 
 		// Phase 1.2, the endpoints decided without a channel. Nothing here
 		// turns on membership: the directory and the sidebar are the caller's
@@ -817,6 +956,74 @@ func instanceRegistry() []Entry {
 		// cannot be hijacked, and a row that could only ever pass by not
 		// upgrading would assert nothing.
 		sessionEntry(http.MethodGet, "/api/v1/ws", "", nil, http.StatusForbidden, "origin_not_allowed"),
+
+		// Phase 3 slice 1: the E2EE transport's own-account half (ADR 006).
+		// Every cell acts on the caller's own devices and Welcomes; there is
+		// no id anywhere in a request body to point at somebody else's, which
+		// is why these are instance-scoped rows and not channel ones.
+		//
+		// Registration is the 201 of a fresh fixture: each cell is its own
+		// account, so the same signature key registers cleanly in every one
+		// of them — the idempotency rule is per (user, key), and pinning the
+		// 200 half needs one account twice, which is a handler test rather
+		// than a matrix shape.
+		sessionEntry(http.MethodPost, mlsDevicePath, "",
+			func(Fixture) string { return fmt.Sprintf(`{"signature_public_key":%q}`, mlsBlob) },
+			http.StatusCreated, ""),
+		// A well-formed device id that was never registered. It answers
+		// exactly like another user's device, which IS the property: a guess
+		// must not confirm that somebody else's device exists.
+		sessionEntry(http.MethodPut, mlsPackagesPath,
+			"/api/v1/users/me/mls/devices/00000000-0000-4000-8000-0000000000d1/key-packages",
+			func(Fixture) string { return fmt.Sprintf(`{"key_packages":[%q]}`, mlsBlob) },
+			http.StatusNotFound, "mls_device_not_found"),
+		sessionEntry(http.MethodGet, mlsWelcomesPath, "", nil, http.StatusOK, ""),
+		// Acknowledgement is a uniform 204 for every id — one that names
+		// nothing, one already acknowledged, one belonging to somebody else.
+		// The uniformity IS the security property, so the matrix pins it:
+		// this row asks with an id that was never issued and requires the
+		// same answer a real one gets, because a 404 here would be exactly
+		// the distinguisher the design removes. That foreign rows are not
+		// deleted is the other half, and is pinned in storage
+		// (TestMlsWelcomesIntegration) where a row exists to survive.
+		sessionEntry(http.MethodDelete, mlsWelcomePath,
+			"/api/v1/users/me/mls/welcomes/00000000-0000-4000-8000-0000000000e1",
+			nil, http.StatusNoContent, ""),
+
+		// Phase 3 slice 5: the recovery surface (ADR 010). Four more
+		// own-account rows. Nobody else reads or writes another person's
+		// envelope — it is ciphertext this server cannot open, and least
+		// privilege is not a function of what the bytes reveal — and the
+		// matrix is where "owner only" is a fact rather than a sentence in an
+		// ADR.
+		//
+		// The upload is the 204 of a fresh fixture: each cell is its own
+		// account, so counter 1 always advances past the nothing that is
+		// stored. The stale refusal needs one account writing twice, which is
+		// a handler test rather than a matrix shape.
+		sessionEntry(http.MethodPut, mlsBackupPath, "",
+			func(Fixture) string {
+				return fmt.Sprintf(`{"envelope":%q,"counter":1}`, mlsBlob)
+			},
+			http.StatusNoContent, ""),
+		// A fresh account has stored nothing, and the endpoint says so with
+		// its own code rather than the router's generic 404 — the restore
+		// screen has to be able to distinguish "the server says there is
+		// nothing here" from "your key was wrong".
+		sessionEntry(http.MethodGet, mlsBackupPath, "", nil,
+			http.StatusNotFound, "mls_backup_not_found"),
+		// Idempotent: an account with no backup asked for a state that is
+		// already true. The uniformity is the point — a 404 here would tell a
+		// caller whether a backup existed, which is not something a delete
+		// needs to answer.
+		sessionEntry(http.MethodDelete, mlsBackupPath, "", nil,
+			http.StatusNoContent, ""),
+		// A well-formed device id that was never registered, which answers
+		// exactly like another account's device. That indistinguishability IS
+		// the property: the lost-device write must not double as a way to
+		// confirm somebody else's device exists.
+		sessionEntry(http.MethodDelete, mlsDeregisterPath, mlsUnknownDeviceTarget, nil,
+			http.StatusNotFound, "mls_device_not_found"),
 
 		// Phase 1.1b two-step verification. Real outcomes: every cell below is
 		// the handler's own answer for a fresh account, so a Member/Admin cell
@@ -1197,6 +1404,91 @@ func channelRegistry() []Entry {
 	callsOff := refusal(http.StatusServiceUnavailable, "calls_unavailable")
 	entries = append(entries, bothKinds(http.MethodPost, callTokenPath, nil,
 		members(callsOff, callsOff, callsOff))...)
+
+	entries = append(entries, mlsEntries()...)
+	return entries
+}
+
+// mlsEntries is the E2EE transport's channel-scoped half (ADR 006).
+//
+// Every fixture channel is plaintext, which is what makes these rows say
+// something: the member cells land on the transport's own refusals — no group
+// here, and this channel is not encrypted — while the two non-member cells
+// get the channel's 404. Both are 404 on the group read, and the codes are
+// what tells them apart: a stranger must not learn whether a channel is
+// encrypted, and a member must learn that there is no group yet, because that
+// is the signal to create one.
+//
+// Membership is the whole rule on all five. Reading or moving a channel's
+// group state is exactly as privileged as reading the channel, so creating a
+// channel confers nothing extra and neither does being an org admin outside
+// it — the two admin columns pin that from both sides, as everywhere else.
+func mlsEntries() []Entry {
+	var (
+		read         = success(http.StatusOK)
+		noGroup      = refusal(http.StatusNotFound, "mls_group_not_found")
+		notEncrypted = refusal(http.StatusBadRequest, "e2ee_not_enabled")
+	)
+
+	entries := bothKinds(http.MethodGet, mlsGroupPath, nil, members(noGroup, noGroup, noGroup))
+
+	// Creating a group on a channel that is not e2ee is refused, and the
+	// refusal is a 400 rather than a 403 for the reason dm_membership_fixed
+	// is: it says something about the channel's shape, not about who is
+	// asking. That it is decided AFTER membership is what keeps a stranger
+	// on the 404.
+	groupBody := func(Fixture) string { return fmt.Sprintf(`{"group_id":%q}`, mlsBlob) }
+	entries = append(entries, bothKinds(http.MethodPost, mlsGroupPath, groupBody,
+		members(notEncrypted, notEncrypted, notEncrypted))...)
+
+	// Claiming names a real member of the cell's own channel, so the refusal
+	// a member reaches is the channel's mode and nothing else: a claim
+	// consumes a single-use key package, and on a channel that can never
+	// have a group it would be a free pool-drain against anyone you share a
+	// plaintext room with. That the two non-member columns still answer 404
+	// is the ordering this row pins — the mode gate runs after membership,
+	// so it cannot become a way to probe which channels exist.
+	claimBody := func(fx Fixture) string { return fmt.Sprintf(`{"user_id":%q}`, fx.MemberUserID) }
+	entries = append(entries, bothKinds(http.MethodPost, mlsClaimsPath, claimBody,
+		members(notEncrypted, notEncrypted, notEncrypted))...)
+
+	// The commit log of a channel with no group is empty rather than absent:
+	// there is nothing to apply, which is what a caught-up client sees too.
+	entries = append(entries,
+		channelEntry(http.MethodGet, mlsCommitsPath, storage.ChannelKindPrivate, nil, members(read, read, read)),
+		channelEntry(http.MethodGet, mlsCommitsPath, storage.ChannelKindDM, nil, members(read, read, read)))
+	for i := range entries {
+		if entries[i].Method == http.MethodGet && entries[i].Path == mlsCommitsPath {
+			// after_epoch is required by the contract, and the generated
+			// router refuses the request with 400 before the security
+			// middleware runs if it is missing — which would pin request
+			// validation instead of an authorization answer.
+			entries[i].RequestTarget = mlsCommitsPath + "?after_epoch=0"
+		}
+	}
+
+	// Submitting a commit to a channel with no group is 404
+	// mls_group_not_found, and a stranger's 404 carries channel_not_found.
+	// Two 404s with different codes is the shape this whole surface has, and
+	// the codes are the only thing separating them.
+	commitBody := func(Fixture) string { return fmt.Sprintf(`{"epoch":0,"message":%q}`, mlsBlob) }
+	entries = append(entries, bothKinds(http.MethodPost, mlsCommitsPath, commitBody,
+		members(noGroup, noGroup, noGroup))...)
+
+	// The member-device directory (ADR 007 decision 2), and the row exists
+	// for the two non-member columns rather than the member ones. This read
+	// is the allow-list an eviction sweep trusts: every leaf whose key it
+	// does not name is evicted. A stranger who could read it would learn the
+	// whole roster of a channel they cannot see — every member's id, and how
+	// many devices each has — so the 404 these cells pin is the boundary that
+	// keeps the directory a thing only members can assemble.
+	//
+	// The member cells land on the mode refusal because every fixture channel
+	// is plaintext, and that they do is the ordering this row pins: a channel
+	// with no group has no tree to sweep, but a stranger must reach the
+	// channel's own 404 first and learn nothing about the mode either way.
+	entries = append(entries, bothKinds(http.MethodGet, mlsDevicesPath, nil,
+		members(notEncrypted, notEncrypted, notEncrypted))...)
 
 	return entries
 }

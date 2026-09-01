@@ -81,6 +81,11 @@ const insertAttachmentQuery = `INSERT INTO attachments
 // short of the asked-for count, and the caller fails the whole send with the
 // contract's single attachment_not_found.
 //
+// message_position is the id's index in the list the sender gave, which is
+// the order their cards render in (migration 0020). array_position is 1-based,
+// hence the -1, and it cannot come back NULL: the same array is this
+// statement's own filter, so every row it updates is one the array contains.
+//
 // The sub-select takes the row locks explicitly, in id order. That order is
 // the entire reason two concurrent sends claiming overlapping ids cannot
 // deadlock: without it PostgreSQL would lock the rows in whatever order the
@@ -89,7 +94,8 @@ const insertAttachmentQuery = `INSERT INTO attachments
 // against the updated row, finds message_id no longer NULL, and drops it
 // from the result — which is exactly the count mismatch the caller refuses on.
 const claimAttachmentsQuery = `UPDATE attachments a
-	SET message_id = $1
+	SET message_id = $1,
+	    message_position = array_position($2::uuid[], a.id) - 1
 	FROM (
 	    SELECT id FROM attachments
 	    WHERE id = ANY($2::uuid[])
@@ -105,10 +111,16 @@ const claimAttachmentsQuery = `UPDATE attachments a
 
 // attachmentsByMessagesQuery reads the cards of a whole page of history in
 // one round trip. A page of fifty messages must not cost fifty queries.
+//
+// The order is the sender's, per message. No tiebreak follows it and none is
+// needed: 0020's attachments_message_order_idx is UNIQUE on exactly this
+// pair, so two cards of one message cannot share a position. The leading
+// message_id is not for the caller — the rows are grouped by it in Go — but
+// for that index, which then answers the filter and the sort together.
 const attachmentsByMessagesQuery = `SELECT ` + attachmentColumns + `
 	FROM attachments
 	WHERE message_id = ANY($1::uuid[])
-	ORDER BY created_at, id`
+	ORDER BY message_id, message_position`
 
 // sweepOrphansQuery deletes the uploads that never became a message and
 // hands back their ids so the caller can delete the blobs. The row goes

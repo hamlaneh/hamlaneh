@@ -313,16 +313,20 @@ func TestLoginRateLimitPerIdentifier(t *testing.T) {
 	wantError(t, rec, http.StatusTooManyRequests, "rate_limited")
 }
 
-// TestLoginRateLimitTrustsForwardedForFromPrivatePeer pins the proxy trust
-// model: X-Forwarded-For distinguishes clients only when the direct peer is
-// private (Caddy), and is ignored from public peers.
-func TestLoginRateLimitTrustsForwardedForFromPrivatePeer(t *testing.T) {
+// TestLoginRateLimitTrustsForwardedForBehindAProxy pins the proxy trust model
+// on a server told it has one — the compose stack, where Caddy terminates
+// every connection. X-Forwarded-For distinguishes clients only when the
+// direct peer sits where Caddy sits, and is ignored from public peers.
+//
+// Both subtests are the server-mode behaviour that must not change:
+// WithTrustedProxy(true) is exactly what cmd/hamlaneh-server passes there.
+func TestLoginRateLimitTrustsForwardedForBehindAProxy(t *testing.T) {
 	t.Parallel()
 
 	t.Run("private peer: forwarded clients are distinct", func(t *testing.T) {
 		t.Parallel()
 		store, _ := loginStore(t)
-		handler := httpserver.Handler(store)
+		handler := httpserver.Handler(store, httpserver.WithTrustedProxy(true))
 
 		// 15 attempts from one private peer, each a distinct forwarded
 		// client and identifier: no limit trips.
@@ -340,7 +344,7 @@ func TestLoginRateLimitTrustsForwardedForFromPrivatePeer(t *testing.T) {
 	t.Run("public peer: forwarded header is ignored", func(t *testing.T) {
 		t.Parallel()
 		store, _ := loginStore(t)
-		handler := httpserver.Handler(store)
+		handler := httpserver.Handler(store, httpserver.WithTrustedProxy(true))
 
 		// A public peer spoofing distinct X-Forwarded-For values must still
 		// be limited by its own address.
@@ -358,6 +362,45 @@ func TestLoginRateLimitTrustsForwardedForFromPrivatePeer(t *testing.T) {
 			withForwardedFor("203.0.113.99")))
 		wantError(t, rec, http.StatusTooManyRequests, "rate_limited")
 	})
+}
+
+// TestLoginRateLimitIgnoresForwardedForWithNoProxy is the home-mode half, and
+// the regression this whole option exists for.
+//
+// Home mode binds 127.0.0.1 with nothing in front of it, so the loopback peer
+// is the caller and not a proxy. Before WithTrustedProxy, the address SHAPE
+// was the whole test, which made every local process — and the page's own
+// JavaScript, since X-Forwarded-For is not a forbidden header name — able to
+// mint a fresh sign-in budget per attempt by rotating the header.
+//
+// A default-constructed handler is what proves the default is the safe one:
+// nothing here passes an option, and the header is still ignored.
+func TestLoginRateLimitIgnoresForwardedForWithNoProxy(t *testing.T) {
+	t.Parallel()
+
+	for _, peer := range []string{"127.0.0.1:5000", "10.0.0.2:5000"} {
+		t.Run(peer, func(t *testing.T) {
+			t.Parallel()
+			store, _ := loginStore(t)
+			handler := httpserver.Handler(store)
+
+			// Ten attempts, each claiming a different client. Without the
+			// fix these are ten separate budgets and none of them trips.
+			for i := 1; i <= 10; i++ {
+				req := request(http.MethodPost, "/api/v1/auth/login", loginBody(fmt.Sprintf("u%d", i), "wrong"),
+					withRemoteAddr(peer),
+					withForwardedFor(fmt.Sprintf("198.51.100.%d", i)))
+				rec := doHandler(t, handler, req)
+				if rec.Code == http.StatusTooManyRequests {
+					t.Fatalf("attempt %d rate-limited early", i)
+				}
+			}
+			rec := doHandler(t, handler, request(http.MethodPost, "/api/v1/auth/login", loginBody("u11", "wrong"),
+				withRemoteAddr(peer),
+				withForwardedFor("198.51.100.99")))
+			wantError(t, rec, http.StatusTooManyRequests, "rate_limited")
+		})
+	}
 }
 
 func TestRefresh(t *testing.T) {

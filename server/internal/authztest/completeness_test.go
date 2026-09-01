@@ -36,6 +36,16 @@ func authorshipOperations() []Operation {
 	}
 }
 
+// ownershipOperations are the operations whose answer turns on who made the
+// resource. ADR 005 requires the ConferenceOwner refinement on each, so the
+// owner's own outcome cannot be forgotten into silence — and without it the
+// plain Member row would be asserting nothing about a stranger.
+func ownershipOperations() []Operation {
+	return []Operation{
+		{Method: http.MethodDelete, Path: conferencePath},
+	}
+}
+
 // probeFixture stands in for a provisioned cell where a test only needs to
 // see that an entry's target resolves: well-formed ids that name nothing.
 func probeFixture() Fixture {
@@ -44,6 +54,7 @@ func probeFixture() Fixture {
 		MessageID:      "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
 		MemberUserID:   "66666666-7777-8888-9999-aaaaaaaaaaaa",
 		OutsiderUserID: "cccccccc-dddd-eeee-ffff-000000000000",
+		ConferenceID:   "99999999-8888-7777-6666-555555555555",
 	}
 }
 
@@ -242,6 +253,43 @@ func TestAuthorshipRefinements(t *testing.T) {
 	for op := range needsAuthor {
 		if found[op] == 0 {
 			t.Errorf("%s distinguishes the message author but has no matrix entry at all", op)
+		}
+	}
+}
+
+// TestOwnershipRefinements is TestAuthorshipRefinements for the resource
+// whose authority is ownership. It also pins the half that makes the
+// refinement worth having: a row that declares ConferenceOwner but lets the
+// plain Member column succeed would prove nothing about a stranger, and the
+// contract's answer to a stranger is a 404 that never says a conference
+// exists.
+func TestOwnershipRefinements(t *testing.T) {
+	t.Parallel()
+
+	needsOwner := map[Operation]bool{}
+	for _, op := range ownershipOperations() {
+		needsOwner[op] = true
+	}
+
+	found := map[Operation]int{}
+	for _, e := range Registry() {
+		op := Operation{Method: e.Method, Path: e.Path}
+		if !needsOwner[op] {
+			continue
+		}
+		found[op]++
+		if _, ok := e.Want[ConferenceOwner]; !ok {
+			t.Errorf("%s does not declare %s; its contract answer turns on who made the "+
+				"conference (ADR 005 requires the refinement)", op, ConferenceOwner)
+		}
+		if got := e.Want[Member]; got != http.StatusNotFound {
+			t.Errorf("%s answers a non-owning member %d, want 404: a distinct refusal would "+
+				"confirm the conference exists", op, got)
+		}
+	}
+	for op := range needsOwner {
+		if found[op] == 0 {
+			t.Errorf("%s distinguishes the owner but has no matrix entry at all", op)
 		}
 	}
 }

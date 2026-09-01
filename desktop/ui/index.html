@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hamlaneh</title>
+  </head>
+  <!--
+    Plain semantic HTML with no styling of its own, per CLAUDE.md "UI pipeline":
+    no artboard draws this screen (docs/design/STATUS.md carries the row as
+    `awaiting-design`), so it is functional plumbing until one does. Every
+    visible string comes from connect.js, keyed, so nothing here is hard-coded.
+  -->
+  <body>
+    <main>
+      <h1 data-string="heading"></h1>
+      <form>
+        <p>
+          <label for="instance" data-string="label"></label>
+          <input
+            id="instance"
+            name="instance"
+            type="url"
+            inputmode="url"
+            autocomplete="url"
+            autofocus
+            required
+            aria-describedby="hint error"
+            dir="ltr"
+          />
+        </p>
+        <p id="hint" data-string="hint"></p>
+        <p id="error" role="alert"></p>
+        <button type="submit" data-string="submit"></button>
+      </form>
+    </main>
+    <script type="module" src="./connect.js"></script>
+  </body>
+</html>
