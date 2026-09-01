@@ -105,7 +105,7 @@ type provisioningServer struct {
 	server *httptest.Server
 }
 
-func newProvisioningServer(t *testing.T, store *storage.Store) (*provisioningServer, string) {
+func newProvisioningServer(t *testing.T, store testdb.Store) (*provisioningServer, string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -148,7 +148,7 @@ func (p *provisioningServer) do(t *testing.T, method, path, token, body string) 
 
 // newTestUser creates an account with a real password hash, which is what
 // makes it an ordinary account rather than a directory-provisioned one.
-func newTestUser(ctx context.Context, t *testing.T, store *storage.Store, username string, admin bool) storage.User {
+func newTestUser(ctx context.Context, t *testing.T, store testdb.Store, username string, admin bool) storage.User {
 	t.Helper()
 
 	user, err := store.CreateUser(ctx, storage.NewUser{
@@ -165,7 +165,7 @@ func newTestUser(ctx context.Context, t *testing.T, store *storage.Store, userna
 
 // newTestFamily mints one live session and returns its family id — one
 // signed-in device.
-func newTestFamily(ctx context.Context, t *testing.T, store *storage.Store, userID uuid.UUID) uuid.UUID {
+func newTestFamily(ctx context.Context, t *testing.T, store testdb.Store, userID uuid.UUID) uuid.UUID {
 	t.Helper()
 
 	_, accessHash := session.NewToken()

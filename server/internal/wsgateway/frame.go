@@ -43,6 +43,9 @@ const (
 	typeCallStarted = "call_started"
 	typeCallUpdated = "call_updated"
 	typeCallEnded   = "call_ended"
+
+	typeMlsCommit  = "mls_commit"
+	typeMlsWelcome = "mls_welcome"
 )
 
 // Close codes (§8). The 1000-range pair are the standard ones; the
@@ -269,6 +272,22 @@ type callUpdatedData struct {
 	Participants []api.CallParticipant `json:"participants"`
 }
 
+// The two E2EE transport events (§4). Neither carries a seq and neither is
+// replayed: both are notifications that something changed, and what is true
+// comes from REST — the commit log and the welcome list, both durable where
+// the replay buffer is not.
+//
+// mls_commit carries the epoch and no blob, because a commit can approach
+// 256 KiB and no frame under the 64 KiB cap could hold one. mls_welcome
+// carries nothing at all: naming the device would say which of a person's
+// devices was added, and the recipient can read that off the list it is being
+// told to fetch.
+type mlsCommitData struct {
+	Epoch int64 `json:"epoch"`
+}
+
+type mlsWelcomeData struct{}
+
 // The contract shapes an event carries. These mirror httpserver's apiMessage,
 // apiChannel and apiUserSummary; they are duplicated rather than shared
 // because those live unexported in the handler package. Any change to the
@@ -295,6 +314,7 @@ func apiChannel(ch storage.Channel) api.Channel {
 	out := api.Channel{
 		Id:                ch.ID,
 		Kind:              api.ChannelKind(ch.Kind),
+		E2ee:              ch.E2EE,
 		Slug:              ch.Slug,
 		Topic:             ch.Topic,
 		MemberCount:       ch.MemberCount,

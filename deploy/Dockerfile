@@ -9,6 +9,28 @@
 # non-root). Only the last stage ships — the final image contains the
 # binary and nothing else.
 
+# The MLS wrapper, compiled to WebAssembly (ADR 006). Rust exists in this
+# image build and nowhere else in the product: the server stays a single Go
+# binary, and this stage's output is a static asset the web bundle lazy-loads
+# when someone opens an encrypted conversation. Same toolchain versions as
+# webapp/src-mls/Dockerfile (the dev-machine build) — drift between the two
+# would ship a bundle nobody tested.
+FROM rust:1.91-bookworm@sha256:c1e5f19e773b7878c3f7a805dd00a495e747acbdc76fb2337a4ebf0418896b33 AS mlswasm
+
+RUN rustup target add wasm32-unknown-unknown \
+ && cargo install wasm-bindgen-cli --version 0.2.127 --locked
+
+WORKDIR /crate
+COPY webapp/src-mls/Cargo.toml webapp/src-mls/Cargo.lock ./
+COPY webapp/src-mls/src ./src
+# --locked: the committed Cargo.lock is obeyed exactly, as npm ci obeys the
+# npm lockfile. The bundler target is the only one the shipped bundle needs;
+# pkg-node exists solely for vitest and is not built here.
+RUN cargo build --release --target wasm32-unknown-unknown --locked \
+ && wasm-bindgen --target bundler --out-dir pkg --out-name hamlaneh_mls \
+      target/wasm32-unknown-unknown/release/hamlaneh_mls.wasm \
+ && echo '{"type":"module"}' > pkg/package.json
+
 # Node LTS, pinned by digest (CLAUDE.md "CI gates": base images pinned by
 # digest; Dependabot's docker ecosystem covers deploy/ and keeps it fresh).
 FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS webbuild
@@ -21,6 +43,12 @@ COPY webapp/package.json webapp/package-lock.json ./
 RUN npm ci
 
 COPY webapp/ ./
+# The compiled MLS wrapper, in the place vite.config.ts's alias resolves.
+# Before `npm run build`, because rollup resolves the dynamic import at
+# build time — without this the image build fails, which is the correct
+# failure: an image without the wasm would 404 the moment somebody opened
+# an encrypted conversation.
+COPY --from=mlswasm /crate/pkg/ ./src-mls/pkg/
 # `npm run build` is `tsc --noEmit && vite build`, so a type error fails the
 # image build rather than shipping a broken bundle.
 RUN npm run build
@@ -45,7 +73,16 @@ COPY server/ ./
 RUN rm -rf ./internal/webassets/dist
 COPY --from=webbuild /src/webapp/dist/ ./internal/webassets/dist/
 
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+# The release tag, stamped into the binary so `hamlaneh-server --version`
+# answers. deploy/hamlaneh-update.sh asks the RUNNING server what it is
+# (`compose exec server hamlaneh-server --version`) and fails the update when
+# the answer is not a version, because the installed version is the only input
+# to verify-release.sh's anti-rollback check. The release workflow passes
+# --build-arg VERSION; a local `docker compose build` gets "dev", which is
+# honest and which the updater refuses rather than guesses at.
+ARG VERSION=dev
+
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
       -o /out/hamlaneh-server ./cmd/hamlaneh-server
 
 # The data directory, created here because the runtime stage is distroless

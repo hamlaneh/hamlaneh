@@ -55,10 +55,15 @@ func runMigrations(connCfg *pgx.ConnConfig) (err error) {
 	return nil
 }
 
-// latestMigrationVersion returns the highest migration version among the
+// LatestMigrationVersion returns the highest migration version among the
 // *.up.sql files in dir of fsys. Ready compares it against the database's
 // schema_migrations row to detect a schema that lags (or leads) this binary.
-func latestMigrationVersion(fsys fs.FS, dir string) (uint64, error) {
+//
+// It is exported because the naming convention it enforces is the contract
+// between a driver and its own migration tree, and home mode's SQLite driver
+// (internal/sqlitestore) keeps a parallel tree under the same convention. The
+// rule belongs in one place; a second copy would be a second rule.
+func LatestMigrationVersion(fsys fs.FS, dir string) (uint64, error) {
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
 		return 0, fmt.Errorf("read migrations directory: %w", err)

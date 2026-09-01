@@ -31,14 +31,19 @@ const (
 // to execute. Anything unrecognised is served as an opaque download rather
 // than guessed at, because guessing is exactly what nosniff forbids.
 var contentTypes = map[string]string{
-	".css":   "text/css; charset=utf-8",
-	".html":  "text/html; charset=utf-8",
-	".js":    "text/javascript; charset=utf-8",
-	".json":  "application/json",
-	".md":    "text/markdown; charset=utf-8",
-	".png":   "image/png",
-	".svg":   "image/svg+xml",
-	".txt":   "text/plain; charset=utf-8",
+	".css":  "text/css; charset=utf-8",
+	".html": "text/html; charset=utf-8",
+	".js":   "text/javascript; charset=utf-8",
+	".json": "application/json",
+	".md":   "text/markdown; charset=utf-8",
+	".png":  "image/png",
+	".svg":  "image/svg+xml",
+	".txt":  "text/plain; charset=utf-8",
+	// Without this the MLS core is served as an opaque download, and
+	// nosniff then makes WebAssembly.instantiateStreaming refuse it —
+	// the module still loads, through wasm-bindgen's slower buffered
+	// fallback, which is exactly the kind of failure that hides.
+	".wasm":  "application/wasm",
 	".webp":  "image/webp",
 	".woff":  "font/woff",
 	".woff2": "font/woff2",
@@ -50,6 +55,12 @@ const defaultContentType = "application/octet-stream"
 // rooted at the build's own directory.
 type webapp struct {
 	files fs.FS
+
+	// compress gzips the build's compressible files on the way out. Off
+	// unless the install asked for it, because the compose stack's proxy is
+	// already doing it — compress.go carries the whole argument, including
+	// why no API response is ever compressed whatever this says.
+	compress bool
 }
 
 // routeWebapp registers the web application's routes on mux.
@@ -68,6 +79,12 @@ type webapp struct {
 //	/invite   the redemption screen an invitation link lands on. Like /reset,
 //	          its token rides in the URL fragment (invite_handlers.go), so
 //	          the server only ever sees this bare path
+//	/meet/... the guest page a conference link opens. The token is a path
+//	          segment here rather than a fragment, unlike /reset and /invite:
+//	          it is not a credential somebody emailed to one person, it is a
+//	          standing link meant to be pasted into a calendar entry, and it
+//	          must survive a reload. The server sees it and does not read it
+//	          — the redemption endpoint is what checks it
 //	/admin    webapp/src/screens/AdminApp.tsx — the account menu links to it
 //	          with a plain anchor, so it is a real navigation the server has
 //	          to answer, and the pane routes below it (invites, settings,
@@ -77,14 +94,15 @@ type webapp struct {
 //	          non-admins, and the shell renders nothing without it
 //
 // — and adding a route to the app means adding it here in the same change.
-func routeWebapp(mux *http.ServeMux, files fs.FS) {
-	a := &webapp{files: files}
+func routeWebapp(mux *http.ServeMux, files fs.FS, compress bool) {
+	a := &webapp{files: files, compress: compress}
 
 	mux.HandleFunc("GET /{$}", a.serveIndex)
 	mux.HandleFunc("GET /reset", a.serveIndex)
 	mux.HandleFunc("GET /invite", a.serveIndex)
 	mux.HandleFunc("GET /c/", a.serveIndex)
 	mux.HandleFunc("GET /admin", a.serveIndex)
+	mux.HandleFunc("GET /meet/", a.serveIndex)
 	mux.HandleFunc("GET /admin/", a.serveIndex)
 
 	mux.HandleFunc("GET /assets/", a.serveHashedAsset)
@@ -150,6 +168,19 @@ func (a *webapp) serveFile(w http.ResponseWriter, r *http.Request, name, cacheCo
 	}
 	w.Header().Set("Content-Type", contentTypeFor(name))
 	w.Header().Set("Cache-Control", cacheControl)
+
+	if a.compressible(w, name, info.Size()) {
+		// This URL now has two representations, so every response for it —
+		// including the plain one being served to a client that did not ask
+		// — must tell caches which one they stored. Without this a shared
+		// cache hands a gzipped body to a client that cannot read it.
+		w.Header().Add("Vary", "Accept-Encoding")
+		if acceptsGzip(r) {
+			a.serveGzipped(w, r, name)
+			return
+		}
+	}
+
 	http.ServeFileFS(w, r, a.files, name) // #nosec G703 -- a.files is the embedded build; embed.FS has no host paths to traverse into (see above)
 }
 

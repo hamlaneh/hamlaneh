@@ -4,13 +4,11 @@ package storage
 // which pin its error contract against a real PostgreSQL.
 var RegisterCitext = registerCitext
 
-// ParseMentions exposes the mention parser to the external tests, which fuzz
-// it, and MentionTokenLen the exact byte width of one token, which bounds how
-// many mentions any content can hold.
-var ParseMentions = parseMentions
-
-// MentionTokenLen is mentionTokenLen for those tests.
-const MentionTokenLen = mentionTokenLen
+// ParseMentions, MentionTokenLen, FoldSearchText and SearchSnippet used to be
+// exported here for the tests alone. They are ordinary exports of the package
+// now (mentions.go, search.go), because home mode's SQLite driver reuses all
+// four: the mention wire format and the search fold are product decisions, and
+// a second copy of either would be a second decision.
 
 // SearchPageQuery is the search statement the external test runs EXPLAIN on.
 // That test is the only thing standing between "the trigram index is used"
@@ -28,12 +26,3 @@ const FileSearchPageQuery = fileSearchPageQuery
 // prefers that index over the message_id one is a cost decision that moves
 // with table size — what must never drift is the expression itself.
 const NormalizedFilename = normalizedFilename
-
-// FoldSearchText and SearchSnippet expose the two halves of the search
-// normalization: the fold that must agree with migration 0006's translate()
-// expression, and the splitter that turns a match into contract snippet
-// parts.
-var (
-	FoldSearchText = foldSearchText
-	SearchSnippet  = searchSnippet
-)

@@ -63,27 +63,33 @@ type Store interface {
 //
 // An invalid cfg on a fresh instance fails startup loudly — a half-formed
 // admin account would be worse. The password never reaches any log.
-func EnsureAdmin(ctx context.Context, store Store, cfg AdminConfig, present bool) error {
+//
+// created reports whether THIS call made the account, and is the condition a
+// caller that generated the password shows it under (home mode does). It is
+// false on every path that did not create one — a populated table, no
+// configuration, or a race another process won — so a restart can neither
+// mint a second admin nor put a live credential back on the console.
+func EnsureAdmin(ctx context.Context, store Store, cfg AdminConfig, present bool) (created bool, err error) {
 	count, err := store.CountUsers(ctx)
 	if err != nil {
-		return fmt.Errorf("bootstrap: count users: %w", err)
+		return false, fmt.Errorf("bootstrap: count users: %w", err)
 	}
 	if count > 0 {
-		return nil
+		return false, nil
 	}
 
 	if !present {
 		slog.Warn("no users exist and no admin bootstrap is configured; " +
 			"set " + EnvUsername + " and " + EnvPassword + " (optionally " +
 			EnvLocale + ") and restart to create the first admin")
-		return nil
+		return false, nil
 	}
 
 	if vErr := validate(cfg); vErr != nil {
-		return fmt.Errorf("bootstrap: %w", vErr)
+		return false, fmt.Errorf("bootstrap: %w", vErr)
 	}
 
-	created, err := store.CreateUser(ctx, storage.NewUser{
+	admin, err := store.CreateUser(ctx, storage.NewUser{
 		Username:           cfg.Username,
 		PasswordHash:       password.Hash(cfg.Password),
 		Locale:             cfg.Locale,
@@ -92,17 +98,19 @@ func EnsureAdmin(ctx context.Context, store Store, cfg AdminConfig, present bool
 	})
 	if errors.Is(err, storage.ErrUsernameTaken) {
 		// Another instance of a shared database won the race; the outcome
-		// (an admin exists) is what matters.
+		// (an admin exists) is what matters. Not created by us, so a caller
+		// holding a generated password must not show it: the account that
+		// exists has the winner's, not ours.
 		slog.Info("admin bootstrap: user already exists", "username", cfg.Username)
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("bootstrap: create admin: %w", err)
+		return false, fmt.Errorf("bootstrap: create admin: %w", err)
 	}
 
 	slog.Info("admin bootstrap: created first admin; the password must be changed on first login",
-		"username", created.Username, "user_id", created.ID)
-	return nil
+		"username", admin.Username, "user_id", admin.ID)
+	return true, nil
 }
 
 // validate applies the shared account rules (internal/uservalidate) to the

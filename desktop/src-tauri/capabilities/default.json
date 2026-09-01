@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the shell's own connect page may reach. It calls no Tauri command at all — it validates an address and navigates the window — so this grants only the core set the webview bootstrap itself needs. The instance's web application runs on a remote origin and is listed by no capability, so it holds no Tauri permission whatsoever: to it, this is an ordinary browser.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

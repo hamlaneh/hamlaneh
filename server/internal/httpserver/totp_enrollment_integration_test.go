@@ -24,7 +24,7 @@ import (
 
 // requireTotp turns the org's two-step policy on, through the same storage
 // call the admin endpoint uses.
-func requireTotp(ctx context.Context, t *testing.T, store *storage.Store) {
+func requireTotp(ctx context.Context, t *testing.T, store testdb.Store) {
 	t.Helper()
 	on := true
 	if _, err := store.UpdateOrgSettings(ctx, storage.OrgSettingsPatch{RequireTotp: &on}); err != nil {

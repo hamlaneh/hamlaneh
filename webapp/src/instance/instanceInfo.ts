@@ -23,6 +23,11 @@ export type InstanceInfo = components["schemas"]["InstanceInfo"];
 export const FALLBACK_INSTANCE_INFO: InstanceInfo = {
   password_min_length: PASSWORD_MIN_LENGTH,
   password_reset_available: false,
+  // Strict when the instance could not be asked, in the same pessimistic
+  // spirit as the reset flag: assuming encryption and being refused costs a
+  // clear error, assuming plaintext and being wrong would offer somebody a
+  // conversation the instance will not create.
+  encryption_mode: "strict",
   // 25 MiB, the server's own default. Pessimistic in the same spirit as the
   // reset flag: if the instance could not be asked, refusing a file the
   // server would have taken is a retry; accepting one it will refuse is a

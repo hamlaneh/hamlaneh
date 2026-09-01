@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import path from "node:path";
+import process from "node:process";
 
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -26,8 +28,50 @@ function dropMockServiceWorker(): Plugin {
   };
 }
 
-export default defineConfig({
+/** The compiled MLS wrapper (webapp/src-mls/build.sh), which is not committed. */
+const MLS_ARTIFACT = path.resolve(import.meta.dirname, "src-mls/pkg/hamlaneh_mls.js");
+
+/**
+ * What the `hamlaneh-mls` specifier resolves to.
+ *
+ * Normally the compiled crate. The one exception is a dev server started with
+ * `VITE_API_MOCK=1` in a checkout that has never built it: Vite resolves every
+ * import specifier while transforming a module — dynamic ones included — so a
+ * missing artifact is a 500 on `src/mls/wasm.ts` and the whole signed-in app
+ * fails to load. Backend-less dev could therefore not open one encrypted
+ * screen, which on a strict-mode instance is every screen.
+ *
+ * The three conditions are all load-bearing. `command === "serve"` keeps it out
+ * of every build; the mock flag keeps it out of a dev server pointed at a real
+ * backend; and the existence check means a checkout that HAS built the crate
+ * always gets the real thing. A production build resolves to the artifact and
+ * fails loudly when it is absent, exactly as before.
+ *
+ * The same missing artifact stops thirteen unit-test files LOADING in a
+ * crate-less checkout, for the same reason. `VITE_API_MOCK=1 npm test` gets
+ * them running; one case fails there by construction — service.test.ts asserts
+ * the device is unavailable when the wrapper cannot be loaded, and under the
+ * substitution it can — which is a fair price for the other 598 and is also
+ * proof that the substitution really is opt-in. CI builds the crate, so CI
+ * sees neither.
+ */
+function mlsSpecifier(command: string): string {
+  const substitute =
+    command === "serve" && process.env.VITE_API_MOCK === "1" && !existsSync(MLS_ARTIFACT);
+  return substitute ? path.resolve(import.meta.dirname, "src/mls/devFallback.ts") : MLS_ARTIFACT;
+}
+
+export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss(), dropMockServiceWorker()],
+  resolve: {
+    alias: {
+      // An alias rather than a relative import so `tsc` can type it from the
+      // ambient declaration in src/mls/hamlaneh-mls.d.ts, which is what lets a
+      // checkout where the crate has never been built still typecheck and run
+      // its unit tests.
+      "hamlaneh-mls": mlsSpecifier(command),
+    },
+  },
   test: {
     environment: "jsdom",
     // worker_threads instead of child processes: faster for this suite and
@@ -40,4 +84,4 @@ export default defineConfig({
     // test's inputs. Headroom keeps the suite deterministic.
     testTimeout: 15000,
   },
-});
+}));

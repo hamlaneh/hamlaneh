@@ -58,11 +58,15 @@ func DeriveUsername(raw string, attempt int) string {
 	for _, r := range strings.ToLower(local) {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteByte(byte(r))
+			// WriteRune, not WriteByte(byte(r)): both are one byte for the
+			// runes these guards admit, but the conversion is only correct
+			// BECAUSE of the guards. Widening a guard later would make
+			// WriteByte truncate silently, where WriteRune stays right.
+			b.WriteRune(r)
 		case r == '_' || r == '.' || r == '-':
 			// Legal, but not as the first character; leading ones are
 			// trimmed below rather than special-cased here.
-			b.WriteByte(byte(r))
+			b.WriteRune(r)
 		default:
 			b.WriteByte('-')
 		}

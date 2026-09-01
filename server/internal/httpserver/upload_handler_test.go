@@ -27,30 +27,49 @@ import (
 // uploadPath is the contract's upload target for the fixture channel.
 func uploadPath() string { return channelPath("/files") }
 
-// multipartBody builds a multipart/form-data body and returns it with the
-// Content-Type header that describes it.
-func multipartBody(t *testing.T, field, filename, contentType string, data []byte) (string, string) {
+// uploadPart is one part of a multipart upload body. An empty contentType
+// means the part declares none, which is a distinct case from declaring
+// application/octet-stream on the e2ee path.
+type uploadPart struct {
+	field       string
+	filename    string
+	contentType string
+	data        []byte
+}
+
+// multipartParts builds a multipart/form-data body out of the parts, in the
+// order given, and returns it with the Content-Type header describing it.
+// Order matters to the handler: the thumb is the part that follows the file.
+func multipartParts(t *testing.T, parts ...uploadPart) (string, string) {
 	t.Helper()
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 
-	header := textproto.MIMEHeader{}
-	header.Set("Content-Disposition", `form-data; name="`+field+`"; filename="`+filename+`"`)
-	if contentType != "" {
-		header.Set("Content-Type", contentType)
-	}
-	part, err := mw.CreatePart(header)
-	if err != nil {
-		t.Fatalf("create multipart part: %v", err)
-	}
-	if _, err := part.Write(data); err != nil {
-		t.Fatalf("write multipart part: %v", err)
+	for _, p := range parts {
+		header := textproto.MIMEHeader{}
+		header.Set("Content-Disposition", `form-data; name="`+p.field+`"; filename="`+p.filename+`"`)
+		if p.contentType != "" {
+			header.Set("Content-Type", p.contentType)
+		}
+		part, err := mw.CreatePart(header)
+		if err != nil {
+			t.Fatalf("create multipart part: %v", err)
+		}
+		if _, err := part.Write(p.data); err != nil {
+			t.Fatalf("write multipart part: %v", err)
+		}
 	}
 	if err := mw.Close(); err != nil {
 		t.Fatalf("close multipart writer: %v", err)
 	}
 	return buf.String(), mw.FormDataContentType()
+}
+
+// multipartBody builds a one-part multipart/form-data body.
+func multipartBody(t *testing.T, field, filename, contentType string, data []byte) (string, string) {
+	t.Helper()
+	return multipartParts(t, uploadPart{field, filename, contentType, data})
 }
 
 // testPNG encodes a w×h PNG.
@@ -82,12 +101,19 @@ type uploadServer struct {
 
 func newUploadServer(t *testing.T) *uploadServer {
 	t.Helper()
+	return newUploadServerFor(t, memberStore())
+}
+
+// newUploadServerFor is newUploadServer over a caller-chosen store, which is
+// what lets the e2ee tests upload into an encrypted channel.
+func newUploadServerFor(t *testing.T, store *fakeStore) *uploadServer {
+	t.Helper()
 
 	blobs, err := blobstore.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("blob store: %v", err)
 	}
-	up := &uploadServer{store: memberStore(), blobs: blobs}
+	up := &uploadServer{store: store, blobs: blobs}
 	up.store.createAttachment = func(_ context.Context, na storage.NewAttachment) (storage.Attachment, error) {
 		up.recorded = na
 		return storage.Attachment{
@@ -109,8 +135,14 @@ func newUploadServer(t *testing.T) *uploadServer {
 // upload posts one file part and returns the recorder.
 func (u *uploadServer) upload(t *testing.T, filename, contentType string, data []byte) *httptest.ResponseRecorder {
 	t.Helper()
+	return u.uploadParts(t, uploadPart{"file", filename, contentType, data})
+}
 
-	body, formType := multipartBody(t, "file", filename, contentType, data)
+// uploadParts posts a multipart body of the caller's own parts.
+func (u *uploadServer) uploadParts(t *testing.T, parts ...uploadPart) *httptest.ResponseRecorder {
+	t.Helper()
+
+	body, formType := multipartParts(t, parts...)
 	req := request(http.MethodPost, uploadPath(), body, withSessionCookie("tok"), withCSRF())
 	req.Header.Set("Content-Type", formType)
 

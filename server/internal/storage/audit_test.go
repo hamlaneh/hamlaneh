@@ -22,7 +22,7 @@ func fakeSeal(e storage.AuditEntry) []byte {
 	return out
 }
 
-func appendEntry(ctx context.Context, t *testing.T, store *storage.Store, e storage.AuditEntry) storage.AuditEntry {
+func appendEntry(ctx context.Context, t *testing.T, store testdb.Store, e storage.AuditEntry) storage.AuditEntry {
 	t.Helper()
 	if e.ID == uuid.Nil {
 		e.ID = uuid.New()

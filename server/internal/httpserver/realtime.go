@@ -67,6 +67,19 @@ type Realtime interface {
 	// departure rather than when the room is eventually reaped, so a banner
 	// never claims a call that ended five minutes ago.
 	CallEnded(channelID uuid.UUID)
+	// MlsCommit tells the channel's members that a commit was accepted at
+	// this epoch. It carries the epoch and nothing else: a commit blob can
+	// approach 256 KiB, which no frame under the 64 KiB cap could carry, so
+	// the event says something changed and REST says what is true — the same
+	// doctrine the call events follow. Missing it costs latency and nothing
+	// more, because the commit log is durable and every client refetches it
+	// on reconnect and on channel open.
+	MlsCommit(channelID uuid.UUID, epoch int64)
+	// MlsWelcome tells one user's sockets that a Welcome awaits at least one
+	// of their devices. It names no device and carries no payload: a Welcome
+	// is encrypted to one device's key package, so a sibling device receiving
+	// the nudge learns only that the person has something to fetch.
+	MlsWelcome(userID uuid.UUID)
 }
 
 // The three call events carry no seq and are never replayed (ws-protocol.md
@@ -93,6 +106,8 @@ func (noRealtime) ReadPosition(uuid.UUID, uuid.UUID, uuid.UUID, time.Time) {}
 func (noRealtime) CallStarted(uuid.UUID, uuid.UUID, []api.CallParticipant) {}
 func (noRealtime) CallUpdated(uuid.UUID, []api.CallParticipant)            {}
 func (noRealtime) CallEnded(uuid.UUID)                                     {}
+func (noRealtime) MlsCommit(uuid.UUID, int64)                              {}
+func (noRealtime) MlsWelcome(uuid.UUID)                                    {}
 
 // WithRealtime attaches the gateway that delivers the events above.
 func WithRealtime(rt Realtime) Option {

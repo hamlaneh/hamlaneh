@@ -135,6 +135,15 @@ type recordingRealtime struct {
 	channelRemoved []recordedChannelRemoved
 	readPositions  []recordedReadPosition
 	calls          []recordedCallEvent
+	mlsCommits     []recordedMlsCommit
+	mlsWelcomes    []uuid.UUID
+}
+
+// recordedMlsCommit is one mls_commit announcement: the channel and the epoch
+// the group reached.
+type recordedMlsCommit struct {
+	channelID uuid.UUID
+	epoch     int64
 }
 
 // recordedCallEvent is one of the three call events: which one it was, the
@@ -233,6 +242,25 @@ func (rt *recordingRealtime) CallEnded(channelID uuid.UUID) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	rt.calls = append(rt.calls, recordedCallEvent{event: "call_ended", channelID: channelID})
+}
+
+func (rt *recordingRealtime) MlsCommit(channelID uuid.UUID, epoch int64) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.mlsCommits = append(rt.mlsCommits, recordedMlsCommit{channelID: channelID, epoch: epoch})
+}
+
+func (rt *recordingRealtime) MlsWelcome(userID uuid.UUID) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.mlsWelcomes = append(rt.mlsWelcomes, userID)
+}
+
+// mlsEvents returns the two E2EE transport announcements made so far.
+func (rt *recordingRealtime) mlsEvents() ([]recordedMlsCommit, []uuid.UUID) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return append([]recordedMlsCommit{}, rt.mlsCommits...), append([]uuid.UUID{}, rt.mlsWelcomes...)
 }
 
 // callEvents returns the call events announced so far.
@@ -576,7 +604,7 @@ func TestOpenDirectMessage(t *testing.T) {
 		t.Parallel()
 		store := authedStore(fixtureUser())
 		var gotCaller, gotPeer uuid.UUID
-		store.openDirectMessage = func(_ context.Context, caller, peer uuid.UUID) (storage.Channel, bool, error) {
+		store.openDirectMessage = func(_ context.Context, caller, peer uuid.UUID, _ bool) (storage.Channel, bool, error) {
 			gotCaller, gotPeer = caller, peer
 			return fixtureDM(), true, nil
 		}
@@ -619,7 +647,7 @@ func TestOpenDirectMessage(t *testing.T) {
 	t.Run("a peer row that cannot be read costs only the peer's announcement", func(t *testing.T) {
 		t.Parallel()
 		store := authedStore(fixtureUser())
-		store.openDirectMessage = func(context.Context, uuid.UUID, uuid.UUID) (storage.Channel, bool, error) {
+		store.openDirectMessage = func(context.Context, uuid.UUID, uuid.UUID, bool) (storage.Channel, bool, error) {
 			return fixtureDM(), true, nil
 		}
 		store.channelForUser = func(context.Context, uuid.UUID, uuid.UUID) (storage.Channel, error) {
@@ -642,7 +670,7 @@ func TestOpenDirectMessage(t *testing.T) {
 	t.Run("an existing direct message is 200 and announces nothing", func(t *testing.T) {
 		t.Parallel()
 		store := authedStore(fixtureUser())
-		store.openDirectMessage = func(context.Context, uuid.UUID, uuid.UUID) (storage.Channel, bool, error) {
+		store.openDirectMessage = func(context.Context, uuid.UUID, uuid.UUID, bool) (storage.Channel, bool, error) {
 			return fixtureDM(), false, nil
 		}
 		rt := &recordingRealtime{}
@@ -660,7 +688,7 @@ func TestOpenDirectMessage(t *testing.T) {
 	t.Run("a direct message with yourself is 400", func(t *testing.T) {
 		t.Parallel()
 		store := authedStore(fixtureUser())
-		store.openDirectMessage = func(context.Context, uuid.UUID, uuid.UUID) (storage.Channel, bool, error) {
+		store.openDirectMessage = func(context.Context, uuid.UUID, uuid.UUID, bool) (storage.Channel, bool, error) {
 			return storage.Channel{}, false, storage.ErrDMWithSelf
 		}
 		rec := do(t, store, request(http.MethodPost, "/api/v1/dms",
@@ -671,7 +699,7 @@ func TestOpenDirectMessage(t *testing.T) {
 	t.Run("an unknown peer is 404 user_not_found", func(t *testing.T) {
 		t.Parallel()
 		store := authedStore(fixtureUser())
-		store.openDirectMessage = func(context.Context, uuid.UUID, uuid.UUID) (storage.Channel, bool, error) {
+		store.openDirectMessage = func(context.Context, uuid.UUID, uuid.UUID, bool) (storage.Channel, bool, error) {
 			return storage.Channel{}, false, storage.ErrNotFound
 		}
 		rec := do(t, store, request(http.MethodPost, "/api/v1/dms",

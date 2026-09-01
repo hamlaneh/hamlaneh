@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "e2e": "playwright test",
+    "e2e:layout": "playwright test --config e2e/layout/playwright.config.ts",
     "e2e:report": "playwright show-report",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit && tsc --noEmit -p e2e/tsconfig.json",

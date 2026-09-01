@@ -11,9 +11,17 @@
  * means the suite also fails when a control stops being reachable to a
  * screen reader.
  */
-import type { Locator, Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 import type { Translate } from "./i18n";
+
+/** One stored attachment, as the upload's own 201 describes it. */
+export interface UploadedFile {
+  id: string;
+  filename: string;
+  content_type: string;
+  url: string;
+}
 
 /**
  * The writing direction the browser actually resolved for an element.
@@ -68,10 +76,60 @@ export class App {
   }
 
   /** Fills both fields and submits. */
+  /**
+   * Submits the sign-in form and waits for the submission to SETTLE: the
+   * login screen replaced (success, or a follow-up step such as two-step
+   * verification), or a banner naming the failure. Callers assert whichever
+   * outcome their spec is about, exactly as before — on the happy path and on
+   * an expected-failure path alike, the settling signal appears within
+   * milliseconds of the response, so this adds no time to either.
+   *
+   * ONE failure is handled here rather than surfaced: the "we could not reach
+   * the server" banner, whose entire design is that the person tries again.
+   * CI produced it twice in one morning — a single dropped request under
+   * full-suite load, on a stack that answered the same spec's sibling seconds
+   * later — and each time the spec spent its whole budget waiting for a
+   * screen the drop had made unreachable. The harness now does what the
+   * banner says, at most twice. A third appearance throws: persistent
+   * unreachability is a finding about the stack, not noise to absorb.
+   */
   async signIn(identifier: string, password: string): Promise<void> {
     await this.identifierField.fill(identifier);
     await this.passwordField.fill(password);
-    await this.signInButton.click();
+
+    const networkBanner = this.errorBanner.filter({
+      hasText: this.t("login.error.networkError"),
+    });
+    for (let attempt = 1; ; attempt += 1) {
+      await this.signInButton.click();
+
+      // Whichever the response produces first. The losers keep waiting until
+      // their timeout; the trailing catch on each keeps a late loser from
+      // surfacing as an unhandled rejection after the race is decided.
+      const settled = await Promise.race([
+        this.signInHeading
+          .waitFor({ state: "hidden", timeout: 30_000 })
+          .then(() => "left" as const),
+        this.twoStepHeading.waitFor({ timeout: 30_000 }).then(() => "left" as const),
+        this.errorBanner
+          .or(this.statusBanner)
+          .first()
+          .waitFor({ timeout: 30_000 })
+          .then(() => "banner" as const),
+      ].map((outcome) => outcome.catch(() => "timeout" as const)));
+
+      if (settled !== "banner" || !(await networkBanner.isVisible())) {
+        return;
+      }
+      if (attempt >= 3) {
+        throw new Error(
+          `sign-in (${identifier}): the server was unreachable ${String(attempt)} times in a row`,
+        );
+      }
+      // The failure empties the password box, and refilling it is also the
+      // edit that lifts the notice and re-enables the button.
+      await this.passwordField.fill(password);
+    }
   }
 
   /** The form-level failure banner (NoticeBanner tone="danger"). */
@@ -228,8 +286,20 @@ export class App {
    * picker would still pass the second way, and that is the regression this
    * helper exists to catch. The wait is on the upload's own response, because
    * a file that is still in flight is deliberately not sendable.
+   *
+   * The response is CHECKED, not merely awaited. It used to be enough that one
+   * arrived, which made a refused upload indistinguishable from a stored one:
+   * the composer draws a tray card either way, so the spec sailed past the
+   * refusal and died sixty seconds later waiting for a send that could never
+   * happen, naming the composer instead of the upload. A helper that says
+   * "attached" has to mean it, and a test that fails should fail where the
+   * truth is — the same rule accounts.ts's `expectOk` follows.
    */
-  async attachFile(file: { name: string; mimeType: string; buffer: Buffer }): Promise<void> {
+  async attachFile(file: {
+    name: string;
+    mimeType: string;
+    buffer: Buffer;
+  }): Promise<UploadedFile> {
     const uploaded = this.page.waitForResponse(
       (response) =>
         /\/api\/v1\/channels\/[^/]+\/files$/.test(new URL(response.url()).pathname) &&
@@ -238,7 +308,18 @@ export class App {
     const chooser = this.page.waitForEvent("filechooser");
     await this.composerForm.getByRole("button", { name: this.t("chat.composer.attach") }).click();
     await (await chooser).setFiles([file]);
-    await uploaded;
+    const response = await uploaded;
+    if (!response.ok()) {
+      throw new Error(
+        `file upload (${file.name}): ${String(response.status())} ${await response.text()}`,
+      );
+    }
+    // The 201 is the only place the signed URL appears. A spec whose subject
+    // is how the bytes come back OUT needs it, and this is now the only way
+    // to get one: the plaintext API upload it used to arrange with is refused
+    // outright in an encrypted conversation (`400 e2ee_required`), and since
+    // ADR 011 there is no other kind.
+    return (await response.json()) as UploadedFile;
   }
 
   /** Inserts a `<@{user_id}>` mention token through the composer's picker. */
@@ -252,6 +333,84 @@ export class App {
   /** The channel or DM name in the header — "#slug", or the peer's name. */
   get channelHeading(): Locator {
     return this.page.getByRole("heading", { level: 1 });
+  }
+
+  /* ── calls ───────────────────────────────────────────────────────── */
+
+  /**
+   * Answers the recovery-key offer with "Not now".
+   *
+   * The offer is account-level and arrives at first MLS use (ADR 010), so
+   * since ADR 011 made every conversation encrypted it greets every new
+   * account in whichever conversation they open first.
+   *
+   * It used to float, and it lay across the call strip: with it on screen the
+   * control that starts a call could not be clicked at all, and this helper
+   * was the thing standing between the media specs and that defect. It no
+   * longer floats — an undesigned surface is a banner in the document flow
+   * (chat.css), and `e2e/layout/plumbing-overlap.layout.ts` holds that in a
+   * browser on any host, Docker or no Docker. So this is now what it says it
+   * is: getting a banner out of the way of a screenshot, not working around a
+   * dead button. Nothing here depends on it any more, and a spec that wants
+   * the offer on screen is free to leave it there.
+   *
+   * Deliberately strict: it waits for the offer instead of shrugging when it
+   * is absent. Every conversation is encrypted and every spec account is new,
+   * so the offer always comes — and an offer that stopped appearing would be a
+   * change worth a red test rather than a silently skipped click.
+   */
+  async declineBackupOffer(): Promise<void> {
+    await this.page
+      .getByRole("region", { name: this.t("chat.e2ee.backup.offerTitle") })
+      .getByRole("button", { name: this.t("chat.e2ee.backup.offerNotNow") })
+      .click();
+  }
+
+  /**
+   * Clicks the one control in the call strip and waits for the tiles.
+   *
+   * Located by role rather than by label on purpose: the same control reads
+   * "Start a call" or "Join call" depending on whether this person's client
+   * has heard about the call yet, and which of the two it says is not
+   * something a spec about media should depend on. The participant list
+   * exists only once the session is connected, which is what makes waiting
+   * for it the right "the call is up" signal.
+   *
+   * The offer is dismissed here rather than in each call spec: it arrives in
+   * every conversation now, and a call spec's screenshots and traces are
+   * easier to read without a banner nobody in the test is answering. It is no
+   * longer required for the click to land — see `declineBackupOffer`.
+   *
+   * The wait for the composer is the call's own precondition, borrowed. Every
+   * conversation is encrypted (ADR 011) and a call in one is refused outright
+   * until this device holds the group's key — "a call here is never placed
+   * unencrypted", which is the design and not a bug to route around. The
+   * composer is withheld by the very same condition (ChatShell:
+   * `encryptionNotReady`), so an enabled message field is the on-screen fact
+   * that says the click can land. Waiting for it here rather than in each
+   * spec is where it belongs: every caller needs it, and a spec that forgets
+   * does not fail at the click — it hangs on participants that were never
+   * going to appear, naming the wrong thing sixty seconds later.
+   *
+   * Generous, because this waits on a group commit across two browsers and a
+   * server under a loaded runner, not on a render.
+   */
+  async joinCall(): Promise<void> {
+    await this.declineBackupOffer();
+    await expect(
+      this.composerField,
+      "the conversation's encryption never became ready on this device, so no call could be placed",
+    ).toBeEnabled({ timeout: 60_000 });
+    await this.page
+      .getByRole("region", { name: this.t("calls.strip.label") })
+      .getByRole("button")
+      .click();
+    await this.callParticipants.waitFor();
+  }
+
+  /** The participant grid — present only while a call session is connected. */
+  get callParticipants(): Locator {
+    return this.page.getByRole("list", { name: this.t("calls.view.participants") });
   }
 
   /* ── the sidebar ─────────────────────────────────────────────────── */

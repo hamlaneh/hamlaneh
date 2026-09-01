@@ -34,10 +34,10 @@ const (
 func TestJoinTokenGrantsNothingElse(t *testing.T) {
 	t.Parallel()
 
-	svc := New(testKey, testSecret, "http://livekit.invalid", nil)
+	svc := New(testKey, testSecret, callstest.New(t).URL, nil)
 	channelID, userID := uuid.New(), uuid.New()
 
-	ticket, err := svc.JoinToken(channelID, userID, "Sara Ahmadi")
+	ticket, err := svc.JoinToken(t.Context(), channelID, userID, "Sara Ahmadi")
 	if err != nil {
 		t.Fatalf("mint join ticket: %v", err)
 	}
@@ -108,8 +108,8 @@ func TestJoinTokenGrantsNothingElse(t *testing.T) {
 func TestJoinTokenExpires(t *testing.T) {
 	t.Parallel()
 
-	svc := New(testKey, testSecret, "http://livekit.invalid", nil)
-	ticket, err := svc.JoinToken(uuid.New(), uuid.New(), "Sara")
+	svc := New(testKey, testSecret, callstest.New(t).URL, nil)
+	ticket, err := svc.JoinToken(t.Context(), uuid.New(), uuid.New(), "Sara")
 	if err != nil {
 		t.Fatalf("mint join ticket: %v", err)
 	}
@@ -134,8 +134,19 @@ func TestNotConfiguredIsUsable(t *testing.T) {
 	if svc.Enabled() {
 		t.Error("a nil service reports calls enabled")
 	}
-	if _, err := svc.JoinToken(uuid.New(), uuid.New(), "x"); err == nil {
+	if _, err := svc.JoinToken(context.Background(), uuid.New(), uuid.New(), "x"); err == nil {
 		t.Error("a nil service minted a ticket")
+	}
+	if _, err := svc.GuestToken(context.Background(), uuid.New(), "x"); err == nil {
+		t.Error("a nil service minted a guest ticket")
+	}
+	if active, err := svc.ActiveConferences(context.Background(), []uuid.UUID{uuid.New()}); err != nil || len(active) != 0 {
+		t.Errorf("nil service active conferences = %v, %v; want none and no error", active, err)
+	}
+	// No media plane means no meeting to end, which is success rather than a
+	// failure a revocation would have to report.
+	if err := svc.CloseConference(context.Background(), uuid.New()); err != nil {
+		t.Errorf("nil service close = %v, want no error", err)
 	}
 	state, err := svc.State(context.Background(), uuid.New())
 	if err != nil || state.Active {
@@ -198,6 +209,267 @@ func TestRoomNaming(t *testing.T) {
 		if _, ours := ChannelFor(room); ours {
 			t.Errorf("ChannelFor(%q) claimed the room as ours", room)
 		}
+	}
+}
+
+// TestGuestTokenGrantsNothingElse is the member ticket's test asked of the
+// wider door. A guest has no account on this instance, so every absence
+// matters more here — and the assertion is deliberately the same one, because
+// the two tickets come from one minter and any divergence is a bug.
+func TestGuestTokenGrantsNothingElse(t *testing.T) {
+	t.Parallel()
+
+	svc := New(testKey, testSecret, callstest.New(t).URL, nil)
+	conferenceID := uuid.New()
+
+	ticket, err := svc.GuestToken(t.Context(), conferenceID, "whoever they say they are")
+	if err != nil {
+		t.Fatalf("mint guest ticket: %v", err)
+	}
+	if ticket.Room != "conf-"+conferenceID.String() {
+		t.Errorf("room = %q, want conf-%s", ticket.Room, conferenceID)
+	}
+	if lifetime := time.Until(ticket.ExpiresAt); lifetime > JoinTTL || lifetime < JoinTTL-time.Minute {
+		t.Errorf("guest ticket lifetime %s, want the member's %s", lifetime, JoinTTL)
+	}
+
+	claims := decodeClaims(t, ticket.Token)
+	video, ok := claims["video"].(map[string]any)
+	if !ok {
+		t.Fatalf("no video grant in %v", claims)
+	}
+	for key, want := range map[string]any{
+		"roomJoin":     true,
+		"room":         ticket.Room,
+		"canPublish":   true,
+		"canSubscribe": true,
+	} {
+		if got := video[key]; got != want {
+			t.Errorf("video[%q] = %v, want %v", key, got, want)
+		}
+	}
+	dataGrant, present := video["canPublishData"]
+	if !present {
+		t.Error("canPublishData is absent, which LiveKit reads as granted")
+	} else if dataGrant != false {
+		t.Errorf("canPublishData = %v, want false", dataGrant)
+	}
+	for _, absent := range []string{
+		"roomList", "roomAdmin", "roomCreate", "roomRecord",
+		"ingressAdmin", "hidden", "recorder", "agent",
+		"canUpdateOwnMetadata", "canSubscribeMetrics", "canManageAgentSession",
+		"destinationRoom", "canPublishSources",
+	} {
+		if got, present := video[absent]; present {
+			t.Errorf("video[%q] = %v; it must be absent", absent, got)
+		}
+	}
+	for _, absent := range []string{"sip", "agent", "inference", "observability", "roomConfig", "roomPreset"} {
+		if _, present := claims[absent]; present {
+			t.Errorf("claim %q is present; it must be absent", absent)
+		}
+	}
+}
+
+// TestGuestIdentityIsNotAnAccount is the property that keeps a guest a guest.
+//
+// Everything that resolves a participant back to a person parses the identity
+// as an account id — stateOf, and both ejection hooks — so a guest identity
+// that could parse as one would put an anonymous visitor into a channel
+// call's participant list, or make them ejectable as somebody else. It is
+// also fresh per join, so a ticket somebody saw names nobody the next time.
+func TestGuestIdentityIsNotAnAccount(t *testing.T) {
+	t.Parallel()
+
+	svc := New(testKey, testSecret, callstest.New(t).URL, nil)
+	conferenceID := uuid.New()
+
+	seen := map[string]bool{}
+	for range 5 {
+		ticket, err := svc.GuestToken(t.Context(), conferenceID, "Guest")
+		if err != nil {
+			t.Fatalf("mint guest ticket: %v", err)
+		}
+		identity, ok := decodeClaims(t, ticket.Token)["sub"].(string)
+		if !ok {
+			t.Fatal("no sub claim in the guest ticket")
+		}
+		if _, err := uuid.Parse(identity); err == nil {
+			t.Errorf("guest identity %q parses as an account id", identity)
+		}
+		if seen[identity] {
+			t.Errorf("guest identity %q was minted twice", identity)
+		}
+		seen[identity] = true
+	}
+
+	// And the participant reader drops it rather than inventing an account
+	// for it, which is what the parse above is protecting.
+	if st := stateOf([]*livekit.ParticipantInfo{{Identity: "guest-" + uuid.NewString(), JoinedAt: 1}}); st.Active {
+		t.Errorf("a guest was reported as a channel-call participant: %+v", st)
+	}
+}
+
+// TestConferenceRoomNaming pins the second namespace: the two prefixes cannot
+// be confused, so a conference id can never be spelled as a channel and a
+// channel webhook can never be mapped onto a conference.
+func TestConferenceRoomNaming(t *testing.T) {
+	t.Parallel()
+
+	conferenceID := uuid.New()
+	got, ours := ConferenceFor(ConferenceRoomFor(conferenceID))
+	if !ours || got != conferenceID {
+		t.Errorf("round trip = %v, %v; want %v, true", got, ours, conferenceID)
+	}
+	if _, ours := ChannelFor(ConferenceRoomFor(conferenceID)); ours {
+		t.Error("a conference room was claimed as a channel's")
+	}
+	if _, ours := ConferenceFor(RoomFor(conferenceID)); ours {
+		t.Error("a channel room was claimed as a conference's")
+	}
+	for _, room := range []string{"", "conf-", "conf-not-a-uuid", conferenceID.String()} {
+		if _, ours := ConferenceFor(room); ours {
+			t.Errorf("ConferenceFor(%q) claimed the room as ours", room)
+		}
+	}
+}
+
+// TestActiveConferences pins the read behind `active`: a room with nobody in
+// it is not a meeting, and rooms this server did not ask about are not
+// answered for.
+func TestActiveConferences(t *testing.T) {
+	t.Parallel()
+
+	lk := callstest.New(t)
+	svc := New(testKey, testSecret, lk.URL, nil)
+
+	busy, quiet, unasked := uuid.New(), uuid.New(), uuid.New()
+	lk.Rooms = []string{
+		ConferenceRoomFor(busy), ConferenceRoomFor(quiet), ConferenceRoomFor(unasked),
+	}
+	// A room lingers for a few minutes after its last participant leaves, so
+	// "the room exists" and "somebody is in it" are different questions.
+	lk.Empty = map[string]bool{ConferenceRoomFor(quiet): true}
+
+	active, err := svc.ActiveConferences(t.Context(), []uuid.UUID{busy, quiet})
+	if err != nil {
+		t.Fatalf("ActiveConferences: %v", err)
+	}
+	if !active[busy] {
+		t.Error("a conference somebody is in reads as inactive")
+	}
+	if active[quiet] {
+		t.Error("an empty room reads as a live meeting")
+	}
+	if active[unasked] {
+		t.Error("a conference nobody asked about was answered for")
+	}
+
+	// An empty ask costs no round trip and is not an error.
+	if got, err := svc.ActiveConferences(t.Context(), nil); err != nil || len(got) != 0 {
+		t.Errorf("ActiveConferences(nil) = %v, %v; want an empty answer", got, err)
+	}
+}
+
+// TestCloseConferenceEndsTheMeeting is the half of a revocation that makes it
+// one: the link dying is not enough while the meeting runs on (ADR 005).
+// TestMintingCreatesTheRoom is the half of durable revocation that is easy to
+// forget: with `auto_create: false` in the deploy stack, nothing but this
+// server may bring a room into being, so if minting did not create it, every
+// legitimate call would fail to start.
+func TestMintingCreatesTheRoom(t *testing.T) {
+	t.Parallel()
+
+	lk := callstest.New(t)
+	svc := New(testKey, testSecret, lk.URL, nil)
+	channelID, conferenceID := uuid.New(), uuid.New()
+
+	if _, err := svc.JoinToken(t.Context(), channelID, uuid.New(), "Sara"); err != nil {
+		t.Fatalf("mint join ticket: %v", err)
+	}
+	if !lk.RoomLives(RoomFor(channelID)) {
+		t.Error("a member's ticket was minted for a room that was never created")
+	}
+
+	if _, err := svc.GuestToken(t.Context(), conferenceID, "A Guest"); err != nil {
+		t.Fatalf("mint guest ticket: %v", err)
+	}
+	if !lk.RoomLives(ConferenceRoomFor(conferenceID)) {
+		t.Error("a guest's ticket was minted for a room that was never created")
+	}
+
+	// Two people starting a call at the same moment must both succeed: the
+	// room names are stable by design (ADR 005), so the second mint asks for a
+	// room that already exists and LiveKit answers with it.
+	if _, err := svc.JoinToken(t.Context(), channelID, uuid.New(), "Reza"); err != nil {
+		t.Errorf("a second ticket for a live room failed: %v", err)
+	}
+
+	// A media server that cannot make the room must not yield a ticket to it.
+	lk.CreateFails = true
+	if _, err := svc.JoinToken(t.Context(), uuid.New(), uuid.New(), "Sara"); err == nil {
+		t.Error("a ticket was minted although the room could not be created")
+	}
+}
+
+// TestRevokedRoomDoesNotComeBack is the security review's finding, pinned.
+//
+// LiveKit tokens are stateless and DeleteRoom does not invalidate the ones
+// already out — a connected participant even holds a rolling ten-minute one.
+// So what stops a revoked guest reconnecting forever is not the token going
+// bad, it is that there is no room left to join and their ticket cannot make
+// one. This asserts the room stays gone, which is the thing a DeleteRoom call
+// count cannot see.
+func TestRevokedRoomDoesNotComeBack(t *testing.T) {
+	t.Parallel()
+
+	lk := callstest.New(t)
+	svc := New(testKey, testSecret, lk.URL, nil)
+	conferenceID := uuid.New()
+	room := ConferenceRoomFor(conferenceID)
+
+	// A guest joins, so the room is live and they hold a ticket for it.
+	if _, err := svc.GuestToken(t.Context(), conferenceID, "A Guest"); err != nil {
+		t.Fatalf("mint guest ticket: %v", err)
+	}
+	if !lk.RoomLives(room) {
+		t.Fatal("the guest's room was never created")
+	}
+
+	if err := svc.CloseConference(t.Context(), conferenceID); err != nil {
+		t.Fatalf("CloseConference: %v", err)
+	}
+
+	// The ticket minted before the revocation is still a valid JWT and always
+	// will be. What it now names is nothing: with auto_create off, LiveKit
+	// refuses a join for a room that does not exist rather than instantiating
+	// one, and no join ticket carries the roomCreate grant that would bypass
+	// that check (asserted in TestGuestTokenGrantsNothingElse).
+	if lk.RoomLives(room) {
+		t.Error("the revoked room is still there; a reconnecting guest would walk back in")
+	}
+}
+
+func TestCloseConferenceEndsTheMeeting(t *testing.T) {
+	t.Parallel()
+
+	lk := callstest.New(t)
+	svc := New(testKey, testSecret, lk.URL, nil)
+	conferenceID := uuid.New()
+
+	if err := svc.CloseConference(t.Context(), conferenceID); err != nil {
+		t.Fatalf("CloseConference: %v", err)
+	}
+	if room := lk.AwaitDeletion(t); room != ConferenceRoomFor(conferenceID) {
+		t.Errorf("closed %q, want the conference's room", room)
+	}
+
+	// A failure must be reported, not swallowed: the caller answers 204 on
+	// the strength of this, and a 204 over a meeting that is still running is
+	// the exact thing the design forbids.
+	lk.DeleteFails = true
+	if err := svc.CloseConference(t.Context(), conferenceID); err == nil {
+		t.Error("a failed close was reported as success")
 	}
 }
 

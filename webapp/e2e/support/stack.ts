@@ -305,6 +305,34 @@ export function collectLogs(): string {
   return compose(["logs", "--no-color", "--tail", "400"], { check: false });
 }
 
+/**
+ * Runs a command inside one of the stack's containers. Exists for the specs
+ * that assert what the SERVER holds rather than what the browser shows — the
+ * e2ee spec dumps the database from inside the db container to prove a
+ * plaintext canary never reached disk. `-T` because there is no TTY in a
+ * test run.
+ */
+export function composeExec(service: string, command: string[]): string {
+  return compose(["exec", "-T", service, ...command]);
+}
+
+/**
+ * The image the running stack's server was built from.
+ *
+ * It exists for the home-mode spec, which runs the SAME binary as a second,
+ * separate process on SQLite (webapp/e2e/support/homestack.ts). Taking the
+ * image compose just built with `--build` is what keeps that spec on the tree
+ * under test rather than on whatever happened to be built last — and it is why
+ * home mode needs no build step of its own.
+ */
+export function serverImage(): string {
+  const id = compose(["images", "--quiet", "server"]).trim().split("\n")[0]?.trim() ?? "";
+  if (id === "") {
+    throw new Error("e2e stack: the server service has no image — is the stack up?");
+  }
+  return id;
+}
+
 export function stopStack(): void {
   if (process.env.HAMLANEH_E2E_REUSE_STACK === "1") {
     return;
