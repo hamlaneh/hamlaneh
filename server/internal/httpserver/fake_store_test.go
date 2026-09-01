@@ -67,7 +67,7 @@ type fakeStore struct {
 	channelForUser      func(ctx context.Context, channelID, userID uuid.UUID) (storage.Channel, error)
 	updateChannelTopic  func(ctx context.Context, id uuid.UUID, topic string) (storage.Channel, error)
 	listChannelsForUser func(ctx context.Context, userID uuid.UUID, params storage.ListChannelsParams) ([]storage.Channel, error)
-	openDirectMessage   func(ctx context.Context, callerID, peerID uuid.UUID) (storage.Channel, bool, error)
+	openDirectMessage   func(ctx context.Context, callerID, peerID uuid.UUID, e2ee bool) (storage.Channel, bool, error)
 	addChannelMember    func(ctx context.Context, channelID, userID, addedBy uuid.UUID) error
 	removeChannelMember func(ctx context.Context, channelID, userID uuid.UUID) error
 	listChannelMembers  func(ctx context.Context, channelID uuid.UUID, params storage.ListChannelMembersParams) ([]storage.User, error)
@@ -86,6 +86,8 @@ type fakeStore struct {
 	redeemInvite          func(ctx context.Context, tokenHash []byte, nu storage.NewUser) (storage.User, error)
 	orgSettings           func(ctx context.Context) (storage.OrgSettings, error)
 	updateOrgSettings     func(ctx context.Context, patch storage.OrgSettingsPatch) (storage.OrgSettings, error)
+	encryptionMode        func(ctx context.Context) (string, error)
+	setEncryptionMode     func(ctx context.Context, mode string) (storage.OrgSettings, error)
 
 	createScimToken func(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string) (storage.ScimToken, error)
 	listScimTokens  func(ctx context.Context) ([]storage.ScimToken, error)
@@ -99,6 +101,22 @@ type fakeStore struct {
 
 	appendAuditEntry func(ctx context.Context, e storage.AuditEntry, seal func(storage.AuditEntry) []byte) (storage.AuditEntry, error)
 	listAuditEntries func(ctx context.Context, params storage.ListAuditParams) ([]storage.AuditEntry, error)
+
+	registerMlsDevice     func(ctx context.Context, userID uuid.UUID, signatureKey []byte) (storage.MlsDevice, bool, error)
+	replaceMlsKeyPackages func(ctx context.Context, userID, deviceID uuid.UUID, packages [][]byte) (int, error)
+	mlsGroupByChannel     func(ctx context.Context, channelID uuid.UUID) (storage.MlsGroup, error)
+	createMlsGroup        func(ctx context.Context, channelID uuid.UUID, groupID []byte) (storage.MlsGroup, error)
+	claimMlsKeyPackages   func(ctx context.Context, channelID, targetUserID uuid.UUID) ([]storage.MlsKeyPackageClaim, []uuid.UUID, error)
+	listMlsMemberDevices  func(ctx context.Context, channelID uuid.UUID, after *uuid.UUID, limit int) ([]storage.MlsMemberDevice, error)
+	submitMlsCommit       func(ctx context.Context, nc storage.NewMlsCommit) (storage.MlsCommitOutcome, error)
+	listMlsCommits        func(ctx context.Context, channelID uuid.UUID, afterEpoch int64, limit int) ([]storage.MlsCommit, error)
+	listMlsWelcomes       func(ctx context.Context, userID uuid.UUID) ([]storage.MlsWelcome, error)
+	deleteMlsWelcome      func(ctx context.Context, userID, welcomeID uuid.UUID) error
+
+	putMlsBackup        func(ctx context.Context, userID uuid.UUID, envelope []byte, counter int64) error
+	mlsBackupByUser     func(ctx context.Context, userID uuid.UUID) (storage.MlsBackup, error)
+	deleteMlsBackup     func(ctx context.Context, userID uuid.UUID) error
+	deregisterMlsDevice func(ctx context.Context, userID, deviceID uuid.UUID) error
 }
 
 var _ httpserver.Store = (*fakeStore)(nil)
@@ -529,11 +547,11 @@ func (f *fakeStore) ListChannelsForUser(ctx context.Context, userID uuid.UUID, p
 	return f.listChannelsForUser(ctx, userID, params)
 }
 
-func (f *fakeStore) OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID) (storage.Channel, bool, error) {
+func (f *fakeStore) OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID, e2ee bool) (storage.Channel, bool, error) {
 	if f.openDirectMessage == nil {
 		return storage.Channel{}, false, errFakeUnwired
 	}
-	return f.openDirectMessage(ctx, callerID, peerID)
+	return f.openDirectMessage(ctx, callerID, peerID, e2ee)
 }
 
 func (f *fakeStore) AddChannelMember(ctx context.Context, channelID, userID, addedBy uuid.UUID) error {
@@ -683,6 +701,26 @@ func (f *fakeStore) UpdateOrgSettings(ctx context.Context, patch storage.OrgSett
 	return f.updateOrgSettings(ctx, patch)
 }
 
+// EncryptionMode is the one method here that answers instead of failing when
+// a test did not wire it. The organisation's mode is a property of the
+// INSTANCE rather than of anything a test is the subject of, every test runs
+// against an instance, and every instance's is strict until an administrator
+// says otherwise — so unwired means the default rather than "undefined", and
+// a test that cares about the mode still sets it.
+func (f *fakeStore) EncryptionMode(ctx context.Context) (string, error) {
+	if f.encryptionMode == nil {
+		return storage.EncryptionModeStrict, nil
+	}
+	return f.encryptionMode(ctx)
+}
+
+func (f *fakeStore) SetEncryptionMode(ctx context.Context, mode string) (storage.OrgSettings, error) {
+	if f.setEncryptionMode == nil {
+		return storage.OrgSettings{}, errFakeUnwired
+	}
+	return f.setEncryptionMode(ctx, mode)
+}
+
 func (f *fakeStore) CreateScimToken(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, note string) (storage.ScimToken, error) {
 	if f.createScimToken == nil {
 		return storage.ScimToken{}, errFakeUnwired
@@ -739,4 +777,108 @@ func (f *fakeStore) LiveConferenceByTokenHash(ctx context.Context, tokenHash []b
 		return storage.Conference{}, errFakeUnwired
 	}
 	return f.liveConferenceByTokenHash(ctx, tokenHash)
+}
+
+// The E2EE transport half of the store (ADR 006). Same shape as everything
+// above: an unwired method fails loudly rather than returning a zero value a
+// test could mistake for an answer.
+
+func (f *fakeStore) RegisterMlsDevice(ctx context.Context, userID uuid.UUID, signatureKey []byte) (storage.MlsDevice, bool, error) {
+	if f.registerMlsDevice == nil {
+		return storage.MlsDevice{}, false, errFakeUnwired
+	}
+	return f.registerMlsDevice(ctx, userID, signatureKey)
+}
+
+func (f *fakeStore) ReplaceMlsKeyPackages(ctx context.Context, userID, deviceID uuid.UUID, packages [][]byte) (int, error) {
+	if f.replaceMlsKeyPackages == nil {
+		return 0, errFakeUnwired
+	}
+	return f.replaceMlsKeyPackages(ctx, userID, deviceID, packages)
+}
+
+func (f *fakeStore) MlsGroupByChannel(ctx context.Context, channelID uuid.UUID) (storage.MlsGroup, error) {
+	if f.mlsGroupByChannel == nil {
+		return storage.MlsGroup{}, errFakeUnwired
+	}
+	return f.mlsGroupByChannel(ctx, channelID)
+}
+
+func (f *fakeStore) CreateMlsGroup(ctx context.Context, channelID uuid.UUID, groupID []byte) (storage.MlsGroup, error) {
+	if f.createMlsGroup == nil {
+		return storage.MlsGroup{}, errFakeUnwired
+	}
+	return f.createMlsGroup(ctx, channelID, groupID)
+}
+
+func (f *fakeStore) ClaimMlsKeyPackages(ctx context.Context, channelID, targetUserID uuid.UUID) ([]storage.MlsKeyPackageClaim, []uuid.UUID, error) {
+	if f.claimMlsKeyPackages == nil {
+		return nil, nil, errFakeUnwired
+	}
+	return f.claimMlsKeyPackages(ctx, channelID, targetUserID)
+}
+
+func (f *fakeStore) ListMlsMemberDevices(ctx context.Context, channelID uuid.UUID, after *uuid.UUID, limit int) ([]storage.MlsMemberDevice, error) {
+	if f.listMlsMemberDevices == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listMlsMemberDevices(ctx, channelID, after, limit)
+}
+
+func (f *fakeStore) SubmitMlsCommit(ctx context.Context, nc storage.NewMlsCommit) (storage.MlsCommitOutcome, error) {
+	if f.submitMlsCommit == nil {
+		return storage.MlsCommitOutcome{}, errFakeUnwired
+	}
+	return f.submitMlsCommit(ctx, nc)
+}
+
+func (f *fakeStore) ListMlsCommits(ctx context.Context, channelID uuid.UUID, afterEpoch int64, limit int) ([]storage.MlsCommit, error) {
+	if f.listMlsCommits == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listMlsCommits(ctx, channelID, afterEpoch, limit)
+}
+
+func (f *fakeStore) ListMlsWelcomes(ctx context.Context, userID uuid.UUID) ([]storage.MlsWelcome, error) {
+	if f.listMlsWelcomes == nil {
+		return nil, errFakeUnwired
+	}
+	return f.listMlsWelcomes(ctx, userID)
+}
+
+func (f *fakeStore) DeleteMlsWelcome(ctx context.Context, userID, welcomeID uuid.UUID) error {
+	if f.deleteMlsWelcome == nil {
+		return errFakeUnwired
+	}
+	return f.deleteMlsWelcome(ctx, userID, welcomeID)
+}
+
+// The recovery surface (ADR 010).
+
+func (f *fakeStore) PutMlsBackup(ctx context.Context, userID uuid.UUID, envelope []byte, counter int64) error {
+	if f.putMlsBackup == nil {
+		return errFakeUnwired
+	}
+	return f.putMlsBackup(ctx, userID, envelope, counter)
+}
+
+func (f *fakeStore) MlsBackupByUser(ctx context.Context, userID uuid.UUID) (storage.MlsBackup, error) {
+	if f.mlsBackupByUser == nil {
+		return storage.MlsBackup{}, errFakeUnwired
+	}
+	return f.mlsBackupByUser(ctx, userID)
+}
+
+func (f *fakeStore) DeleteMlsBackup(ctx context.Context, userID uuid.UUID) error {
+	if f.deleteMlsBackup == nil {
+		return errFakeUnwired
+	}
+	return f.deleteMlsBackup(ctx, userID)
+}
+
+func (f *fakeStore) DeregisterMlsDevice(ctx context.Context, userID, deviceID uuid.UUID) error {
+	if f.deregisterMlsDevice == nil {
+		return errFakeUnwired
+	}
+	return f.deregisterMlsDevice(ctx, userID, deviceID)
 }

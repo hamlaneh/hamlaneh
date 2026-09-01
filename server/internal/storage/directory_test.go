@@ -11,7 +11,7 @@ import (
 
 // seedDirectoryUser creates one directory fixture: a username, and the display
 // name the filter searches alongside it.
-func seedDirectoryUser(ctx context.Context, t *testing.T, store *storage.Store,
+func seedDirectoryUser(ctx context.Context, t *testing.T, store testdb.Store,
 	username, displayName string,
 ) {
 	t.Helper()
@@ -22,7 +22,7 @@ func seedDirectoryUser(ctx context.Context, t *testing.T, store *storage.Store,
 }
 
 // mustListDirectory reads one page of the directory.
-func mustListDirectory(ctx context.Context, t *testing.T, store *storage.Store,
+func mustListDirectory(ctx context.Context, t *testing.T, store testdb.Store,
 	params storage.ListDirectoryParams,
 ) []storage.User {
 	t.Helper()

@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/audit"
 	"github.com/hamlaneh/hamlaneh/server/internal/blobstore"
@@ -89,7 +88,7 @@ type cell struct {
 // entry a channel of that entry's kind with its own members and message.
 // Cells mutate — a removal, an edit, a send — and sharing any of this across
 // cells would make a failure depend on the order they ran in.
-func provisionCell(ctx context.Context, t *testing.T, store *storage.Store, pool *pgxpool.Pool, entry Entry, principal Principal) cell {
+func provisionCell(ctx context.Context, t *testing.T, store testdb.Store, raw *testdb.Raw, entry Entry, principal Principal) cell {
 	t.Helper()
 
 	rel, known := relations[principal]
@@ -115,7 +114,7 @@ func provisionCell(ctx context.Context, t *testing.T, store *storage.Store, pool
 	if rel.session {
 		c.accessToken, c.refreshToken = newFixtureSession(ctx, t, store, actor.ID)
 		if rel.totpPending {
-			flagSessionTotpPending(ctx, t, pool, actor.ID)
+			flagSessionTotpPending(ctx, t, raw, actor.ID)
 		}
 	}
 
@@ -141,7 +140,7 @@ func provisionCell(ctx context.Context, t *testing.T, store *storage.Store, pool
 // while claiming to assert somebody else's. A conference has no membership to
 // arrange — that is the whole feature — so who made it is the only fact to
 // set up.
-func provisionConference(ctx context.Context, t *testing.T, store *storage.Store,
+func provisionConference(ctx context.Context, t *testing.T, store testdb.Store,
 	rel relation, seq int64, actor storage.User,
 ) uuid.UUID {
 	t.Helper()
@@ -171,7 +170,7 @@ func provisionConference(ctx context.Context, t *testing.T, store *storage.Store
 // removal, and the fixture message's author unless the principal wrote it
 // themselves. That last part is what makes the plain member columns genuine
 // non-authors instead of accidental ones.
-func provisionChannel(ctx context.Context, t *testing.T, store *storage.Store,
+func provisionChannel(ctx context.Context, t *testing.T, store testdb.Store,
 	kind storage.ChannelKind, rel relation, seq int64, actor storage.User,
 ) (channelID, messageID, otherMemberID uuid.UUID) {
 	t.Helper()
@@ -194,7 +193,7 @@ func provisionChannel(ctx context.Context, t *testing.T, store *storage.Store,
 			peer = newFixtureUser(ctx, t, store, fmt.Sprintf("mx%dp", seq), false, false)
 		}
 		var err error
-		channel, _, err = store.OpenDirectMessage(ctx, creator.ID, peer.ID)
+		channel, _, err = store.OpenDirectMessage(ctx, creator.ID, peer.ID, false)
 		if err != nil {
 			t.Fatalf("open fixture dm: %v", err)
 		}
@@ -240,7 +239,7 @@ func provisionChannel(ctx context.Context, t *testing.T, store *storage.Store,
 }
 
 // newFixtureUser creates one account for a cell.
-func newFixtureUser(ctx context.Context, t *testing.T, store *storage.Store,
+func newFixtureUser(ctx context.Context, t *testing.T, store testdb.Store,
 	username string, admin, mustChange bool,
 ) storage.User {
 	t.Helper()
@@ -260,7 +259,7 @@ func newFixtureUser(ctx context.Context, t *testing.T, store *storage.Store,
 
 // newFixtureSession mints a live session for the acting user and returns its
 // raw cookie values.
-func newFixtureSession(ctx context.Context, t *testing.T, store *storage.Store,
+func newFixtureSession(ctx context.Context, t *testing.T, store testdb.Store,
 	userID uuid.UUID,
 ) (accessToken, refreshToken string) {
 	t.Helper()
@@ -291,19 +290,16 @@ func newFixtureSession(ctx context.Context, t *testing.T, store *storage.Store,
 // through-storage provisioning the rest of this file does; the flag's
 // production semantics are pinned by the integration tests in
 // internal/httpserver and internal/storage, not here.
-func flagSessionTotpPending(ctx context.Context, t *testing.T, pool *pgxpool.Pool, userID uuid.UUID) {
+func flagSessionTotpPending(ctx context.Context, t *testing.T, raw *testdb.Raw, userID uuid.UUID) {
 	t.Helper()
 
-	if _, err := pool.Exec(ctx,
-		`UPDATE sessions SET totp_enrollment_required = true WHERE user_id = $1`,
-		userID,
-	); err != nil {
-		t.Fatalf("flag fixture session totp-pending: %v", err)
-	}
+	raw.Exec(ctx, t,
+		`UPDATE sessions SET totp_enrollment_required = ? WHERE user_id = ?`,
+		true, userID)
 }
 
 // addFixtureMember puts a user in the cell's channel.
-func addFixtureMember(ctx context.Context, t *testing.T, store *storage.Store,
+func addFixtureMember(ctx context.Context, t *testing.T, store testdb.Store,
 	channelID, userID, addedBy uuid.UUID,
 ) {
 	t.Helper()
@@ -332,8 +328,8 @@ func buildRequest(entry Entry, principal Principal, c cell) *http.Request {
 	// authorization, not budgets, and hundreds of cells sharing httptest's
 	// one default RemoteAddr would let a per-IP rate limit on message send or
 	// channel creation turn the grid red for a reason that is not permission.
-	// The address is documentation-range and public, so the trusted-proxy
-	// path that reads X-Forwarded-For never applies to it.
+	// The address is documentation-range and public, and the harness passes
+	// no WithTrustedProxy, so nothing here reads X-Forwarded-For at all.
 	req.RemoteAddr = fmt.Sprintf("[2001:db8::%x]:443", c.seq)
 
 	if principal == Anonymous {
@@ -359,14 +355,9 @@ func buildRequest(entry Entry, principal Principal, c cell) *http.Request {
 func TestAuthzMatrix(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
-	// A raw connection beside the store, for the one fixture state no
+	// The raw connection beside the store is for the one fixture state no
 	// storage API mints on demand: the totp-pending session flag.
-	pool, err := pgxpool.New(context.Background(), dsn)
-	if err != nil {
-		t.Fatalf("matrix raw pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
+	store, raw := testdb.New(t)
 	// The upload row posts a real file, so the server under the matrix needs
 	// somewhere to put it. A per-run temporary directory keeps the grid from
 	// touching anything an install would.
@@ -406,7 +397,7 @@ func TestAuthzMatrix(t *testing.T) {
 			t.Run(fmt.Sprintf("%s as %s", entryName(entry), principal), func(t *testing.T) {
 				t.Parallel()
 
-				c := provisionCell(ctx, t, store, pool, entry, principal)
+				c := provisionCell(ctx, t, store, raw, entry, principal)
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, buildRequest(entry, principal, c))
 

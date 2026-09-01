@@ -211,6 +211,35 @@ func (g *Gateway) CallEnded(channelID uuid.UUID) {
 	})
 }
 
+// MlsCommit announces that a commit was accepted at this epoch.
+//
+// Membership scope, like every other channel event: a stranger to a channel
+// must not learn that its group moved, which is as much a disclosure as
+// learning that a message was sent. The audience is read from the membership
+// table at send time, so a member removed a moment ago is simply not in it.
+func (g *Gateway) MlsCommit(channelID uuid.UUID, epoch int64) {
+	g.enqueue(event{
+		typ:       typeMlsCommit,
+		channelID: channelID,
+		payload:   mlsCommitData{Epoch: epoch},
+	})
+}
+
+// MlsWelcome nudges one user's sockets that a Welcome is waiting.
+//
+// It is a `self` event and carries no channel: the recipient is the subject,
+// not a member of anything, and a Welcome exists precisely because they are
+// not in the group yet. Delivering it channel-scoped would be a membership
+// check that has not happened — the point of a Welcome is to arrive before
+// the group knows the device.
+func (g *Gateway) MlsWelcome(userID uuid.UUID) {
+	g.enqueue(event{
+		typ:     typeMlsWelcome,
+		toUsers: []uuid.UUID{userID},
+		payload: mlsWelcomeData{},
+	})
+}
+
 // callParticipants normalizes the announced list. The contract makes
 // participants an array, so a call that momentarily has nobody in it must
 // serialize as [] rather than null — a client that reads null as "unknown"

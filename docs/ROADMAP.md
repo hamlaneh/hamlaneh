@@ -24,7 +24,11 @@ that later phases depend on already exists and can turn red.
 
 ### Tasks
 
-- [ ] Namespace grabs (user): GitHub org `hamlaneh`, Docker Hub, social handles. Domain: done.
+- [ ] Namespace grabs (user), partly done. **GitHub org `hamlaneh`: taken** — it owns
+      `github.com/hamlaneh/hamlaneh`, created 2026-08-20, so that half is checkable from here
+      and checked. **Docker Hub and the social handles are still open, or at least unknown**:
+      nothing in this tree records them and nothing here can, which is why this box stays
+      unticked rather than being ticked on the strength of the half that is visible. Domain: done.
 - [x] Repo hygiene: `LICENSE` (AGPL-3.0), `README.md` (pitch + "How Hamlaneh makes money"),
       `SECURITY.md` (disclosure policy **+ published threat model incl. explicit non-goals per
       PLAN.md §6.1**), `CONTRIBUTING.md`, `CODEOWNERS`, issue/PR templates, `.gitignore`, `.env.example`
@@ -51,11 +55,57 @@ that later phases depend on already exists and can turn red.
       (written + shellcheck-clean; real-VM smoke = gate 3)
 - [ ] CI (GitHub Actions): everything in CLAUDE.md "CI gates" incl. **compose-smoke** job and
       CI hygiene rules (SHA-pinned actions, minimal permissions); branch protection on `main`
-      — *workflow files written and validated; activates once the GitHub remote exists*
+      — *the workflows run: `github.com/hamlaneh/hamlaneh` exists, `ci.yml` and the nightly
+      e2e workflow have both been firing on push since the repository was created, and
+      Dependabot is open against it. This line used to say "activates once the GitHub remote
+      exists", which stopped being the blocker on 2026-08-20. What is left is **branch
+      protection**, which GitHub does not offer on a private repository outside a paid plan —
+      so it is blocked on the repository going public or on a plan, not on anything in the
+      tree, and the box stays open because the rule `main` stays green depends on it*
 - [x] Walking skeleton: Go server serves a static login page (no real auth yet) + `/healthz`
       (booted locally via compose: TLS + all security headers + healthz verified, 2026-08-20)
 - [ ] Weekend recon (user + Claude): deploy Mattermost, Rocket.Chat, Element+Jitsi; write
       `docs/recon-notes.md` — every friction point becomes install-experience spec
+
+- [x] **The e2e suite arranges conversations the way Strict makes people arrange them** —
+      *2026-08-31*. `sendMessageApi` could not be repaired, because under Strict no REST call
+      produces a legal message; it is replaced by a helper that drives a real browser's MLS
+      composer. `attachFile` now checks the upload status rather than accepting any response,
+      which is what turned a silent 400 into a visible failure.
+
+- [x] **Encrypted attachments — file sharing works again** — *2026-08-31*,
+      [ADR 013](adr/013-encrypted-attachments.md). It had been unreachable on every install:
+      Strict is the only selectable mode so every conversation is born encrypted, and an
+      encrypted conversation refused attachments. A fresh 16-byte AES-GCM key per file now
+      rides inside the attaching message's ciphertext, so a file opens exactly when its message
+      reads. The exporter approach was refuted by the system's own forward secrecy — a file
+      needs a key for the past, and merged epochs delete theirs.
+      The upload path is two branches rather than one with conditionals, so the sniff/strip
+      pipeline is *unreachable* from the encrypted path; EXIF stripping and thumbnails moved to
+      the sender, since the server can no longer see an image; and what decides whether
+      decrypted bytes render is a four-signature sniff with SVG deliberately absent, never the
+      sender's declared type
+- [x] **Mentions under E2EE, server half** — *2026-08-31*,
+      [ADR 014](adr/014-mentions-under-e2ee.md). They notified nobody, silently: they were
+      derived from a content column empty by construction, while the composer still offered the
+      picker and the reader still saw `@Name`. The client now declares the list in the envelope.
+      The declared array cannot introduce anybody — the stored id is selected from
+      `channel_members` and the array only narrows it — so a stranger, a departed member and a
+      uuid naming nobody are one case: zero rows, no error, message still lands
+- [ ] **Mentions under E2EE, client half**: the composer must send the declared list. Until it
+      does, an encrypted mention still notifies nobody — the server is ready and nothing feeds it
+- [x] **The backup offer covering the call button** — *2026-08-31*, fixed at the cause rather
+      than patched a third time. `.hm-plumbing` meant both "this has no design yet" and "this
+      floats", so every undesigned surface inherited popover positioning whether or not it was a
+      popover, and each earlier fix added another opt-out to the floating class instead of
+      inverting the default. The base class no longer positions; `--overlay` is opted into by the
+      six real popovers. The objection recorded against putting these in flow was real and
+      misdiagnosed — `.hm-chat` is the sidebar/conversation *row*, so an in-flow child there
+      becomes a third column. What stops a fourth recurrence is a Docker-free layout tier
+      (`npm run e2e:layout`, ~20s) in which a reintroduced `absolute` fails **by class name**
+      rather than by whichever control it happens to land on: the two specs that should have
+      caught this need the runner to be the Docker host, which is why they never saw any of the
+      three
 
 ### Test gate ✅
 
@@ -87,8 +137,14 @@ retrofit is how security fails.
 - [x] Password reset **backend**: email-delivered, single-use, time-limited (30m) tokens;
       rate-limited per address and per client; uniform responses (no account enumeration);
       completing a reset revokes every session family and sets no cookies — *slice 1.1b*
-- [ ] Password reset **UI**: build the `reset-request`, `reset-request-confirmation` and
-      `reset-new-password` artboards plus the `BackLink` component (design/LOGIN_HANDOFF.md)
+- [x] Password reset **UI**: the `reset-request`, `reset-request-confirmation` and
+      `reset-new-password` artboards plus the `BackLink` component (design/LOGIN_HANDOFF.md) —
+      *slice 1.1b, 2026-08-22*. `ResetRequestScreen` carries the request form and its
+      confirmation as two states of one screen rather than two routes, because the confirmation
+      must be identical for every address the contract accepts and a distinct URL would be one
+      more thing that could differ; `ResetPasswordScreen` reads the token from the URL
+      **fragment** and scrubs it from the address bar, so it never reaches the access logs of
+      the server it unlocks
 - [x] Mail infrastructure the reset depends on: a `Mailer` interface with a recording fake for
       tests and an SMTP implementation wired in `cmd/`, dispatching asynchronously so SMTP
       latency never sits on a response; SMTP settings plus a public base URL in `.env.example`
@@ -97,10 +153,16 @@ retrofit is how security fails.
 - [x] Server-side bilingual email templates need a language-policy amendment: the Persian
       exception in CLAUDE.md currently covers only `webapp/**/locales/fa/**` — widened to any
       localized user-facing template wherever it lives — *slice 1.1b*
-- [ ] **Recovery codes have no sign-in entry point.** `login-totp` is six numeric cells; a
-      `XXXX-XXXX` recovery code cannot be typed into it, so codes that exist entirely for
-      account recovery are unreachable at the moment they are needed. The endpoint accepts them;
-      the screen needs a design addendum before the feature is real
+- [x] **Recovery codes have a sign-in entry point** — *slice 1.1b, 2026-08-22*. This box read
+      "have none": `login-totp` was six numeric cells, and a `XXXX-XXXX` code could not be typed
+      into any of them, so codes that exist entirely for account recovery were unreachable at
+      the moment they are needed. `TotpChallengeScreen` now carries a `Method` of `authenticator`
+      or `recovery` and swaps the cells for one plain field, normalising what is typed to the
+      form the contract describes. Both halves post the same field to the same endpoint — the
+      server always accepted either — so nothing on the write path changed. The recovery half is
+      **undesigned**: no artboard draws it, it borrows delivered components unchanged, and
+      `docs/design/STATUS.md` marks it `awaiting-design` so the artboard lands as a reskin
+      rather than a rebuild. Shipping it unstyled beat leaving the codes unreachable
 - [x] Sessions core: short-lived access (15m) + rotating refresh (30d) **with reuse detection
       (family revocation)**, opaque tokens stored as SHA-256; HttpOnly+Secure+SameSite=Strict
       cookies; CSRF double-submit via `X-Hamlaneh-CSRF`; change-password revokes all other
@@ -108,10 +170,26 @@ retrofit is how security fails.
 - [x] Session management **endpoints**: one row per live session family (device), current
       first; sign one device out or all the others; another account's family answers 404 so a
       guessed id confirms nothing — *slice 1.1b*
-- [ ] Sessions remainder: device list UI; new-device login notification (email infra now
-      exists); expired-row cleanup sweep; client reacts to an unrecoverable 401 mid-use by
-      returning to sign-in; decide a short server-side grace window for concurrent refresh
-      (two tabs racing trips family revocation) — before 1.2
+- [x] Sessions remainder, the half that shipped — *slice 1.1b, 2026-08-22*. The device list UI
+      is `components/settings/SessionsSection.tsx`, one row per live family with remote sign-out
+      behind a confirm dialog. A session that dies mid-use returns to sign-in rather than sitting
+      on a dead shell: the gateway closes with 4401, and `ChatShell` calls `onLogout` on that
+      close (ws-protocol.md §7 — a revoked family cannot be retried, so retrying would only be
+      rate-limited). On the REST side `api/client.ts` refreshes once and retries once, straight
+      to `fetch` rather than back through the client, so a second 401 propagates instead of
+      looping
+- [ ] Sessions remainder, the half that did not. **New-device login notification** — the mail
+      infrastructure exists (`internal/mailer` has the transport, the async queue and bilingual
+      templates), and the only template in the tree is `password_reset`. **Expired-row cleanup
+      sweep** — nothing deletes an expired session row; `storage/sessions.go` has no delete path
+      that is not a revocation, so the table grows for the life of the instance.
+      **The concurrent-refresh race is still open, and the client-side single-flight is not the
+      fix.** `client.ts` shares one in-flight refresh, which covers concurrent requests *within
+      one document*; two tabs are two module instances with no lock between them, and
+      `RotateSession` is explicit that the second presentation of a rotated token trips reuse
+      detection and revokes the family. Two tabs waking together still sign the user out of
+      everything. It wants either a cross-tab lock or the short server-side grace window this
+      line has been asking for — the decision has not been made
 - [x] `Retry-After` declared in the contract and emitted on the login, two-step and
       account-security 429s, so the sign-in form can show a real countdown instead of clearing
       its rate-limited state on the next edit — *slice 1.1b*
@@ -487,18 +565,143 @@ Goal: 1:1 and group calls that survive real-world NATs.
 
 Goal: a compromised server yields only ciphertext. Assemble, never invent.
 
-- [ ] Library pick finalized (OpenMLS vs libsignal): short spike comparing maturity, audit
-      status, multi-device story → ADR
-- [ ] MLS for messages; group state management; member add/remove flows
-- [ ] Multi-device: per-device keys, device verification, key sync
-- [ ] Key verification UX: safety numbers/QR (key transparency log = post-v1)
-- [ ] Encrypted backups + user-held recovery keys; org-level recovery policy; recovery UX drills
-- [ ] Media E2EE via LiveKit insertable streams
-- [ ] Per-org mode choice at setup: **Strict E2EE** vs **Compliance mode** — clearly labeled,
+- [x] Library pick finalized: spike (`docs/spikes/mls-library.md`) →
+      [ADR 006](adr/006-mls-library-and-boundaries.md) — **OpenMLS**, exact-pinned, on the
+      `openmls_rust_crypto` provider, compiled to WASM for the browser client. The line used to
+      say "OpenMLS vs libsignal"; the spike's first finding is that libsignal implements no MLS,
+      so the real field was OpenMLS / mls-rs / ts-mls and the audit requirement decided it.
+      The ADR also fixes two boundaries: the Go server stays MLS-blind (delivery + key-package
+      directory, epoch sequencing on an unverified envelope claim), and conference guests are
+      outside E2EE — the encryption boundary is the room kind, fixed at birth — *2026-08-29*
+- [x] Integration spike **before the first contract freeze**
+      ([`docs/spikes/mls-wasm-integration.md`](spikes/mls-wasm-integration.md)): 0.9.0 builds on
+      `wasm32` (the 0.8.1 fallback is dead), two-client round-trip green **including a
+      restore-from-serialized-state restart**, best bundle cost **489 KB gzipped** (`opt-level=z`
+      + LTO, no `wasm-opt` — the post-pass shrinks raw bytes but *grows* gzipped), a Welcome is
+      self-contained via `RatchetTreeExtension` so no tree-transfer endpoint is needed —
+      *2026-08-29*
+- [x] **Device-local keystore at rest** — *shipped with slice 3.1*. (Falls out of the spike, owned by the group-state
+      slice): OpenMLS provider storage holds raw secrets as plaintext JSON, so persisting it to
+      IndexedDB unwrapped persists key material in the clear. Needs a wrapping-key design plus
+      honest labeling of what it does and does not resist — a browser cannot fully protect keys
+      from its own profile, and pretending otherwise is the §6.9 violation. The wrapper
+      implements the `openmls_traits` storage trait itself (the spike's write-through-public-field
+      restore path is nobody's stability promise), bridging the sync trait to async IndexedDB
+      with flush-at-commit-points
+- [x] MLS for messages; group state management; member add/remove flows — slice 3.1,
+      *2026-08-29*: contract v0.7.0 + migration 0017 (opaque-blob transport, ADR 006), the
+      `webapp/src-mls` wasm core with its own storage-trait implementation and AES-GCM-wrapped
+      IndexedDB keystore, group bootstrap/claim/commit/welcome flows, add-on-invite and
+      remove-on-removal, and the e2ee write-path boundary enforced in both directions. Proven
+      by a two-browser e2e whose canary crosses encrypted while a `pg_dump` from inside the
+      db container carries a plaintext control and no canary. History across reloads is the
+      next item's local store; the first implementation's seven contract findings were
+      adjudicated back into the contract in the same slice
+- [x] **Own-message history after a reload** — *2026-08-30*, bounded at 500 messages and 30 days, in the keystore under the same wrapping key. (Found by the first client implementation): MLS
+      gives a sender no way to decrypt its own application messages, so without a local
+      plaintext store your own words render as undecryptable after a reload — honest, but
+      visible. Its own slice, because the store needs the same at-rest design as the keystore:
+      what you said is as sensitive as what you received
+- [x] **Key-package pool replenishes on a low-water mark** — *2026-08-30*, at a quarter of a batch, with the local count treated as a lower bound on consumption. No contract read was needed after all: the PUT already returns `unclaimed_count`. (Was: a read for `unclaimed_count`
+      (today only the PUT returns it) and a low-water replenishment policy — with the
+      multi-device slice, which owns the device lifecycle this feeds
+- [ ] **One MLS device per browser profile, shared across tabs.** Each tab builds its own
+      device in wasm memory and they write to one stored slot, so the last tab to save wins and
+      the other's ratchet advances are lost on the next reload. A Web Lock now stops the worse
+      half — two tabs both minting a wrapping key and silently stranding each other's state —
+      but a lock cannot make two devices into one. That needs a SharedWorker owning the device
+      with the tabs as clients, which is a slice, not a patch
+- [x] **Slice 3.2 — eviction by leaf signature key** ([ADR 007](adr/007-device-identity-and-verification.md)) — *2026-08-29*.
+      A leaf's credential identity is a string the enrolling client chose, and removal filters on
+      it, so a leaf credentialed under a *staying* member's id is never stale and never removed:
+      it survives every eviction and reads every epoch after. The fix is an allow-list sweep, not
+      a per-user lookup — evict every leaf whose signature key the directory does not map to a
+      current member — because a planted leaf's key is exactly one the directory never listed for
+      the removed user. Three touchpoints: a channel-scoped read of members' device signature
+      keys (new endpoint → authz matrix + `/security-review`), a wasm export of leaf keys plus
+      remove-by-key, and `reconcileMembers` switched to the key allow-list. Its regression test is
+      the attack: a leaf planted under a staying member's id, evicted by the first reconcile.
+      Adversarial review found the property holds and fails closed — a directory page that
+      errors aborts the whole reconcile rather than sweeping against a short allow-list
+- [x] **`failed` self-retries the way `waiting` and `incomplete` do** — *2026-08-30*, with the backoff bundle. From slice 3.2's
+      adversarial review: exhausting the commit-retry budget leaves a channel `failed`, and only
+      a commit nudge, a member event, a reconnect or a reopen re-drives it. Deliberately not
+      fixed in 3.2: the fix is one more entry in the same five-second timer, and that timer is
+      already carrying two unbounded polls the slice-3.1 review flagged for backoff. Doing both
+      together is one coherent change; adding a third poll first is two
+- [x] Multi-device, the two thirds that shipped: **per-device keys** with the transport itself
+      (migration 0017 — "a leaf is a device, not a user, from the first group ever created", one
+      signature key per client instance, keyed `(user_id, signature_public_key)`, because sharing
+      a key across devices means exporting private key material between browsers and
+      retrofitting device-ness later is a state migration inside every user's browser storage),
+      and **device verification** as slice 3.3, ticked below. Verification is where the
+      residue of ADR 007 went: the sweep trusts the directory's key↔person mapping, and only two
+      humans comparing key material out of band can close that — no server signature can, because
+      under PLAN §6.1's adversary 3 the signer is the adversary
+- [ ] Multi-device, the third that did not: **key sync**. Nothing carries a person's device
+      state from one of their devices to another, so each browser profile enrols as a separate
+      device and starts with no history and no verification records. Encrypted backups
+      ([ADR 010](adr/010-encrypted-backups.md)) restore the trust decisions onto a new profile
+      and are the closest thing that exists, but a restore is a deliberate act with a key typed
+      by hand, not a sync. It also sits behind the one-device-per-browser-profile item above:
+      until a SharedWorker owns the device, two tabs are not reliably one device, and syncing
+      between profiles would be building the harder case on top of an unsettled easier one
+- [x] **Slice 3.3 — key verification** ([ADR 008](adr/008-key-verification.md)) — *2026-08-30*: client-local
+      records in the wrapped keystore (never server-stored — a server that can *set* a verified
+      flag marks its own planted key safe), a safety number over a person's whole device-key set
+      with **your own half computed locally and never from the directory** (both halves from the
+      directory would show a planted key identically on both screens and the ceremony would bless
+      it), refusal on the send path because ADR 007 established there is no veto at commit-apply,
+      and TOFU pinning on by default. Client-only: no endpoint, no migration, no contract change.
+      **Its gate is the roadmap's own key-swap test**, which this design exists to make
+      implementable as written
+- [x] **Encrypted backups + user-held recovery keys** — *2026-08-30*, [ADR 010](adr/010-encrypted-backups.md).
+      Not org-level recovery, which the ADR refused and named for what it is: an organisation
+      that can recover is an organisation that can read, so that policy *is* Compliance mode,
+      chosen at setup. What a backup restores is the knowledge that cannot be re-derived — your
+      verification decisions — never past message plaintext, which forward secrecy has already
+      destroyed
+- [ ] **The recovery UX drills**, which are the gate rather than the slice: back up, destroy the
+      profile, recover with the key; then the same loss with no key, landing on the documented
+      non-lying failure path. Two browser contexts, and phase gate item 2 is not met until they run
+- [x] **Slice 3.4 — media E2EE** ([ADR 009](adr/009-media-e2ee.md)) — *2026-08-30*, via LiveKit
+      insertable streams. `webapp/src/calls/e2ee.ts` derives the key, `calls/livekit.ts` wraps the
+      key provider, and `webapp/e2e/specs/e2ee-call-rotation.e2e.ts` drives a membership change
+      under a live encrypted call — which is the assertion worth having, since a key that never
+      rotates would pass every static check.
+      The key is MLS exporter output at the current epoch, so nothing distributes it and
+      every member derives the same bytes independently; it rotates when the epoch does, into
+      keyring slot `epoch % 16`, which needs no signalling at all. A fixed per-call key was
+      refused because it would let a member removed mid-call keep listening — exactly the
+      property ADR 007 spent a slice restoring for messages. `chan-` rooms only: a conference
+      guest has no leaf to derive with, so conferences stay plainly labelled as not
+      end-to-end encrypted rather than quietly weaker. LiveKit's stack is used whole except its
+      key provider, which is wrapped because the stock one's `setKey` takes no key index and so
+      cannot rotate (verified against the pinned 2.22.1 types); its own ratchet stays unused,
+      since MLS is the only ratchet
+- [x] Per-org mode choice — *2026-08-30*, [ADR 011](adr/011-org-encryption-mode.md), security-reviewed. **Strict E2EE** vs **Compliance mode**, clearly labeled,
       documented bluntly (search/export/retention impossible in Strict, by design)
 - [ ] Compliance-mode server-side half actually built: encryption at rest, retention policy,
       compliance export (promised free in PLAN.md §7 — a mode toggle without them is dishonest)
-- [ ] Research spike: mobile push architecture with metadata minimization (decision in PLAN.md §12)
+- [x] Research spike: mobile push architecture with metadata minimisation
+      ([`docs/spikes/mobile-push.md`](spikes/mobile-push.md)) — *2026-08-30*. It corrected this
+      bullet's own framing: on the web path the push provider **cannot** read the payload (RFC
+      8291 encrypts it end to end), so the adversary a push design must defend against here is
+      our own untrusted server, not Apple or Google. Recommendation is standard Web Push sent by
+      the instance itself under a self-generated VAPID key — no Apple Developer membership, no
+      Firebase, no vendor relationship, which is the only shape that survives "installation is
+      the product", and UnifiedPush comes free because UnifiedPush 3.x *is* Web Push. Two
+      supposed blockers dissolved: the manifest already meets iOS's precondition, and §1.5's
+      no-service-worker reasoning is about a cached shell, which a push-only worker is not
+- [ ] **The one device test the push recommendation rests on**: can a service worker instantiate
+      the ~489 KB MLS core, open the IndexedDB keystore through its non-extractable key, take the
+      lock against a live tab, decrypt and display — inside a push handler's budget? Answerable
+      only on real hardware. If it cannot, the recommendation collapses and the fallback is a
+      generic "New message" with no content, which is honest but much less useful
+- [ ] **Mentions cannot be computed server-side under Strict E2EE** (found by the same spike):
+      `parseMentions` reads message content, which the server no longer has. Matrix hits the
+      identical wall. It decides what a push can say and what the mention badge can count, so it
+      belongs to whichever slice ships push
 - Tests: **MLS integration tests** (the glue, not the audited library): two independent client
   instances create a group, exchange, persist state, restart, resume; a removed member cannot
   decrypt anything sent after removal; a new member cannot decrypt anything sent before joining;
@@ -511,11 +714,40 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
 
 1. **Compromised-server drill**, scripted in `docs/drills/e2ee-drill.md`: (a) send a known
    canary message; full DB + disk dump is scanned — the canary appears only as ciphertext;
-   (b) media: packet capture at the SFU during a live call — RTP payloads fail to decode
-   without the E2EE key.
+   (b) media: **a no-key subscriber at the server's own position cannot decode a `chan-` call**
+   — mint a token server-side, join the live room as a bare subscriber holding no MLS state,
+   and assert the tracks produce decrypt failures and no renderable frames, with the same probe
+   against a `conf-` room decoding fine as the control.
+
+   *This item used to say "packet capture at the SFU — RTP payloads fail to decode without the
+   E2EE key", and that wording was vacuous* (found while designing
+   [ADR 009](adr/009-media-e2ee.md)): SRTP already encrypts every hop, so a captured payload is
+   unreadable whether or not media E2EE exists, and the drill would have passed identically
+   against a build with no E2EE in it at all. The replacement puts the adversary where it
+   actually sits — after SRTP terminates, holding the token-minting power the operator always
+   has — and the `conf-` control is what keeps a clean result from being vacuous a second time,
+   the same role the plaintext control plays in the message drill and the synthetic secret plays
+   in the key-leak scan. The intent is unchanged and now measurable.
 2. **Key-loss drill**: honest user loses device → recovers with recovery key; user without a
    recovery key hits the documented, non-lying failure path.
 3. Mode choice is irreversible-safe: switching modes can't silently decrypt or expose history.
+
+**Where the gate actually stands** — kept here rather than inferred from the checkboxes above,
+because a phase with most of its slices done can still be nowhere near its gate, and that is the
+distinction worth being able to see at a glance:
+
+| Gate item | Status |
+|---|---|
+| 1(a) message canary → ciphertext only | **met**, automated rather than drilled — `webapp/e2e/specs/e2ee-messaging.e2e.ts` asserts the row shape and scans a real `pg_dump` from inside the database container, with a plaintext control so a clean scan cannot be vacuous |
+| 1(b) a no-key subscriber cannot decode a `chan-` call | **buildable, not run.** Slice 3.4 landed, so the code the drill needs exists and `webapp/e2e/specs/e2ee-call-rotation.e2e.ts` covers the rotation. The drill in `docs/drills/e2ee-drill.md` has never been executed, and it is the item that proves the claim |
+| 2 key-loss / recovery drill | **buildable, not run.** This row said "needs encrypted backups and a recovery key, neither built" — both were built ([ADR 010](adr/010-encrypted-backups.md)), so the row was stale in the direction of understating progress. What remains is running the drill: a real device loss, a real recovery, and the documented non-lying failure for a user who never kept a key |
+| 3 mode choice irreversible-safe | **met by construction.** This row said "no Strict/Compliance mode exists yet"; [ADR 011](adr/011-org-encryption-mode.md) shipped it. Nothing converts in either direction — the per-conversation flag is fixed at creation — so the property holds because there is no conversion path, not because a check forbids one |
+
+[`docs/drills/e2ee-drill.md`](drills/e2ee-drill.md) now exists and covers both halves: the
+message half as the automated test that meets 1(a), the media half as the manual procedure for
+1(b). Slice 3.4 has landed, so that procedure is runnable rather than waiting on code — what
+stands between it and a met gate is somebody running it. It also records why the packet-capture
+form was rejected, so the shorter version is not reinvented by somebody who never saw this note.
 
 ---
 
@@ -523,19 +755,113 @@ Goal: a compromised server yields only ciphertext. Assemble, never invent.
 
 Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measured**.
 
-- [ ] `install.sh` hardened: Ubuntu LTS, Debian, Fedora, RHEL-clone; idempotent re-runs; clear errors
+- [x] **`install.sh` hardened** — *2026-08-30*. Ubuntu, Debian, Fedora, RHEL-clones, and
+      AlmaLinux, which needed its own route because `get.docker.com` refuses it outright
+      (verified: `ERROR: Unsupported distribution 'almalinux'`, and its docker-ce repo 404s).
+      Idempotent: a second run leaves `deploy/.env` byte-identical. It also installs cosign,
+      pinned to the version CI signs with, because nothing did — without it the update timer
+      would have failed on every fire on every stock install. 118 checks.
+      **Container-level only**: detection, idempotency and error paths are covered; actually
+      installing Docker, starting systemd units and SELinux at runtime are not, which is why
+      the VM matrix below is still open rather than satisfied by this
+- [x] **A security finding closed in passing**: `.env.example` shipped `REPLACED_AT_INSTALL`
+      for five secrets and the README told readers to copy it, while every `ensure_*` check
+      tested for the *key* and never the *value* — so a placeholder LiveKit secret that mints
+      admin tokens for every room could survive an install. Unexploitable only by luck (the
+      32-byte key floor rejects a 19-byte placeholder, so the server refused to boot).
+      Placeholders are now stripped and regenerated
 - [ ] Installer served from `get.hamlaneh.com` (redirect/proxy to repo raw) — the documented
       one-liner uses this URL so tutorials never break
-- [ ] Bare-IP mode polished; home mode: single binary with SQLite (storage suite now runs
-      against **both** drivers in CI, per CLAUDE.md); Tauri desktop app builds
-- [ ] Response compression in the Go server, for home mode only. Caddy's `encode zstd gzip`
+- [x] **The SQLite driver** — *2026-08-30*, `server/internal/sqlitestore`, 102 methods, the
+      same set as the PostgreSQL store. The seam is the **consumer-side** interfaces that
+      already existed, so nothing was invented for it and the compiler proves completeness:
+      `var _ testdb.Store = (*sqlitestore.Store)(nil)`. Three representation choices carry
+      what PostgreSQL got from its types — fixed-width UTC TEXT timestamps, canonical TEXT
+      uuids whose hex order matches uuid bytes, citext as a registered collation. The whole
+      module passes on both drivers, and `ci.yml` runs a full `-race` leg per driver because
+      the SQLite concurrency *shape* (one connection, a retrying busy handler) is its own.
+      Six PostgreSQL-mechanism tests are skipped under an allow-list whose gate was proved
+      to fail in **both** directions — a stale entry fails it, a missing one fails it too
+- [x] **Home mode's boot path** — *2026-08-30*. `hamlaneh-server home`: SQLite at the per-OS
+      data directory, loopback bind, calls refused, compression on, and `--version`, which the
+      updater needs to know what is installed. It mints its own signing and audit keys on first
+      run, since home mode has no `install.sh` to generate them; that key path was reviewed
+      adversarially before merge. The inverse is pinned too — a test proves server mode never
+      creates a SQLite file, so an organisation's data cannot silently fork onto one
+- [x] **Home mode's first run** — *2026-08-30*. The first admin is generated and printed once,
+      chosen over a setup screen because a screen is a privileged unauthenticated path that must
+      be proven shut afterwards and proven unreachable from a LAN bind, while a console line has
+      no network surface to close. `localhost` and `127.0.0.1` are now both accepted, by an
+      option that takes no argument and so cannot be handed a name: it derives siblings only
+      when the configured origin is already loopback, same scheme and port. Proven in a real
+      browser, and proven not to widen — a page on a *different* loopback port is still refused,
+      and server mode's origin table is asserted byte-identical with the option forced on
+- [x] **Gate clause 4's second half** — *2026-08-31*,
+      `webapp/e2e/specs/home-mode-restart.e2e.ts`. It could never be a manual drill: a fresh
+      instance is Strict, so a message exists only if the browser's MLS client put it there.
+      Proven to fail as well as pass — pointed at a fresh data directory it goes red on the
+      substantive assertion, not only on its console control.
+      **What it proves is the server's half.** The database keeps the ciphertext, the session row
+      and the channel, and never holds the words or any key that opens them; the MLS keystore and
+      this device's own copy of what it sent live in the browser profile the restart does not
+      touch. So a different device, or the same browser with its profile cleared, cannot read
+      that history — MLS working, not persistence failing. Device-side durability is the backup
+      path and a separate claim
+- [ ] **Docker Desktop usually holds `:8080` on a household Windows machine**, so the very first
+      run fails to bind for a reason that has nothing to do with Hamlaneh. The error now names
+      `HAMLANEH_HOME_ADDR` and a free port. Whether the default should move off 8080 entirely is
+      still open — it is the port most likely to be taken on exactly the machines home mode is for
+- [x] **Tauri desktop app builds** — *2026-08-31*, three OSes in CI. The shell does not embed
+      the web application and cannot: the client builds its base URL from
+      `window.location.origin`, the session is an HttpOnly cookie and CSRF is a double-submit
+      cookie, so a copy served from `tauri://localhost` would sit on an origin with no server
+      and could hold none of them. It navigates to the instance instead. That makes its address
+      field a trust boundary — the value reaches `location.assign` in the shell's own privileged
+      origin — so it refuses `javascript:`, `data:`, `file:`, `tauri:`, `vbscript:` and `ws:`,
+      with tests. Verified by driving the real Linux binary under Xvfb: the instance logged the
+      request and the window displayed content that exists only on the remote origin.
+      Two gaps written into the workflow rather than left implicit: the macOS leg is arm64 only,
+      so an Intel Mac is uncovered, and **every bundle is unsigned**, so Gatekeeper and
+      SmartScreen will both object
+- [ ] **Clause 4's desktop smoke e2e**, which does not split the way I assumed when scoping it.
+      Strict E2EE is *not* the blocker — the shell loads the instance's own webapp, MLS client
+      included. The blockers are that **Tauri's WebDriver support is Linux and Windows only**, so
+      a third of the matrix could never run this test whatever we write, and that the e2e stack's
+      internal-CA certificate is refused by the system webview, with no in-app override by design
+      (trusting a CA is the machine owner's decision). It needs the CA in each runner's trust
+      store, or a home-mode HTTP instance for the desktop leg
+- [ ] Bare-IP mode polished. *(The Caddy half is fixed: the files origin now has its own
+      variable, because gluing `files.` onto a bare IP produced a name neither the internal CA
+      nor any public CA could ever certify, and Caddy retried that impossible order for a month
+      on an otherwise-working install.)*
+- [x] **Response compression in the Go server, for home mode only** — *2026-08-30*,
+      `server/internal/httpserver/compress.go`, off unless asked for and on by default in home
+      mode, which is the mode with no proxy in front of it. Caddy's `encode zstd gzip`
       covers the compose path, but home mode has no proxy in front of it and would otherwise
       serve the ~560 KB web bundle uncompressed over whatever link the household has
-- [ ] Signed releases (Sigstore/cosign) + SBOM; auto-update channel, on by default for security
-      patches, **with anti-rollback** (older validly-signed release refused unless forced)
-- [ ] Automated encrypted backups on by default; documented restore
-- [ ] Publish `docs/hardening.md` (defaults already carry the load; guide covers optional
-      extras: IP allow-lists, reverse-proxy variants, backup key custody)
+- [x] **Signed releases (Sigstore/cosign) + SPDX SBOM + the anti-rollback refusal** —
+      *2026-08-30*, `.github/workflows/release.yml`, `deploy/verify-release.sh` and its test
+      suite, runbook in [`docs/releasing.md`](releasing.md). One signature over `SHA256SUMS`
+      rather than per artifact, and the release is drafted so §6.6's simultaneous patch and
+      advisory is a control rather than an intention. Every control in the verifier was
+      mutation-tested. **Keyless signing is the untested half**: Fulcio and Rekor cannot be
+      exercised offline, so the first real tag is where a wrong identity pattern would show
+- [x] **The auto-updater** — *2026-08-30*, `deploy/hamlaneh-update.sh`. It contains no
+      signature logic and no version ordering: `verify-release.sh`'s exit code is the authority,
+      so there is only ever one copy of that check to rot. Both deployment shapes, atomic swap
+      by `rename(2)` between siblings on one filesystem, rollback on a failed health check.
+      43 checks, 14 controls mutated and all 14 went red.
+      **On by default only where systemd is** — on a systemd-less host the timer cannot be armed
+      and the installer says so rather than reporting success; backups already have a cron
+      fallback and the updater does not
+- [x] **Automated encrypted backups on by default; documented restore** — *2026-08-30*,
+      `deploy/hamlaneh-backup.sh`, [`docs/backups.md`](backups.md). Verification happens before
+      anything is stopped or written, so a wrong key or a tampered archive leaves the instance
+      untouched rather than half-restored — asserted by comparing checksums before and after,
+      not by inspection
+- [x] **Publish [`docs/hardening.md`](hardening.md)** — *2026-08-30*. Defaults carry the load;
+      the guide covers the optional extras (IP allow-lists, reverse-proxy variants, backup key
+      custody) and now also home mode beyond the machine it runs on
 - [ ] Start pre-selling Managed to interested orgs (validates pricing, near-zero build cost)
 - Tests: install matrix in **real VMs, not containers** (installer touches Docker + systemd —
   containers test nothing; use nested-virt CI runners or scheduled cloud VMs): Ubuntu LTS,
@@ -545,11 +871,25 @@ Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measur
 ### Test gate ✅
 
 1. ≥3 strangers, fresh VPS each, median time-to-working-instance **< 5 minutes** — timed, logged.
+   **At risk, structurally, and not by a margin tuning will close:** `install.sh` runs
+   `compose up -d --build`, which is a Go compile plus a Vite build on the stranger's VPS. On a
+   modest machine that alone exceeds five minutes, and on a 1 GB one the web build is
+   OOM-killed. The release pipeline already builds and signs images that nobody pulls. Making
+   compose reference the published image, with `--build` kept for CI and development, is what
+   this clause needs — and it also puts the signed-image supply chain on the path operators
+   actually take, instead of leaving it theoretical.
 2. Auto-update applies a signed release; a tampered release is rejected; an **older
    validly-signed release is rejected** unless explicitly forced (anti-rollback negative test).
 3. Restore drill on a fresh machine: pre-backup canary message present, file checksums match,
-   existing users log in. Negatives: backup archive unreadable without key (scripted scan finds
-   no plaintext canary); restore with wrong key fails with a clear error, not a corrupt instance.
+   existing users log in. Negatives: backup archive unreadable without key; restore with wrong
+   key fails with a clear error, not a corrupt instance.
+   **The encryption check is not "a scan finds no plaintext canary"** — that wording was
+   vacuous and is corrected here rather than quietly met. Gzip hides a literal string exactly
+   as well as a cipher does, so absence alone certifies an unencrypted archive as clean; it was
+   demonstrated by replacing encryption with `cat` and watching the naive check pass. The real
+   check is four: the canary absent from the ciphertext, the archive not readable as gzip, not
+   readable as tar, **and** the canary recovered from the archive once the key is supplied. The
+   positive control is what makes the three absences mean anything.
 4. Home mode: the single binary starts on Windows, macOS, Linux; first run creates the SQLite
    DB; a sent message survives process restart. Tauri app builds for all three OSes in CI and
    passes a login + send-message smoke e2e.
@@ -565,7 +905,31 @@ security *marketing*, not launch.
       with zero unresolved crashes (crashes file blocking issues); automated header test keeps
       CSP free of inline/eval on every served page; rate-limit tests assert documented
       thresholds on login, signup, reset
-- [ ] `security.txt`, disclosure policy, security contact, stated patch SLA
+- [x] `security.txt`, disclosure policy, security contact, stated patch targets — *2026-08-30*,
+      drafted in `docs/security.txt` and `SECURITY.md`. **Not yet true in the world**: the
+      contact address and canonical domain are placeholders, the file is served nowhere, and
+      GitHub private vulnerability reporting is off by default — SECURITY.md links to that form
+      today, so the link is a dead contact until it is switched on
+- [ ] **Fronting the stack with a CDN or upstream proxy has no correct configuration** (found
+      while writing the hardening guide). Caddy ships without `trusted_proxies` so it strips
+      client-supplied `X-Forwarded-For`, and `clientIP` reads XFF only from a trusted peer — so
+      behind a CDN every client collapses onto the CDN's address and per-IP limits on sign-in
+      stop distinguishing anyone, while trusting the proxy naively would make the leftmost hop
+      spoofable. The fix is code, not documentation: rightmost-untrusted parsing plus a
+      trusted-proxy list behind one env var. Until then the guide tells operators not to try
+- [ ] **IP allow-listing is promised in PLAN §6.5 and reachable only by editing a baked-in
+      Caddyfile**, which `up -d --build` rebuilds and any upgrade overwrites. One env var
+      (`HAMLANEH_ADMIN_ALLOW_CIDRS`) consumed by the Caddyfile turns a documented workaround
+      into a supported default — and note the trap the guide had to correct: `/admin` is a
+      client-side route served the same index.html as everything else, so blocking it protects
+      nothing. The surfaces with power are `/api/v1/admin/*` and `/scim/v2/*`
+- [x] **Operator backup tooling** — *2026-08-30*, the same work the Phase 4 automated-backups
+      box ticks: `deploy/hamlaneh-backup.sh`, its own test suite beside it, a `backup-tooling`
+      job in `ci.yml`, and the restore runbook in [`docs/backups.md`](backups.md). This line
+      read "no operator backup tooling exists at all", which was true when the hardening guide
+      was written and was left behind by the Phase 4 slice that closed it — one piece of work
+      tracked in two places, and only one of them updated. It is the reason the guide could stop
+      declining to offer a cron recipe: there is a supported path to point at instead
 - [ ] External pentest → fix findings → publish report
 - [ ] Cryptography audit of the E2EE integration → fix → publish
 

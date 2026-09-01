@@ -699,6 +699,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/org/encryption-mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change which kind of conversation this instance creates.
+         * @description adminOnly. Deliberately its own endpoint rather than a field on the settings PATCH: that screen saves as you type, and this is a decision an administrator should have to mean — it is audited (`org.encryption_mode_changed`) and the UI confirms it, which a field among a dozen others cannot be.
+         *     It changes the rule for conversations born from now on and nothing else. No existing conversation is converted in either direction, and that is the design rather than a limitation: a strict-to-compliance switch could not decrypt what is already encrypted even if it wanted to, because the server holds no key, and a compliance-to-strict switch cannot un-store plaintext that has already been written. Selecting `compliance` answers 409 encryption_mode_locked until the server-side half it promises exists.
+         */
+        put: operations["setOrgEncryptionMode"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/org": {
         parameters: {
             query?: never;
@@ -1065,6 +1086,8 @@ export interface paths {
          * Upload one file into a channel.
          * @description Backs the composer's paperclip. One file per request — the composer uploads several as several requests, each with its own progress and its own failure. The file is scoped to this channel from birth: membership is checked here, the later message references it by id, and a file never attached to a message is swept after 24 hours. That one rule — a file is readable exactly by the members of its channel — keeps the authorization story identical to every other channel resource.
          *     The declared content type is kept as the card's label, but the server trusts the bytes, not the label: a declared image/* whose bytes do not sniff as that image type is refused (415, content_type_mismatch), because images are the one kind served inline. Everything else is stored as an opaque blob and always served as a download — Content-Disposition attachment, nosniff, sandboxing CSP — so an uploaded SVG, HTML page or anything else that can carry script is a file the reader saves, never a page their browser runs. Images have their metadata stripped at ingest: EXIF carries GPS coordinates, and a photo shared in a chat must not quietly say where its author lives.
+         *     ON AN E2EE CHANNEL the bytes are already ciphertext and none of the paragraph above can apply — the server cannot sniff what it cannot read (ADR 013). So the metadata must not arrive in the clear either: the `file` part must declare its filename as exactly `encrypted` and its content type as absent or `application/octet-stream`. Anything else is a 400 `e2ee_metadata_in_clear`, refused rather than stored, because a real filename beside an encrypted body would leak the one thing the encryption was for. The real name, type and dimensions travel inside the attaching message's ciphertext.
+         *     An optional second part named `thumb` may follow `file` on an e2ee channel: a client-derived, client-encrypted thumbnail, at most 1 MiB. It is a 400 `invalid_request` beyond that size or on a plaintext channel, where the server derives thumbnails itself. The effective request-body cap on an e2ee channel is therefore `max_file_size_bytes` + 1 MiB; `max_file_size_bytes` itself is unchanged and applies to the uploaded ciphertext, so a client budgets its plaintext at the cap minus 28 bytes of nonce and tag.
          */
         post: operations["uploadFile"];
         delete?: never;
@@ -1091,6 +1114,243 @@ export interface paths {
         put: operations["setReadPosition"];
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/mls/device": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register this client instance as an MLS device.
+         * @description An MLS leaf is a device, not a user, from the first group ever created — one signature key per browser profile, because sharing a signature key across devices means exporting private key material between browsers, and retrofitting device-ness later is a group-state migration inside every user's storage. Idempotent on (user, signature_public_key): re-registering the same key returns 200 with the existing device, so a client can call this on every startup without bookkeeping. The server stores the key as an opaque identifier; it never verifies a signature with it.
+         */
+        post: operations["registerMlsDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/mls/devices/{deviceId}/key-packages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deviceId: components["parameters"]["MlsDeviceId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace this device's pool of unclaimed key packages.
+         * @description Replace-all semantics, deliberately: a key package embeds its own expiry, which the server cannot read, so instead of the server guessing at staleness the client publishes a fresh batch on every connect and the previous unclaimed pool is deleted in the same transaction. Claimed packages are already gone (claims are consuming). Scoped to the caller's own devices — another user's device id answers 404 mls_device_not_found. Which of your own devices you publish under is not the server's to police: a session is not bound to a device, so it cannot tell, and does not need to — packages published under the wrong own-device, like garbage packages, only break your own addability. The server never validates that a package matches the device's signature key for the same reason.
+         */
+        put: operations["replaceMlsKeyPackages"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/mls/group": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The channel's MLS group, if one exists.
+         * @description Members only — a non-member gets the same channel_not_found 404 as on every channel-scoped path. A member of an e2ee channel with no group yet gets 404 mls_group_not_found, which is the signal to create one. The epoch is the server's sequencing claim, not cryptographic truth — clients trust their own group state and use this value to know how far behind the commit log they are.
+         */
+        get: operations["getMlsGroup"];
+        put?: never;
+        /**
+         * Create the channel's MLS group.
+         * @description Called by the first member whose client finds an e2ee channel with no group. The creator creates the group locally containing only itself, registers it here, then adds the other members by claiming their key packages and committing. Exactly one group per channel, enforced structurally — a concurrent second create answers 409 mls_group_exists, and that loser's client waits to be added instead. Refused on a channel without e2ee (400 e2ee_not_enabled).
+         */
+        post: operations["createMlsGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/mls/member-devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Every current member's registered device signature keys.
+         * @description The allow-list a client sweeps the MLS tree against (ADR 007). A leaf whose signature key does not appear here belongs to nobody who is currently in this channel, and reconciliation evicts it — which is what makes removal hold against a leaf credentialed under somebody else's id, since the credential is a string the enrolling client chose and is never again read for a security decision. Deliberately the whole roster in one answer rather than a per-user lookup: the sweep is "evict what is not allowed", and a per-user question can only ever confirm keys the directory already attributes correctly — the planted leaf is precisely the one no per-user answer names. Members only, so the same 404 as every channel-scoped path, and refused on a channel without e2ee (400 e2ee_not_enabled) since a channel with no group has no tree to sweep. Co-members already learn device ids at claim time, so this exposes the same information class and adds no reach. The keys are the server's claim, not a proof: the directory is written under an authenticated session and never signature-verified, and closing that residue is the verification slice's job, not this endpoint's.
+         */
+        get: operations["listMlsMemberDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/mls/key-package-claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim one key package per device of a member, to add them.
+         * @description Consuming read — each returned package is deleted in the same transaction and can never be handed out twice, because a key package is single-use by protocol and reusing one across groups is the bug this endpoint exists to make impossible. Deliberately channel-scoped rather than a public directory: the caller must be a member and the target must be a member of this channel, which kills the enumerate-and-exhaust surface a Signal-style open fetch would carry — on a closed instance nobody needs to claim packages of a person they share no conversation with. A target device whose pool is empty appears in missing_device_ids; a target with no devices at all returns both lists empty, and the client renders "cannot add yet" rather than pretending. The target being a non-member answers 404 member_not_found. Refused on a channel without e2ee (400 e2ee_not_enabled): a claim exists to add someone to this channel's group, and a channel with no possible group would make this endpoint a free pool-drain against anyone you share a plaintext channel with.
+         */
+        post: operations["claimMlsKeyPackages"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channelId}/mls/commits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The commit log after a given epoch, ascending.
+         * @description How a client catches up: it holds group state at epoch N and fetches every commit after N, in order, applying each. A brand-new joiner needs nothing here — its Welcome is self-contained. Pages by epoch: the last epoch received is the next after_epoch, and an empty page means caught up. The log is durable, unlike the WS replay buffer, because a device offline for a week must still be able to advance. A channel whose group does not exist yet answers a 200 empty page — the log of a group that is not there holds nothing, and the client flow has already asked GET …/mls/group before it gets here.
+         */
+        get: operations["listMlsCommits"];
+        put?: never;
+        /**
+         * Submit a commit — first-wins per epoch.
+         * @description The sequencing point of the whole design (ADR 006). The client names the epoch its commit was built at; the server accepts it only if that is still the group's current epoch, advancing the group by exactly one — a compare-and-swap, so of two concurrent committers exactly one wins and the other gets 409 mls_epoch_conflict, refetches the log, merges and retries. Welcomes for members this commit adds ride in the same request and are stored in the same transaction, because a committed add whose Welcome was lost is a forked group — atomicity here is group-integrity, not tidiness. Membership is checked but the blob is not parsed: the server cannot tell a real commit from noise, and does not need to — a garbage commit that wins an epoch is rejected by every member's own MLS validation, and the group repairs by committing past it.
+         */
+        post: operations["submitMlsCommit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/mls/backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch this account's sealed backup, if one exists.
+         * @description Owner only, and the only thing that can open it is a recovery key the server has never seen. 404 mls_backup_not_found when there is none — which is a state a person can genuinely be in, and the restore screen says so rather than implying a lost key.
+         */
+        get: operations["getMlsBackup"];
+        /**
+         * Store this account's sealed verification backup.
+         * @description One envelope per account, replaced in place (ADR 010). The server stores bytes it cannot read and never could: the key that opens them is derived from a recovery key generated on the device, shown once, and never sent here in any form — there is no reset, because a server that could reset it could read the backup, which is the entire thing this defends.
+         *     `counter` is a convenience copy of the value sealed inside the envelope's authenticated header, and the server refuses one that does not move forward (409 mls_backup_stale). That refusal is not the security control — the client checks the sealed counter against its own floor, which is what a lying server cannot forge — it is what stops an ordinary lost update between two of the owner's own devices.
+         */
+        put: operations["putMlsBackup"];
+        post?: never;
+        /**
+         * Forget this account's backup.
+         * @description Idempotent — deleting one that is not there is still 204. Deleting is the honest end of "I no longer want a copy of this off my device", and it is the one direction the server can take unilaterally anyway, so offering it changes nothing about what the server can do and quite a lot about what a person can.
+         */
+        delete: operations["deleteMlsBackup"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/mls/devices/{deviceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deviceId: components["parameters"]["MlsDeviceId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Drop one of this account's devices from the directory.
+         * @description The lost-device path. Without it a stolen or discarded device's signature key stays in the directory, and therefore stays inside every group's allow-list, for as long as the account exists — ADR 007's sweep evicts exactly what the directory stops listing, so this write is what makes the sweep able to act.
+         *     Owner only. Anything that is not currently one of the caller's devices answers 404 mls_device_not_found — another account's, one that never existed, and one this caller already deregistered are a single answer, so a guessed id confirms nothing. **A client retrying after a network failure must treat that 404 as success**: the device is gone either way, and the only thing the two answers distinguish is which attempt did it.
+         *     It does not revoke sessions and does not touch messages; it removes the key from the mapping other members' clients sweep against, and their next reconcile does the eviction. That is deliberately a separate act from signing the device out, because the two answer different questions and a person who has lost a laptop needs both.
+         */
+        delete: operations["deregisterMlsDevice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/mls/welcomes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Welcomes waiting for any of the caller's devices.
+         * @description Fetched on every connect and on the mls_welcome nudge. A Welcome is encrypted to one device's key package, so listing all of a user's pending Welcomes on any of their sockets reveals nothing — a sibling device holds bytes it cannot open. Explicit acknowledgement (the DELETE below) rather than delete-on-read, because a client that fetches and crashes before joining must find the Welcome still there.
+         */
+        get: operations["listMlsWelcomes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/mls/welcomes/{welcomeId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                welcomeId: components["parameters"]["MlsWelcomeId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Acknowledge a Welcome after successfully joining.
+         * @description Always 204. The DELETE is scoped to the caller's own devices' rows, so an id naming another user's Welcome, or nothing at all, deletes nothing and answers exactly like an already-acknowledged one — a guessed id can neither remove foreign state nor learn whether it named any. (An earlier draft answered 404 for foreign ids, which read as non-leaking and was not: nothing-vs-404 was a distinguisher. Uniform 204 is what makes the claim true.)
+         */
+        delete: operations["acknowledgeMlsWelcome"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1212,8 +1472,9 @@ export interface components {
             /** @default false */
             is_admin?: boolean;
         };
-        /** @description What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere. */
+        /** @description What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere. encryption_mode is here rather than only on the admin settings document because every member's creation surfaces need it and that document answers 403 to them. It is not withheld as a secret: an instance's encryption posture is a product characteristic its own users are entitled to know before they type anything into it, and a client that had to guess would guess wrong somewhere. */
         InstanceInfo: {
+            encryption_mode: components["schemas"]["EncryptionMode"];
             /**
              * Format: int64
              * @description The per-file upload cap, published so a client can refuse a file before spending the user's bandwidth on a doomed request. The server enforces it regardless; this is a courtesy, not the check.
@@ -1407,6 +1668,11 @@ export interface components {
             /** Format: uuid */
             id: string;
             kind: components["schemas"]["ChannelKind"];
+            /**
+             * @description Fixed at creation, never toggled — flipping it either way on a live conversation is exactly the silent mode-switch the downgrade test forbids. In an e2ee channel every message carries the mls envelope and empty content, so the server holds nothing it can read. Two consequences a client renders honestly rather than papering over: no link previews, and no server-side search — unread counts are row counts and survive.
+             *     Mentions do work, by a different route: the sender declares them in mls.mentions, because the server cannot parse content it cannot read (ADR 014). Attachments work too — the bytes are opaque and every key travels inside the ciphertext (ADR 013), so a file in an encrypted conversation is encrypted rather than a lie.
+             */
+            e2ee: boolean;
             /** @description The name the sidebar renders after "#". Unique across non-DM channels; null for a direct message, which the client labels with dm_peer.display_name instead. */
             slug?: string | null;
             /** @description Empty string when unset — the header renders its own "No topic set" copy. Always empty for a direct message. */
@@ -1460,6 +1726,8 @@ export interface components {
             kind: "public" | "private";
             /** @default  */
             topic?: string;
+            /** @description Omit it and the organisation's encryption mode decides (ADR 011). Send it and it must agree with that mode: under `strict`, false is refused with 400 e2ee_required_by_org; under `compliance`, true is refused with 400 e2ee_forbidden_by_org. There is no per-conversation opt-out, because one would be a hole in exactly the guarantee the mode exists to state. Immutable after creation — the flag is never updated, which is what makes a later mode switch unable to touch this conversation either way. */
+            e2ee?: boolean;
         };
         UpdateChannelRequest: {
             /** @description Empty string clears the topic. */
@@ -1471,6 +1739,8 @@ export interface components {
              * @description The other person. Must not be the caller.
              */
             user_id: string;
+            /** @description Applies only when this call CREATES the DM; reopening an existing one returns it as it is, whatever this says — get-or-create is idempotent and a flag cannot re-decide a conversation that already exists, which is also why a mode switch cannot. On creation the organisation's encryption mode decides when this is omitted, and a value that disagrees with the mode is refused exactly as on channel creation (400 e2ee_required_by_org / e2ee_forbidden_by_org). */
+            e2ee?: boolean;
         };
         AddChannelMemberRequest: {
             /** Format: uuid */
@@ -1591,7 +1861,20 @@ export interface components {
          * @enum {string}
          */
         RegistrationMode: "invite" | "open";
+        SetEncryptionModeRequest: {
+            encryption_mode: components["schemas"]["EncryptionMode"];
+        };
+        /**
+         * @description Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+         * @enum {string}
+         */
+        EncryptionMode: "strict" | "compliance";
         OrgSettings: {
+            encryption_mode: components["schemas"]["EncryptionMode"];
+            /** @description How many conversations this instance holds that are end-to-end encrypted. */
+            readonly encrypted_conversations: number;
+            /** @description How many are not. Both totals rather than one "outside the current mode" count, because the switch confirmation has to name what will be outside the mode being CHOSEN — which is the other set in each direction, so a single current-mode count would state the plaintext total as the encrypted one on a screen about encryption. Neither number ever moves on a switch: conversations are never converted, which is the whole of decision 2, so these are also the honest standing answer to "what does the mode not describe". */
+            readonly plaintext_conversations: number;
             org_name: string;
             /**
              * @description The locale a new account starts in.
@@ -1649,7 +1932,10 @@ export interface components {
             chain_valid: boolean;
             next_cursor?: string;
         };
-        /** @description A file card in the message list. Read-only on Message: attachments are created by the Phase 1.3 upload pipeline, so until that slice lands the array is always empty. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both. */
+        /**
+         * @description A file card in the message list. Read-only on Message: a file becomes an attachment by being uploaded first and named in the send's attachment_ids, never by being written here.
+         *     On an e2ee channel these fields are placeholders, not description: `filename` is `encrypted`, `content_type` is `application/octet-stream`, `size_bytes` is the size of the ciphertext, and there are no dimensions — the server was never told the real ones. The card renders from metadata the client decrypts out of the message, so an unreadable message yields an unreadable card rather than a card that lies. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both.
+         */
         Attachment: {
             /** Format: uuid */
             id: string;
@@ -1699,10 +1985,12 @@ export interface components {
              * @description Non-null renders the dashed "Message removed" placeholder. The row keeps its place in history so the conversation never reshapes.
              */
             deleted_at?: string | null;
-            /** @description Always empty until the Phase 1.3 upload pipeline lands. */
+            /** @description The message's file cards, in the order the sender listed them in attachment_ids. Empty when the message carries no files. */
             attachments: components["schemas"]["Attachment"][];
             /** @description Absent until the Phase 1.3 preview proxy lands. */
             link_preview?: components["schemas"]["LinkPreview"];
+            /** @description Present on every message of an e2ee channel (until deletion erases it), absent everywhere else — content is empty exactly when this is present. */
+            mls?: components["schemas"]["MlsMessageEnvelope"];
         };
         /** @description One page of history, always ordered ascending by (created_at, id). The two cursors are the handles for the next scrollback and the next forward fetch; each is absent when there is nothing more in that direction. */
         MessagePage: {
@@ -1713,7 +2001,10 @@ export interface components {
             after_cursor?: string;
         };
         SendMessageRequest: {
-            /** @description Files previously uploaded to this channel by this caller and not yet attached to any message, attached atomically with the send. An id that names anything else — another channel's file, another person's, one already attached — answers 404 attachment_not_found, one code for every miss so nothing about other people's uploads leaks. Duplicates in the list are a 400. */
+            /**
+             * @description Files previously uploaded to this channel by this caller and not yet attached to any message, attached atomically with the send. An id that names anything else — another channel's file, another person's, one already attached — answers 404 attachment_not_found, one code for every miss so nothing about other people's uploads leaks. Duplicates in the list are a 400.
+             *     The ORDER of this list is significant and is preserved: a message's cards come back in it, on the send response and on every later read. It is the order the person arranged their files in, which is not the order the uploads finished — one request per file goes out concurrently, so completion order is a property of the network.
+             */
             attachment_ids?: string[];
             /**
              * Format: uuid
@@ -1722,9 +2013,17 @@ export interface components {
             client_msg_id: string;
             /** @description Markdown as authored. May be empty only when attachment_ids is non-empty — an image with no caption is an ordinary message, a message with neither text nor files is nothing (400). One extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name. */
             content: string;
+            /**
+             * @description Required on an e2ee channel, refused elsewhere — the write path enforces the boundary in both directions rather than trusting clients to keep it. On an e2ee channel content must be the empty string (400 e2ee_required); on a plaintext channel this field is a 400 e2ee_not_enabled. Idempotency by client_msg_id is unchanged.
+             *     attachment_ids is permitted beside this field (ADR 013). The ids must name opaque uploads to the same channel; every per-file key and the real filename, type and dimensions travel inside the ciphertext, so the server stores bytes it cannot open and metadata it was never given.
+             */
+            mls?: components["schemas"]["MlsMessageEnvelope"];
         };
         EditMessageRequest: {
+            /** @description Non-empty on a plaintext channel. On an e2ee channel it must be the empty string, with the new ciphertext in mls — same rule as send. */
             content: string;
+            /** @description The replacement ciphertext. Required on an e2ee channel, refused elsewhere — the same boundary as send, at the same choke point. */
+            mls?: components["schemas"]["MlsMessageEnvelope"];
         };
         SetReadPositionRequest: {
             /**
@@ -1732,6 +2031,161 @@ export interface components {
              * @description The newest message the caller has seen. Must belong to this channel.
              */
             message_id: string;
+        };
+        RegisterMlsDeviceRequest: {
+            /** @description Base64. The device's MLS signature public key — an opaque identifier to the server, the idempotency key of registration, and the handle other members' clients verify against. Sized for Ed25519 today with headroom for post-quantum suites. */
+            signature_public_key: string;
+        };
+        MlsDevice: {
+            /** Format: uuid */
+            id: string;
+            /** @description Base64, echoed as registered. */
+            signature_public_key: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ReplaceMlsKeyPackagesRequest: {
+            /** @description Base64 key packages, each single-use. The measured size today is ~275 bytes raw; the cap leaves room for post-quantum suites without renegotiating the contract. */
+            key_packages: string[];
+        };
+        MlsKeyPackagePool: {
+            /** @description Unclaimed packages now stored for this device — what the client checks on connect to decide whether to replenish. */
+            unclaimed_count: number;
+        };
+        CreateMlsGroupRequest: {
+            /** @description Base64, at most 64 raw bytes, chosen by the creating client — the MLS GroupId. Opaque to the server; unique across the instance. */
+            group_id: string;
+        };
+        MlsGroup: {
+            /** @description Base64, as registered at creation. */
+            group_id: string;
+            /**
+             * Format: int64
+             * @description The server's sequencing claim — how many commits the log holds — not cryptographic truth. Clients trust their own group state and use this to see how far behind they are.
+             */
+            epoch: number;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ClaimMlsKeyPackagesRequest: {
+            /**
+             * Format: uuid
+             * @description The member whose devices are being added. May be the caller — that is how a person's own second device gets added.
+             */
+            user_id: string;
+        };
+        PutMlsBackupRequest: {
+            /** @description Base64 of `header ‖ iv ‖ ciphertext` (ADR 010). The header is the magic HMLB, a version byte, and the length-prefixed framing of the counter and the user id, used verbatim as the AEAD's additional data — so a server that edits any of it produces a blob that will not open, rather than one that opens differently. The cap is ~512 KiB raw: verification records are kilobytes, and this endpoint is not a blob store. */
+            envelope: string;
+            /**
+             * Format: int64
+             * @description A readable copy of the counter sealed in the header. The server compares it only to refuse a backward write; the client compares the SEALED one against its own stored floor, which is the check a hostile server cannot pass by lying here.
+             */
+            counter: number;
+        };
+        MlsBackup: {
+            /** @description Base64, exactly as stored. */
+            envelope: string;
+            /** Format: int64 */
+            counter: number;
+            /**
+             * Format: date-time
+             * @description When the server last accepted a write. Shown to the person during a restore so a rolled-back envelope has a visible date to disagree with — the only defence available on a first restore, where the device that would hold the floor is the one that was lost.
+             */
+            updated_at: string;
+        };
+        /** @description One member and the signature keys of every device they have registered. A member with no devices yet appears with an empty list rather than being omitted, so a client can tell "has no device" from "is not a member" without a second question. */
+        MlsMemberDevice: {
+            /** Format: uuid */
+            user_id: string;
+            /** @description Base64, as registered. Opaque to the server. */
+            signature_public_keys: string[];
+        };
+        MlsMemberDevicePage: {
+            members: components["schemas"]["MlsMemberDevice"][];
+            /** @description Present when another page exists. A client must read every page before sweeping: an allow-list built from half the roster would evict the members it had not read yet. */
+            next_cursor?: string;
+        };
+        MlsKeyPackageClaim: {
+            /** Format: uuid */
+            device_id: string;
+            /** @description Base64. Consumed — this package will never be handed out again. */
+            key_package: string;
+        };
+        MlsKeyPackageClaims: {
+            claims: components["schemas"]["MlsKeyPackageClaim"][];
+            /** @description The target's devices whose pool was empty — they cannot be added until they replenish. Both lists empty means the target has no MLS devices at all; the client says "cannot add yet" rather than pretending. */
+            missing_device_ids: string[];
+        };
+        SubmitMlsCommitRequest: {
+            /**
+             * Format: int64
+             * @description The epoch this commit was built at. Accepted only while it is still current — the compare-and-swap that makes one commit win each epoch.
+             */
+            epoch: number;
+            /** @description Base64 MLSMessage carrying the commit. The cap (~256 KiB raw) bounds a commit for a large tree; measured today a two-member commit is under 1 KiB. */
+            message: string;
+            /** @description Welcomes for the devices this commit adds, stored atomically with the commit — a committed add whose Welcome was lost is a forked group. MLS produces ONE Welcome covering every member a commit adds, so a delivery names many devices and carries the blob once; a shape that repeated the blob per device would multiply a tree-sized payload by the member count, which is the 70 MB request the first implementation caught. The whole request is additionally bounded by an 8 MiB body cap on this endpoint, stated here so the per-item caps cannot be read as multiplying past it. */
+            welcomes?: components["schemas"]["MlsWelcomeDelivery"][];
+        };
+        MlsWelcomeDelivery: {
+            /** @description Every claimed device this Welcome covers. The server stores one pending-Welcome row per device; each recipient extracts its own secrets from the shared blob. */
+            device_ids: string[];
+            /** @description Base64 Welcome, encrypted to the claimed key packages of every device it names. */
+            welcome: string;
+        };
+        MlsCommit: {
+            /**
+             * Format: int64
+             * @description The epoch the group REACHED by this commit — the submitted epoch plus one. This is the only numbering under which after_epoch=<your epoch> returns exactly the commits you have not applied, and under which a fresh group at epoch 0 has an empty log.
+             */
+            epoch: number;
+            /** @description Base64, as submitted. */
+            message: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        MlsCommitPage: {
+            /** @description Ascending by epoch. The last epoch received is the next after_epoch; an empty page means caught up — epochs are the cursor, so there is no separate one. */
+            commits: components["schemas"]["MlsCommit"][];
+        };
+        MlsWelcome: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            channel_id: string;
+            /** @description Base64. */
+            group_id: string;
+            /**
+             * Format: uuid
+             * @description Which of the caller's devices this Welcome is encrypted to. The others hold bytes they cannot open.
+             */
+            device_id: string;
+            /** @description Base64. */
+            welcome: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        MlsWelcomeList: {
+            /** @description Oldest first. */
+            welcomes: components["schemas"]["MlsWelcome"][];
+        };
+        /** @description The encrypted half of a message in an e2ee channel. The server stores and echoes it without parsing; content is the empty string wherever this is present, so nothing the server can read ever carries the words. Deleting the message erases the ciphertext exactly as it erases content; editing replaces it and stamps edited_at as for any edit. */
+        MlsMessageEnvelope: {
+            /**
+             * Format: int64
+             * @description The group epoch the sender encrypted at — a routing hint for receivers holding older state, never a server-verified claim.
+             */
+            epoch: number;
+            /** @description Base64 MLSMessage (application message). Cap ~32 KiB raw: a 4000-character message plus MLS framing fits with room, and the resulting message_created frame stays far under the 64 KiB WebSocket cap. */
+            ciphertext: string;
+            /**
+             * @description Sender-declared notification routing for an encrypted message (ADR 014). The server cannot read the ciphertext, so it cannot derive mentions the way it does on a plaintext channel — the sender names them instead.
+             *     Ids that are not current members of the channel are dropped silently, duplicates collapse, and order is irrelevant: the write joins this list against channel_members, which is what keeps a declaration from naming a stranger. Trusting the sender here therefore widens nothing the membership join did not already bound.
+             *     Never echoed on reads. Recipients render mentions from the tokens in the decrypted content; this list exists only so the badge and any later notification can outlive the reader's ability to decrypt.
+             *     PRIVACY: this list is visible to the server. It is the one content-derived fact an encrypted message discloses — a directed sender-to-member edge — and it is named in the threat model rather than left implicit.
+             */
+            mentions?: string[];
         };
         /**
          * @description The two tabs above the results. `files` searches filenames, scoped by channel membership exactly as messages are.
@@ -1825,6 +2279,8 @@ export interface components {
         ChannelId: string;
         MessageId: string;
         UserId: string;
+        MlsDeviceId: string;
+        MlsWelcomeId: string;
         InviteId: string;
     };
     requestBodies: never;
@@ -2957,6 +3413,42 @@ export interface operations {
             429: components["responses"]["RateLimited"];
         };
     };
+    setOrgEncryptionMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetEncryptionModeRequest"];
+            };
+        };
+        responses: {
+            /** @description The settings as they now stand. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description `compliance` was asked for while it is not yet available (code encryption_mode_locked). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     getOrgSettings: {
         parameters: {
             query?: never;
@@ -3728,6 +4220,406 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    registerMlsDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterMlsDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description This signature key is already registered; the existing device. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsDevice"];
+                };
+            };
+            /** @description Device registered. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsDevice"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    replaceMlsKeyPackages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deviceId: components["parameters"]["MlsDeviceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplaceMlsKeyPackagesRequest"];
+            };
+        };
+        responses: {
+            /** @description Pool replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsKeyPackagePool"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getMlsGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The group. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsGroup"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createMlsGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMlsGroupRequest"];
+            };
+        };
+        responses: {
+            /** @description Group registered at epoch 0. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsGroup"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            /** @description A group already exists for this channel (code mls_group_exists). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listMlsMemberDevices: {
+        parameters: {
+            query?: {
+                /** @description From a previous page's next_cursor. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of members and their device keys. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsMemberDevicePage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    claimMlsKeyPackages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimMlsKeyPackagesRequest"];
+            };
+        };
+        responses: {
+            /** @description The claimed packages, one per addressable device. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsKeyPackageClaims"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listMlsCommits: {
+        parameters: {
+            query: {
+                after_epoch: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Commits after the given epoch, ascending. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsCommitPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    submitMlsCommit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A channel or direct message the caller is a member of. */
+                channelId: components["parameters"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitMlsCommitRequest"];
+            };
+        };
+        responses: {
+            /** @description Commit accepted; the group advanced one epoch. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            /** @description The named epoch is no longer current (code mls_epoch_conflict). Fetch the commits you are missing and rebuild the commit. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getMlsBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sealed envelope. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsBackup"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    putMlsBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutMlsBackupRequest"];
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description The counter does not move forward (code mls_backup_stale). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    deleteMlsBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Gone, or already was. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    deregisterMlsDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deviceId: components["parameters"]["MlsDeviceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deregistered. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listMlsWelcomes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pending welcomes, oldest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MlsWelcomeList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    acknowledgeMlsWelcome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                welcomeId: components["parameters"]["MlsWelcomeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Acknowledged, already acknowledged, or never yours to acknowledge — indistinguishable by design. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
         };
     };
     search: {

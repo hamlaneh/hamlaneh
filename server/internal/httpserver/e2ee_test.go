@@ -1,0 +1,661 @@
+package httpserver_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/hamlaneh/hamlaneh/server/internal/api"
+	"github.com/hamlaneh/hamlaneh/server/internal/blobstore"
+	"github.com/hamlaneh/hamlaneh/server/internal/storage"
+)
+
+// The anti-downgrade boundary, asked from both sides (ADR 006).
+//
+// Every case below is a write that must NOT be stored, so every one of them
+// leaves the store's write methods unwired: an unwired method fails with
+// errFakeUnwired, so a refusal that leaked through would surface as a 500
+// rather than passing quietly. That is the point of the shape — the assertion
+// is not only "the right code came back" but "storage was never reached".
+
+// e2eeCiphertext is a well-formed envelope payload. The server never parses
+// one, so its bytes are arbitrary; what matters is that it is valid base64
+// within the contract's cap.
+var e2eeCiphertext = base64.StdEncoding.EncodeToString([]byte("ciphertext"))
+
+// encryptedChannel is the fixture channel with e2ee on.
+func encryptedChannel() storage.Channel {
+	ch := fixtureChannel()
+	ch.E2EE = true
+	return ch
+}
+
+// encryptedMemberStore is a member of an encrypted channel.
+func encryptedMemberStore() *fakeStore {
+	return channelStore(fixtureUser(), encryptedChannel(), true)
+}
+
+// mlsEnvelope is the JSON fragment a send or edit carries on an e2ee channel.
+func mlsEnvelope(epoch int, ciphertext string) string {
+	return fmt.Sprintf(`"mls":{"epoch":%d,"ciphertext":%q}`, epoch, ciphertext)
+}
+
+// mlsEnvelopeMentioning is the same fragment with ADR 014's declared list.
+func mlsEnvelopeMentioning(epoch int, ciphertext string, mentions ...uuid.UUID) string {
+	quoted := make([]string, 0, len(mentions))
+	for _, id := range mentions {
+		quoted = append(quoted, `"`+id.String()+`"`)
+	}
+	return fmt.Sprintf(`"mls":{"epoch":%d,"ciphertext":%q,"mentions":[%s]}`,
+		epoch, ciphertext, strings.Join(quoted, ","))
+}
+
+// overCapMentions is one more id than the contract's maxItems.
+func overCapMentions() []uuid.UUID {
+	ids := make([]uuid.UUID, 51)
+	for i := range ids {
+		ids[i] = uuid.New()
+	}
+	return ids
+}
+
+func sendBody(parts ...string) string {
+	return "{" + `"client_msg_id":"` + testClientMsgID + `",` + strings.Join(parts, ",") + "}"
+}
+
+func TestSendMessageE2EEBoundary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		encrypted bool
+		body      string
+		wantCode  string
+	}{
+		{
+			// The downgrade itself: plaintext arriving on an encrypted
+			// conversation. Nothing else in the server would notice.
+			name:      "plaintext send on an encrypted channel",
+			encrypted: true,
+			body:      sendBody(`"content":"hello"`),
+			wantCode:  "e2ee_required",
+		},
+		{
+			name:      "empty send with no envelope on an encrypted channel",
+			encrypted: true,
+			body:      sendBody(`"content":""`),
+			wantCode:  "e2ee_required",
+		},
+		{
+			// Ciphertext AND words. Storing this would put the message in the
+			// searchable column, which is the same disclosure as sending it
+			// in the clear — so it is the same refusal.
+			name:      "content beside the ciphertext on an encrypted channel",
+			encrypted: true,
+			body:      sendBody(`"content":"hello"`, mlsEnvelope(1, e2eeCiphertext)),
+			wantCode:  "e2ee_required",
+		},
+		{
+			// The other direction, and it matters as much: a ciphertext
+			// stored on a plaintext channel would make "encrypted" a property
+			// of a message rather than of the conversation.
+			name:      "ciphertext on a plaintext channel",
+			encrypted: false,
+			body:      sendBody(`"content":""`, mlsEnvelope(1, e2eeCiphertext)),
+			wantCode:  "e2ee_not_enabled",
+		},
+		{
+			name:      "ciphertext beside content on a plaintext channel",
+			encrypted: false,
+			body:      sendBody(`"content":"hello"`, mlsEnvelope(1, e2eeCiphertext)),
+			wantCode:  "e2ee_not_enabled",
+		},
+		{
+			name:      "a negative epoch",
+			encrypted: true,
+			body:      sendBody(`"content":""`, mlsEnvelope(-1, e2eeCiphertext)),
+			wantCode:  "invalid_request",
+		},
+		{
+			name:      "ciphertext that is not base64",
+			encrypted: true,
+			body:      sendBody(`"content":""`, mlsEnvelope(1, "not base64 at all!")),
+			wantCode:  "invalid_request",
+		},
+		{
+			name:      "an empty ciphertext",
+			encrypted: true,
+			body:      sendBody(`"content":""`, mlsEnvelope(1, "")),
+			wantCode:  "invalid_request",
+		},
+		{
+			name:      "a ciphertext over the contract's cap",
+			encrypted: true,
+			body:      sendBody(`"content":""`, mlsEnvelope(1, strings.Repeat("A", 45004))),
+			wantCode:  "invalid_request",
+		},
+		{
+			// ADR 014's one refusal. Everything else about a declared list is
+			// dropped silently by the membership join; the length is the one
+			// thing no join bounds, so the handler does.
+			name:      "more declared mentions than the contract's cap",
+			encrypted: true,
+			body: sendBody(`"content":""`,
+				mlsEnvelopeMentioning(1, e2eeCiphertext, overCapMentions()...)),
+			wantCode: "invalid_request",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ch := fixtureChannel()
+			if tt.encrypted {
+				ch = encryptedChannel()
+			}
+			// createMessage stays unwired on purpose: a refusal that leaked
+			// through would be a 500 here, not a quiet pass.
+			store := channelStore(fixtureUser(), ch, true)
+
+			rec := do(t, store, request(http.MethodPost, channelPath("/messages"), tt.body,
+				withSessionCookie("tok"), withCSRF()))
+			wantError(t, rec, http.StatusBadRequest, tt.wantCode)
+		})
+	}
+}
+
+func TestSendMessageEncryptedIsStored(t *testing.T) {
+	t.Parallel()
+
+	store := encryptedMemberStore()
+	var got storage.NewMessage
+	store.createMessage = func(_ context.Context, nm storage.NewMessage) (storage.Message, bool, error) {
+		got = nm
+		msg := fixtureMessage()
+		msg.Content = ""
+		msg.Mls = nm.Mls
+		return msg, true, nil
+	}
+
+	rec := do(t, store, request(http.MethodPost, channelPath("/messages"),
+		sendBody(`"content":""`, mlsEnvelope(4, e2eeCiphertext)),
+		withSessionCookie("tok"), withCSRF()))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got.Mls == nil || got.Mls.Epoch != 4 || string(got.Mls.Ciphertext) != "ciphertext" {
+		t.Fatalf("storage got envelope %+v, want the decoded ciphertext at epoch 4", got.Mls)
+	}
+	if got.Content != "" {
+		t.Errorf("storage got content %q; the searchable column must stay empty", got.Content)
+	}
+	// And the response echoes it as base64, which is the only encoding the
+	// contract has: the decode on the way in and the encode on the way out
+	// have to be the same alphabet or a blob does not round-trip.
+	if !strings.Contains(rec.Body.String(), e2eeCiphertext) {
+		t.Errorf("response %s does not echo the ciphertext", rec.Body.String())
+	}
+}
+
+// TestSendMessageEncryptedDeclaresMentions is ADR 014's write path: the
+// envelope's list reaches storage, which uses it in place of a content parse
+// that would derive nobody.
+//
+// It also pins the half that must NOT happen — the response never echoes the
+// list back. The field is write-only because a recipient renders mentions from
+// the tokens it decrypted; echoing the declaration would hand clients a second,
+// sender-controlled source of truth about words the server cannot read.
+func TestSendMessageEncryptedDeclaresMentions(t *testing.T) {
+	t.Parallel()
+
+	mentioned := uuid.New()
+	store := encryptedMemberStore()
+	var got storage.NewMessage
+	store.createMessage = func(_ context.Context, nm storage.NewMessage) (storage.Message, bool, error) {
+		got = nm
+		msg := fixtureMessage()
+		msg.Content = ""
+		msg.Mls = nm.Mls
+		return msg, true, nil
+	}
+
+	rec := do(t, store, request(http.MethodPost, channelPath("/messages"),
+		sendBody(`"content":""`, mlsEnvelopeMentioning(4, e2eeCiphertext, mentioned)),
+		withSessionCookie("tok"), withCSRF()))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got.Mls == nil || len(got.Mls.Mentions) != 1 || got.Mls.Mentions[0] != mentioned {
+		t.Fatalf("storage got mentions %v, want the declared %s", got.Mls, mentioned)
+	}
+	if strings.Contains(rec.Body.String(), mentioned.String()) {
+		t.Errorf("response %s echoes the declared list; the field is write-only", rec.Body.String())
+	}
+}
+
+// TestSendMessageEncryptedCarriesAttachments is ADR 013's write path: ids
+// beside an envelope, which the boundary used to refuse outright.
+//
+// The ids reach storage exactly as sent — the claim is storage's, inside the
+// send's own transaction, against the channel each row was born in — and the
+// searchable column stays empty. What the server never sees is the per-file
+// key and the real name: both ride inside the ciphertext it is holding.
+func TestSendMessageEncryptedCarriesAttachments(t *testing.T) {
+	t.Parallel()
+
+	store := encryptedMemberStore()
+	var got storage.NewMessage
+	store.createMessage = func(_ context.Context, nm storage.NewMessage) (storage.Message, bool, error) {
+		got = nm
+		msg := fixtureMessage()
+		msg.Content = ""
+		msg.Mls = nm.Mls
+		return msg, true, nil
+	}
+
+	rec := do(t, store, request(http.MethodPost, channelPath("/messages"),
+		sendBody(`"content":""`, mlsEnvelope(3, e2eeCiphertext),
+			`"attachment_ids":["`+testMessageID+`"]`),
+		withSessionCookie("tok"), withCSRF()))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if len(got.AttachmentIDs) != 1 || got.AttachmentIDs[0].String() != testMessageID {
+		t.Errorf("storage got attachment ids %v, want the one the send named", got.AttachmentIDs)
+	}
+	if got.Mls == nil || got.Content != "" {
+		t.Errorf("storage got %+v, want the envelope alone", got)
+	}
+}
+
+func TestEditMessageE2EEBoundary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		encrypted bool
+		body      string
+		wantCode  string
+	}{
+		{
+			name:      "plaintext edit on an encrypted channel",
+			encrypted: true,
+			body:      `{"content":"rewritten"}`,
+			wantCode:  "e2ee_required",
+		},
+		{
+			name:      "content beside the ciphertext on an encrypted channel",
+			encrypted: true,
+			body:      `{"content":"rewritten",` + mlsEnvelope(2, e2eeCiphertext) + `}`,
+			wantCode:  "e2ee_required",
+		},
+		{
+			name:      "ciphertext on a plaintext channel",
+			encrypted: false,
+			body:      `{"content":"",` + mlsEnvelope(2, e2eeCiphertext) + `}`,
+			wantCode:  "e2ee_not_enabled",
+		},
+		{
+			// The plaintext minimum still applies where it should: an empty
+			// edit on a plaintext channel is not suddenly legal because the
+			// e2ee path allows one.
+			name:      "an empty edit on a plaintext channel",
+			encrypted: false,
+			body:      `{"content":""}`,
+			wantCode:  "invalid_request",
+		},
+		{
+			// The cap is the boundary's, so it holds on both writes: send and
+			// edit reach it through the same function.
+			name:      "more declared mentions than the contract's cap",
+			encrypted: true,
+			body: `{"content":"",` +
+				mlsEnvelopeMentioning(2, e2eeCiphertext, overCapMentions()...) + `}`,
+			wantCode: "invalid_request",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ch := fixtureChannel()
+			if tt.encrypted {
+				ch = encryptedChannel()
+			}
+			store := &editStore{
+				fakeStore: channelStore(fixtureUser(), ch, true),
+				messageByID: func(context.Context, uuid.UUID, uuid.UUID) (storage.Message, error) {
+					return fixtureMessage(), nil
+				},
+				// updateMessageContent stays unwired: reaching it is a 500.
+			}
+
+			rec := do(t, store, request(http.MethodPatch, channelPath("/messages/"+testMessageID),
+				tt.body, withSessionCookie("tok"), withCSRF()))
+			wantError(t, rec, http.StatusBadRequest, tt.wantCode)
+		})
+	}
+}
+
+func TestEditMessageEncryptedReplacesCiphertext(t *testing.T) {
+	t.Parallel()
+
+	var gotContent string
+	var gotMls *storage.MessageMls
+	store := &editStore{
+		fakeStore: channelStore(fixtureUser(), encryptedChannel(), true),
+		messageByID: func(context.Context, uuid.UUID, uuid.UUID) (storage.Message, error) {
+			return fixtureMessage(), nil
+		},
+		updateMessageContent: func(
+			_ context.Context, _, _ uuid.UUID, content string, mls *storage.MessageMls,
+		) (storage.Message, error) {
+			gotContent, gotMls = content, mls
+			msg := fixtureMessage()
+			msg.Content = ""
+			msg.Mls = mls
+			return msg, nil
+		},
+	}
+
+	mentioned := uuid.New()
+	rec := do(t, store, request(http.MethodPatch, channelPath("/messages/"+testMessageID),
+		`{"content":"",`+mlsEnvelopeMentioning(9, e2eeCiphertext, mentioned)+`}`,
+		withSessionCookie("tok"), withCSRF()))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if gotContent != "" {
+		t.Errorf("storage got content %q, want empty", gotContent)
+	}
+	if gotMls == nil || gotMls.Epoch != 9 {
+		t.Fatalf("storage got envelope %+v, want the replacement at epoch 9", gotMls)
+	}
+	// An edit re-declares (ADR 014). The rewrite itself is storage's; what the
+	// handler owes is carrying the new list at all, because an edit whose
+	// declaration never arrived would silently keep the old rows.
+	if len(gotMls.Mentions) != 1 || gotMls.Mentions[0] != mentioned {
+		t.Errorf("storage got mentions %v, want the re-declared %s", gotMls.Mentions, mentioned)
+	}
+}
+
+// TestUploadFileRefusalComesAfterMembership pins the ordering: a stranger to
+// an encrypted channel learns that it does not exist, never that it is
+// encrypted.
+func TestUploadFileRefusalComesAfterMembership(t *testing.T) {
+	t.Parallel()
+
+	store := channelStore(fixtureUser(), encryptedChannel(), false)
+	rec := do(t, store,
+		request(http.MethodPost, channelPath("/files"), "", withSessionCookie("tok"), withCSRF()))
+	wantError(t, rec, http.StatusNotFound, "channel_not_found")
+}
+
+// encryptedUploadServer is an upload pipeline over an encrypted channel.
+func encryptedUploadServer(t *testing.T) *uploadServer {
+	t.Helper()
+	return newUploadServerFor(t, encryptedMemberStore())
+}
+
+// encryptedPart is the only file part an e2ee channel accepts: the
+// placeholder name, no declared type, opaque bytes.
+func encryptedPart(data []byte) uploadPart {
+	return uploadPart{field: "file", filename: "encrypted", data: data}
+}
+
+// TestUploadFileEncryptedStoresPlaceholderMetadata is ADR 013 decision 3's
+// first half: the row an encrypted upload produces says nothing about the
+// plaintext.
+//
+// The placeholders are asserted at the STORED row rather than only at the
+// response, because that is the column an operator, a backup and a dump can
+// read. Everything real — the name, the type, the pixel dimensions — travels
+// inside the attaching message's ciphertext and is never offered here.
+func TestUploadFileEncryptedStoresPlaceholderMetadata(t *testing.T) {
+	t.Parallel()
+
+	up := encryptedUploadServer(t)
+	// Opaque as far as this server is concerned: nonce ‖ AES-GCM output.
+	ciphertext := []byte("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0bsealed bytes")
+
+	rec := up.uploadParts(t, encryptedPart(ciphertext))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	if up.recorded.Filename != "encrypted" || up.recorded.ContentType != "application/octet-stream" {
+		t.Errorf("stored row = %q / %q, want the placeholder name and the opaque type",
+			up.recorded.Filename, up.recorded.ContentType)
+	}
+	if up.recorded.Width != nil || up.recorded.Height != nil {
+		t.Errorf("stored row carries dimensions %v x %v; nothing measured ciphertext",
+			up.recorded.Width, up.recorded.Height)
+	}
+	if up.recorded.HasThumbnail {
+		t.Error("stored row claims a thumbnail although no thumb part arrived")
+	}
+	if up.recorded.SizeBytes != int64(len(ciphertext)) {
+		t.Errorf("stored size %d, want the ciphertext's %d", up.recorded.SizeBytes, len(ciphertext))
+	}
+
+	var att api.Attachment
+	if err := json.Unmarshal(rec.Body.Bytes(), &att); err != nil {
+		t.Fatalf("body is not an Attachment: %v", err)
+	}
+	if got := up.storedBytes(t, att.Id, blobstore.Original); !bytes.Equal(got, ciphertext) {
+		t.Error("the ciphertext was rewritten on the way in; it must be stored byte for byte")
+	}
+	if _, err := up.blobs.Open(att.Id, blobstore.Thumbnail); err == nil {
+		t.Error("an encrypted upload with no thumb part still got a thumbnail")
+	}
+}
+
+// TestUploadFileEncryptedRefusesMetadataInClear is the other half: a real
+// filename or a declared type beside ciphertext is refused, never scrubbed.
+//
+// Coercion would hide the bug while the leak — already in transit — recurred
+// forever, which is e2eeAtBirth's reasoning applied to a filename. The store
+// stays wired here on purpose: the assertion is that nothing was recorded
+// even though recording would have succeeded.
+func TestUploadFileEncryptedRefusesMetadataInClear(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]uploadPart{
+		"a real filename": {
+			field: "file", filename: "salary-review.pdf", data: []byte("sealed"),
+		},
+		"the placeholder with a declared image type": {
+			field: "file", filename: "encrypted", contentType: "image/png", data: []byte("sealed"),
+		},
+		"the placeholder with any other declared type": {
+			field: "file", filename: "encrypted", contentType: "application/pdf", data: []byte("sealed"),
+		},
+		"a filename that only looks like the placeholder": {
+			field: "file", filename: "encrypted.pdf", data: []byte("sealed"),
+		},
+		"the placeholder in a different case": {
+			field: "file", filename: "Encrypted", data: []byte("sealed"),
+		},
+		"a filename that reduces to the placeholder": {
+			// uploadFilename's path-stripping and trimming are the plaintext
+			// path's leniency. Nothing reduces here: the name is compared
+			// whole, so a directory tree off the uploader's machine cannot
+			// arrive by being trimmed down to something acceptable.
+			field: "file", filename: "/home/amir/encrypted", data: []byte("sealed"),
+		},
+		"no filename at all": {
+			field: "file", data: []byte("sealed"),
+		},
+	}
+
+	for name, part := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			up := encryptedUploadServer(t)
+
+			rec := up.uploadParts(t, part)
+			wantError(t, rec, http.StatusBadRequest, "e2ee_metadata_in_clear")
+			if up.recorded.ID != uuid.Nil {
+				t.Error("a refused upload still recorded a row")
+			}
+		})
+	}
+}
+
+// TestUploadFileEncryptedNeverRunsTheImagePipeline is the structural claim
+// ADR 013 makes about the sniff, the EXIF strip and the thumbnailer: they
+// have nothing true to do to bytes nobody can read, so they must not run.
+//
+// The bytes below are a real PNG. On a plaintext channel this exact upload
+// is decoded, stripped, re-encoded and given dimensions and a thumbnail; on
+// an encrypted one it must come back out byte for byte with none of that,
+// because the pipeline is reached only through a declared image/* type and
+// the only type this path will store is the opaque constant.
+func TestUploadFileEncryptedNeverRunsTheImagePipeline(t *testing.T) {
+	t.Parallel()
+
+	up := encryptedUploadServer(t)
+	source := testPNG(t, 800, 400)
+
+	rec := up.uploadParts(t, encryptedPart(source))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	var att api.Attachment
+	if err := json.Unmarshal(rec.Body.Bytes(), &att); err != nil {
+		t.Fatalf("body is not an Attachment: %v", err)
+	}
+	if att.Width != nil || att.Height != nil || att.ThumbnailUrl != nil {
+		t.Errorf("ciphertext was measured as an image: %+v", att)
+	}
+	if got := up.storedBytes(t, att.Id, blobstore.Original); !bytes.Equal(got, source) {
+		t.Error("the bytes were re-encoded; an encrypted upload is stored verbatim")
+	}
+}
+
+// TestUploadFileEncryptedTakesAThumbPart pins the optional second part: the
+// client derives and encrypts its own preview, because the server cannot.
+func TestUploadFileEncryptedTakesAThumbPart(t *testing.T) {
+	t.Parallel()
+
+	up := encryptedUploadServer(t)
+	thumb := []byte("sealed thumbnail bytes")
+
+	rec := up.uploadParts(t,
+		encryptedPart([]byte("sealed original")),
+		uploadPart{field: "thumb", filename: "encrypted", data: thumb})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !up.recorded.HasThumbnail {
+		t.Error("a thumb part arrived but the row does not say so")
+	}
+	// size_bytes stays the ORIGINAL's: the thumb is a second blob, not part
+	// of the file the card reports.
+	if up.recorded.SizeBytes != int64(len("sealed original")) {
+		t.Errorf("stored size %d, want the original's alone", up.recorded.SizeBytes)
+	}
+
+	var att api.Attachment
+	if err := json.Unmarshal(rec.Body.Bytes(), &att); err != nil {
+		t.Fatalf("body is not an Attachment: %v", err)
+	}
+	if att.ThumbnailUrl == nil {
+		t.Error("the row has a thumbnail but no thumbnail URL was minted")
+	}
+	if got := up.storedBytes(t, att.Id, blobstore.Thumbnail); !bytes.Equal(got, thumb) {
+		t.Error("the thumb was rewritten; it is ciphertext and is stored byte for byte")
+	}
+}
+
+// TestUploadFileEncryptedRefusesAnOversizedThumb pins the 1 MiB bound. The
+// body cap admits it — that is what the extra megabyte is for — so this
+// refusal is the part's own and nothing else's.
+func TestUploadFileEncryptedRefusesAnOversizedThumb(t *testing.T) {
+	t.Parallel()
+
+	up := encryptedUploadServer(t)
+	rec := up.uploadParts(t,
+		encryptedPart([]byte("sealed original")),
+		uploadPart{field: "thumb", filename: "encrypted", data: bytes.Repeat([]byte("T"), (1<<20)+1)})
+	wantError(t, rec, http.StatusBadRequest, "invalid_request")
+	if up.recorded.ID != uuid.Nil {
+		t.Error("an upload with an oversized thumb still recorded a row")
+	}
+}
+
+// TestUploadFileEncryptedKeepsTheFileCap is the trap the wider body opens:
+// max_file_size_bytes is unchanged and applies to the ciphertext, so the
+// megabyte the thumb is allowed must not become a megabyte the file may
+// borrow.
+func TestUploadFileEncryptedKeepsTheFileCap(t *testing.T) {
+	t.Parallel()
+
+	up := encryptedUploadServer(t)
+	var info api.InstanceInfo
+	instance := do(t, up.store, request(http.MethodGet, "/api/v1/instance", ""))
+	if err := json.Unmarshal(instance.Body.Bytes(), &info); err != nil {
+		t.Fatalf("instance body: %v", err)
+	}
+
+	rec := up.uploadParts(t, encryptedPart(bytes.Repeat([]byte("A"), int(info.MaxFileSizeBytes)+1)))
+	wantError(t, rec, http.StatusRequestEntityTooLarge, "file_too_large")
+	if up.recorded.ID != uuid.Nil {
+		t.Error("an oversized ciphertext still recorded a row")
+	}
+}
+
+// TestUploadFileRefusesAThumbOnAPlaintextChannel is the boundary's other
+// direction, the half e2eeBody has always insisted on: a plaintext channel
+// derives its own thumbnail from bytes it can read, so a client-supplied one
+// is refused rather than trusted.
+func TestUploadFileRefusesAThumbOnAPlaintextChannel(t *testing.T) {
+	t.Parallel()
+
+	up := newUploadServer(t)
+	rec := up.uploadParts(t,
+		uploadPart{field: "file", filename: "notes.txt", contentType: "text/plain", data: []byte("hello")},
+		uploadPart{field: "thumb", filename: "thumb.png", data: []byte("whatever")})
+	wantError(t, rec, http.StatusBadRequest, "invalid_request")
+	if up.recorded.ID != uuid.Nil {
+		t.Error("an upload with a refused thumb still recorded a row")
+	}
+}
+
+// TestChannelCreationCarriesE2EE pins that a created channel's encryption
+// reaches the response, so a client can render what it just made.
+//
+// Which value it gets is no longer a request bound: the organisation's mode
+// decides it (ADR 011), and that rule — both modes, both creation paths,
+// omitted, matching and mismatching flags — is pinned in
+// orgencryptionmode_test.go. What is left here is the wiring.
+func TestChannelCreationCarriesE2EE(t *testing.T) {
+	t.Parallel()
+
+	store := authedStore(fixtureUser())
+	var got storage.NewChannel
+	store.createChannel = func(_ context.Context, nc storage.NewChannel) (storage.Channel, error) {
+		got = nc
+		return encryptedChannel(), nil
+	}
+
+	rec := do(t, store, request(http.MethodPost, "/api/v1/channels",
+		`{"slug":"secrets","kind":"private","e2ee":true}`, withSessionCookie("tok"), withCSRF()))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got status %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !got.E2EE {
+		t.Error("storage got e2ee=false although the instance is strict")
+	}
+	if !strings.Contains(rec.Body.String(), `"e2ee":true`) {
+		t.Errorf("response %s does not report the channel as encrypted", rec.Body.String())
+	}
+}

@@ -122,6 +122,11 @@
 // row it declines to touch. An adder may wait for a remover; a remover never
 // waits for an adder, and a cycle needs both.
 //
+// The MLS transport tables extend the same order once more at the end —
+// mls_devices → mls_key_packages → mls_groups → mls_commits → mls_welcomes —
+// and mls.go's header carries the argument for why neither operation that
+// takes a lock there can close a cycle with the other or with anything above.
+//
 // Anything that later wants to serialize on a channel takes the same lock at
 // the same strength. FOR UPDATE on channels is what puts removals and adds
 // back in each other's way; a plain UPDATE of that row (UpdateChannelTopic)
@@ -203,7 +208,7 @@ func Open(ctx context.Context, connString string) (*Store, error) {
 		}
 	}
 
-	wantVersion, err := latestMigrationVersion(migrationFiles, migrationsDir)
+	wantVersion, err := LatestMigrationVersion(migrationFiles, migrationsDir)
 	if err != nil {
 		return nil, fmt.Errorf("embedded migrations: %w", err)
 	}

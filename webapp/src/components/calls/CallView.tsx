@@ -151,6 +151,15 @@ interface CallViewProps {
   micEnabled: boolean;
   cameraEnabled: boolean;
   screenSharing: boolean;
+  /** This call's media is end-to-end encrypted (ADR 009). */
+  encrypted?: boolean;
+  /**
+   * The mid-call publish warning, when one stands. A node rather than a flag
+   * because its two exits are the verification ceremony's own, unchanged —
+   * the caller passes the same component the composer is replaced by, and
+   * this view stays ignorant of MLS (a conference draws it too).
+   */
+  publishWarning?: React.ReactNode;
   errorKey: CallErrorKey | null;
   onToggleMicrophone: () => void;
   onToggleCamera: () => void;
@@ -177,6 +186,8 @@ export function CallView({
   micEnabled,
   cameraEnabled,
   screenSharing,
+  encrypted = false,
+  publishWarning = null,
   errorKey,
   onToggleMicrophone,
   onToggleCamera,
@@ -187,6 +198,11 @@ export function CallView({
   const headingId = useId();
 
   const connected = status === "connected";
+  /* The three publish toggles are dead while the warning stands. Not merely
+     cosmetic: the session refuses them too (useCallSession), so this is the
+     control agreeing with the gate rather than being it — a button that
+     silently does nothing is the thing this file already refuses elsewhere. */
+  const canPublish = connected && publishWarning === null;
   // Beyond twelve the grid stops growing rather than shrinking everybody.
   const overflowing = participants.length > GRID_CELLS;
   const shown = overflowing ? participants.slice(0, GRID_CELLS - 1) : participants;
@@ -200,6 +216,29 @@ export function CallView({
           {t("calls.view.heading", { channel: channelTitle })}
         </h2>
       </div>
+
+      {/* UNDESIGNED — `call-encrypted-indicator` is PENDING in
+          docs/design/STATUS.md, so this is plain semantic HTML with no styling
+          beyond structure, per CLAUDE.md's UI pipeline.
+
+          What must survive the reskin is not the markup but the pairing: the
+          claim about content and the disclaimer about metadata are one
+          statement, and the artboard may not keep the first without the
+          second. A true sentence about what the server cannot read, standing
+          alone, is read by most people as a claim about who it cannot see —
+          which is the overclaim §2.4 forbids and the SFU cannot honour. */}
+      {encrypted ? (
+        <div className="hm-plumbing" aria-label={t("calls.encrypted.label")}>
+          <p>{t("calls.encrypted.label")}</p>
+          <p>{t("calls.encrypted.detail")}</p>
+          <p>{t("calls.encrypted.metadata")}</p>
+        </div>
+      ) : null}
+
+      {/* The mid-call form of the composer's warning, drawn above the stage so
+          somebody whose camera just went dark reads why before they start
+          testing hardware (BRIEFS.md §Media E2EE). Two exits, no third. */}
+      {publishWarning}
 
       {/* `call-screenshare`: persistent while sharing, and never a toast. "You
           are sharing" is the state people forget and then leak a window they
@@ -273,7 +312,7 @@ export function CallView({
               className="hm-call-control"
               aria-label={t("calls.control.microphone")}
               aria-pressed={micEnabled}
-              disabled={!connected}
+              disabled={!canPublish}
               onClick={onToggleMicrophone}
             >
               {micEnabled ? <MicIcon size={19} strokeWidth={1.85} /> : <MicOffIcon size={19} strokeWidth={1.85} />}
@@ -283,7 +322,7 @@ export function CallView({
               className="hm-call-control"
               aria-label={t("calls.control.camera")}
               aria-pressed={cameraEnabled}
-              disabled={!connected}
+              disabled={!canPublish}
               onClick={onToggleCamera}
             >
               {cameraEnabled ? (
@@ -299,7 +338,7 @@ export function CallView({
               className="hm-call-control hm-call-control--share"
               aria-label={t("calls.control.screenShare")}
               aria-pressed={screenSharing}
-              disabled={!connected}
+              disabled={!canPublish}
               onClick={onToggleScreenShare}
             >
               <MonitorIcon size={19} strokeWidth={1.85} />

@@ -1,0 +1,17 @@
+[package]
+name = "hamlaneh-desktop"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+description = "Tauri shell that points a native window at a Hamlaneh instance."
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# No serde, no serde_json and no plugins: the shell exposes no commands, so
+# nothing crosses the IPC boundary and nothing needs to be (de)serialised.
+# Cargo.lock is committed and is the actual pin — same argument the MLS
+# wrapper makes for its non-cryptographic dependencies.
+tauri = { version = "2", features = [] }

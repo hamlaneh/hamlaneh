@@ -95,7 +95,7 @@ func (s *apiServer) record(r *http.Request, ev AuditEvent) {
 	if prin, ok := principalFrom(r.Context()); ok {
 		ev.ActorID = prin.user.ID
 	}
-	ev.IP, _ = clientIP(r)
+	ev.IP, _ = s.clientIP(r)
 	s.audit.Record(r.Context(), ev)
 }
 
@@ -273,6 +273,54 @@ func (s *apiServer) UpdateOrgSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSONValue(w, r, http.StatusOK, apiOrgSettings(settings))
 }
 
+// SetOrgEncryptionMode changes what conversations this instance creates from
+// now on (ADR 011).
+//
+// It is its own endpoint rather than a field on the settings patch because
+// that screen saves as you type, and this is a decision an administrator
+// should have to mean. What it does NOT do is the part worth stating: it
+// writes one column of one row and reads no conversation at all, so there is
+// no path from here to a channel's flag or to a message. Switching modes
+// cannot decrypt what is already encrypted — this server holds no key — and
+// cannot un-store what was written in the clear.
+//
+// compliance is refused while the server-side half it promises does not
+// exist. That refusal is the honest half of defining the mode early, and it
+// is asserted in tests so it cannot rot into a reachable lie.
+func (s *apiServer) SetOrgEncryptionMode(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.requireStore(w, r)
+	if !ok {
+		return
+	}
+
+	var req api.SetEncryptionModeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if !req.EncryptionMode.Valid() {
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+			"encryption_mode must be one of: strict, compliance")
+		return
+	}
+	if req.EncryptionMode == api.Compliance {
+		writeError(w, r, http.StatusConflict, codeEncryptionModeLocked,
+			"compliance mode is not available yet: it needs encryption at rest, a retention policy and compliance export")
+		return
+	}
+
+	settings, err := store.SetEncryptionMode(r.Context(), string(req.EncryptionMode))
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
+
+	s.record(r, AuditEvent{
+		Action: "org.encryption_mode_changed",
+		Detail: map[string]any{"encryption_mode": settings.EncryptionMode},
+	})
+	writeJSONValue(w, r, http.StatusOK, apiOrgSettings(settings))
+}
+
 // validateOrgSettings enforces every UpdateOrgSettingsRequest bound the
 // contract states, and returns the patch alongside the fields it carries —
 // which is what the audit entry records, so the log says which switch moved
@@ -355,6 +403,7 @@ func apiAdminUser(u storage.User) api.AdminUser {
 // apiOrgSettings maps stored settings onto the contract shape.
 func apiOrgSettings(s storage.OrgSettings) api.OrgSettings {
 	count := s.AccountsWithoutTotp
+	encrypted, plaintext := s.EncryptedConversations, s.PlaintextConversations
 	return api.OrgSettings{
 		OrgName:              s.OrgName,
 		DefaultLocale:        api.OrgSettingsDefaultLocale(s.DefaultLocale),
@@ -362,6 +411,13 @@ func apiOrgSettings(s storage.OrgSettings) api.OrgSettings {
 		RequireTotp:          s.RequireTotp,
 		SsoJitProvisioning:   s.SsoJitProvisioning,
 		SessionLifetimeHours: s.SessionLifetimeHours,
-		AccountsWithoutTotp:  &count,
+		EncryptionMode:       api.EncryptionMode(s.EncryptionMode),
+		// Both totals, always sent: the switch confirmation names what will
+		// be outside the mode being chosen, which is the other set in each
+		// direction, and an absent count would read as zero on a screen
+		// about encryption.
+		EncryptedConversations: &encrypted,
+		PlaintextConversations: &plaintext,
+		AccountsWithoutTotp:    &count,
 	}
 }

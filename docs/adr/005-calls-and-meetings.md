@@ -223,4 +223,7 @@ a limitation.
   decides; nothing here worsens either branch.
 - Phase 3's one real tension with this design: conference guests have no identity for MLS key
   exchange, so strict mode must either exclude them from end-to-end encrypted conferences or
-  design a key-in-fragment scheme. Left genuinely open; nothing here forecloses either.
+  design a key-in-fragment scheme. Left genuinely open when this was written; **resolved by
+  [ADR 006](006-mls-library-and-boundaries.md)** — guests are excluded, the key-in-fragment
+  scheme is rejected because the server mints the link and could mint itself the key, and the
+  encryption boundary is the room kind, fixed at birth.

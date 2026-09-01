@@ -1,3 +1,5 @@
+import type { MediaKey } from "../mls/types";
+
 /**
  * The seam between the call UI and the media client.
  *
@@ -43,10 +45,47 @@ export interface MediaSession {
   setMicrophoneEnabled: (enabled: boolean) => Promise<void>;
   setCameraEnabled: (enabled: boolean) => Promise<void>;
   setScreenShareEnabled: (enabled: boolean) => Promise<void>;
+  /**
+   * Rotates the media key into the keyring slot its epoch names (ADR 009,
+   * decision 3). A no-op on an unencrypted session.
+   *
+   * Filling a new slot rather than overwriting the old one is what lets
+   * frames already in flight — sealed under the previous epoch — still
+   * decode while everyone catches up.
+   */
+  setKey: (key: MediaKey) => Promise<void>;
   disconnect: () => Promise<void>;
 }
 
-export type MediaConnect = (url: string, token: string) => Promise<MediaSession>;
+/**
+ * Connects to a room, encrypting its media when a key is given.
+ *
+ * The key is an argument rather than something set afterwards because the
+ * media client has to be built encrypting: a session that connected first and
+ * was keyed second would have a window in which it published in the clear,
+ * which is the exact downgrade the phase exists to prevent.
+ */
+export type MediaConnect = (
+  url: string,
+  token: string,
+  key?: MediaKey,
+) => Promise<MediaSession>;
+
+/**
+ * This browser cannot do insertable streams, so it cannot join an encrypted
+ * call at all (ADR 009, decision 2, gate 2).
+ *
+ * A distinct type because the honest answer here is a specific sentence: the
+ * one thing that must never happen is falling back to an unencrypted join,
+ * and an error the caller cannot tell apart from "the network failed" invites
+ * exactly that.
+ */
+export class CallEncryptionUnsupportedError extends Error {
+  constructor() {
+    super("this browser cannot encrypt call media");
+    this.name = "CallEncryptionUnsupportedError";
+  }
+}
 
 /**
  * Where the media server's signal endpoint is.

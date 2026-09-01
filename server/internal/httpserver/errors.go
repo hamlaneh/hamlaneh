@@ -38,7 +38,7 @@ const (
 	codeSSOUnavailable      errorCode = "sso_unavailable"
 	codeSSOAlreadyLinked    errorCode = "sso_already_linked"
 	codeSSONotLinked        errorCode = "sso_not_linked"
-	codeSSOUnlinkNoPassword errorCode = "sso_unlink_no_password"
+	codeSSOUnlinkNoPassword errorCode = "sso_unlink_no_password" // #nosec G101 -- a stable error code in the API contract, not a credential
 	codeSSOFailed           errorCode = "sso_failed"
 	codeSSOAccountExists    errorCode = "sso_account_exists"
 	codeSSOAccountUnknown   errorCode = "sso_account_unknown"
@@ -101,7 +101,7 @@ const (
 	// invitation revocation, which is idempotent, the contract reserves a
 	// 404 here — an administrator cutting a credential off needs to know
 	// when they named the wrong one.
-	codeScimTokenNotFound errorCode = "scim_token_not_found"
+	codeScimTokenNotFound errorCode = "scim_token_not_found" // #nosec G101 -- a stable error code in the API contract, not a credential
 	// Phase 2: calls. The instance has no media server configured, so there
 	// is no ticket to mint. Chat is unaffected, which is why this is a 503 on
 	// one endpoint rather than a degraded instance — the same shape
@@ -114,6 +114,84 @@ const (
 	// why it does not; a caller who may not revoke learns nothing about
 	// whether there was anything to revoke.
 	codeConferenceNotFound errorCode = "conference_not_found"
+	// Phase 3 slice 1: the E2EE transport (ADR 006).
+	//
+	// The first two are the anti-downgrade boundary, and they are two codes
+	// rather than one because they ask for opposite things from a client:
+	// encrypt this, and stop encrypting this. Collapsing them would leave a
+	// client unable to tell which side of the boundary it fell off, which is
+	// precisely the confusion a downgrade attempt would hide in.
+	//
+	// A third once said encrypted attachments do not exist yet
+	// (e2ee_attachments_unsupported). ADR 013 built them and retired it; the
+	// code below replaced it, and it says something narrower and permanent.
+	codeE2EERequired   errorCode = "e2ee_required"
+	codeE2EENotEnabled errorCode = "e2ee_not_enabled"
+	// The group lifecycle: no group yet (create one), a group already there
+	// (you lost the create race), and an epoch that has moved on (refetch the
+	// log and rebuild).
+	codeMlsGroupNotFound errorCode = "mls_group_not_found"
+	codeMlsGroupExists   errorCode = "mls_group_exists"
+	codeMlsEpochConflict errorCode = "mls_epoch_conflict"
+	// codeMemberNotFound answers a claim whose target is not a member of this
+	// channel. It is distinct from channel_not_found because the caller can
+	// already see the channel; what they got wrong is who they named.
+	codeMemberNotFound errorCode = "member_not_found"
+	// codeMlsDeviceNotFound answers a key-package publish under a device id
+	// that is not the caller's own, and one that names nothing at all, with
+	// one answer — so a guess confirms nothing about anybody else's devices.
+	//
+	// It is the only not-found code on this surface. Acknowledging a Welcome
+	// deliberately has none: that endpoint is a uniform 204, because a 404
+	// for foreign ids would itself be the distinguisher it looks like it
+	// prevents (openapi.yaml, acknowledgeMlsWelcome).
+	codeMlsDeviceNotFound errorCode = "mls_device_not_found"
+
+	// Phase 3 slice 5: encrypted backups (ADR 010).
+	//
+	// codeMlsBackupNotFound answers a fetch by an account that has stored no
+	// envelope. It is a state a person can genuinely be in — never enrolled,
+	// or turned it off — so it is a distinct code rather than the router's
+	// generic 404: the restore screen has to be able to say "the server says
+	// there is nothing here" instead of implying the recovery key was wrong.
+	//
+	// codeMlsBackupStale answers an upload whose counter does not move past
+	// the stored one. It is honestly a convenience: what it catches is two of
+	// the owner's own devices writing out of order, and it is worth nothing
+	// against a server that wants to serve an old blob — the control for that
+	// is the client's own floor against the counter sealed inside the
+	// envelope, which no answer this server gives can affect.
+	codeMlsBackupNotFound errorCode = "mls_backup_not_found"
+	codeMlsBackupStale    errorCode = "mls_backup_stale"
+
+	// Phase 3: the organisation encryption mode (ADR 011).
+	//
+	// The first two are the creation rule's two refusals, one per mode. They
+	// are refusals rather than silent coercion because an explicit flag that
+	// disagrees with the mode means the client's picture of the instance is
+	// stale at the exact moment it matters — fixing a property that can never
+	// be changed again — and handing somebody the opposite of what their
+	// screen said is how an immutable surprise is manufactured. The code is
+	// what teaches the client the real mode.
+	codeE2EERequiredByOrg  errorCode = "e2ee_required_by_org"
+	codeE2EEForbiddenByOrg errorCode = "e2ee_forbidden_by_org"
+
+	// Phase 3: encrypted attachments (ADR 013). An upload to an encrypted
+	// channel that declared a real filename or a real content type — the
+	// metadata the ciphertext beside it exists to hide.
+	//
+	// A refusal rather than a scrub, for e2eeAtBirth's reason: a client that
+	// sent salary-review.pdf is leaking by bug, and quietly storing
+	// "encrypted" instead would hide the bug while the leak — already in
+	// transit — recurred on every upload after it.
+	codeE2EEMetadataInClear errorCode = "e2ee_metadata_in_clear"
+	// codeEncryptionModeLocked answers an attempt to select compliance. The
+	// mode is defined from the first day and selectable only once the
+	// server-side half it promises — encryption at rest, retention, export —
+	// exists; until then it would deliver nothing but the absence of E2EE,
+	// which is the dishonest toggle the mode exists to avoid being.
+	codeEncryptionModeLocked errorCode = "encryption_mode_locked"
+
 	// codeNotFound answers a path under /api that no contract route claims.
 	// It is the router's answer, not a resource's: the contract's
 	// resource-level 404s carry their own codes (session_not_found,
@@ -212,13 +290,23 @@ func writeJSONValue(w http.ResponseWriter, r *http.Request, status int, v any) {
 	writeBody(w, r, data)
 }
 
+// maxJSONBody bounds an ordinary JSON request: far above any valid one, and
+// small enough that an authenticated caller cannot buy memory with it.
+const maxJSONBody = 64 << 10
+
 // decodeJSON reads a bounded JSON request body into dst. On any failure —
 // oversized body, malformed JSON, wrong field types, trailing content — it
 // answers 400 invalid_request and reports false.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	const maxJSONBody = 64 << 10 // far above any valid request; bounds DoS
+	return decodeJSONLimit(w, r, dst, maxJSONBody)
+}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBody)
+// decodeJSONLimit is decodeJSON with an explicit ceiling, for the two MLS
+// endpoints whose contract bounds do not fit under the ordinary one: a batch
+// of key packages and a commit carrying its Welcomes. Every use states its
+// own number and why (mls_handlers.go).
+func decodeJSONLimit(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(dst); err != nil {
 		writeError(w, r, http.StatusBadRequest, codeInvalidRequest, "malformed request body")

@@ -30,7 +30,7 @@ func tokensFor(access, refresh string) storage.SessionTokens {
 	}
 }
 
-func mustCreateSession(ctx context.Context, t *testing.T, store *storage.Store, userID uuid.UUID, tokens storage.SessionTokens) storage.Session {
+func mustCreateSession(ctx context.Context, t *testing.T, store testdb.Store, userID uuid.UUID, tokens storage.SessionTokens) storage.Session {
 	t.Helper()
 	sess, err := store.CreateSession(ctx, storage.NewSession{UserID: userID, SessionTokens: tokens})
 	if err != nil {

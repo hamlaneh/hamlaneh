@@ -56,7 +56,7 @@ func TestSecurityHeaders(t *testing.T) {
 	t.Parallel()
 
 	const wantCSP = "default-src 'self'; " +
-		"script-src 'self'; " +
+		"script-src 'self' 'wasm-unsafe-eval'; " +
 		"style-src 'self'; " +
 		"connect-src 'self'; " +
 		"img-src 'self'; " +
@@ -108,6 +108,15 @@ func TestSecurityHeaders(t *testing.T) {
 // TestCSPForbidsUnsafeSources reads the shipped policy, not a copy of it, so
 // a weakening cannot be made to pass by editing a test expectation. If the
 // app ever appears to need one of these, the app is what needs fixing.
+//
+// THE SUBSTRING TRAP, which is why every entry below is a QUOTED token: the
+// policy legitimately carries 'wasm-unsafe-eval', and the bare string
+// "unsafe-eval" is a substring of it. A check written without the quotes
+// would fail on the allowance the app depends on, and whoever hit that would
+// most likely "fix" it by deleting the check — turning a real guard into
+// nothing. With the quotes the two are distinct: 'wasm-unsafe-eval' does not
+// contain 'unsafe-eval', because the character before "unsafe-eval" is a
+// dash, not a quote. Do not relax these to bare substrings.
 func TestCSPForbidsUnsafeSources(t *testing.T) {
 	t.Parallel()
 
@@ -116,6 +125,23 @@ func TestCSPForbidsUnsafeSources(t *testing.T) {
 		if strings.Contains(httpserver.ContentSecurityPolicy, source) {
 			t.Errorf("CSP contains %s: %q", source, httpserver.ContentSecurityPolicy)
 		}
+	}
+
+	// The other half of the trap, and what keeps the loop above from being
+	// vacuously true: the wasm allowance really is in script-src, so the
+	// quoted check is proved to be discriminating rather than accidentally
+	// passing. It is also the regression guard for the bug this test was
+	// amended for — dropping the token silently turns E2EE off in the
+	// browser rather than failing anything (ADR 006, securityheaders.go).
+	var scriptSrc string
+	for _, directive := range strings.Split(httpserver.ContentSecurityPolicy, "; ") {
+		if strings.HasPrefix(directive, "script-src") {
+			scriptSrc = directive
+		}
+	}
+	if !strings.Contains(scriptSrc, "'wasm-unsafe-eval'") {
+		t.Errorf("script-src = %q, want it to permit WebAssembly: without "+
+			"'wasm-unsafe-eval' no browser can run the MLS core", scriptSrc)
 	}
 	// data: is legitimate in some directives and catastrophic in script-src.
 	for _, directive := range strings.Split(httpserver.ContentSecurityPolicy, "; ") {

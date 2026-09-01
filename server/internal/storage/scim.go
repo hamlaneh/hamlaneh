@@ -45,7 +45,7 @@ type ScimTokenCreator struct {
 
 // scimTokenColumns is the projection every token query selects, in the order
 // scanScimToken expects.
-const scimTokenColumns = `t.id, t.note, t.created_at, t.last_used_at, u.id, u.username, u.display_name`
+const scimTokenColumns = `t.id, t.note, t.created_at, t.last_used_at, u.id, u.username, u.display_name` // #nosec G101 -- a SELECT list; matched only because the identifier says "Token". The token itself is never stored, only its SHA-256.
 
 // CreateScimToken stores one provisioning credential and returns it.
 // tokenHash is the SHA-256 digest of the generated token; the raw value

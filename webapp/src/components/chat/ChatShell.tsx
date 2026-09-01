@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router";
 
 import { isolateAuto, isolateLtr } from "../../i18n/bidi";
+import { callKeyState } from "../../calls/e2ee";
 import type { MediaConnect } from "../../calls/media";
 import { useCallSession } from "../../calls/useCallSession";
 import { PRESENCE_LABEL_KEY } from "../../chat/presence";
@@ -11,7 +12,11 @@ import type { Channel, Presence, User, UserSummary } from "../../chat/types";
 import { useChat } from "../../chat/useChat";
 import type { RealtimeOverrides } from "../../chat/useChat";
 import { isUuid } from "../../chat/uuid";
+import { bornEncrypted } from "../../instance/encryptionMode";
 import { useInstance } from "../../instance/instanceInfo";
+import { MessageBodyProvider } from "../../mls/MessageBodyContext";
+import { needsAttention } from "../../mls/types";
+import { useMls } from "../../mls/useMls";
 import { CallRing } from "../calls/CallRing";
 import type { AwayCall } from "../calls/CallStrip";
 import { CallStrip } from "../calls/CallStrip";
@@ -19,6 +24,7 @@ import { CallView } from "../calls/CallView";
 import { ChatHeader } from "./ChatHeader";
 import { Composer } from "./Composer";
 import { ConnectionBanner } from "./ConnectionBanner";
+import { E2eeNotice } from "./E2eeNotice";
 import { EmptyChannel } from "./EmptyChannel";
 import { MessageList } from "./MessageList";
 import { SearchResultsPanel } from "./SearchResultsPanel";
@@ -27,6 +33,8 @@ import { AccountMenu } from "./plumbing/AccountMenu";
 import { ChannelMenu } from "./plumbing/ChannelMenu";
 import { CreateChannelDialog } from "./plumbing/CreateChannelDialog";
 import { PeoplePicker } from "./plumbing/PeoplePicker";
+import { BackupIndicator, BackupSurfaces } from "./plumbing/BackupPlumbing";
+import { VerificationSheet, VerificationWarning } from "./plumbing/Verification";
 import { SettingsPanel } from "../settings/SettingsPanel";
 
 export interface ChatShellProps {
@@ -101,17 +109,46 @@ export function ChatShell({
   const focusMessageId =
     params.messageId !== undefined && isUuid(params.messageId) ? params.messageId : undefined;
 
+  // Constructed for every session, but inert until an encrypted conversation
+  // is opened: no wasm is fetched and no keystore is touched before then.
+  const mls = useMls(currentUser.id);
+
   const chat = useChat({
     currentUser: me,
     channelId: params.channelId,
     focusMessageId,
     callsEnabled,
+    mls,
     ...(realtime === undefined ? {} : { realtime }),
   });
 
-  const call = useCallSession(media);
-
+  /*
+   * WHAT ENCRYPTION SAYS ABOUT A CALL, asked per target rather than computed
+   * here (ADR 009, decision 2).
+   *
+   * A callback because the call session decides its own target and the answer
+   * depends on it. The room kind is fixed by the fact that this shell is a
+   * member session at all: it mints channel tickets, so every room it enters
+   * is `chan-`. A conference guest runs `MeetGuestScreen`, which passes no
+   * resolver and is therefore never keyed — the boundary is the join path,
+   * and no server signal can move it.
+   */
   const { state, activeChannel, view, markRead } = chat;
+
+  const channels = state.channels;
+  const mlsState = mls.state;
+  const mlsMediaKey = mls.mediaKey;
+  const resolveCallKey = useCallback(
+    (channelId: string) =>
+      callKeyState(
+        channels.find((channel) => channel.id === channelId),
+        mlsState,
+        mlsMediaKey,
+      ),
+    [channels, mlsState, mlsMediaKey],
+  );
+
+  const call = useCallSession(media, undefined, resolveCallKey);
 
   /* Landing on "/" opens the first conversation, which is what the sidebar's
    * own order says is first. */
@@ -176,6 +213,10 @@ export function ChatShell({
    * and a sentence waiting on a channel nobody is looking at is not one. */
   const callTarget = call.target;
   const callChannel = state.channels.find((channel) => channel.id === callTarget);
+  /* Whose keys stopped this device publishing — the CALL's conversation, not
+     the one being read. Somebody can walk away from a call into another
+     channel, and the warning has to keep naming the right people. */
+  const callVerification = callTarget === null ? undefined : mls.state.verification[callTarget];
   const inCall = callsEnabled && call.status !== "idle";
   const callOver = callsEnabled && call.status === "idle" && call.errorKey !== null;
   /** The call is in the conversation being read, so it takes the pane's top. */
@@ -204,8 +245,39 @@ export function ChatShell({
     chat.runSearch(query, kind);
   };
 
+  /*
+   * An encrypted channel whose group is not usable yet must not accept a
+   * message: the composer would take text the send path then refuses to put
+   * anywhere, and a queued message nobody can read is worse than a disabled
+   * field that says why.
+   */
+  const channelMls = activeChannel === undefined ? undefined : mls.state.channels[activeChannel.id];
+  const encryptionNotReady =
+    activeChannel?.e2ee === true &&
+    (mls.state.device.status === "unavailable" ||
+      channelMls === undefined ||
+      channelMls.status === "opening" ||
+      channelMls.status === "waiting" ||
+      channelMls.status === "failed");
+
+  /*
+   * The second, independent reason a composer can be withheld (ADR 008). It is
+   * NOT folded into `encryptionNotReady`: that one says the group is not usable
+   * and the answer is to wait, while this one says the group is perfectly
+   * usable and holds a key nobody here has accepted — and the answer is a
+   * decision only a human can make. A conversation can be `ready` and blocked
+   * at the same time, and the composer is replaced rather than merely disabled,
+   * because there is something to do here and waiting is not it.
+   */
+  const channelVerification =
+    activeChannel === undefined ? undefined : mls.state.verification[activeChannel.id];
+  const verificationBlocked = activeChannel?.e2ee === true && needsAttention(channelVerification);
+
+  /* The per-person sheet, opened from the warning. Null when closed. */
+  const [verifyFor, setVerifyFor] = useState<string | null>(null);
+
   return (
-    <>
+    <MessageBodyProvider resolve={mls.bodyOf}>
       {/* The chat behind the panel is inert, not merely dimmed — the settings
           handoff's accessibility note. */}
       <div className="hm-chat" inert={settingsOpen}>
@@ -278,6 +350,15 @@ export function ChatShell({
                   setOverlay("invite");
                 }}
                 onSetTopic={chat.setTopic}
+                onVerify={
+                  activeChannel.e2ee && activeChannel.dm_peer !== undefined
+                    ? () => {
+                        const peerId = activeChannel.dm_peer?.id;
+                        closeOverlay();
+                        setVerifyFor(peerId ?? null);
+                      }
+                    : undefined
+                }
                 onClose={closeOverlay}
               />
             ) : null
@@ -289,6 +370,38 @@ export function ChatShell({
           justReconnected={state.justReconnected}
           onSettled={chat.settleConnection}
         />
+
+        {/* The recovery surfaces (ADR 010). A backup is an account-level thing
+            rather than a property of whichever conversation is open, and these
+            used to sit at the shell root to say so — floating, because the
+            root is the sidebar/conversation ROW and an in-flow child there is
+            a third column, not a banner. Floating is what put the offer on top
+            of the call button for every new account once encryption became the
+            default.
+
+            The conversation column is the only vertical stack in the shell, so
+            it is where a banner goes whatever the banner is about; the
+            connection banner directly above says nothing about the open
+            conversation either. In flow here it takes real height, the message
+            list gives it up (`flex: 1; min-block-size: 0`), and it covers
+            nothing.
+
+            The slot is fixed rather than conditional so the component is never
+            remounted by a sibling appearing or a channel switching: the
+            ceremony holds the one copy of the recovery key in component state,
+            and a remount mid-ceremony would lose it for good. */}
+        <BackupSurfaces
+          backup={mls.state.backup}
+          deviceReady={mls.state.device.status === "ready"}
+          onEnable={mls.enableBackup}
+          onDecline={() => {
+            void mls.declineBackup();
+          }}
+          onOpen={mls.openBackup}
+          onApply={mls.applyRestore}
+          onDiscard={mls.discardRestore}
+        />
+        <BackupIndicator backup={mls.state.backup} />
 
         {/* The strip is for people not looking at the call: it is absent once
             this channel's call is the one drawn below, and it takes the
@@ -320,6 +433,32 @@ export function ChatShell({
             micEnabled={call.micEnabled}
             cameraEnabled={call.cameraEnabled}
             screenSharing={call.screenSharing}
+            encrypted={call.encrypted}
+            /* The composer's warning, said for a call: the same records, the
+               same two exits, the same absence of a third (ADR 009). It is
+               driven by the CALL's conversation rather than the one on
+               screen, because that is whose keys stopped this device. */
+            publishWarning={
+              call.publishBlocked ? (
+                <VerificationWarning
+                  changed={(callVerification?.changed ?? []).filter(
+                    (member) => member.userId !== currentUser.id,
+                  )}
+                  uncoveredLeaves={callVerification?.uncoveredLeaves ?? 0}
+                  own={mls.state.ownDevices}
+                  resolveName={chat.resolveMention}
+                  headline={t("calls.blocked.title")}
+                  continues={t("calls.blocked.continues")}
+                  onCompare={setVerifyFor}
+                  onAccept={(userId) => {
+                    void mls.acceptPeer(userId);
+                  }}
+                  onAcceptOwn={() => {
+                    void mls.acceptOwnDevices();
+                  }}
+                />
+              ) : null
+            }
             errorKey={call.errorKey}
             onToggleMicrophone={call.toggleMicrophone}
             onToggleCamera={call.toggleCamera}
@@ -327,6 +466,15 @@ export function ChatShell({
             onLeave={call.leave}
           />
         ) : null}
+
+        {activeChannel === undefined ? null : (
+          <E2eeNotice
+            channel={activeChannel}
+            device={mls.state.device}
+            channelState={channelMls}
+            resolveName={chat.resolveMention}
+          />
+        )}
 
         {activeChannel === undefined ? (
           <div className="hm-messages">
@@ -392,17 +540,38 @@ export function ChatShell({
           />
         )}
 
-        {activeChannel === undefined ? null : (
+        {activeChannel === undefined ? null : verificationBlocked ? (
+          /* Replaced, not disabled: reading and receiving carry on normally,
+             and there is exactly one way back — a decision about the keys. */
+          <VerificationWarning
+            changed={(channelVerification?.changed ?? []).filter(
+              (member) => member.userId !== currentUser.id,
+            )}
+            uncoveredLeaves={channelVerification?.uncoveredLeaves ?? 0}
+            own={mls.state.ownDevices}
+            resolveName={chat.resolveMention}
+            onCompare={setVerifyFor}
+            onAccept={(userId) => {
+              void mls.acceptPeer(userId);
+            }}
+            onAcceptOwn={() => {
+              void mls.acceptOwnDevices();
+            }}
+          />
+        ) : (
           <Composer
             channelId={activeChannel.id}
+            e2ee={activeChannel.e2ee}
             target={composerTarget}
-            disabled={disconnected}
+            disabled={disconnected || encryptionNotReady}
             disabledReason={
               givenUp
                 ? t("chat.composer.closed")
                 : disconnected
                   ? t("chat.composer.disconnected")
-                  : null
+                  : encryptionNotReady
+                    ? t("chat.e2ee.composerNotReady")
+                    : null
             }
             onSend={chat.sendMessage}
           />
@@ -420,13 +589,14 @@ export function ChatShell({
 
       {overlay === "createChannel" ? (
         <CreateChannelDialog
-          onCreate={async (slug, kind) => {
-            const channel = await chat.createChannel(slug, kind);
-            if (channel === null) {
-              return false;
+          mode={info.encryption_mode}
+          onCreate={async (slug, kind, e2ee) => {
+            const result = await chat.createChannel(slug, kind, e2ee);
+            if ("error" in result) {
+              return result.error;
             }
-            await navigate(`/c/${channel.id}`);
-            return true;
+            await navigate(`/c/${result.channel.id}`);
+            return null;
           }}
           onClose={closeOverlay}
         />
@@ -436,7 +606,7 @@ export function ChatShell({
         <PeoplePicker
           title={t("chat.empty.invite")}
           actionLabel={t("chat.people.invite")}
-          onPick={(user) => chat.inviteMember(user.id)}
+          onPick={async (user) => ((await chat.inviteMember(user.id)) ? null : "unexpected")}
           onClose={closeOverlay}
         />
       ) : null}
@@ -445,17 +615,45 @@ export function ChatShell({
         <PeoplePicker
           title={t("chat.sidebar.newDirectMessage")}
           actionLabel={t("chat.people.message")}
+          encryptionMode={info.encryption_mode}
           onPick={async (user) => {
-            const channel = await chat.openDirectMessage(user.id);
-            if (channel === null) {
-              return false;
+            // The mode's value, asserted rather than omitted, so a stale view
+            // of it is refused by name instead of silently creating a DM whose
+            // encryption is the opposite of what the picker just promised.
+            const result = await chat.openDirectMessage(
+              user.id,
+              bornEncrypted(info.encryption_mode),
+            );
+            if ("error" in result) {
+              return result.error;
             }
-            await navigate(`/c/${channel.id}`);
-            return true;
+            await navigate(`/c/${result.channel.id}`);
+            return null;
           }}
           onClose={closeOverlay}
         />
       ) : null}
+
+      {verifyFor === null ? null : (
+        <VerificationSheet
+          /* Remounted per person, so the number on screen can never be the
+             previous person's while the new one is still being worked out. */
+          key={verifyFor}
+          userId={verifyFor}
+          name={chat.resolveMention(verifyFor) ?? verifyFor}
+          level={mls.state.records[verifyFor]?.level ?? null}
+          safetyNumberFor={mls.safetyNumberFor}
+          onVerify={(userId) => {
+            void mls.verifyPeer(userId);
+          }}
+          onAccept={(userId) => {
+            void mls.acceptPeer(userId);
+          }}
+          onClose={() => {
+            setVerifyFor(null);
+          }}
+        />
+      )}
       </div>
 
       {/* Outside the chat container, so a ring is still answerable while the
@@ -480,6 +678,6 @@ export function ChatShell({
           }}
         />
       ) : null}
-    </>
+    </MessageBodyProvider>
   );
 }

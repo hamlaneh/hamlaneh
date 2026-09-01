@@ -1,0 +1,43 @@
+# Tests in internal/storage that run on the PostgreSQL driver only.
+#
+# Every other test in this package runs on BOTH drivers and must pass on both
+# (ADR 012, decision 3). A test earns a line here only by asserting PostgreSQL
+# MECHANISM rather than contract outcome — how PostgreSQL serializes, what pgx
+# registers, what information_schema reports — never merely because it was
+# easier to leave it behind.
+#
+# The list is diffed against the tests that actually called
+# testdb.RequiresPostgres, in both directions, on both legs of the matrix
+# (main_test.go). A skip cannot appear here without a line, and a line cannot
+# survive a test that stopped skipping.
+#
+# One test name per line, exactly as t.Name() reports it. Keep it sorted.
+
+# EXPLAIN against migration 0007's GIN pg_trgm index over the filename fold.
+# The SQLite tree deliberately builds no index there (0007 in that tree says
+# so): the same fold is applied in Go, over a scan.
+TestFileSearchUsesTrigramIndexIntegration
+
+# pgx registers the citext type on a connection. SQLite has no type to
+# register — citext there is a Go collation the driver installs itself — so
+# the error contract this pins does not exist on that side.
+TestRegisterCitextIntegration
+
+# Asserts a removal does NOT queue behind an in-flight add: FOR NO KEY UPDATE
+# against KEY SHARE. SQLite has no row locks at all, so the uncommitted insert
+# this test holds open owns the single write lock and the removal correctly
+# waits it out. False by design there, not broken.
+TestRemoveChannelMemberDoesNotBlockOnAddIntegration
+
+# Pins the Go fold to migration 0006's translate() index expression. The
+# SQLite tree builds no such expression — it applies storage.FoldSearchText in
+# Go — so there is nothing on that side to compare the Go fold against.
+TestSearchFoldingMatchesSQLIntegration
+
+# EXPLAIN against migration 0006's GIN pg_trgm index over the message fold.
+TestSearchUsesTrigramIndexIntegration
+
+# Drives storage.Open — the PostgreSQL driver's own constructor, which home
+# mode never calls — against a DSN, and asserts information_schema column
+# shapes and the schema_migrations bookkeeping golang-migrate keeps.
+TestStorageIntegration
