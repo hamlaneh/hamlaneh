@@ -265,7 +265,7 @@ func (s *apiServer) CompleteTotpLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	addr, ipKey := clientIP(r)
+	addr, ipKey := s.clientIP(r)
 	if s.totpIPLimiter.Limited(ipKey) {
 		writeRateLimited(w, r, s.totpIPLimiter.RetryAfter(ipKey))
 		return

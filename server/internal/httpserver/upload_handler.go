@@ -28,13 +28,30 @@ const maxUploadBytes int64 = 25 << 20
 // path (internal/blobstore).
 const maxFilenameLen = 255
 
-// uploadFormField is the multipart field the contract names.
-const uploadFormField = "file"
+// uploadFormField is the multipart field the contract names, and
+// thumbFormField is the optional one that may follow it on an e2ee channel.
+const (
+	uploadFormField = "file"
+	thumbFormField  = "thumb"
+)
 
 // defaultUploadType is what an upload with no declared content type is
 // labelled. Unlabelled means opaque, which is the safe end of the ADR's rule:
 // only a part that declares an image is ever considered for inline serving.
 const defaultUploadType = "application/octet-stream"
+
+// encryptedFilename is the literal name an e2ee upload must declare and the
+// only name one is ever stored under (ADR 013). It is a constant rather than
+// an empty string because migration 0007 requires a filename of at least one
+// character, and it is compared byte for byte — none of uploadFilename's
+// path-stripping and trimming applies, so nothing can be reduced into it.
+const encryptedFilename = "encrypted"
+
+// maxThumbBytes bounds the client-derived thumbnail an e2ee upload may carry
+// beside its ciphertext. It widens the request body by exactly this much and
+// nothing else: maxUploadBytes is unchanged and still bounds the file part
+// itself, so the megabyte allowed here can never be borrowed by the file.
+const maxThumbBytes int64 = 1 << 20
 
 // UploadFile stores one file into a channel.
 //
@@ -52,6 +69,15 @@ const defaultUploadType = "application/octet-stream"
 // Everything else is stored byte for byte as an opaque blob and served as a
 // download, which is what makes an uploaded SVG or HTML page a file the
 // reader saves rather than a page their browser runs.
+//
+// On an e2ee channel none of that paragraph can apply and none of it runs
+// (ADR 013). The bytes are ciphertext, so there is nothing to sniff, nothing
+// to strip and nothing to thumbnail; the metadata must therefore arrive as
+// the placeholders storeEncrypted insists on, and the row is filled from
+// this package's own constants rather than from anything the client sent.
+// The two regimes are separate branches rather than a shared path with
+// conditionals, because the property that matters is that the image pipeline
+// is unreachable from the encrypted one, not that it is skipped.
 func (s *apiServer) UploadFile(w http.ResponseWriter, r *http.Request, channelID api.ChannelId) {
 	sc, ok := s.resolveChannel(w, r, channelID)
 	if !ok {
@@ -66,41 +92,37 @@ func (s *apiServer) UploadFile(w http.ResponseWriter, r *http.Request, channelID
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
-	part, ok := filePart(w, r)
-	if !ok {
-		return
+	// The channel's mode is fixed at creation and cannot change under this
+	// request, so the regime chosen here is the regime the row is stored
+	// under. An e2ee body may carry a second part, and only its own cap
+	// widens: maxUploadBytes still bounds the file part below.
+	e2ee := sc.channel.E2EE
+	bodyCap := maxUploadBytes
+	if e2ee {
+		bodyCap += maxThumbBytes
 	}
-	defer func() {
-		if err := part.Close(); err != nil {
-			slog.Debug("close upload part", "error", err)
-		}
-	}()
+	r.Body = http.MaxBytesReader(w, r.Body, bodyCap)
 
-	filename, ok := uploadFilename(w, r, part)
+	mr, part, ok := filePart(w, r)
 	if !ok {
 		return
 	}
-	declared := declaredType(part)
 
 	// One id for the row and for every blob under it. It is generated here,
 	// before anything is written, because the bytes have to land at a path
 	// only the server chose — never one derived from what the client sent.
 	id := uuid.New()
-	na := storage.NewAttachment{
-		ID:          id,
-		ChannelID:   channelID,
-		UploaderID:  sc.prin.user.ID,
-		Filename:    filename,
-		ContentType: declared,
-	}
+	na := storage.NewAttachment{ID: id, ChannelID: channelID, UploaderID: sc.prin.user.ID}
 
-	if strings.HasPrefix(declared, "image/") {
-		ok = s.storeImage(w, r, id, part, &na)
+	if e2ee {
+		ok = s.storeEncrypted(w, r, id, part, &na)
 	} else {
-		ok = s.storeBlob(w, r, id, part, &na)
+		ok = s.storePlaintext(w, r, id, part, &na)
 	}
 	if !ok {
+		return
+	}
+	if !s.takeThumbPart(w, r, id, mr, e2ee, &na) {
 		return
 	}
 
@@ -119,26 +141,163 @@ func (s *apiServer) UploadFile(w http.ResponseWriter, r *http.Request, channelID
 	writeJSONValue(w, r, http.StatusCreated, api.AttachmentOf(att, s.fileSigner))
 }
 
-// storeBlob streams an opaque upload straight to disk, filling in the size
-// it turned out to be. Nothing buffers the file: the bytes go from the
-// socket to the blob, and the cap is the reader's to enforce.
-func (s *apiServer) storeBlob(w http.ResponseWriter, r *http.Request,
-	id uuid.UUID, part io.Reader, na *storage.NewAttachment,
+// storePlaintext is the ADR 003 pipeline: the client's own name and label,
+// the sniff-strip-thumbnail path for a declared image, and byte-for-byte
+// storage for everything else.
+func (s *apiServer) storePlaintext(w http.ResponseWriter, r *http.Request,
+	id uuid.UUID, part *multipart.Part, na *storage.NewAttachment,
 ) bool {
-	f, err := s.blobs.Create(id, blobstore.Original)
+	filename, ok := uploadFilename(w, r, part)
+	if !ok {
+		return false
+	}
+	na.Filename = filename
+	na.ContentType = declaredType(part)
+
+	if strings.HasPrefix(na.ContentType, "image/") {
+		return s.storeImage(w, r, id, part, na)
+	}
+	return s.storeOriginal(w, r, id, part, na)
+}
+
+// storeEncrypted is the e2ee pipeline (ADR 013): prove the part declares
+// nothing about the plaintext, then store the ciphertext opaquely.
+//
+// The row's name and type are this package's constants, not the part's. That
+// is what makes the placeholder a property of the code rather than of the
+// check above it: even a bug that let a real filename past the refusal could
+// not put one in the column.
+func (s *apiServer) storeEncrypted(w http.ResponseWriter, r *http.Request,
+	id uuid.UUID, part *multipart.Part, na *storage.NewAttachment,
+) bool {
+	if declaredFilename(part) != encryptedFilename || !opaquelyDeclared(part) {
+		writeError(w, r, http.StatusBadRequest, codeE2EEMetadataInClear,
+			"on an end-to-end encrypted channel the file part must be named "+
+				encryptedFilename+" and declare no content type but "+defaultUploadType)
+		return false
+	}
+	na.Filename = encryptedFilename
+	na.ContentType = defaultUploadType
+	return s.storeOriginal(w, r, id, part, na)
+}
+
+// declaredFilename is the part's filename parameter exactly as the client
+// wrote it, or "" when there is none or the header will not parse.
+//
+// It is deliberately not multipart.Part.FileName, which applies RFC 7578's
+// basename reduction. That reduction is right for a plaintext upload — it is
+// what keeps a directory tree off the card — but wrong here, where the whole
+// claim is that the client said nothing: "/home/amir/q3-layoffs/encrypted"
+// reduces to the placeholder and would pass, having named a directory this
+// server has no business being told about.
+func declaredFilename(part *multipart.Part) string {
+	_, params, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
 	if err != nil {
-		internalError(w, r, err)
+		return ""
+	}
+	return params["filename"]
+}
+
+// opaquelyDeclared reports that the part named a content type of absent or
+// application/octet-stream, and nothing else.
+//
+// An unparseable header is a refusal rather than the opaque default
+// declaredType falls back to: on this path the question is not "what shall we
+// label this" but "did the client say something about the plaintext", and a
+// header nobody can parse is not an answer of no.
+func opaquelyDeclared(part *multipart.Part) bool {
+	declared := part.Header.Get("Content-Type")
+	if declared == "" {
+		return true
+	}
+	mediaType, _, err := mime.ParseMediaType(declared)
+	return err == nil && mediaType == defaultUploadType
+}
+
+// takeThumbPart handles whatever follows the file part: on an e2ee channel a
+// client-encrypted thumbnail, anywhere else a refusal.
+//
+// A plaintext channel derives its own preview from bytes it can read, so a
+// supplied one is refused rather than trusted — the same both-directions
+// discipline e2eeBody applies to a message. The scan runs on both regimes so
+// that refusal is real; parts that are not the thumb are skipped, as they are
+// before the file part.
+func (s *apiServer) takeThumbPart(w http.ResponseWriter, r *http.Request,
+	id uuid.UUID, mr *multipart.Reader, e2ee bool, na *storage.NewAttachment,
+) bool {
+	part, ok := thumbPart(w, r, mr)
+	if !ok {
+		s.deleteBlobs(id)
+		return false
+	}
+	if part == nil {
+		return true
+	}
+	if !e2ee {
+		s.deleteBlobs(id)
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+			"a "+thumbFormField+" part is accepted only on an end-to-end encrypted channel")
 		return false
 	}
 
-	size, copyErr := io.Copy(f, part)
-	closeErr := f.Close()
-	if err := errors.Join(copyErr, closeErr); err != nil {
+	size, ok := s.storeBlob(w, r, id, blobstore.Thumbnail, part, maxThumbBytes)
+	if !ok {
+		return false
+	}
+	if size > maxThumbBytes {
 		s.deleteBlobs(id)
-		return uploadReadFailed(w, r, err)
+		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+			"the "+thumbFormField+" part is larger than this instance accepts")
+		return false
+	}
+	na.HasThumbnail = true
+	return true
+}
+
+// storeOriginal streams the uploaded bytes into the original blob and
+// records the size they turned out to be, refusing anything past the
+// published cap.
+func (s *apiServer) storeOriginal(w http.ResponseWriter, r *http.Request,
+	id uuid.UUID, part io.Reader, na *storage.NewAttachment,
+) bool {
+	size, ok := s.storeBlob(w, r, id, blobstore.Original, part, maxUploadBytes)
+	if !ok {
+		return false
+	}
+	if size > maxUploadBytes {
+		s.deleteBlobs(id)
+		writeFileTooLarge(w, r)
+		return false
 	}
 	na.SizeBytes = size
 	return true
+}
+
+// storeBlob streams one part straight to disk and reports how many bytes it
+// held. Nothing buffers the file: the bytes go from the socket to the blob.
+//
+// It reads one byte past limit and hands the count back rather than deciding
+// anything, because the two callers refuse an over-limit part differently: a
+// file past the published cap is the contract's 413, an oversized thumb is a
+// 400. The limit is per PART, which is what the body cap cannot express once
+// a body may carry two of them.
+func (s *apiServer) storeBlob(w http.ResponseWriter, r *http.Request,
+	id uuid.UUID, variant blobstore.Variant, part io.Reader, limit int64,
+) (int64, bool) {
+	f, err := s.blobs.Create(id, variant)
+	if err != nil {
+		s.deleteBlobs(id)
+		internalError(w, r, err)
+		return 0, false
+	}
+
+	size, copyErr := io.Copy(f, io.LimitReader(part, limit+1))
+	closeErr := f.Close()
+	if err := errors.Join(copyErr, closeErr); err != nil {
+		s.deleteBlobs(id)
+		return 0, uploadReadFailed(w, r, err)
+	}
+	return size, true
 }
 
 // storeImage reads an image upload, proves the bytes are the type the label
@@ -236,35 +395,70 @@ func writeFileTooLarge(w http.ResponseWriter, r *http.Request) {
 }
 
 // filePart advances the multipart stream to the part the contract names and
-// returns it. Parts before it are skipped rather than refused — a form
+// returns it, along with the reader it came from so the caller can look for
+// what follows. Parts before it are skipped rather than refused — a form
 // library may send its own — and everything is streamed: ParseMultipartForm
 // would spool the whole request to a temporary file first, which is exactly
 // the memory and disk the cap exists to avoid spending.
-func filePart(w http.ResponseWriter, r *http.Request) (*multipart.Part, bool) {
+func filePart(w http.ResponseWriter, r *http.Request) (*multipart.Reader, *multipart.Part, bool) {
 	mr, err := r.MultipartReader()
 	if err != nil {
 		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
 			"this endpoint takes a multipart/form-data body")
-		return nil, false
+		return nil, nil, false
 	}
 
 	for {
-		part, err := mr.NextPart()
-		if errors.Is(err, io.EOF) {
-			writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
-				"the request has no "+uploadFormField+" part")
-			return nil, false
-		}
-		if err != nil {
-			uploadReadFailed(w, r, err)
-			return nil, false
+		part, err := nextPart(w, r, mr)
+		if part == nil {
+			if err == nil {
+				writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
+					"the request has no "+uploadFormField+" part")
+			}
+			return nil, nil, false
 		}
 		if part.FormName() == uploadFormField {
+			return mr, part, true
+		}
+		closePart(part)
+	}
+}
+
+// thumbPart advances past the file part to an optional part named thumb.
+// A nil part with ok reports that the body simply ended, which is the common
+// case: a thumb is optional even on an e2ee channel.
+func thumbPart(w http.ResponseWriter, r *http.Request, mr *multipart.Reader) (*multipart.Part, bool) {
+	for {
+		part, err := nextPart(w, r, mr)
+		if part == nil {
+			return nil, err == nil
+		}
+		if part.FormName() == thumbFormField {
 			return part, true
 		}
-		if closeErr := part.Close(); closeErr != nil {
-			slog.Debug("close skipped upload part", "error", closeErr)
-		}
+		closePart(part)
+	}
+}
+
+// nextPart reads one part, answering a malformed or oversized body itself. A
+// nil part with a nil error is a body that ended; a nil part with an error
+// means the caller's answer is already written.
+func nextPart(w http.ResponseWriter, r *http.Request, mr *multipart.Reader) (*multipart.Part, error) {
+	part, err := mr.NextPart()
+	if errors.Is(err, io.EOF) {
+		return nil, nil
+	}
+	if err != nil {
+		uploadReadFailed(w, r, err)
+		return nil, err
+	}
+	return part, nil
+}
+
+// closePart drops a part nothing wanted, discarding whatever is left of it.
+func closePart(part *multipart.Part) {
+	if err := part.Close(); err != nil {
+		slog.Debug("close skipped upload part", "error", err)
 	}
 }
 

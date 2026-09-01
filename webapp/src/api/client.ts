@@ -79,24 +79,106 @@ const NO_REFRESH_PATHS = new Set([
 ]);
 
 /**
+ * Names of the two things every tab of this origin shares to keep refreshes
+ * from racing each other: the Web Locks mutex, and the localStorage counter a
+ * tab bumps once its refresh has landed.
+ */
+const REFRESH_LOCK = "hamlaneh:auth-refresh";
+const REFRESH_COUNTER = "hamlaneh:auth-refreshed";
+
+/**
  * Single-flighted refresh: concurrent 401s must share ONE in-flight
  * POST /api/v1/auth/refresh. This is not just an optimization — the server
  * rotates refresh tokens and treats a re-presented (already-rotated) token as
  * theft, revoking the whole token family. Parallel refreshes would trip that.
+ *
+ * This guard covers one document. Two tabs are two module instances, and the
+ * refresh cookie they present is one cookie in one shared jar, so the guard
+ * has to reach across documents too — see exclusiveRefresh.
  */
 let refreshInFlight: Promise<boolean> | null = null;
 
 function refreshSession(): Promise<boolean> {
-  refreshInFlight ??= api
+  refreshInFlight ??= exclusiveRefresh().finally(() => {
+    // Allow a future refresh (e.g. after the next 15-minute expiry);
+    // awaiters of THIS refresh still share the resolved promise.
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
+/**
+ * One refresh at a time for the whole origin, and no more of them than the
+ * account actually needs.
+ *
+ * Two tabs waking together — a reopened laptop, a restored window — both hit
+ * 401 and both reach for the same refresh cookie. Whichever presents it
+ * second is presenting an already-rotated token, and the server cannot tell
+ * that from a stolen one: it revokes the family, and the honest user is
+ * signed out everywhere. So the race is removed rather than excused, and the
+ * server's reuse detection is left exactly as strict as it was.
+ *
+ * The Web Lock serializes the tabs; the counter tells a tab that woke into
+ * the queue that the tab ahead of it already refreshed, so it can retry its
+ * request on the cookies now in the jar instead of rotating them again. That
+ * second half matters: every rotation retires the access token the previous
+ * tab just started using, so a queue of N tabs rotating in turn would hand
+ * the earlier ones a fresh 401 each.
+ *
+ * Degradations, all safe:
+ *
+ *   - No Web Locks (unavailable before Safari 15.4, and outside secure
+ *     contexts): the per-document guard above is all that is left, which is
+ *     where this started. Nothing is made worse.
+ *   - No localStorage (blocked storage): the counter never moves, so queued
+ *     tabs each refresh in turn — still one at a time, still never reuse.
+ *   - Tab closed mid-refresh: the browser releases its lock, and the next tab
+ *     sees an unmoved counter and refreshes on whichever cookie the jar
+ *     ended up holding.
+ *   - Refresh hanging on a dead connection: other tabs wait on the lock
+ *     rather than 401ing on their own. They would have hung on the same
+ *     cookie anyway, and the browser's own fetch timeout ends it.
+ */
+async function exclusiveRefresh(): Promise<boolean> {
+  // lib.dom types `locks` as always present. Partial<Navigator> is that
+  // claim widened back to the truth the paragraph above depends on.
+  const { locks } = navigator as Partial<Navigator>;
+  if (locks === undefined) {
+    return postRefresh();
+  }
+  const before = refreshCounter();
+  return locks.request(REFRESH_LOCK, () =>
+    refreshCounter() === before ? postRefresh() : true,
+  );
+}
+
+async function postRefresh(): Promise<boolean> {
+  const refreshed = await api
     .POST("/api/v1/auth/refresh")
     .then(({ response }) => response.status === 204)
-    .catch(() => false) // network failure: treat as not refreshed
-    .finally(() => {
-      // Allow a future refresh (e.g. after the next 15-minute expiry);
-      // awaiters of THIS refresh still share the resolved promise.
-      refreshInFlight = null;
-    });
-  return refreshInFlight;
+    .catch(() => false); // network failure: treat as not refreshed
+  if (refreshed) {
+    writeRefreshCounter(refreshCounter() + 1);
+  }
+  return refreshed;
+}
+
+/** How many refreshes this browser has landed; 0 when storage is unreadable. */
+function refreshCounter(): number {
+  try {
+    return Number(localStorage.getItem(REFRESH_COUNTER)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeRefreshCounter(value: number): void {
+  try {
+    localStorage.setItem(REFRESH_COUNTER, String(value));
+  } catch {
+    // Storage can be blocked entirely; see exclusiveRefresh for what that
+    // costs (nothing but a few extra rotations).
+  }
 }
 
 /**

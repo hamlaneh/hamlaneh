@@ -513,7 +513,7 @@ func TestSetReadPosition(t *testing.T) {
 type editStore struct {
 	*fakeStore
 	messageByID          func(ctx context.Context, channelID, messageID uuid.UUID) (storage.Message, error)
-	updateMessageContent func(ctx context.Context, channelID, messageID uuid.UUID, content string) (storage.Message, error)
+	updateMessageContent func(ctx context.Context, channelID, messageID uuid.UUID, content string, mls *storage.MessageMls) (storage.Message, error)
 	softDeleteMessage    func(ctx context.Context, channelID, messageID, deletedBy uuid.UUID) (storage.Message, error)
 }
 
@@ -527,12 +527,12 @@ func (s *editStore) MessageByID(ctx context.Context, channelID, messageID uuid.U
 }
 
 func (s *editStore) UpdateMessageContent(
-	ctx context.Context, channelID, messageID uuid.UUID, content string,
+	ctx context.Context, channelID, messageID uuid.UUID, content string, mls *storage.MessageMls,
 ) (storage.Message, error) {
 	if s.updateMessageContent == nil {
 		return storage.Message{}, errFakeUnwired
 	}
-	return s.updateMessageContent(ctx, channelID, messageID, content)
+	return s.updateMessageContent(ctx, channelID, messageID, content, mls)
 }
 
 func (s *editStore) SoftDeleteMessage(
@@ -632,7 +632,7 @@ func TestEditMessage(t *testing.T) {
 		var gotChannel, gotMessage uuid.UUID
 		var gotContent string
 		store.updateMessageContent = func(
-			_ context.Context, channelID, messageID uuid.UUID, content string,
+			_ context.Context, channelID, messageID uuid.UUID, content string, _ *storage.MessageMls,
 		) (storage.Message, error) {
 			gotChannel, gotMessage, gotContent = channelID, messageID, content
 			msg := authoredBy(fixtureUser())
@@ -736,7 +736,7 @@ func TestEditMessage(t *testing.T) {
 		t.Parallel()
 		store := messageStore(fixtureUser(), authoredBy(fixtureUser()))
 		store.updateMessageContent = func(
-			context.Context, uuid.UUID, uuid.UUID, string,
+			context.Context, uuid.UUID, uuid.UUID, string, *storage.MessageMls,
 		) (storage.Message, error) {
 			return storage.Message{}, storage.ErrNotFound
 		}
@@ -764,7 +764,7 @@ func TestEditMessage(t *testing.T) {
 		t.Parallel()
 		store := messageStore(fixtureUser(), authoredBy(fixtureUser()))
 		store.updateMessageContent = func(
-			context.Context, uuid.UUID, uuid.UUID, string,
+			context.Context, uuid.UUID, uuid.UUID, string, *storage.MessageMls,
 		) (storage.Message, error) {
 			return storage.Message{}, errors.New("boom")
 		}

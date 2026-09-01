@@ -14,6 +14,8 @@ export type Invite = components["schemas"]["Invite"];
 export type CreatedInvite = components["schemas"]["CreatedInvite"];
 export type OrgSettings = components["schemas"]["OrgSettings"];
 export type UpdateOrgSettingsRequest = components["schemas"]["UpdateOrgSettingsRequest"];
+export type EncryptionMode = components["schemas"]["EncryptionMode"];
+export type SetEncryptionModeRequest = components["schemas"]["SetEncryptionModeRequest"];
 export type AuditEntry = components["schemas"]["AuditEntry"];
 export type AuditPage = components["schemas"]["AuditPage"];
 export type TemporaryCredentials = components["schemas"]["TemporaryCredentials"];
@@ -192,6 +194,22 @@ export async function getOrgSettings(): Promise<OrgSettings> {
 
 export async function updateOrgSettings(body: UpdateOrgSettingsRequest): Promise<OrgSettings> {
   return unwrap(await api.PATCH("/api/v1/admin/org", { body }));
+}
+
+/**
+ * The encryption mode's own endpoint, deliberately not a field on the settings
+ * PATCH above: that screen saves as you type, and this one is a decision an
+ * administrator should have to mean (openapi.yaml -> setOrgEncryptionMode).
+ *
+ * Throws `AdminError(409, "encryption_mode_locked")` when `compliance` is asked
+ * for while it is not yet selectable — the screen keeps that option visible and
+ * disabled, so the refusal should not be reachable from it, and is handled
+ * anyway for the instance that locks it while the screen is open.
+ */
+export async function setOrgEncryptionMode(mode: EncryptionMode): Promise<OrgSettings> {
+  return unwrap(
+    await api.PUT("/api/v1/admin/org/encryption-mode", { body: { encryption_mode: mode } }),
+  );
 }
 
 export interface AuditQuery {

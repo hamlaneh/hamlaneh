@@ -81,8 +81,17 @@ const normalizedFilename = `lower(translate(a.filename, U&'\064A\0643\0629\200C'
 //
 // Membership is checked against the MESSAGE's channel, which is the channel
 // that decides who may see the card.
+//
+// The third join is ADR 013's: an encrypted channel's files are stored under
+// the literal placeholder `encrypted`, so indexing them here would make one
+// query match every one of them and every other query match none. They are
+// excluded by the join rather than by a filter, for the reason the membership
+// join is a join — so no statement built from this constant can be written
+// without it, the count included. The attachment's OWN channel is the one
+// asked, because that is the channel it was born in and can never leave.
 const fileSearchScope = searchScope + `
-	JOIN attachments a ON a.message_id = m.id`
+	JOIN attachments a ON a.message_id = m.id
+	JOIN channels ac ON ac.id = a.channel_id AND NOT ac.e2ee`
 
 // fileSearchPredicate is the match, plus the soft-delete rule: a deleted
 // message's cards are gone with it. Deleting erases the content but leaves
@@ -137,7 +146,7 @@ func (s *Store) SearchFiles(ctx context.Context, params SearchFilesParams) (File
 	// The wildcards are added here so the parameter carries no pattern
 	// syntax of the caller's: a search for "report_final" looks for that
 	// underscore rather than for any character.
-	needle := foldSearchText(params.Query)
+	needle := FoldSearchText(params.Query)
 	pattern := "%" + escapeLike(needle) + "%"
 
 	var total int
@@ -215,6 +224,6 @@ func scanFileSearchResult(row pgx.Row, needle string) (FileSearchResult, error) 
 	if peerID != nil && peerUsername != nil && peerDisplayName != nil {
 		res.Channel.DMPeer = &DMPeer{ID: *peerID, Username: *peerUsername, DisplayName: *peerDisplayName}
 	}
-	res.Snippet = searchSnippet(res.Attachment.Filename, needle)
+	res.Snippet = SearchSnippet(res.Attachment.Filename, needle)
 	return res, nil
 }

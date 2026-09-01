@@ -82,9 +82,12 @@ func TestEnsureAdminValidation(t *testing.T) {
 			cfg := valid
 			tt.mutate(&cfg)
 
-			err := bootstrap.EnsureAdmin(context.Background(), store, cfg, true)
+			created, err := bootstrap.EnsureAdmin(context.Background(), store, cfg, true)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("error = %v, want it to contain %q", err, tt.wantErr)
+			}
+			if created {
+				t.Error("a rejected config reported that it created an admin")
 			}
 			if len(store.created) != 0 {
 				t.Error("invalid config still created a user")
@@ -100,9 +103,12 @@ func TestEnsureAdminUnit(t *testing.T) {
 		t.Parallel()
 		store := &fakeStore{count: 3}
 		// Even an invalid config must not matter once users exist.
-		err := bootstrap.EnsureAdmin(context.Background(), store, bootstrap.AdminConfig{Username: "!"}, true)
+		created, err := bootstrap.EnsureAdmin(context.Background(), store, bootstrap.AdminConfig{Username: "!"}, true)
 		if err != nil {
 			t.Errorf("EnsureAdmin: %v", err)
+		}
+		if created {
+			t.Error("a populated table reported that it created an admin")
 		}
 		if len(store.created) != 0 {
 			t.Error("bootstrap created a user although the table is not empty")
@@ -112,20 +118,32 @@ func TestEnsureAdminUnit(t *testing.T) {
 	t.Run("empty table without config only warns", func(t *testing.T) {
 		t.Parallel()
 		store := &fakeStore{count: 0}
-		if err := bootstrap.EnsureAdmin(context.Background(), store, bootstrap.AdminConfig{}, false); err != nil {
+		created, err := bootstrap.EnsureAdmin(context.Background(), store, bootstrap.AdminConfig{}, false)
+		if err != nil {
 			t.Errorf("EnsureAdmin: %v", err)
+		}
+		if created {
+			t.Error("an unconfigured bootstrap reported that it created an admin")
 		}
 		if len(store.created) != 0 {
 			t.Error("bootstrap created a user without configuration")
 		}
 	})
 
-	t.Run("username race maps to success", func(t *testing.T) {
+	// The race loser must report created=false. A caller holding a generated
+	// password shows it only when created is true, and the account that
+	// actually exists here carries the WINNER's password, not ours — so
+	// reporting true would print a credential that opens nothing.
+	t.Run("username race maps to success but not to creation", func(t *testing.T) {
 		t.Parallel()
 		race := &racingStore{}
 		cfg := bootstrap.AdminConfig{Username: "admin", Password: "a long password", Locale: "en"}
-		if err := bootstrap.EnsureAdmin(context.Background(), race, cfg, true); err != nil {
+		created, err := bootstrap.EnsureAdmin(context.Background(), race, cfg, true)
+		if err != nil {
 			t.Errorf("EnsureAdmin during race: %v", err)
+		}
+		if created {
+			t.Error("the loser of the bootstrap race reported that it created the admin")
 		}
 	})
 }
@@ -148,8 +166,12 @@ func TestEnsureAdminIntegration(t *testing.T) {
 	ctx := context.Background()
 	cfg := bootstrap.AdminConfig{Username: "firstadmin", Password: "initial admin password", Locale: "fa"}
 
-	if err := bootstrap.EnsureAdmin(ctx, store, cfg, true); err != nil {
+	created, err := bootstrap.EnsureAdmin(ctx, store, cfg, true)
+	if err != nil {
 		t.Fatalf("EnsureAdmin: %v", err)
+	}
+	if !created {
+		t.Error("the bootstrap that made the first admin did not report creating one")
 	}
 
 	admin, err := store.UserByIdentifier(ctx, "firstadmin")
@@ -169,9 +191,14 @@ func TestEnsureAdminIntegration(t *testing.T) {
 		t.Errorf("stored hash does not verify the configured password (ok=%v err=%v)", ok, verifyErr)
 	}
 
-	// Second startup: no second user.
-	if againErr := bootstrap.EnsureAdmin(ctx, store, cfg, true); againErr != nil {
+	// Second startup: no second user, and it says so — which is what stops a
+	// generated password being printed again on every restart.
+	againCreated, againErr := bootstrap.EnsureAdmin(ctx, store, cfg, true)
+	if againErr != nil {
 		t.Fatalf("second EnsureAdmin: %v", againErr)
+	}
+	if againCreated {
+		t.Error("a second startup reported creating an admin")
 	}
 	count, err := store.CountUsers(ctx)
 	if err != nil {
@@ -183,8 +210,12 @@ func TestEnsureAdminIntegration(t *testing.T) {
 
 	// Non-empty table: different variables change nothing.
 	other := bootstrap.AdminConfig{Username: "secondadmin", Password: "another admin password", Locale: "en"}
-	if err := bootstrap.EnsureAdmin(ctx, store, other, true); err != nil {
+	otherCreated, err := bootstrap.EnsureAdmin(ctx, store, other, true)
+	if err != nil {
 		t.Fatalf("EnsureAdmin on non-empty table: %v", err)
+	}
+	if otherCreated {
+		t.Error("bootstrap on a non-empty table reported creating an admin")
 	}
 	if _, err := store.UserByIdentifier(ctx, "secondadmin"); !errors.Is(err, storage.ErrNotFound) {
 		t.Errorf("bootstrap on a non-empty table created a user (err=%v)", err)

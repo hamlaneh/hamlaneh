@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { AppearanceSection } from "./AppearanceSection";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { LanguageSection } from "./LanguageSection";
+import { MeetingsSection } from "./MeetingsSection";
 import { RecoveryCodesStep } from "./RecoveryCodesStep";
 import { SecuritySection } from "./SecuritySection";
 import { SessionsSection } from "./SessionsSection";
@@ -13,21 +14,27 @@ import { useFocusTrap } from "./useFocusTrap";
 import { useChangePassword } from "../../auth/useChangePassword";
 import { useSessions } from "../../settings/useSessions";
 import { useTotpStatus } from "../../settings/useTotpStatus";
-import { LanguagesIcon, ShieldIcon, SunIcon, XIcon } from "../icons";
+import { LanguagesIcon, ShieldIcon, SunIcon, UsersIcon, XIcon } from "../icons";
 
 /**
  * The nav rows, in drawn order. `Profile` is deliberately absent: the artboard
  * draws an editable display name and an avatar upload, and neither has an
  * endpoint yet — a row leading to controls that cannot save anything would be
  * worse than the missing row. It returns with the profile endpoints.
+ *
+ * `meetings` is APPENDED rather than placed: the artboard draws three rows and
+ * this is a fourth, so the drawn three keep their drawn positions. Its glyph is
+ * borrowed — nothing is drawn for a meeting room, and `UsersIcon` is the mark
+ * this product already uses for "a set of people" (docs/design/STATUS.md).
  */
-const SECTIONS = ["language", "security", "appearance"] as const;
+const SECTIONS = ["language", "security", "appearance", "meetings"] as const;
 type Section = (typeof SECTIONS)[number];
 
 const SECTION_ICON = {
   language: LanguagesIcon,
   security: ShieldIcon,
   appearance: SunIcon,
+  meetings: UsersIcon,
 } as const;
 
 /** Which Security screen is showing; every one of them keeps Security selected. */
@@ -208,6 +215,8 @@ export function SettingsPanel({ onClose, restoreFocusRef }: SettingsPanelProps) 
               <LanguageSection />
             ) : section === "appearance" ? (
               <AppearanceSection />
+            ) : section === "meetings" ? (
+              <MeetingsSection />
             ) : securityView.kind === "sessions" ? (
               <SessionsSection sessions={sessions} />
             ) : securityView.kind === "totpSetup" ? (

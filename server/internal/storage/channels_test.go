@@ -27,7 +27,7 @@ func newChannel(slug string, kind storage.ChannelKind, createdBy uuid.UUID) stor
 	}
 }
 
-func mustCreateChannel(ctx context.Context, t *testing.T, store *storage.Store, nc storage.NewChannel) storage.Channel {
+func mustCreateChannel(ctx context.Context, t *testing.T, store testdb.Store, nc storage.NewChannel) storage.Channel {
 	t.Helper()
 
 	ch, err := store.CreateChannel(ctx, nc)
@@ -37,17 +37,17 @@ func mustCreateChannel(ctx context.Context, t *testing.T, store *storage.Store, 
 	return ch
 }
 
-func mustOpenDM(ctx context.Context, t *testing.T, store *storage.Store, caller, peer uuid.UUID) storage.Channel {
+func mustOpenDM(ctx context.Context, t *testing.T, store testdb.Store, caller, peer uuid.UUID) storage.Channel {
 	t.Helper()
 
-	ch, _, err := store.OpenDirectMessage(ctx, caller, peer)
+	ch, _, err := store.OpenDirectMessage(ctx, caller, peer, false)
 	if err != nil {
 		t.Fatalf("OpenDirectMessage(%s, %s): %v", caller, peer, err)
 	}
 	return ch
 }
 
-func mustListChannels(ctx context.Context, t *testing.T, store *storage.Store, userID uuid.UUID) []storage.Channel {
+func mustListChannels(ctx context.Context, t *testing.T, store testdb.Store, userID uuid.UUID) []storage.Channel {
 	t.Helper()
 
 	channels, err := store.ListChannelsForUser(ctx, userID, storage.ListChannelsParams{Limit: 100})
@@ -57,7 +57,7 @@ func mustListChannels(ctx context.Context, t *testing.T, store *storage.Store, u
 	return channels
 }
 
-func mustListMembers(ctx context.Context, t *testing.T, store *storage.Store, channelID uuid.UUID) []storage.User {
+func mustListMembers(ctx context.Context, t *testing.T, store testdb.Store, channelID uuid.UUID) []storage.User {
 	t.Helper()
 
 	members, err := store.ListChannelMembers(ctx, channelID, storage.ListChannelMembersParams{Limit: 100})
@@ -89,7 +89,7 @@ func usernamesOf(users []storage.User) []string {
 // the sidebar actually runs, rather than a single-row read that could quietly
 // compute the counts differently.
 func sidebarChannel(
-	ctx context.Context, t *testing.T, store *storage.Store, userID, channelID uuid.UUID,
+	ctx context.Context, t *testing.T, store testdb.Store, userID, channelID uuid.UUID,
 ) storage.Channel {
 	t.Helper()
 
@@ -144,9 +144,8 @@ func assertCounts(t *testing.T, ch storage.Channel, unread, mentions int, lastRe
 func TestChannelUnreadCountsIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("countalice"))
 	bob := mustCreateUser(ctx, t, store, newUser("countbob"))
@@ -282,9 +281,8 @@ func TestChannelUnreadCountsIntegration(t *testing.T) {
 func TestChannelUnreadCountsAfterReadPositionIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, conn := testdb.New(t)
 	ctx := context.Background()
-	conn := messagesRawConn(ctx, t, dsn)
 
 	alice := mustCreateUser(ctx, t, store, newUser("readalice"))
 	bob := mustCreateUser(ctx, t, store, newUser("readbob"))
@@ -661,7 +659,7 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 	bob := mustCreateUser(ctx, t, store, newUser("bob"))
 
 	t.Run("the first open creates the channel", func(t *testing.T) {
-		dm, created, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID)
+		dm, created, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage: %v", err)
 		}
@@ -694,12 +692,12 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 	})
 
 	t.Run("opening it again from either side returns the same channel", func(t *testing.T) {
-		first, _, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID)
+		first, _, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage(alice, bob): %v", err)
 		}
 
-		again, created, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID)
+		again, created, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage(alice, bob) again: %v", err)
 		}
@@ -710,7 +708,7 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 			t.Errorf("repeat open returned %s, want %s", again.ID, first.ID)
 		}
 
-		reversed, created, err := store.OpenDirectMessage(ctx, bob.ID, alice.ID)
+		reversed, created, err := store.OpenDirectMessage(ctx, bob.ID, alice.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage(bob, alice): %v", err)
 		}
@@ -723,14 +721,14 @@ func TestOpenDirectMessageIntegration(t *testing.T) {
 	})
 
 	t.Run("a direct message with yourself is refused", func(t *testing.T) {
-		_, _, err := store.OpenDirectMessage(ctx, alice.ID, alice.ID)
+		_, _, err := store.OpenDirectMessage(ctx, alice.ID, alice.ID, false)
 		if !errors.Is(err, storage.ErrDMWithSelf) {
 			t.Errorf("got %v, want ErrDMWithSelf", err)
 		}
 	})
 
 	t.Run("an unknown peer is ErrNotFound", func(t *testing.T) {
-		_, _, err := store.OpenDirectMessage(ctx, alice.ID, uuid.New())
+		_, _, err := store.OpenDirectMessage(ctx, alice.ID, uuid.New(), false)
 		if !errors.Is(err, storage.ErrNotFound) {
 			t.Errorf("got %v, want ErrNotFound", err)
 		}
@@ -807,7 +805,7 @@ func TestChannelDMPeerIntegration(t *testing.T) {
 	})
 
 	t.Run("opening the direct message names the peer straight away", func(t *testing.T) {
-		opened, _, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID)
+		opened, _, err := store.OpenDirectMessage(ctx, alice.ID, bob.ID, false)
 		if err != nil {
 			t.Fatalf("OpenDirectMessage: %v", err)
 		}
@@ -863,7 +861,7 @@ func TestChannelDMPeerIntegration(t *testing.T) {
 func TestOpenDirectMessageConcurrentIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 	alice := mustCreateUser(ctx, t, store, newUser("alice"))
 	bob := mustCreateUser(ctx, t, store, newUser("bob"))
@@ -890,7 +888,7 @@ func TestOpenDirectMessageConcurrentIntegration(t *testing.T) {
 				caller, peer = bob.ID, alice.ID
 			}
 			<-start
-			ch, created, err := store.OpenDirectMessage(ctx, caller, peer)
+			ch, created, err := store.OpenDirectMessage(ctx, caller, peer, false)
 			outcomes[i] = outcome{channelID: ch.ID, created: created, err: err}
 		}()
 	}
@@ -916,14 +914,18 @@ func TestOpenDirectMessageConcurrentIntegration(t *testing.T) {
 		t.Errorf("the openers landed on %d distinct channels, want 1", len(ids))
 	}
 
-	pool := assertPool(ctx, t, dsn)
+	// The pair is canonicalized here rather than by least()/greatest(), which
+	// SQLite spells min()/max(): both drivers order the pair by the uuid's own
+	// bytes, and the canonical text form compares the same way.
+	low, high := alice.ID, bob.ID
+	if high.String() < low.String() {
+		low, high = high, low
+	}
 	var rows int
-	err := pool.QueryRow(ctx,
-		`SELECT count(*)::int FROM channels
-		 WHERE kind = 'dm'
-		   AND dm_user_a = least($1::uuid, $2::uuid)
-		   AND dm_user_b = greatest($1::uuid, $2::uuid)`,
-		alice.ID, bob.ID,
+	err := raw.QueryRow(ctx,
+		`SELECT count(*) FROM channels
+		 WHERE kind = 'dm' AND dm_user_a = ? AND dm_user_b = ?`,
+		low, high,
 	).Scan(&rows)
 	if err != nil {
 		t.Fatalf("count dm rows: %v", err)
@@ -1073,7 +1075,7 @@ func TestChannelMembersIntegration(t *testing.T) {
 
 // memberCount is the channel's membership as the database has it, read
 // outside any of the calls under test.
-func memberCount(ctx context.Context, t *testing.T, store *storage.Store, channelID uuid.UUID) int {
+func memberCount(ctx context.Context, t *testing.T, store testdb.Store, channelID uuid.UUID) int {
 	t.Helper()
 
 	ch, err := store.ChannelByID(ctx, channelID)
@@ -1232,9 +1234,13 @@ func TestRemoveChannelMemberConcurrentIntegration(t *testing.T) {
 // rather than merely unlikely. Under FOR UPDATE this test hangs until its
 // deadline.
 func TestRemoveChannelMemberDoesNotBlockOnAddIntegration(t *testing.T) {
+	// PostgreSQL lock STRENGTH, which is the one thing single-writer SQLite
+	// makes false by design: there the uncommitted insert below holds the only
+	// write lock, so the removal correctly waits it out (ADR 012, decision 3).
+	testdb.RequiresPostgres(t, "FOR NO KEY UPDATE does not conflict with KEY SHARE — a lock-strength property SQLite has no rows locks for")
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 	owner := mustCreateUser(ctx, t, store, newUser("owner"))
 	keeper := mustCreateUser(ctx, t, store, newUser("keeper"))
@@ -1248,7 +1254,7 @@ func TestRemoveChannelMemberDoesNotBlockOnAddIntegration(t *testing.T) {
 	// The add, mid-flight and uncommitted. It is spelled out rather than
 	// driven through AddChannelMember because the point is to hold the locks
 	// that method takes and then stop, which a method that commits cannot do.
-	pool := assertPool(ctx, t, dsn)
+	pool := assertPool(ctx, t, raw.DSN())
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin the in-flight add: %v", err)

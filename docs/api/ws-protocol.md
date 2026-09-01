@@ -199,6 +199,8 @@ this socket has subscribed to).
 | `call_started` | membership | no | `{started_by, participants}` — a call is now happening here. Membership scope rather than subscription is what makes a DM peer's client ring without having subscribed to anything. `started_by` exists only on this event: a ring is strictly live, and `GET .../call` cannot rebuild one after a reconnect because it does not carry who started the call. |
 | `call_updated` | membership | no | `{participants}` — somebody joined or left, or started sharing a screen. |
 | `call_ended` | membership | no | `{}` — the last participant left. Sent immediately on that departure, not when the room is eventually reaped, so a banner never claims a call that ended five minutes ago. |
+| `mls_commit` | membership | no | `{epoch}` — a commit was accepted at this epoch; fetch the blob with `GET …/mls/commits?after_epoch=<your epoch>`. Notification only, deliberately: commit blobs can approach 256 KiB, which no frame under the 64 KiB cap can carry, and the commit log is durable where the replay buffer is not — so the event says something changed and REST says what is true, the same doctrine as calls. Missing this event costs nothing but latency: every client refetches the log on reconnect and on channel open. |
+| `mls_welcome` | own user | no | `{}` — a Welcome awaits at least one of your devices; fetch `GET /api/v1/users/me/mls/welcomes`. Delivered to all the user's sockets because a Welcome is encrypted to one device's key package — a sibling device receives bytes it cannot open, so the fan-out reveals nothing. |
 | `resync` | socket | no | `{chan}` — this channel's replay buffer could not satisfy your resume; backfill over REST (§5). |
 | `ping` | socket | no | `{}` — §6. |
 | `pong` | socket | no | `{}` — answer to a client `ping`. |
@@ -241,7 +243,11 @@ once per ordered event on that channel (the `seq: yes` rows in §4). Ephemeral e
 worthless, and a call event from five minutes ago is worse than worthless — it would paint a
 banner for a call nobody is in. Clients reconcile call state against
 `GET /api/v1/channels/{id}/call` on opening a channel and after a reconnect. The events say
-something changed; REST says what is true.
+something changed; REST says what is true — as of the moment it was asked. A read is a round
+trip, and a client that applies its answer unconditionally will undo any call event that arrived
+while it was in flight, with no reconciliation point left to put the banner back. So an answer
+the socket overtook is dropped rather than applied: whichever of the two spoke last wins, and an
+event that landed after the read was issued is the later of them.
 
 The server keeps a bounded per-channel **replay buffer**: the more recent of the last **256
 events** or the last **5 minutes**. It is memory only. It is not durable, not a queue, and not a
@@ -442,6 +448,8 @@ entry and on an entry without a row. Columns are fixed: `op`, `direction`, `scop
 | read_position | s2c | channel | self |
 | typing | s2c | channel | member |
 | presence | s2c | channel | member-dm |
+| mls_commit | s2c | channel | member |
+| mls_welcome | s2c | user | self |
 | resync | s2c | channel | member |
 | call_started | s2c | channel | member |
 | call_updated | s2c | channel | member |

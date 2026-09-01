@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { api } from "../api/client";
-import { RealtimeClient, realtimeUrl } from "./realtime";
+import type { MlsController } from "../mls/useMls";
+import { fullJitterDelay, RealtimeClient, realtimeUrl } from "./realtime";
 import type { RealtimeOptions, ServerFrame } from "./realtime";
 import { chatReducer, emptyView, initialChatState } from "./store";
 import type { ChannelView, ChatState, SearchKind } from "./store";
@@ -14,7 +15,43 @@ export type RealtimeOverrides = Partial<
 >;
 
 const HISTORY_PAGE_SIZE = 50;
+
+/**
+ * How soon an encrypted channel that could not finish its group setup asks
+ * again, and how far apart those asks are allowed to drift.
+ *
+ * There is no event for the thing it is waiting on. A member who has never
+ * opened the app has published no key packages, so the client bootstrapping
+ * the group cannot add them — and nothing in the protocol tells the group
+ * later that a device has appeared. Without this, the first person into a
+ * channel creates a group of one and everybody invited before their first
+ * sign-in stays outside it forever, which is exactly what the real stack did.
+ * Five seconds is a conversation someone is looking at.
+ *
+ * The cap is what keeps that first number honest at the other end of the
+ * scale. The wait has no deadline — one invited person who never signs in
+ * holds a channel `incomplete` until they do, which can be weeks — and each
+ * ask costs every online member's client a paged member-device read plus a
+ * key-package claim per missing user. At five seconds flat that is a fixed
+ * per-member load a single unanswered invitation can impose indefinitely, so
+ * the interval doubles into a ceiling of a few minutes rather than staying
+ * where a human's attention span put it.
+ */
+const MLS_RETRY_MS = 5_000;
+const MLS_RETRY_CAP_MS = 180_000;
 const SEARCH_PAGE_SIZE = 20;
+
+/**
+ * A conversation, or the server's own refusal code for why there isn't one.
+ *
+ * The code is carried rather than flattened to a boolean because two of them
+ * have to be said out loud: `e2ee_required_by_org` and `e2ee_forbidden_by_org`
+ * mean the organisation's mode is not what this client displayed, which is the
+ * one failure the person in front of the screen can act on.
+ */
+export type ConversationResult =
+  | { readonly channel: Channel }
+  | { readonly error: string };
 
 export interface ChatController {
   state: ChatState;
@@ -32,8 +69,22 @@ export interface ChatController {
   closeSearch: () => void;
   /** Dismisses the "Back online" banner once its window has elapsed. */
   settleConnection: () => void;
-  createChannel: (slug: string, kind: "public" | "private") => Promise<Channel | null>;
-  openDirectMessage: (userId: string) => Promise<Channel | null>;
+  /**
+   * `e2ee` is fixed at creation and never toggled (openapi.yaml). It asserts
+   * what the surface promised the user rather than being left to the server,
+   * so an organisation mode this client has stale is refused by name instead
+   * of silently creating the opposite (ADR 011 decision 1).
+   */
+  createChannel: (
+    slug: string,
+    kind: "public" | "private",
+    e2ee: boolean,
+  ) => Promise<ConversationResult>;
+  /**
+   * `e2ee` applies only when this opens a DM that did not exist; an existing
+   * one comes back as it is, whatever is passed (openapi.yaml).
+   */
+  openDirectMessage: (userId: string, e2ee: boolean) => Promise<ConversationResult>;
   inviteMember: (userId: string) => Promise<boolean>;
   setTopic: (topic: string) => Promise<boolean>;
   /** Closes the DM ring toast, and that is all it does (ADR 005). */
@@ -46,6 +97,11 @@ interface UseChatInput {
   focusMessageId: string | undefined;
   /** `instance.calls` — with no media server there is nothing to reconcile. */
   callsEnabled: boolean;
+  /**
+   * The encryption layer. Plaintext channels never touch it; an e2ee channel
+   * routes its send, its history and its membership events through it.
+   */
+  mls: MlsController;
   realtime?: RealtimeOverrides;
 }
 
@@ -73,6 +129,7 @@ export function useChat({
   channelId,
   focusMessageId,
   callsEnabled,
+  mls,
   realtime,
 }: UseChatInput): ChatController {
   const [state, dispatch] = useReducer(chatReducer, initialChatState);
@@ -170,19 +227,40 @@ export function useChat({
   /* ── calls ──────────────────────────────────────────────────────── */
 
   /**
+   * Call events applied since this client started, counted per channel.
+   *
+   * A read is only the truth as of the moment it was taken, and it takes a
+   * round trip to come back. Anything that happened to the call in that window
+   * arrived over the socket, and is therefore newer than the answer in hand.
+   */
+  const callNews = useRef(new Map<string, number>());
+  const noteCallNews = useCallback((target: string) => {
+    callNews.current.set(target, (callNews.current.get(target) ?? 0) + 1);
+  }, []);
+
+  /**
    * Reads what is actually happening in a channel's call.
    *
    * ws-protocol.md §5: `call_started`, `call_updated` and `call_ended` carry
    * no sequence number and are never replayed, so a client that trusted them
    * would paint a banner for a call that ended while it was disconnected. The
    * events say something changed; this says what is true.
+   *
+   * True *when it was asked*, though, which is why the count is taken first
+   * and checked after. A call that starts while this read is in flight paints
+   * the banner from the event, and the answer that comes back — taken before
+   * anybody joined — would put it straight back to nothing, with no further
+   * reconciliation point until the reader changes channel or the socket drops.
+   * So a read the socket has overtaken is dropped rather than applied: the
+   * newer of the two is whichever spoke last, and here that is the event.
    */
   const reconcileCall = useCallback(async (target: string) => {
+    const asked = callNews.current.get(target) ?? 0;
     try {
       const { data } = await api.GET("/api/v1/channels/{channelId}/call", {
         params: { path: { channelId: target } },
       });
-      if (data !== undefined) {
+      if (data !== undefined && (callNews.current.get(target) ?? 0) === asked) {
         dispatch({ type: "call/state", channelId: target, call: data });
       }
     } catch (error) {
@@ -219,6 +297,37 @@ export function useChat({
   const clientRef = useRef<RealtimeClient | null>(null);
   const backfillRef = useLatest(backfill);
 
+  const mlsRef = useLatest(mls);
+  const channelIdRef = useLatest(channelId);
+
+  /**
+   * Counts the arrivals that are a fresh reason to re-drive the open channel's
+   * group setup, rather than the retry timer merely expiring again. The retry
+   * effect keys on it, so a nudge sends the backoff back to its floor.
+   *
+   * Scoped to the open channel, which is the only one that effect watches: an
+   * unscoped counter would let a busy channel's commits reset a different
+   * channel's backoff, and a session with one chatty conversation would then
+   * poll every stuck one at the floor forever — the flat interval this
+   * replaced, reached by a longer road.
+   */
+  const [mlsRetryNudge, setMlsRetryNudge] = useState(0);
+  const nudgeMlsRetry = useCallback(
+    (target: string) => {
+      if (target === channelIdRef.current) {
+        setMlsRetryNudge((count) => count + 1);
+      }
+    },
+    [channelIdRef],
+  );
+
+  /** True only for channels the server has told us are encrypted. */
+  const isE2ee = useCallback(
+    (target: string) =>
+      stateRef.current.channels.find((channel) => channel.id === target)?.e2ee === true,
+    [stateRef],
+  );
+
   const handleFrame = useCallback(
     (frame: ServerFrame) => {
       switch (frame.type) {
@@ -245,6 +354,7 @@ export function useChat({
           dispatch({ type: "presence/set", userId: frame.userId, state: frame.state });
           break;
         case "call_started":
+          noteCallNews(frame.chan);
           dispatch({
             type: "call/started",
             channelId: frame.chan,
@@ -254,6 +364,7 @@ export function useChat({
           });
           break;
         case "call_updated":
+          noteCallNews(frame.chan);
           dispatch({
             type: "call/state",
             channelId: frame.chan,
@@ -261,18 +372,46 @@ export function useChat({
           });
           break;
         case "call_ended":
+          noteCallNews(frame.chan);
           // `active: false` and nothing else — the contract says the other
           // fields are absent rather than stale.
           dispatch({ type: "call/state", channelId: frame.chan, call: { active: false } });
           break;
+        case "mls_commit":
+          // A nudge, not the truth: the commit itself comes over REST.
+          mlsRef.current.syncChannel(frame.chan);
+          nudgeMlsRetry(frame.chan);
+          break;
+        case "mls_welcome":
+          // Deliberately not a retry nudge. This sync either moves the state —
+          // in which case the timer is torn down anyway — or the Welcome named
+          // some other device, which is not news about this one being stuck.
+          mlsRef.current.syncWelcomes();
+          break;
+        case "member_added":
+          // Somebody joined an encrypted conversation: every member's client
+          // races to add their devices, and all but one lose harmlessly.
+          if (isE2ee(frame.chan)) {
+            mlsRef.current.memberAdded(frame.chan);
+            nudgeMlsRetry(frame.chan);
+          }
+          break;
+        case "member_removed":
+          // The id on the frame is deliberately not passed on: who leaves the
+          // tree is the directory's answer, not this frame's claim (ADR 007).
+          if (isE2ee(frame.chan)) {
+            mlsRef.current.memberRemoved(frame.chan);
+            nudgeMlsRetry(frame.chan);
+          }
+          break;
         default:
-          // subscribed / unsubscribed / typing / member_added / error carry
-          // nothing this slice draws. Typing has a protocol but no designed
-          // UI yet (ws-protocol.md §4).
+          // subscribed / unsubscribed / typing / error carry nothing this
+          // slice draws. Typing has a protocol but no designed UI yet
+          // (ws-protocol.md §4).
           break;
       }
     },
-    [currentUserId],
+    [currentUserId, isE2ee, mlsRef, noteCallNews, nudgeMlsRetry],
   );
 
   const handleFrameRef = useLatest(handleFrame);
@@ -372,6 +511,148 @@ export function useChat({
     };
   }, [channelId, currentUserId, focusMessageId, loadHistory, markReadFor, stateRef]);
 
+  /*
+   * Bootstrapping the channel's group: find or create it, catch up on the
+   * commit log, add whoever is missing.
+   *
+   * Keyed on whether the open channel *is* encrypted, as a value read during
+   * render — not on a callback that reads the channel list through a ref. The
+   * ref version was a real bug: on a cold load the route names a channel
+   * before `GET /channels` has answered, so the check ran against an empty
+   * list, said "not encrypted", and never ran again — the callback is stable,
+   * so the arrival of the list re-rendered but re-triggered nothing. The
+   * screen sat on "setting up encryption" forever with not one MLS request
+   * for the channel. As a value, the list arriving is the trigger.
+   */
+  const activeChannelIsE2ee = activeChannel?.e2ee === true;
+  useEffect(() => {
+    if (channelId === undefined || !activeChannelIsE2ee) {
+      return;
+    }
+    mlsRef.current.openChannel(channelId);
+  }, [activeChannelIsE2ee, channelId, mlsRef]);
+
+  /*
+   * The three states that resolve themselves only if somebody asks again.
+   *
+   * `incomplete` — this client is in the group and could not add everyone.
+   * It re-reconciles, which claims key packages for whoever is still outside.
+   *
+   * `waiting` — the group exists and this device is not in it yet. Only a
+   * Welcome can change that, so the Welcome list is what gets re-asked: the
+   * `mls_welcome` nudge reaches sockets, and one sent while this client was
+   * reconnecting is simply gone. Re-opening the channel would re-read the
+   * group and learn nothing, which is a poll that cannot answer its own
+   * question.
+   *
+   * `failed` — the group could not be reached or advanced: a directory page
+   * that 5xx'd, a commit-retry budget spent against a member who kept winning
+   * the race. Nothing sends in this channel, so leaving it out meant a
+   * transient server hiccup was indistinguishable from a permanent one until
+   * a commit nudge, a member event, a reconnect or a reopen happened along.
+   *
+   * `failed` alone is re-driven through openChannel rather than syncChannel,
+   * because syncChannel is a no-op for a channel no group is known for — and
+   * a directory read that threw before the group was ever read is precisely
+   * the failure most worth retrying. Sending is already blocked in this
+   * state, so the `opening` it passes through costs nothing.
+   *
+   * The retry is a growing wait rather than a fixed one because none of the
+   * three has a deadline (see MLS_RETRY_CAP_MS), and it starts over — at the
+   * floor — whenever something happens that is a genuinely new reason to
+   * expect a different answer. That is what the dependency list is: the status
+   * moving, the socket changing state, or a nudge naming this channel. Backing
+   * off is for a condition that has not changed; a cause that just arrived
+   * deserves the first attempt, not the twelfth one's wait.
+   *
+   * None of the three is polled for its own sake: all stop as soon as the
+   * state leaves this set.
+   */
+  const channelMlsStatus =
+    channelId === undefined ? undefined : mls.state.channels[channelId]?.status;
+  useEffect(() => {
+    if (
+      channelId === undefined ||
+      (channelMlsStatus !== "incomplete" &&
+        channelMlsStatus !== "waiting" &&
+        channelMlsStatus !== "failed")
+    ) {
+      return undefined;
+    }
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    // A self-rescheduling timeout, not an interval: the gap has to be read
+    // fresh each time for it to be able to grow.
+    const schedule = () => {
+      timer = setTimeout(
+        () => {
+          if (channelMlsStatus === "waiting") {
+            mlsRef.current.syncWelcomes();
+          } else if (channelMlsStatus === "failed") {
+            // openChannel, not syncChannel: syncChannel is a no-op for a
+            // channel the service holds no group for, and the failure that
+            // most needs re-driving is exactly that one — a directory read
+            // that threw before any group was known. The usual objection to
+            // openChannel does not apply here, because it is the composer it
+            // would disable and `failed` has already disabled it.
+            mlsRef.current.openChannel(channelId);
+          } else {
+            // Not openChannel: that would go back through `opening`, and an
+            // `incomplete` client can already send — briefly disabling its
+            // composer every few seconds would be a worse bug than the one
+            // being fixed.
+            mlsRef.current.syncChannel(channelId);
+          }
+          attempt += 1;
+          schedule();
+        },
+        fullJitterDelay(attempt, Math.random, MLS_RETRY_MS, MLS_RETRY_CAP_MS),
+      );
+    };
+    schedule();
+    return () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
+    };
+  }, [channelId, channelMlsStatus, connectionStatus, mlsRetryNudge, mlsRef]);
+
+  /*
+   * Decryption follows whatever is loaded, rather than being wired into every
+   * path that loads something: history pages, live frames and the reconnect
+   * backfill all end up in `view.messages`, and asking for the same message
+   * twice is free (the service keeps what it has already opened).
+   */
+  useEffect(() => {
+    if (channelId === undefined) {
+      return;
+    }
+    mlsRef.current.decryptAll(channelId, view.messages);
+  }, [channelId, mlsRef, view.messages]);
+
+  /*
+   * Reconnect: the Welcome list and the commit log are both durable where the
+   * replay buffer is not, so a client that was away refetches both rather
+   * than trusting that it heard every nudge.
+   *
+   * Gated on the session having an encrypted conversation at all. A Welcome
+   * can only ever name a channel this person is a member of, so the channel
+   * list is a complete answer — and without the gate every plaintext-only
+   * session would open a keystore and fetch a 480 KB wasm chunk to learn that
+   * it had nothing to decrypt. A channel created encrypted while the socket is
+   * up arrives as `channel_created` and re-runs this.
+   */
+  const hasEncryptedChannel = state.channels.some((channel) => channel.e2ee);
+  useEffect(() => {
+    if (connectionStatus !== "online" || !hasEncryptedChannel) {
+      return;
+    }
+    mlsRef.current.syncWelcomes();
+    if (channelId !== undefined && activeChannelIsE2ee) {
+      mlsRef.current.syncChannel(channelId);
+    }
+  }, [activeChannelIsE2ee, channelId, connectionStatus, hasEncryptedChannel, mlsRef]);
+
   /* ── sending ────────────────────────────────────────────────────── */
 
   const attemptSend = useCallback(
@@ -383,6 +664,27 @@ export function useChat({
     ) => {
       dispatch({ type: "pending/sending", channelId: target, clientMsgId });
       try {
+        // Encrypted inside the chain, not before it: the ratchet advances per
+        // message, so the order messages are sealed in has to be the order
+        // they are sent in.
+        // The attachment ids travel with the text because the per-file keys
+        // ride inside this ciphertext (ADR 013). They come from attemptSend's
+        // own parameter, so a message replayed from the offline queue seals
+        // the same files rather than a message whose cards cannot open.
+        const encrypted = isE2ee(target)
+          ? await mlsRef.current.encrypt(
+              target,
+              content,
+              attachments.map((entry) => entry.id),
+            )
+          : null;
+        if (isE2ee(target) && encrypted === null) {
+          // No ciphertext, no send. Falling back to plaintext in a channel
+          // the user was told is encrypted is the one thing this path must
+          // never do; the message stays queued instead.
+          dispatch({ type: "pending/queue", channelId: target, clientMsgId });
+          return;
+        }
         const { data } = await api.POST("/api/v1/channels/{channelId}/messages", {
           params: { path: { channelId: target } },
           // The idempotency key is reused verbatim on every retry: a resend
@@ -391,7 +693,10 @@ export function useChat({
           // its files can never half-exist.
           body: {
             client_msg_id: clientMsgId,
-            content,
+            // Empty exactly when the ciphertext is present, so the server
+            // stores nothing it can read (openapi.yaml -> SendMessageRequest).
+            content: encrypted === null ? content : "",
+            ...(encrypted === null ? {} : { mls: encrypted }),
             ...(attachments.length === 0
               ? {}
               : { attachment_ids: attachments.map((entry) => entry.id) }),
@@ -400,6 +705,14 @@ export function useChat({
         if (data === undefined) {
           dispatch({ type: "pending/queue", channelId: target, clientMsgId });
           return;
+        }
+        if (encrypted !== null) {
+          // MLS gives a sender no way to open its own application message —
+          // the ratchet is per-sender — so the plaintext is kept here as the
+          // message lands, on the screen and in the wrapped keystore. Not
+          // awaited: the write is bounded local storage, and a send must not
+          // wait on it to dispatch the message it already has.
+          void mlsRef.current.rememberSent(data.id, content);
         }
         dispatch({
           type: "message/upsert",
@@ -415,7 +728,7 @@ export function useChat({
         dispatch({ type: "pending/queue", channelId: target, clientMsgId });
       }
     },
-    [currentUserId, markReadFor],
+    [currentUserId, isE2ee, markReadFor, mlsRef],
   );
 
   /**
@@ -478,13 +791,22 @@ export function useChat({
     [enqueueSend, channelId],
   );
 
-  /** Queued messages send themselves when the connection returns. */
-  const wasOnline = useRef(false);
+  /**
+   * Queued messages send themselves again when something that could have
+   * blocked them changes.
+   *
+   * Losing the connection is not the only way to end up queued. A refused
+   * request, a transport throw, and an encrypted channel whose group was not
+   * usable yet all queue while the socket is perfectly online — and a drain
+   * that only fires on an offline→online edge would never look at them again,
+   * so the message would sit under "Waiting to send" until a reload dropped
+   * it without a word. Retrying when the encryption state moves is what makes
+   * the e2ee case recover; retrying while merely online is what makes the
+   * other two recover, and a resend is free because `client_msg_id` makes the
+   * server's answer a lookup rather than a second message.
+   */
   useEffect(() => {
-    const online = state.connection.status === "online";
-    const regained = online && !wasOnline.current;
-    wasOnline.current = online;
-    if (!regained) {
+    if (state.connection.status !== "online") {
       return;
     }
     for (const [target, channelView] of Object.entries(stateRef.current.views)) {
@@ -497,7 +819,7 @@ export function useChat({
         }
       }
     }
-  }, [state.connection, enqueueSend, stateRef]);
+  }, [state.connection, channelMlsStatus, enqueueSend, stateRef]);
 
   /* ── message actions ────────────────────────────────────────────── */
 
@@ -509,12 +831,30 @@ export function useChat({
         return false;
       }
       try {
+        // An edit re-seals the whole envelope, so it has to re-carry the
+        // attachment keys it is replacing. Omitting them would leave the
+        // message readable and every one of its files permanently shut.
+        const encrypted = isE2ee(target)
+          ? await mlsRef.current.encrypt(target, trimmed, mlsRef.current.attachmentIdsOf(messageId))
+          : null;
+        if (isE2ee(target) && encrypted === null) {
+          return false;
+        }
         const { data } = await api.PATCH("/api/v1/channels/{channelId}/messages/{messageId}", {
           params: { path: { channelId: target, messageId } },
-          body: { content: trimmed },
+          body: {
+            content: encrypted === null ? trimmed : "",
+            ...(encrypted === null ? {} : { mls: encrypted }),
+          },
         });
         if (data === undefined) {
           return false;
+        }
+        if (encrypted !== null) {
+          // Same id, new text: the store replaces its own entry, so an edited
+          // message reads as edited after a reload rather than as its
+          // original.
+          void mlsRef.current.rememberSent(data.id, trimmed);
         }
         dispatch({
           type: "message/upsert",
@@ -529,7 +869,7 @@ export function useChat({
         return false;
       }
     },
-    [channelId, currentUserId],
+    [channelId, currentUserId, isE2ee, mlsRef],
   );
 
   const deleteMessage = useCallback(
@@ -634,33 +974,42 @@ export function useChat({
 
   /* ── channel management ─────────────────────────────────────────── */
 
-  const createChannel = useCallback(async (slug: string, kind: "public" | "private") => {
-    try {
-      const { data } = await api.POST("/api/v1/channels", { body: { slug, kind } });
-      if (data === undefined) {
-        return null;
+  const createChannel = useCallback(
+    async (slug: string, kind: "public" | "private", e2ee: boolean): Promise<ConversationResult> => {
+      try {
+        const { data, error } = await api.POST("/api/v1/channels", { body: { slug, kind, e2ee } });
+        if (data === undefined) {
+          // No data means the client's own union has `error`. A response that
+          // carries neither throws here and lands in the catch below, which is
+          // the same "unexpected" either way.
+          return { error: error.error.code };
+        }
+        dispatch({ type: "channel/upsert", channel: data });
+        return { channel: data };
+      } catch (error) {
+        console.warn("Could not create the channel:", error);
+        return { error: "unexpected" };
       }
-      dispatch({ type: "channel/upsert", channel: data });
-      return data;
-    } catch (error) {
-      console.warn("Could not create the channel:", error);
-      return null;
-    }
-  }, []);
+    },
+    [],
+  );
 
-  const openDirectMessage = useCallback(async (userId: string) => {
-    try {
-      const { data } = await api.POST("/api/v1/dms", { body: { user_id: userId } });
-      if (data === undefined) {
-        return null;
+  const openDirectMessage = useCallback(
+    async (userId: string, e2ee: boolean): Promise<ConversationResult> => {
+      try {
+        const { data, error } = await api.POST("/api/v1/dms", { body: { user_id: userId, e2ee } });
+        if (data === undefined) {
+          return { error: error.error.code };
+        }
+        dispatch({ type: "channel/upsert", channel: data });
+        return { channel: data };
+      } catch (error) {
+        console.warn("Could not open the direct message:", error);
+        return { error: "unexpected" };
       }
-      dispatch({ type: "channel/upsert", channel: data });
-      return data;
-    } catch (error) {
-      console.warn("Could not open the direct message:", error);
-      return null;
-    }
-  }, []);
+    },
+    [],
+  );
 
   const inviteMember = useCallback(
     async (userId: string) => {
@@ -708,6 +1057,46 @@ export function useChat({
 
   /* ── mention directory ──────────────────────────────────────────── */
 
+  /**
+   * Names of the open channel's members, whether or not they have ever spoken.
+   *
+   * Authors and DM peers are not enough, and the gap is not cosmetic: the
+   * encryption warnings name a *person* whose devices changed, and the person
+   * most likely to trigger one is a member who has said nothing yet — a
+   * colleague who was invited, opened the app, and registered a device. With
+   * only authors to go on, that warning asked somebody to make a security
+   * judgement about a UUID.
+   */
+  const [memberNames, setMemberNames] = useState<ReadonlyMap<string, string>>(new Map());
+  useEffect(() => {
+    if (channelId === undefined) {
+      return undefined;
+    }
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const { data } = await api.GET("/api/v1/channels/{channelId}/members", {
+          params: { path: { channelId }, query: { limit: 100 } },
+          signal: controller.signal,
+        });
+        if (data !== undefined) {
+          setMemberNames(
+            new Map(data.members.map((member) => [member.id, member.display_name])),
+          );
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          // A name this could not fetch degrades to the generic placeholder,
+          // never to an id — see resolveMention's callers.
+          console.warn("Could not load member names:", error);
+        }
+      }
+    })();
+    return () => {
+      controller.abort();
+    };
+  }, [channelId]);
+
   const directory = useMemo(() => {
     const names = new Map<string, string>([[currentUser.id, currentUser.display_name]]);
     for (const channel of state.channels) {
@@ -715,13 +1104,16 @@ export function useChat({
         names.set(channel.dm_peer.id, channel.dm_peer.display_name);
       }
     }
+    for (const [userId, displayName] of memberNames) {
+      names.set(userId, displayName);
+    }
     for (const channelView of Object.values(state.views)) {
       for (const message of channelView.messages) {
         names.set(message.author.id, message.author.display_name);
       }
     }
     return names;
-  }, [currentUser, state.channels, state.views]);
+  }, [currentUser, memberNames, state.channels, state.views]);
 
   const resolveMention = useCallback(
     (userId: string) => directory.get(userId) ?? null,

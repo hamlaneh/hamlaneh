@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,13 +62,61 @@ func TestRunHealthcheckSubcommand(t *testing.T) {
 	}
 }
 
+// TestVersionFlag is what the updater reads to know what is installed, so the
+// output is one line and nothing else: the version, exactly as the release
+// tag spells it.
+func TestVersionFlag(t *testing.T) {
+	var out bytes.Buffer
+	original := stdout
+	stdout = &out
+	t.Cleanup(func() { stdout = original })
+
+	originalVersion := version
+	version = "v1.2.3"
+	t.Cleanup(func() { version = originalVersion })
+
+	if err := run([]string{"--version"}); err != nil {
+		t.Fatalf("run(--version) = %v, want nil", err)
+	}
+	if got := out.String(); got != "v1.2.3\n" {
+		t.Errorf("run(--version) printed %q, want %q", got, "v1.2.3\n")
+	}
+}
+
+// A taken port is the most likely first-run failure on a household machine,
+// because Docker Desktop usually already holds :8080. The error has to carry
+// the way out, so this asserts the remedy reaches the operator rather than
+// only that starting failed.
+func TestServeOnATakenPortSaysHowToMoveIt(t *testing.T) {
+	t.Parallel()
+
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a port: %v", err)
+	}
+	defer func() {
+		if cerr := held.Close(); cerr != nil {
+			t.Errorf("closing the held listener: %v", cerr)
+		}
+	}()
+
+	remedy := (mode{home: true}).addrInUseRemedy()
+	err = serve(context.Background(), remedy, httpserver.New(held.Addr().String(), nil))
+	if err == nil {
+		t.Fatal("serve on a port already held returned no error")
+	}
+	if !strings.Contains(err.Error(), envHomeAddr) {
+		t.Errorf("error %q does not name %s, so nobody is told how to move the port", err, envHomeAddr)
+	}
+}
+
 func TestServeShutsDownOnContextCancel(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(ctx, httpserver.New("127.0.0.1:0", nil))
+		done <- serve(ctx, "", httpserver.New("127.0.0.1:0", nil))
 	}()
 
 	// Give the server a moment to start, then request shutdown.
@@ -88,7 +139,7 @@ func TestServeInvalidAddress(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if err := serve(ctx, httpserver.New("127.0.0.1:99999", nil)); err == nil {
+	if err := serve(ctx, "", httpserver.New("127.0.0.1:99999", nil)); err == nil {
 		t.Error("serve() with an invalid port returned nil, want error")
 	}
 }

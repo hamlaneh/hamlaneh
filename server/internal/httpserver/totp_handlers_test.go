@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/pquerna/otp/hotp"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
@@ -44,12 +43,12 @@ type twoStepAccount struct {
 	setupCode string
 }
 
-// newTotpFixture creates a user, signs it in, and returns the store, the
-// scratch DSN and the handler under test.
-func newTotpFixture(t *testing.T, username string) (*storage.Store, string, http.Handler, twoStepAccount) {
+// newTotpFixture creates a user, signs it in, and returns the store, a raw
+// connection to the same database and the handler under test.
+func newTotpFixture(t *testing.T, username string) (testdb.Store, *testdb.Raw, http.Handler, twoStepAccount) {
 	t.Helper()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	handler := httpserver.Handler(store)
 
 	email := username + "@example.com"
@@ -63,7 +62,7 @@ func newTotpFixture(t *testing.T, username string) (*storage.Store, string, http
 		t.Fatalf("create fixture user: %v", err)
 	}
 
-	return store, dsn, handler, twoStepAccount{
+	return store, raw, handler, twoStepAccount{
 		user:    user,
 		cookies: login(t, handler, username, totpFixturePassword),
 	}
@@ -179,7 +178,7 @@ func totpStatus(t *testing.T, handler http.Handler, sc sessionCookies) api.TotpS
 
 // mintChallenge creates the half-authenticated state the 202 login answer
 // sets, and returns the cookie value that carries it.
-func mintChallenge(t *testing.T, store *storage.Store, userID uuid.UUID) string {
+func mintChallenge(t *testing.T, store testdb.Store, userID uuid.UUID) string {
 	t.Helper()
 
 	raw, hash := session.NewToken()
@@ -444,7 +443,7 @@ func passwordLogin(t *testing.T, handler http.Handler, identifier, addr string) 
 
 // secondTwoStepAccount provisions another two-step account on the SAME
 // handler (and so the same rate limiters) as an existing fixture.
-func secondTwoStepAccount(t *testing.T, store *storage.Store, handler http.Handler, username string) twoStepAccount {
+func secondTwoStepAccount(t *testing.T, store testdb.Store, handler http.Handler, username string) twoStepAccount {
 	t.Helper()
 
 	email := username + "@example.com"
@@ -829,7 +828,7 @@ func TestTotpSettingsRateLimitIntegration(t *testing.T) {
 
 // signedInAccount creates a plain password-only account on an existing
 // store and signs it in through handler.
-func signedInAccount(t *testing.T, store *storage.Store, handler http.Handler, username string) sessionCookies {
+func signedInAccount(t *testing.T, store testdb.Store, handler http.Handler, username string) sessionCookies {
 	t.Helper()
 
 	email := username + "@example.com"
@@ -915,10 +914,10 @@ func TestRecoveryCodeLoginIntegration(t *testing.T) {
 func TestRecoveryCodesAreArgon2idAtRest(t *testing.T) {
 	t.Parallel()
 
-	_, dsn, handler, acct := newTotpFixture(t, "atrest2fa")
+	_, raw, handler, acct := newTotpFixture(t, "atrest2fa")
 	enableTwoStep(t, handler, &acct)
 
-	stored := storedRecoveryHashes(t, dsn, acct.user.ID)
+	stored := storedRecoveryHashes(t, raw, acct.user.ID)
 	if len(stored) != totp.RecoveryCodeCount {
 		t.Fatalf("stored %d hashes, want %d", len(stored), totp.RecoveryCodeCount)
 	}
@@ -1089,25 +1088,10 @@ func assertChallengeCookieAttrs(t *testing.T, c *http.Cookie) {
 }
 
 // storedRecoveryHashes reads the code hashes straight out of the database.
-func storedRecoveryHashes(t *testing.T, dsn string, userID uuid.UUID) []string {
+func storedRecoveryHashes(t *testing.T, raw *testdb.Raw, userID uuid.UUID) []string {
 	t.Helper()
 
-	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect to the scratch database: %v", err)
-	}
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			t.Errorf("close scratch connection: %v", closeErr)
-		}
-	}()
-
-	rows, err := conn.Query(ctx, `SELECT code_hash FROM user_recovery_codes WHERE user_id = $1`, userID)
-	if err != nil {
-		t.Fatalf("read recovery hashes: %v", err)
-	}
-	defer rows.Close()
+	rows := raw.Query(context.Background(), t, `SELECT code_hash FROM user_recovery_codes WHERE user_id = ?`, userID)
 
 	var hashes []string
 	for rows.Next() {

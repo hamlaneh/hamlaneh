@@ -90,7 +90,7 @@ func (s *apiServer) CreateCallToken(w http.ResponseWriter, r *http.Request, chan
 	// The identity is the account id, taken from the session and never from
 	// the request: it is what the ejection hooks name a participant by, and
 	// what a call's participant list is resolved back through.
-	ticket, err := s.calls.JoinToken(channelID, sc.prin.user.ID, sc.prin.user.DisplayName)
+	ticket, err := s.calls.JoinToken(r.Context(), channelID, sc.prin.user.ID, sc.prin.user.DisplayName)
 	if err != nil {
 		internalError(w, r, err)
 		return

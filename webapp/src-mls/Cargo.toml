@@ -1,0 +1,40 @@
+[package]
+name = "hamlaneh-mls"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+description = "Thin wasm-bindgen wrapper over OpenMLS — glue only, no cryptography of our own."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Exact pins per ADR 006. Never widen these to a caret range: a silent minor
+# bump of an MLS implementation is a change to persisted cryptographic state.
+openmls = { version = "=0.9.0", features = ["js"] }
+openmls_rust_crypto = "=0.6.0"
+openmls_traits = "=0.6.0"
+openmls_basic_credential = "=0.6.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasm-bindgen = "0.2"
+
+# Two getrandom versions reach this tree and only one is covered by openmls's
+# `js` feature: getrandom 0.4 (via openmls) is handled there, while
+# getrandom 0.2 (via openmls_rust_crypto -> rand_core 0.6) needs its own `js`
+# feature. Without this the wasm32 build fails pointing at the wrong knob.
+# Measured in docs/spikes/mls-wasm-integration.md §1.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
+# The measured-cheapest configuration for gzipped bytes, which is what crosses
+# the wire (spike §2: 489 KB gzipped, against 760 KB at the default profile).
+# Deliberately no wasm-opt pass afterwards — it shrinks the file raw and grows
+# it gzipped.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

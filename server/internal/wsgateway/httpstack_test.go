@@ -109,7 +109,12 @@ func newStack(t *testing.T) *stack {
 	origin := "http://" + server.Listener.Addr().String()
 
 	gw := wsgateway.New(store, origin)
-	server.Config.Handler = httpserver.Handler(store, httpserver.WithRealtime(gw))
+	// WithTrustedProxy because this stack stands in for the compose
+	// deployment, where Caddy terminates every connection — it is what makes
+	// the forwarded-address test below exercise the real derivation rather
+	// than a shape the single binary never has.
+	server.Config.Handler = httpserver.Handler(store,
+		httpserver.WithRealtime(gw), httpserver.WithTrustedProxy(true))
 	// The production server sets request deadlines (httpserver.New: 10s read,
 	// 30s write). Short ones here let one test prove a socket outlives them,
 	// which is the difference between a realtime connection and one that
@@ -303,7 +308,8 @@ func TestHandshakeOverTheConnectBudgetIsRefusedWithRetryAfter(t *testing.T) {
 // copy of it: the budget must identify the client the same way every other
 // per-address budget in this server does (httpserver.clientIP), which means
 // trusting the leftmost X-Forwarded-For value when — and only when — the
-// direct peer is the reverse proxy on the private network.
+// server was told a proxy is in front of it AND the direct peer sits where
+// that proxy sits (httpserver.WithTrustedProxy, set by newStack above).
 //
 // Getting this wrong is not a cosmetic bug in either direction. Keying on the
 // peer would put the whole instance behind Caddy into one bucket and let any

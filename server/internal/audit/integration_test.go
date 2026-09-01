@@ -1,37 +1,24 @@
 package audit_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net/netip"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/audit"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
 )
 
-// rawConn opens a second connection to the scratch database, for the SQL a
-// test has to run BEHIND the application: these tests exist to prove what
-// happens when somebody edits the table directly, and going through the
-// store would prove nothing, because the store has no way to do it.
-func rawConn(ctx context.Context, t *testing.T, dsn string) *pgx.Conn {
-	t.Helper()
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect to the scratch database: %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close(context.Background()) })
-	return conn
-}
-
 // appendN records n entries through the recorder and returns the log.
-func appendN(ctx context.Context, t *testing.T, store *storage.Store, chain *audit.Chain, n int) []storage.AuditEntry {
+func appendN(ctx context.Context, t *testing.T, store testdb.Store, chain *audit.Chain, n int) []storage.AuditEntry {
 	t.Helper()
 
 	actor, err := store.CreateUser(ctx, storage.NewUser{
@@ -93,33 +80,36 @@ func TestRecordedChainVerifies(t *testing.T) {
 func TestEditingARowBreaksVerification(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 	chain := newChain(t)
-	conn := rawConn(ctx, t, dsn)
 
 	entries := appendN(ctx, t, store, chain, 5)
+	before := entries[len(entries)-3] // seq 3, newest first
 
-	tests := map[string]string{
-		"the action":     `UPDATE audit_entries SET action = 'test.something.else' WHERE seq = 3`,
-		"the target":     `UPDATE audit_entries SET target_label = 'somebody.else' WHERE seq = 3`,
-		"the actor":      `UPDATE audit_entries SET actor_id = NULL WHERE seq = 3`,
-		"the detail":     `UPDATE audit_entries SET detail = '{"index": 99}'::jsonb WHERE seq = 3`,
-		"the address":    `UPDATE audit_entries SET ip = '198.51.100.9' WHERE seq = 3`,
-		"the time":       `UPDATE audit_entries SET occurred_at = occurred_at + interval '1 hour' WHERE seq = 3`,
-		"the link":       `UPDATE audit_entries SET prev_hash = decode(repeat('00', 32), 'hex') WHERE seq = 3`,
-		"the seal (all)": `UPDATE audit_entries SET entry_hash = decode(repeat('ff', 32), 'hex') WHERE seq = 3`,
+	// One bound value per case, so the same statement runs on both drivers:
+	// what each engine spells differently — a jsonb cast, an interval, a
+	// decode(repeat(...)) — is a Go value here instead.
+	tests := map[string]struct {
+		statement string
+		value     any
+	}{
+		"the action":     {`UPDATE audit_entries SET action = ? WHERE seq = 3`, "test.something.else"},
+		"the target":     {`UPDATE audit_entries SET target_label = ? WHERE seq = 3`, "somebody.else"},
+		"the actor":      {`UPDATE audit_entries SET actor_id = ? WHERE seq = 3`, nil},
+		"the detail":     {`UPDATE audit_entries SET detail = ? WHERE seq = 3`, `{"index": 99}`},
+		"the address":    {`UPDATE audit_entries SET ip = ? WHERE seq = 3`, "198.51.100.9"},
+		"the time":       {`UPDATE audit_entries SET occurred_at = ? WHERE seq = 3`, before.OccurredAt.Add(time.Hour)},
+		"the link":       {`UPDATE audit_entries SET prev_hash = ? WHERE seq = 3`, bytes.Repeat([]byte{0x00}, 32)},
+		"the seal (all)": {`UPDATE audit_entries SET entry_hash = ? WHERE seq = 3`, bytes.Repeat([]byte{0xff}, 32)},
 	}
 
-	for name, statement := range tests {
+	for name, tamper := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Deliberately NOT parallel: each case edits the same row and
 			// puts it back, so they have to take turns.
-			before := entries[len(entries)-3] // seq 3, newest first
-			if _, err := conn.Exec(ctx, statement); err != nil {
-				t.Fatalf("tamper: %v", err)
-			}
-			t.Cleanup(func() { restoreEntry(ctx, t, conn, before) })
+			raw.Exec(ctx, t, tamper.statement, tamper.value)
+			t.Cleanup(func() { restoreEntry(ctx, t, raw, before) })
 
 			tampered, err := store.ListAuditEntries(ctx, storage.ListAuditParams{Limit: 10})
 			if err != nil {
@@ -144,15 +134,12 @@ func TestEditingARowBreaksVerification(t *testing.T) {
 func TestDeletingARowBreaksVerification(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 	chain := newChain(t)
-	conn := rawConn(ctx, t, dsn)
 
 	appendN(ctx, t, store, chain, 5)
-	if _, err := conn.Exec(ctx, `DELETE FROM audit_entries WHERE seq = 3`); err != nil {
-		t.Fatalf("delete an entry: %v", err)
-	}
+	raw.Exec(ctx, t, `DELETE FROM audit_entries WHERE seq = 3`)
 
 	remaining, err := store.ListAuditEntries(ctx, storage.ListAuditParams{Limit: 10})
 	if err != nil {
@@ -226,16 +213,27 @@ func TestConcurrentAppendsProduceOneValidChain(t *testing.T) {
 
 // restoreEntry puts a row back exactly as it was, so the next subtest starts
 // from an intact chain.
-func restoreEntry(ctx context.Context, t *testing.T, conn *pgx.Conn, e storage.AuditEntry) {
+//
+// The detail and the address are bound as strings rather than as the []byte
+// and *netip.Addr the entry carries: the columns are jsonb and inet on
+// PostgreSQL and plain TEXT on SQLite, and a string is the one encoding both
+// take. It restores the same bytes either way — jsonb re-normalises what it
+// already normalised on the way out, and SQLite stores text byte for byte.
+func restoreEntry(ctx context.Context, t *testing.T, raw *testdb.Raw, e storage.AuditEntry) {
 	t.Helper()
-	_, err := conn.Exec(ctx,
-		`UPDATE audit_entries
-		 SET action = $2, actor_id = $3, target_id = $4, target_label = $5,
-		     detail = $6, ip = $7, occurred_at = $8, prev_hash = $9, entry_hash = $10
-		 WHERE seq = $1`,
-		e.Seq, e.Action, e.ActorID, e.TargetID, e.TargetLabel,
-		e.Detail, e.IP, e.OccurredAt, e.PrevHash, e.EntryHash)
-	if err != nil {
-		t.Fatalf("restore entry seq %d: %v", e.Seq, err)
+
+	var detail, ip any
+	if e.Detail != nil {
+		detail = string(e.Detail)
 	}
+	if e.IP != nil {
+		ip = e.IP.String()
+	}
+	raw.Exec(ctx, t,
+		`UPDATE audit_entries
+		 SET action = ?, actor_id = ?, target_id = ?, target_label = ?,
+		     detail = ?, ip = ?, occurred_at = ?, prev_hash = ?, entry_hash = ?
+		 WHERE seq = ?`,
+		e.Action, e.ActorID, e.TargetID, e.TargetLabel,
+		detail, ip, e.OccurredAt, e.PrevHash, e.EntryHash, e.Seq)
 }

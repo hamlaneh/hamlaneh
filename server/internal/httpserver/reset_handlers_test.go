@@ -93,7 +93,7 @@ func resetHandler(t *testing.T, store passwordreset.Store, cfg passwordreset.Con
 	t.Helper()
 
 	svc, recorder := newResetService(t, store, cfg)
-	return httpserver.Handler(nil, httpserver.WithPasswordReset(svc)), recorder
+	return httpserver.Handler(&fakeStore{}, httpserver.WithPasswordReset(svc)), recorder
 }
 
 // deliverableConfig is the configuration of an instance that can actually
@@ -112,7 +112,7 @@ func TestGetInstance(t *testing.T) {
 	}{
 		{
 			name:          "no service configured",
-			build:         func(*testing.T) http.Handler { return httpserver.Handler(nil) },
+			build:         func(*testing.T) http.Handler { return httpserver.Handler(&fakeStore{}) },
 			wantAvailable: false,
 		},
 		{
@@ -127,7 +127,7 @@ func TestGetInstance(t *testing.T) {
 					t.Fatalf("build reset service: %v", err)
 				}
 				t.Cleanup(svc.Close)
-				return httpserver.Handler(nil, httpserver.WithPasswordReset(svc))
+				return httpserver.Handler(&fakeStore{}, httpserver.WithPasswordReset(svc))
 			},
 			wantAvailable: false,
 		},
@@ -184,7 +184,7 @@ func TestInstanceReportsResetAvailabilityFromTheEnvironment(t *testing.T) {
 		}
 		t.Cleanup(svc.Close)
 
-		rec := doHandler(t, httpserver.Handler(nil, httpserver.WithPasswordReset(svc)), request(http.MethodGet, "/api/v1/instance", ""))
+		rec := doHandler(t, httpserver.Handler(&fakeStore{}, httpserver.WithPasswordReset(svc)), request(http.MethodGet, "/api/v1/instance", ""))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status %d (body %s), want 200", rec.Code, rec.Body.String())
 		}
@@ -557,7 +557,7 @@ func TestPasswordResetFlowIntegration(t *testing.T) {
 
 // expiredTokenResponse mints a token that is already past its expiry and
 // returns what reset-complete answers for it.
-func expiredTokenResponse(ctx context.Context, t *testing.T, store *storage.Store, handler http.Handler, newPassword string) *httptest.ResponseRecorder {
+func expiredTokenResponse(ctx context.Context, t *testing.T, store testdb.Store, handler http.Handler, newPassword string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	raw, hash := session.NewToken()
