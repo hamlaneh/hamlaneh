@@ -1,5 +1,40 @@
+import type { Page } from "@playwright/test";
+
 import { createChannelApi, inviteApi, uniqueSlug } from "../support/chat";
 import { expect, test } from "../support/fixtures";
+
+/**
+ * Poisons every directory answer for one member with extra signature keys —
+ * the server-that-lies this spec's adversary is made of.
+ *
+ * The try/catch is not about the poisoning, which cannot fail; it is about
+ * WHEN the handler runs. The client polls this endpoint on a timer, so a
+ * request is in flight whenever the page reloads (twice in this spec) or
+ * closes (once, in teardown) — and at that moment Playwright disposes the
+ * fetched response mid-handler. Left unhandled, the throw is attributed to
+ * the spec after every real assertion has already passed, which is how
+ * main's first post-merge run went red on a test whose subject was fine.
+ * An aborted poll is indistinguishable from a dropped one to the client,
+ * which retries on its own timer; the next answer is poisoned the same way.
+ */
+async function plantDirectoryKeys(page: Page, userId: string, keys: string[]): Promise<void> {
+  await page.route("**/api/v1/channels/*/mls/member-devices*", async (route) => {
+    try {
+      const response = await route.fetch();
+      const body = (await response.json()) as {
+        members: { user_id: string; signature_public_keys: string[] }[];
+      };
+      for (const member of body.members) {
+        if (member.user_id === userId) {
+          member.signature_public_keys = [...member.signature_public_keys, ...keys];
+        }
+      }
+      await route.fulfill({ response, json: body });
+    } catch {
+      await route.abort().catch(() => undefined);
+    }
+  });
+}
 
 /**
  * ROADMAP Phase 3's key-swap gate, met as written: "an adversarial test
@@ -65,18 +100,7 @@ test.describe("key swap", () => {
     // half of the safety number comes from their own signer, so an attack on
     // their own row would be a different test.
     const planted = Buffer.from(`planted-key-${peer.id}`).toString("base64");
-    await app.page.route("**/api/v1/channels/*/mls/member-devices*", async (route) => {
-      const response = await route.fetch();
-      const body = (await response.json()) as {
-        members: { user_id: string; signature_public_keys: string[] }[];
-      };
-      for (const member of body.members) {
-        if (member.user_id === peer.id) {
-          member.signature_public_keys = [...member.signature_public_keys, planted];
-        }
-      }
-      await route.fulfill({ response, json: body });
-    });
+    await plantDirectoryKeys(app.page, peer.id, [planted]);
 
     // Reopening is what forces the reconcile that reads the directory. The
     // reload also throws away every scrap of in-memory state, so what the
@@ -133,23 +157,16 @@ test.describe("key swap", () => {
     // between a decision and a switch.
     const second = Buffer.from(`planted-again-${peer.id}`).toString("base64");
     await app.page.unrouteAll({ behavior: "ignoreErrors" });
-    await app.page.route("**/api/v1/channels/*/mls/member-devices*", async (route) => {
-      const response = await route.fetch();
-      const body = (await response.json()) as {
-        members: { user_id: string; signature_public_keys: string[] }[];
-      };
-      for (const member of body.members) {
-        if (member.user_id === peer.id) {
-          member.signature_public_keys = [...member.signature_public_keys, planted, second];
-        }
-      }
-      await route.fulfill({ response, json: body });
-    });
+    await plantDirectoryKeys(app.page, peer.id, [planted, second]);
     await app.page.reload();
     await expect(app.page.getByText(t("chat.e2ee.verification.blockedTitle"))).toBeVisible({
       timeout: 60_000,
     });
 
+    // The mid-spec unroute above already follows this rule; teardown gets the
+    // same courtesy, so no poll handler is left in flight to race the page
+    // close it cannot survive.
+    await app.page.unrouteAll({ behavior: "ignoreErrors" });
     await peerApp.page.close();
   });
 });
