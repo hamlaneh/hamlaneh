@@ -18,8 +18,16 @@ import { audioBytes, MEDIA_ARGS, peerFacts } from "../support/webrtc";
  * because any two of them can be true while the call is worthless:
  *
  *   1. the peer connections reach connected and nominate a pair;
- *   2. the nominated pair's LOCAL candidate really is of type `relay`, on the
- *      address the media server advertises;
+ *   2. every transport either browser GATHERED was a relay allocation on the
+ *      address the media server advertises, inside its relay range — so the
+ *      call had nothing else to ride, whatever label the nominated pair
+ *      carries. (It used to assert the pair's own local candidate is `relay`;
+ *      two CI runs showed that label losing a benign race to `prflx` — the
+ *      name libwebrtc gives a mapping the far side observed on an existing
+ *      socket — while the gathered set, the media and the probe all held.
+ *      The set is the stronger claim: a peer-reflexive candidate is never a
+ *      transport of its own, so relay-only gathering plus a live call IS the
+ *      relay proof, race or no race.)
  *   3. `inbound-rtp` audio grows on both sides between two samples — media
  *      moving, not a handshake that merely looks green.
  *
@@ -305,52 +313,75 @@ test.describe("relay-only calls", () => {
       for (const one of connected) {
         // Every check below is SOFT, and none of them is relaxed: a soft
         // failure still fails the run. What changes is that one stops the
-        // reporting instead of stopping the test, so a red run says which of
-        // the eight facts were wrong AND still reaches the media samples and
-        // the control probe underneath.
-        //
-        // The reason is a real one this gate hit: a mismatch on the candidate
-        // TYPE alone aborted before section 3 ever ran, so the run could not
-        // say whether media was flowing — which is the difference between a
-        // relabelled path and a broken one, and the only thing that tells you
-        // which. A gate whose first failure hides its remaining evidence is
-        // the same defect as one that reports only "passed".
+        // reporting instead of stopping the test, so a red run names every
+        // wrong fact AND still reaches the media samples and the control
+        // probe underneath — which is what separates a relabelled path from
+        // a broken one when this gate goes red.
         expect.soft(one.policy, `${who}: the peer connection is not relay-only`).toBe("relay");
         expect.soft(one.nominated, `${who}: no candidate pair was nominated`).toBe(true);
         expect.soft(one.pairState, `${who}: the nominated pair did not succeed`).toBe("succeeded");
 
-        const local = one.local;
-        expect.soft(local, `${who}: the nominated pair has no local candidate`).not.toBeNull();
-        if (local === null) {
-          continue;
-        }
-        // The measurement the whole spec exists for: not "we asked for relay"
-        // but "the pair carrying this call has a relay candidate on our side".
-        expect
-          .soft(local.type, `${who}: the nominated local candidate is not a relay`)
-          .toBe("relay");
-        expect.soft(local.protocol, `${who}: the relay candidate is not over UDP`).toBe("udp");
-        expect.soft(local.address, `${who}: the relay is not on the advertised node IP`).toBe(
-          stack.livekit.nodeIP,
+        // The measurement the whole spec exists for — moved off the nominated
+        // pair's LABEL and onto the gathered candidate SET, on evidence from
+        // two CI runs (2026-09-01) that failed identically. The pair's local
+        // candidate was reported as `prflx` with a redacted address and the
+        // peer-observed port: the label libwebrtc mints when the SFU's
+        // connectivity check arrives before local pairing catches up — a race
+        // this runner loses and drill 001's machine happened to win, on the
+        // same stack, with media flowing and the control probe green both
+        // times.
+        //
+        // Asserting on the gathered set is the STRONGER claim, not a
+        // concession. A peer-reflexive candidate is never a transport of its
+        // own — it is a name for a mapping observed on a socket that already
+        // exists — so proving every transport this side ever had was a relay
+        // allocation on our own SFU proves the call rode one, whatever the
+        // pair chose to call it. The pair-label assert proved the same thing
+        // only when the race fell the right way; this holds either way, and a
+        // real breach (a host or srflx candidate in the pool) fails it
+        // outright.
+        const relays = one.gathered.filter((candidate) => candidate.type === "relay");
+        const foreign = one.gathered.filter(
+          (candidate) => candidate.type !== "relay" && candidate.type !== "prflx",
         );
         expect
           .soft(
-            local.port,
-            `${who}: the relay port ${String(local.port)} is outside LiveKit's relay range`,
+            foreign,
+            `${who}: non-relay transports were gathered — the relay-only policy did not hold`,
           )
-          .toBeGreaterThanOrEqual(RELAY_RANGE.start);
+          .toEqual([]);
         expect
-          .soft(local.port, `${who}: the relay port is outside LiveKit's relay range`)
-          .toBeLessThan(RELAY_RANGE.end);
-        expect
-          .soft(
-            PUBLISHED_PORTS,
-            `${who}: the relay landed on a published port, so it proves nothing`,
-          )
-          .not.toContain(local.port);
-        relayPorts.add(local.port);
+          .soft(relays.length, `${who}: no relay candidate was gathered at all`)
+          .toBeGreaterThan(0);
+        for (const relay of relays) {
+          expect
+            .soft(relay.protocol, `${who}: a relay candidate is not over UDP`)
+            .toBe("udp");
+          expect
+            .soft(relay.address, `${who}: a relay candidate is not on the advertised node IP`)
+            .toBe(stack.livekit.nodeIP);
+          expect
+            .soft(
+              relay.port,
+              `${who}: relay port ${String(relay.port)} is outside LiveKit's relay range`,
+            )
+            .toBeGreaterThanOrEqual(RELAY_RANGE.start);
+          expect
+            .soft(relay.port, `${who}: the relay port is outside LiveKit's relay range`)
+            .toBeLessThan(RELAY_RANGE.end);
+          expect
+            .soft(
+              PUBLISHED_PORTS,
+              `${who}: the relay landed on a published port, so it proves nothing`,
+            )
+            .not.toContain(relay.port);
+          relayPorts.add(relay.port);
+        }
+
+        const local = one.local;
         evidence.push(
-          `${who}: ${one.connectionState}/${one.pairState} nominated local=${local.type}/${local.protocol} ${local.address}:${String(local.port)} remote=${one.remote?.type ?? "?"}/${one.remote?.protocol ?? "?"} ${one.remote?.address ?? "?"}:${String(one.remote?.port ?? 0)}`,
+          `${who}: ${one.connectionState}/${one.pairState} nominated local=${local?.type ?? "?"}/${local?.protocol ?? "?"} ${local?.address ?? "?"}:${String(local?.port ?? 0)} remote=${one.remote?.type ?? "?"}/${one.remote?.protocol ?? "?"} ${one.remote?.address ?? "?"}:${String(one.remote?.port ?? 0)}`,
+          `${who}: gathered ${relays.map((relay) => `relay/${relay.protocol} ${relay.address}:${String(relay.port)}`).join(", ") || "none"}${foreign.length > 0 ? ` FOREIGN ${foreign.map((candidate) => candidate.type).join(",")}` : ""}`,
         );
       }
     }

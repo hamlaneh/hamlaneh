@@ -73,6 +73,17 @@ export interface PeerFacts {
   pairState: string;
   local: CandidateFacts | null;
   remote: CandidateFacts | null;
+  /**
+   * Every `local-candidate` stats entry — the transports this side HAD, not
+   * the one the nominated pair happens to label. The distinction matters
+   * because a nominated pair's local candidate can be reported as `prflx`:
+   * a label minted when the far side's connectivity check arrives on an
+   * existing socket before local pairing catches up, with the address
+   * redacted and the port being the mapping the peer observed. A spec that
+   * asserts on the pair's label is asserting on a race; the gathered set is
+   * what the connection could actually send from.
+   */
+  gathered: CandidateFacts[];
   audioBytesReceived: number;
   audioPacketsReceived: number;
   /**
@@ -129,6 +140,14 @@ export function peerFacts(page: Page): Promise<PeerFacts[]> {
         pairState: pair === null ? "" : str(pair.state),
         local: pair === null ? null : candidate(pair.localCandidateId),
         remote: pair === null ? null : candidate(pair.remoteCandidateId),
+        gathered: entries
+          .filter((entry) => entry.type === "local-candidate")
+          .map((entry) => ({
+            type: str(entry.candidateType),
+            protocol: str(entry.protocol),
+            address: str(entry.address),
+            port: num(entry.port),
+          })),
         audioBytesReceived: audio.reduce((total, one) => total + num(one.bytesReceived), 0),
         audioPacketsReceived: audio.reduce((total, one) => total + num(one.packetsReceived), 0),
         audioEnergy: audio.reduce((total, one) => total + num(one.totalAudioEnergy), 0),
