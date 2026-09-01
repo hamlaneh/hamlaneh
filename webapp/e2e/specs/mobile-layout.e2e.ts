@@ -66,8 +66,14 @@ test("@fa-smoke the chat shell fits a 375px phone", async ({ app, accounts, page
 
   // The header control the mobile artboard adds, and only it: its presence is
   // how we know the <=899 tier is the one in force.
+  //
+  // 30s, not the 10s default: this is the first fact asserted after signIn,
+  // so it absorbs the whole login round-trip, shell render and MLS bootstrap
+  // on a contended runner — the same allowance every other spec's first
+  // post-sign-in wait already makes (chat-messaging, chat-unread, key-swap).
+  // Everything after it keeps the default.
   const drawerToggle = page.getByRole("button", { name: t("chat.header.openChannels") });
-  await expect(drawerToggle).toBeVisible();
+  await expect(drawerToggle).toBeVisible({ timeout: 30_000 });
   await expect(app.channelHeading).toBeVisible();
   await expectFits(page, "chat shell, drawer closed");
   await expectWithinViewport(drawerToggle, "drawer toggle");
@@ -145,7 +151,10 @@ test("@fa-smoke the admin dashboard fits a 375px phone", async ({ app, accounts,
   await app.gotoSignIn("/admin");
   await app.signIn(account.username, account.password);
 
-  await expect(page.getByRole("heading", { name: t("admin.users.title") })).toBeVisible();
+  // First fact after signIn — the 30s allowance the chat-shell test explains.
+  await expect(page.getByRole("heading", { name: t("admin.users.title") })).toBeVisible({
+    timeout: 30_000,
+  });
   const rail = page.getByRole("navigation", { name: t("admin.nav.label") });
   const content = page.getByRole("main");
   await expect(rail).toBeVisible();
@@ -192,7 +201,8 @@ test("the two-step code row fits a 375px phone", async ({ app, accounts, page, t
   await app.gotoSignIn();
   await app.signIn(account.username, account.password);
 
-  await expect(app.twoStepHeading).toBeVisible();
+  // First fact after signIn — the 30s allowance the chat-shell test explains.
+  await expect(app.twoStepHeading).toBeVisible({ timeout: 30_000 });
   // The first and last of the six: between them they span the whole row, so
   // a row that no longer fits shows up on one end or the other.
   await expectWithinViewport(
