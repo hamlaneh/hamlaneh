@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/hamlaneh/hamlaneh/server/internal/session"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
@@ -15,24 +13,8 @@ import (
 
 const testIssuer = "https://idp.example.com"
 
-// oidcRawConn opens a raw connection for assertions the storage API has no
-// reason to expose (last_login_at, a hard delete).
-func oidcRawConn(ctx context.Context, t *testing.T, dsn string) *pgx.Conn {
-	t.Helper()
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("raw connection: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := conn.Close(context.Background()); err != nil {
-			t.Errorf("close raw connection: %v", err)
-		}
-	})
-	return conn
-}
-
 // newOidcFixtureUser creates one account for these tests.
-func newOidcFixtureUser(ctx context.Context, t *testing.T, store *storage.Store, username string) storage.User {
+func newOidcFixtureUser(ctx context.Context, t *testing.T, store testdb.Store, username string) storage.User {
 	t.Helper()
 	user, err := store.CreateUser(ctx, storage.NewUser{
 		Username:     username,
@@ -51,7 +33,7 @@ func newOidcFixtureUser(ctx context.Context, t *testing.T, store *storage.Store,
 func TestOidcIdentityLifecycle(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 	alice := newOidcFixtureUser(ctx, t, store, "alice")
 	bob := newOidcFixtureUser(ctx, t, store, "bob")
@@ -87,10 +69,9 @@ func TestOidcIdentityLifecycle(t *testing.T) {
 	}
 
 	// The lookup recorded the use.
-	var lastLogin *string
-	conn := oidcRawConn(ctx, t, dsn)
-	if scanErr := conn.QueryRow(ctx,
-		`SELECT last_login_at::text FROM oidc_identities WHERE user_id = $1`, alice.ID,
+	var lastLogin *time.Time
+	if scanErr := raw.QueryRow(ctx,
+		`SELECT last_login_at FROM oidc_identities WHERE user_id = ?`, alice.ID,
 	).Scan(&lastLogin); scanErr != nil {
 		t.Fatalf("read last_login_at: %v", scanErr)
 	}
@@ -155,17 +136,14 @@ func TestOidcIdentityLifecycle(t *testing.T) {
 func TestOidcIdentityGoneWithUser(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 	user := newOidcFixtureUser(ctx, t, store, "leaver")
 
 	if err := store.LinkOidcIdentity(ctx, user.ID, testIssuer, "sub-leaver", nil); err != nil {
 		t.Fatalf("link: %v", err)
 	}
-	conn := oidcRawConn(ctx, t, dsn)
-	if _, err := conn.Exec(ctx, `DELETE FROM users WHERE id = $1`, user.ID); err != nil {
-		t.Fatalf("delete user: %v", err)
-	}
+	raw.Exec(ctx, t, `DELETE FROM users WHERE id = ?`, user.ID)
 	if _, err := store.UserByOidcIdentity(ctx, testIssuer, "sub-leaver"); !errors.Is(err, storage.ErrNotFound) {
 		t.Errorf("identity outlived its account: got %v, want ErrNotFound", err)
 	}
@@ -231,7 +209,7 @@ func TestOidcLinkRequestSingleUseAndExpiry(t *testing.T) {
 func TestOidcLinkRequestGoneWithUser(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 	user := newOidcFixtureUser(ctx, t, store, "linkreqgone")
 
@@ -240,10 +218,7 @@ func TestOidcLinkRequestGoneWithUser(t *testing.T) {
 	if err := store.CreateOidcLinkRequest(ctx, state, secret, user.ID, time.Hour); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	conn := oidcRawConn(ctx, t, dsn)
-	if _, err := conn.Exec(ctx, `DELETE FROM users WHERE id = $1`, user.ID); err != nil {
-		t.Fatalf("delete user: %v", err)
-	}
+	raw.Exec(ctx, t, `DELETE FROM users WHERE id = ?`, user.ID)
 	if _, err := store.ConsumeOidcLinkRequest(ctx, state, secret); !errors.Is(err, storage.ErrNotFound) {
 		t.Errorf("pending link outlived its account: got %v, want ErrNotFound", err)
 	}

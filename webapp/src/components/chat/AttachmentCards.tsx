@@ -9,7 +9,9 @@ import {
 } from "../../chat/format";
 import type { Attachment, LinkPreview, Message } from "../../chat/types";
 import { isolateLtr } from "../../i18n/bidi";
+import type { AttachmentEntry } from "../../mls/attachments";
 import { DownloadIcon, FileTextIcon, ImageIcon } from "../icons";
+import { EncryptedAttachmentCard, UnopenableAttachmentCard } from "./EncryptedAttachments";
 
 /**
  * The file, image and link-preview cards from chat-components.
@@ -154,8 +156,40 @@ function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
   );
 }
 
-/** The cards for a list of attachments — a stored message's, or a pending one's. */
-export function AttachmentList({ attachments }: { attachments: readonly Attachment[] }) {
+/**
+ * The cards for a list of attachments — a stored message's, or a pending one's.
+ *
+ * `entries` is what makes a card encrypted: present, and every card is drawn
+ * from the decrypted envelope (ADR 013) rather than from the server's row,
+ * whose filename is the literal placeholder and whose type is opaque. Absent
+ * is the plaintext channel, unchanged.
+ *
+ * An id with no entry gets the cannot-be-opened card rather than the
+ * placeholder one. That is not a defensive nicety: it is what a hostile or
+ * truncated envelope produces, and drawing "encrypted · OCTET-STREAM" there
+ * would be showing the reader the server's fiction as though it were the file.
+ */
+export function AttachmentList({
+  attachments,
+  entries,
+}: {
+  attachments: readonly Attachment[];
+  entries?: readonly AttachmentEntry[] | undefined;
+}) {
+  if (entries !== undefined) {
+    return (
+      <>
+        {attachments.map((attachment) => {
+          const entry = entries.find((candidate) => candidate.id === attachment.id);
+          return entry === undefined ? (
+            <UnopenableAttachmentCard key={attachment.id} reason="key" />
+          ) : (
+            <EncryptedAttachmentCard key={attachment.id} attachment={attachment} entry={entry} />
+          );
+        })}
+      </>
+    );
+  }
   return (
     <>
       {attachments.map((attachment) =>
@@ -169,10 +203,33 @@ export function AttachmentList({ attachments }: { attachments: readonly Attachme
   );
 }
 
-export function AttachmentCards({ message }: { message: Message }) {
+/**
+ * The files of a message this device cannot read.
+ *
+ * The key rides inside the message, so a message that will not open takes its
+ * files with it. Saying so is the honest rendering of E2EE's join boundary
+ * applied to files; drawing nothing would leave the reader to guess.
+ */
+export function UnreadableAttachments({ message }: { message: Message }) {
   return (
     <>
-      <AttachmentList attachments={message.attachments} />
+      {message.attachments.map((attachment) => (
+        <UnopenableAttachmentCard key={attachment.id} reason="message" />
+      ))}
+    </>
+  );
+}
+
+export function AttachmentCards({
+  message,
+  entries,
+}: {
+  message: Message;
+  entries?: readonly AttachmentEntry[] | undefined;
+}) {
+  return (
+    <>
+      <AttachmentList attachments={message.attachments} entries={entries} />
       {message.link_preview === undefined ? null : (
         <LinkPreviewCard preview={message.link_preview} />
       )}

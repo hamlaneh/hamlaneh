@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
@@ -25,27 +24,14 @@ func deviceTokens(access, refresh, userAgent, ip string) storage.SessionTokens {
 	return tokens
 }
 
-// assertionPool opens a second pool for raw table assertions; Store
-// deliberately does not expose its own.
-func assertionPool(ctx context.Context, t *testing.T, dsn string) *pgxpool.Pool {
-	t.Helper()
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open assertion pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
-}
-
 // familyRowCounts reads how many generations a family has and how many of
 // them are revoked, straight from the table — revocation is judged on rows,
 // not on the read model's view of them.
-func familyRowCounts(ctx context.Context, t *testing.T, pool *pgxpool.Pool, familyID uuid.UUID) (total, revoked int) {
+func familyRowCounts(ctx context.Context, t *testing.T, raw *testdb.Raw, familyID uuid.UUID) (total, revoked int) {
 	t.Helper()
 
-	err := pool.QueryRow(ctx,
-		`SELECT count(*), count(revoked_at) FROM sessions WHERE family_id = $1`,
+	err := raw.QueryRow(ctx,
+		`SELECT count(*), count(revoked_at) FROM sessions WHERE family_id = ?`,
 		familyID,
 	).Scan(&total, &revoked)
 	if err != nil {
@@ -64,7 +50,7 @@ func familyIDs(families []storage.SessionFamily) []uuid.UUID {
 }
 
 // mustListFamilies lists the caller's families or fails the test.
-func mustListFamilies(ctx context.Context, t *testing.T, store *storage.Store, userID, currentFamilyID uuid.UUID) []storage.SessionFamily {
+func mustListFamilies(ctx context.Context, t *testing.T, store testdb.Store, userID, currentFamilyID uuid.UUID) []storage.SessionFamily {
 	t.Helper()
 
 	families, err := store.ListSessionFamilies(ctx, userID, currentFamilyID)
@@ -80,9 +66,8 @@ func mustListFamilies(ctx context.Context, t *testing.T, store *storage.Store, u
 func TestListSessionFamiliesIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
-	pool := assertionPool(ctx, t, dsn)
 
 	user := mustCreateUser(ctx, t, store, newUser("lister"))
 	stranger := mustCreateUser(ctx, t, store, newUser("listerstranger"))
@@ -175,7 +160,7 @@ func TestListSessionFamiliesIntegration(t *testing.T) {
 		}
 
 		// Two generations exist; the list still shows the family once.
-		if total, _ := familyRowCounts(ctx, t, pool, deviceB.FamilyID); total != 2 {
+		if total, _ := familyRowCounts(ctx, t, raw, deviceB.FamilyID); total != 2 {
 			t.Errorf("device B has %d generations, want 2", total)
 		}
 	})
@@ -239,38 +224,29 @@ func TestListSessionFamiliesIntegration(t *testing.T) {
 func TestListSessionFamiliesJudgesOnlyTheNewestGeneration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
-	pool := assertionPool(ctx, t, dsn)
 
 	user := mustCreateUser(ctx, t, store, newUser("fencer"))
 	first := mustCreateSession(ctx, t, store, user.ID,
 		deviceTokens("f-acc", "f-ref", "fenced-device", "203.0.113.70"))
 
 	// Rotating leaves generation 1 used but neither revoked nor expired.
-	if _, outcome, err := store.RotateSession(ctx, hashOf("f-ref"),
-		deviceTokens("f2-acc", "f2-ref", "fenced-device", "203.0.113.70")); err != nil ||
-		outcome != storage.RotateOutcomeRotated {
+	newest, outcome, err := store.RotateSession(ctx, hashOf("f-ref"),
+		deviceTokens("f2-acc", "f2-ref", "fenced-device", "203.0.113.70"))
+	if err != nil || outcome != storage.RotateOutcomeRotated {
 		t.Fatalf("rotate the fenced family: outcome %v, err %v", outcome, err)
 	}
 
 	// Revoke ONLY the newest generation. No storage method does this — they
 	// all revoke whole families, which is the correct behaviour and exactly
-	// why the fence is otherwise untested.
-	tag, err := pool.Exec(ctx,
-		`UPDATE sessions SET revoked_at = now()
-		  WHERE family_id = $1
-		    AND created_at = (SELECT max(created_at) FROM sessions WHERE family_id = $1)`,
-		first.FamilyID,
-	)
-	if err != nil {
-		t.Fatalf("revoke the newest generation: %v", err)
-	}
-	if tag.RowsAffected() != 1 {
-		t.Fatalf("revoked %d generations, want exactly the newest one", tag.RowsAffected())
-	}
+	// why the fence is otherwise untested. It is named by id rather than by
+	// max(created_at): the count below is what proves exactly one row moved,
+	// and an id cannot tie the way two timestamps a microsecond apart can.
+	raw.Exec(ctx, t,
+		`UPDATE sessions SET revoked_at = ? WHERE id = ?`, time.Now().UTC(), newest.ID)
 
-	total, revoked := familyRowCounts(ctx, t, pool, first.FamilyID)
+	total, revoked := familyRowCounts(ctx, t, raw, first.FamilyID)
 	if total != 2 || revoked != 1 {
 		t.Fatalf("fixture is %d generations with %d revoked, want 2 with 1", total, revoked)
 	}
@@ -290,9 +266,8 @@ func TestListSessionFamiliesJudgesOnlyTheNewestGeneration(t *testing.T) {
 func TestRevokeUserFamilyIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
-	pool := assertionPool(ctx, t, dsn)
 
 	user := mustCreateUser(ctx, t, store, newUser("revoker"))
 	victim := mustCreateUser(ctx, t, store, newUser("revokervictim"))
@@ -310,7 +285,7 @@ func TestRevokeUserFamilyIntegration(t *testing.T) {
 			t.Fatalf("RevokeUserFamily: %v", err)
 		}
 
-		total, revoked := familyRowCounts(ctx, t, pool, target.FamilyID)
+		total, revoked := familyRowCounts(ctx, t, raw, target.FamilyID)
 		if total != 2 || revoked != total {
 			t.Errorf("%d of %d generations revoked, want all %d", revoked, total, total)
 		}
@@ -330,7 +305,7 @@ func TestRevokeUserFamilyIntegration(t *testing.T) {
 		if err := store.RevokeUserFamily(ctx, user.ID, target.FamilyID); err != nil {
 			t.Fatalf("second RevokeUserFamily: %v", err)
 		}
-		total, revoked := familyRowCounts(ctx, t, pool, target.FamilyID)
+		total, revoked := familyRowCounts(ctx, t, raw, target.FamilyID)
 		if total != 2 || revoked != 2 {
 			t.Errorf("after re-revoking: %d of %d generations revoked, want 2 of 2", revoked, total)
 		}
@@ -347,7 +322,7 @@ func TestRevokeUserFamilyIntegration(t *testing.T) {
 
 		// The status code alone would hide the real bug: assert the victim's
 		// session is untouched.
-		if _, revoked := familyRowCounts(ctx, t, pool, victimSess.FamilyID); revoked != 0 {
+		if _, revoked := familyRowCounts(ctx, t, raw, victimSess.FamilyID); revoked != 0 {
 			t.Errorf("%d generations of the victim's family were revoked, want 0", revoked)
 		}
 		if _, _, err := store.SessionUserByAccessHash(ctx, hashOf("v-acc")); err != nil {

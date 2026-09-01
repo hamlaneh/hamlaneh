@@ -44,7 +44,7 @@ func (s *apiServer) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	addr, ipKey := clientIP(r)
+	addr, ipKey := s.clientIP(r)
 	if s.loginIPLimiter.Limited(ipKey) {
 		writeRateLimited(w, r, s.loginIPLimiter.RetryAfter(ipKey))
 		return
@@ -233,7 +233,7 @@ func (s *apiServer) RefreshSession(w http.ResponseWriter, r *http.Request) {
 	accessRaw, accessHash := session.NewToken()
 	refreshRaw, refreshHash := session.NewToken()
 
-	addr, _ := clientIP(r)
+	addr, _ := s.clientIP(r)
 	_, outcome, err := s.store.RotateSession(r.Context(), session.HashToken(c.Value), storage.SessionTokens{
 		AccessTokenHash:  accessHash,
 		RefreshTokenHash: refreshHash,

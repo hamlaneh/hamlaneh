@@ -274,6 +274,68 @@ an edge case.
 Empty conference: a link-holder arrives before anybody else. Waiting alone in a room is a state,
 and it should not read as broken.
 
+## Key verification (Phase 3, slice 3.3 — [ADR 008](../adr/008-key-verification.md))
+
+Two surfaces, both currently unbuilt and both carrying a security meaning that the visual design
+has to keep honest rather than soften.
+
+### `verification-sheet`
+
+Per person, reached from a conversation. Shows the safety number: sixty decimal digits in twelve
+five-digit groups, identical on both people's screens, plus a QR for same-room comparison. The
+number is the whole point, so it is the largest thing on the screen and must be readable aloud
+over a phone call — grouping and spacing carry that, not decoration.
+
+Three states it must draw, and they are not interchangeable: **unverified** (a number to compare,
+no badge), **pinned** (this device recorded these keys on first sight without a ceremony — real,
+weaker, and it must not look like verified), and **verified** (the humans compared and matched).
+The visual distance between pinned and verified is a security property: a design that renders
+them alike would make an unceremonied acceptance look like a proof.
+
+**Numerals:** ASCII digits in both locales, per the locked correction — a safety number read
+aloud in Persian has to be the same string the other person sees.
+
+### `verification-changed`
+
+Replaces the composer when a member's device keys have changed since this device accepted them.
+It has to say who, and what changed — a new device, or a replaced key — because those read very
+differently to a person deciding whether to worry.
+
+Two exits, and no third: run the ceremony, or accept explicitly. The design must not offer a
+dismiss, a "not now", or anything that returns the composer without a decision — ADR 008 calls
+each of those "silently encrypt to the new key wearing a delay". Reading and receiving continue
+normally in this state, so the warning belongs where the composer was, not over the history.
+
+The prompt about **your own account** (a device was registered to you; is it yours?) is the same
+component pointed at the reader, and it is the loudest one in the slice.
+
+## Media E2EE (Phase 3, slice 3.4 — [ADR 009](../adr/009-media-e2ee.md))
+
+Three surfaces, and all three exist to make a claim precise rather than to decorate a call.
+
+### `call-encrypted-indicator`
+
+On a DM or channel call: the media is end-to-end encrypted and the server relays what it cannot
+read. What it must **not** imply is metadata protection — the SFU still sees who is in the call,
+when, and who is speaking. The design problem is that a true claim about content sitting beside
+an absent claim about metadata reads, to most people, as a claim about both.
+
+### `conference-plain-label`
+
+A conference is not end-to-end encrypted, in either mode, because a guest has no key of their
+own. The join surface has to say the server can access audio and video, and the unqualified word
+"encrypted" may not appear on it — the call still uses TLS and SRTP, and saying "encrypted"
+without saying which kind is the overclaim §2.4 forbids. The design problem is stating that
+plainly without making a working, deliberate feature look broken or second-rate.
+
+### `call-publish-blocked`
+
+The mid-call form of slice 3.3's warning: somebody's device keys changed, so this device stops
+publishing until the person decides. Its two exits are the verification ceremony's, unchanged.
+The design problem is specific to a call: the user's own camera and microphone have just stopped
+for a reason that is not an error and not a network failure, and the screen has to say so fast
+enough that they do not start debugging their hardware.
+
 ---
 
 *Maintained alongside the product: when a screen's scope changes in ROADMAP.md, its brief

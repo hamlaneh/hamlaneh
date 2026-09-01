@@ -183,12 +183,13 @@ func TestAccessTokenExpiryIntegration(t *testing.T) {
 
 // TestMalformedForwardedHeadersIntegration exercises clientIP hardening
 // through the stack: garbage X-Forwarded-For from a private peer must not
-// break login handling.
+// break login handling. WithTrustedProxy is what makes the header reach the
+// parser at all, so the server-mode wiring is what this has to run under.
 func TestMalformedForwardedHeadersIntegration(t *testing.T) {
 	t.Parallel()
 
 	store, _ := testdb.New(t)
-	handler := httpserver.Handler(store)
+	handler := httpserver.Handler(store, httpserver.WithTrustedProxy(true))
 
 	rec := httptest.NewRecorder()
 	req := request(http.MethodPost, "/api/v1/auth/login", loginBody("ghost", "whatever password"),

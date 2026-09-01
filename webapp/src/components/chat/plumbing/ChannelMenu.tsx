@@ -15,22 +15,38 @@ interface ChannelMenuProps {
   channel: Channel;
   onInvite: () => void;
   onSetTopic: (topic: string) => Promise<boolean>;
+  /** Opens the safety-number sheet. Absent when this is not an encrypted DM. */
+  onVerify?: (() => void) | undefined;
   onClose: () => void;
 }
 
-export function ChannelMenu({ channel, onInvite, onSetTopic, onClose }: ChannelMenuProps) {
+export function ChannelMenu({
+  channel,
+  onInvite,
+  onSetTopic,
+  onVerify,
+  onClose,
+}: ChannelMenuProps) {
   const { t } = useTranslation();
   const [topic, setTopic] = useState(channel.topic);
 
   if (channel.kind === "dm") {
     return (
       <section
-        className="hm-plumbing"
+        className="hm-plumbing hm-plumbing--overlay"
         role="dialog"
         aria-modal="false"
         aria-label={t("chat.header.channelActions")}
       >
         <p>{t("chat.channelMenu.dmNote")}</p>
+        {/* The way in when nothing is wrong. Without it the ceremony would be
+            reachable only from the warning, so nobody could verify anybody
+            until a key had already changed — which is backwards. */}
+        {onVerify === undefined ? null : (
+          <button type="button" onClick={onVerify}>
+            {t("chat.e2ee.verification.openSheet")}
+          </button>
+        )}
         <button type="button" onClick={onClose}>
           {t("chat.common.close")}
         </button>
@@ -40,7 +56,7 @@ export function ChannelMenu({ channel, onInvite, onSetTopic, onClose }: ChannelM
 
   return (
     <section
-      className="hm-plumbing"
+      className="hm-plumbing hm-plumbing--overlay"
       role="dialog"
       aria-modal="false"
       aria-label={t("chat.header.channelActions")}

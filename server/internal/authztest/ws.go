@@ -143,6 +143,23 @@ func WSRegistry() []WSEntry {
 		wsEnforced("call_started", S2C, WSMember),
 		wsEnforced("call_updated", S2C, WSMember),
 		wsEnforced("call_ended", S2C, WSMember),
+		// The two E2EE transport events (ADR 006). mls_commit is
+		// membership-scoped like every other channel event: a stranger must
+		// not learn that a channel's group moved, which is as much a
+		// disclosure as learning a message was sent.
+		//
+		// mls_welcome is `self` rather than `member`, and it is the one event
+		// in this table where that is not a weaker rule but the only correct
+		// one: a Welcome exists precisely because its recipient is NOT in the
+		// group yet, so a membership check would refuse the event the design
+		// depends on. It carries no payload, so the fan-out to a person's
+		// other devices reveals only that they have something to fetch.
+		//
+		// TestMlsEventsNeverReachANonMember and TestMlsWelcomeReachesOnlyItsOwnUser
+		// (internal/wsgateway/mls_delivery_test.go) are what licenses
+		// WSEnforced on both.
+		wsEnforced("mls_commit", S2C, WSMember),
+		wsEnforced("mls_welcome", S2C, WSSelf),
 		wsEnforced("ping", S2C, WSSession),
 		wsEnforced("pong", S2C, WSSession),
 		wsEnforced("error", S2C, WSSession),

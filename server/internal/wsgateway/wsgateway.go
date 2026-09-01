@@ -199,8 +199,12 @@ func WithPresenceGrace(d time.Duration) Option {
 // Gateway is the realtime gateway: an httpserver.Realtime implementation
 // plus the upgrade endpoint's socket handling.
 type Gateway struct {
-	store  Store
-	origin string
+	store Store
+	// origins is every origin a handshake may carry, normalized. It holds
+	// the configured public origin and nothing else unless the deployment
+	// asked for WithLoopbackAlias; an empty slice allows nothing, which is
+	// the fail-closed answer for a gateway that does not know its own origin.
+	origins []string
 	// signer mints the expiring URLs an Attachment carries. Nil on a server
 	// with no signing key, which yields cards without links rather than no
 	// cards — the honest degradation, and the same one the REST side makes.
@@ -284,7 +288,6 @@ func New(store Store, origin string, opts ...Option) *Gateway {
 	ctx, cancel := context.WithCancel(context.Background())
 	g := &Gateway{
 		store:             store,
-		origin:            normalizeOrigin(origin),
 		sweepInterval:     defaultSweepInterval,
 		heartbeatInterval: heartbeatInterval,
 		heartbeatTimeout:  heartbeatTimeout,
@@ -298,6 +301,12 @@ func New(store Store, origin string, opts ...Option) *Gateway {
 		sockets:           make(map[uuid.UUID]map[*socket]struct{}),
 		channels:          make(map[uuid.UUID]*replayBuffer),
 		presence:          make(map[uuid.UUID]*presenceState),
+	}
+	// Before the options, because WithLoopbackAlias derives its addition from
+	// the configured origin. A value that does not read as an origin leaves
+	// the slice empty, and an empty slice allows nothing.
+	if normalized := normalizeOrigin(origin); normalized != "" {
+		g.origins = []string{normalized}
 	}
 	for _, opt := range opts {
 		opt(g)
@@ -341,16 +350,97 @@ func normalizeOrigin(raw string) string {
 }
 
 // OriginAllowed reports whether an Origin header may open a socket: present,
-// not "null", and equal to the configured public origin. Case is ignored
-// because scheme and host are case-insensitive; nothing else is. There is no
-// wildcard, no substring match and no registrable-domain relaxation, and
-// there must never be one — this check stands in for the CSRF header a
-// browser cannot send on a WebSocket handshake.
+// not "null", and equal to one of this gateway's origins. Case is ignored
+// because scheme and host are case-insensitive; nothing else is. Every
+// comparison is a whole-string equality — there is no wildcard, no substring
+// match and no registrable-domain relaxation, and there must never be one,
+// because this check stands in for the CSRF header a browser cannot send on a
+// WebSocket handshake.
+//
+// The set has one member on every deployment that is not home mode, and at
+// most three there (WithLoopbackAlias). It is never operator-supplied: nothing
+// outside this package can put an origin into it.
 func (g *Gateway) OriginAllowed(origin string) bool {
-	if g.origin == "" || origin == "" || origin == "null" {
+	if origin == "" || origin == "null" {
 		return false
 	}
-	return strings.EqualFold(origin, g.origin)
+	for _, allowed := range g.origins {
+		if strings.EqualFold(origin, allowed) {
+			return true
+		}
+	}
+	return false
+}
+
+// loopbackHosts are the three spellings of "this machine" a browser will put
+// in an Origin header, each with the literal a URL writes it as (IPv6 is
+// bracketed). The set is closed and deliberately small: these are the ones a
+// person types, not every address in 127/8.
+var loopbackHosts = []struct{ host, literal string }{
+	{"localhost", "localhost"},
+	{"127.0.0.1", "127.0.0.1"},
+	{"::1", "[::1]"},
+}
+
+// WithLoopbackAlias also accepts the other loopback spellings of the
+// configured origin — same scheme, same port, sibling host.
+//
+// It exists for home mode and only home mode (ADR 012). That deployment binds
+// 127.0.0.1 and prints an address, but a person types localhost; those are one
+// machine, one port and one trust boundary, and refusing the second means the
+// page loads and every WebSocket upgrade is denied — a chat that looks like it
+// works and receives nothing.
+//
+// It is narrow by construction rather than by discipline. It takes no
+// argument, so it cannot be used to allow an origin somebody names; it derives
+// its additions from the configured origin, and only when THAT origin is
+// already loopback. On any other instance — including a home instance an
+// operator has published to a LAN or put behind a name — it adds nothing at
+// all, so applying it cannot widen a deployment that is not on loopback.
+func WithLoopbackAlias() Option {
+	return func(g *Gateway) {
+		if len(g.origins) == 0 {
+			return
+		}
+		g.origins = append(g.origins, loopbackAliases(g.origins[0])...)
+	}
+}
+
+// loopbackAliases returns the sibling loopback origins of a normalized
+// loopback origin, or nothing at all when origin does not name a loopback
+// host. Scheme and port are copied verbatim: only the host may differ.
+func loopbackAliases(origin string) []string {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return nil
+	}
+	hostname := u.Hostname()
+	if !isLoopbackHost(hostname) {
+		return nil
+	}
+
+	port := ""
+	if p := u.Port(); p != "" {
+		port = ":" + p
+	}
+	aliases := make([]string, 0, len(loopbackHosts)-1)
+	for _, lh := range loopbackHosts {
+		if strings.EqualFold(lh.host, hostname) {
+			continue
+		}
+		aliases = append(aliases, u.Scheme+"://"+lh.literal+port)
+	}
+	return aliases
+}
+
+// isLoopbackHost reports whether host is one of the spellings above.
+func isLoopbackHost(host string) bool {
+	for _, lh := range loopbackHosts {
+		if strings.EqualFold(lh.host, host) {
+			return true
+		}
+	}
+	return false
 }
 
 // Close stops the gateway: every socket is closed with 1001 (going away, the

@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
+	"github.com/hamlaneh/hamlaneh/server/internal/blobstore"
+	"github.com/hamlaneh/hamlaneh/server/internal/filesign"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
 
@@ -75,11 +77,14 @@ type fileURLSigner interface {
 type unsignedFileURLs struct{}
 
 func (unsignedFileURLs) AttachmentURLs(id uuid.UUID, hasThumbnail bool) (string, *string) {
-	url := "/files/" + id.String()
+	// filesign.Path, not a literal: "correctly shaped" is a claim, and this
+	// used to spell the thumbnail "/thumbnail" while the origin serves
+	// "/thumb". Nothing caught it, because nothing production reads this.
+	url := filesign.Path(id, blobstore.Original)
 	if !hasThumbnail {
 		return url, nil
 	}
-	thumbnail := url + "/thumbnail"
+	thumbnail := filesign.Path(id, blobstore.Thumbnail)
 	return url, &thumbnail
 }
 

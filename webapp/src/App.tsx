@@ -7,6 +7,7 @@ import type { components } from "./api/schema";
 import { readInviteToken } from "./auth/inviteToken";
 import { consumeResetToken } from "./auth/resetToken";
 import { consumeSsoLanding } from "./auth/sso";
+import { readMeetToken } from "./calls/meetLink";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AuthShell } from "./components/auth/AuthShell";
 import { useAccountLanguage } from "./i18n/useLanguage";
@@ -15,6 +16,7 @@ import { ChangePasswordScreen } from "./screens/ChangePasswordScreen";
 import { ChatApp } from "./screens/ChatApp";
 import { LoginScreen } from "./screens/LoginScreen";
 import type { LoginNotice } from "./screens/LoginScreen";
+import { MeetGuestScreen } from "./screens/MeetGuestScreen";
 import { RedeemInviteScreen } from "./screens/RedeemInviteScreen";
 import { ResetPasswordScreen } from "./screens/ResetPasswordScreen";
 import { ResetRequestScreen } from "./screens/ResetRequestScreen";
@@ -39,7 +41,30 @@ type AuthFlow =
   | { screen: "totp" }
   | { screen: "resetRequest" }
   | { screen: "resetPassword"; token: string }
-  | { screen: "redeemInvite"; token: string };
+  | { screen: "redeemInvite"; token: string }
+  /**
+   * A CONFERENCE LINK, AND WHY IT IS HERE RATHER THAN A ROUTE.
+   *
+   * `/meet/{token}` is the webapp's first unauthenticated *application* URL,
+   * so "make it a real route" is the obvious reading — and it is the wrong
+   * one twice over. The router (`BrowserRouter`, in the authenticated branch
+   * below) exists because the chat shell has things to navigate *between*:
+   * channels are addressable and a message has a permalink. The guest page
+   * has exactly one screen and no sub-navigation at all, so a route buys it
+   * nothing. Paying for it, on the other hand, means hoisting the router
+   * above the session gate and turning this whole pre-session conditional —
+   * the reset, invite, two-step and forced-change screens, none of which are
+   * URLs — into route elements, to give one screen an address it already has.
+   *
+   * The precedent it actually matches is the invite link: a bearer capability
+   * in a path segment, read once at the first render, rendered as a state.
+   * The difference from the invite is that this one outranks the *session*
+   * too — the same way a reset link does — because a conference link is for
+   * whoever opens it, and a member who happens to be signed in joins the
+   * meeting exactly as a stranger does. There is no member-flavoured join in
+   * the contract.
+   */
+  | { screen: "meet"; token: string };
 
 /** Asks the server who is signed in (GET /users/me) and maps it to a Session. */
 async function fetchSession(): Promise<Session> {
@@ -88,6 +113,11 @@ function CrashFallback() {
  * conditional render and each brings its own AuthShell. Once signed in, the
  * chat shell mounts behind a router: channels are addressable and a message
  * has a permalink.
+ *
+ * Two of these screens are reached by a *link* rather than by a state — the
+ * invitation and the conference link — and both are read out of the address
+ * bar here, at the first render, rather than routed to. See AuthFlow above for
+ * why the conference link in particular is not a route.
  */
 function App() {
   const { t } = useTranslation();
@@ -99,6 +129,14 @@ function App() {
    * somewhere.
    */
   const [flow, setFlow] = useState<AuthFlow>(() => {
+    // First, and before the fragment is even read: a conference link is the
+    // one address here that belongs to somebody who may have no account at
+    // all, so nothing about this instance's sign-in state gets to answer for
+    // it. See the AuthFlow note above.
+    const meetToken = readMeetToken();
+    if (meetToken !== null) {
+      return { screen: "meet", token: meetToken };
+    }
     const resetToken = consumeResetToken();
     if (resetToken !== null) {
       return { screen: "resetPassword", token: resetToken };
@@ -136,10 +174,16 @@ function App() {
     void fetchSession().then(setSession);
   }, []);
 
+  const guest = flow.screen === "meet";
+
   useEffect(() => {
-    // Session bootstrap: resolve the initial "loading" state.
-    refreshSession();
-  }, [refreshSession]);
+    // Session bootstrap: resolve the initial "loading" state — except for a
+    // conference link, which never reads the answer. A stranger's browser has
+    // no reason to be asked who is signed in on somebody else's server.
+    if (!guest) {
+      refreshSession();
+    }
+  }, [guest, refreshSession]);
 
   // The language follows the person, not the browser: the account's locale
   // takes over the moment there is an account, and every later switch is
@@ -182,6 +226,10 @@ function App() {
     // the server, not from a local guess.
     refreshSession();
   };
+
+  if (flow.screen === "meet") {
+    return <MeetGuestScreen token={flow.token} />;
+  }
 
   if (flow.screen === "redeemInvite") {
     return (

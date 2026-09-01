@@ -10,10 +10,9 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
 
-// The WebSocket upgrade endpoint. Split out of messaging_stubs.go so the
-// gateway and the REST messaging handlers can be built without sharing a
-// file; docs/api/ws-protocol.md is the contract everything above the upgrade
-// obeys.
+// The WebSocket upgrade endpoint, kept in its own file so the gateway and the
+// REST messaging handlers do not share one; docs/api/ws-protocol.md is the
+// contract everything above the upgrade obeys.
 
 // codeOriginNotAllowed answers a handshake whose Origin is missing, "null",
 // or not the instance's public origin. It is a 403 on the handshake
@@ -88,8 +87,9 @@ func (s *apiServer) ConnectWebSocket(w http.ResponseWriter, r *http.Request) {
 	//
 	// The address comes from clientIP, the same derivation every other
 	// per-address budget here uses, trust model included: the leftmost
-	// X-Forwarded-For value only when the direct peer is the reverse proxy.
-	_, ip := clientIP(r)
+	// X-Forwarded-For value only on a server told it has a proxy in front,
+	// and only from a peer where that proxy sits.
+	_, ip := s.clientIP(r)
 	if retryAfter, allowed := gw.ConnectAllowed(prin.session.FamilyID, ip); !allowed {
 		writeRateLimited(w, r, retryAfter)
 		return

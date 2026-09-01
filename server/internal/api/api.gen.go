@@ -72,6 +72,24 @@ func (e CreateChannelRequestKind) Valid() bool {
 	}
 }
 
+// Defines values for EncryptionMode.
+const (
+	Compliance EncryptionMode = "compliance"
+	Strict     EncryptionMode = "strict"
+)
+
+// Valid indicates whether the value is a known member of the EncryptionMode enum.
+func (e EncryptionMode) Valid() bool {
+	switch e {
+	case Compliance:
+		return true
+	case Strict:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HealthStatusStatus.
 const (
 	Degraded HealthStatusStatus = "degraded"
@@ -278,7 +296,8 @@ type AdminUserPage struct {
 	Users      []AdminUser `json:"users"`
 }
 
-// Attachment A file card in the message list. Read-only on Message: attachments are created by the Phase 1.3 upload pipeline, so until that slice lands the array is always empty. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both.
+// Attachment A file card in the message list. Read-only on Message: a file becomes an attachment by being uploaded first and named in the send's attachment_ids, never by being written here.
+// On an e2ee channel these fields are placeholders, not description: `filename` is `encrypted`, `content_type` is `application/octet-stream`, `size_bytes` is the size of the ciphertext, and there are no dimensions — the server was never told the real ones. The card renders from metadata the client decrypts out of the message, so an unreadable message yields an unreadable card rather than a card that lies. Every field here is one the design draws — name, type and size on the generic card; pixel dimensions and a thumbnail on the image card; a download control on both.
 type Attachment struct {
 	// ContentType The card's short type label ("PDF", "PNG") is derived from this.
 	ContentType string             `json:"content_type"`
@@ -356,8 +375,12 @@ type Channel struct {
 	CreatedBy *openapi_types.UUID `json:"created_by,omitempty"`
 
 	// DmPeer The other person. Present only when kind is dm.
-	DmPeer *UserSummary       `json:"dm_peer,omitempty"`
-	Id     openapi_types.UUID `json:"id"`
+	DmPeer *UserSummary `json:"dm_peer,omitempty"`
+
+	// E2ee Fixed at creation, never toggled — flipping it either way on a live conversation is exactly the silent mode-switch the downgrade test forbids. In an e2ee channel every message carries the mls envelope and empty content, so the server holds nothing it can read. Two consequences a client renders honestly rather than papering over: no link previews, and no server-side search — unread counts are row counts and survive.
+	// Mentions do work, by a different route: the sender declares them in mls.mentions, because the server cannot parse content it cannot read (ADR 014). Attachments work too — the bytes are opaque and every key travels inside the ciphertext (ADR 013), so a file in an encrypted conversation is encrypted rather than a lie.
+	E2ee bool               `json:"e2ee"`
+	Id   openapi_types.UUID `json:"id"`
 
 	// Kind Flat channel kinds (ADR 001 — no org or team layer). In Phase 1.2 visibility is membership for all three; `kind` is stored so a channel directory and join flow can arrive without a schema change.
 	Kind ChannelKind `json:"kind"`
@@ -413,8 +436,45 @@ type ChannelRef struct {
 	Slug *string     `json:"slug,omitempty"`
 }
 
+// ClaimMlsKeyPackagesRequest defines model for ClaimMlsKeyPackagesRequest.
+type ClaimMlsKeyPackagesRequest struct {
+	// UserId The member whose devices are being added. May be the caller — that is how a person's own second device gets added.
+	UserId openapi_types.UUID `json:"user_id"`
+}
+
+// Conference A conference as its owner or an administrator sees it. Never the link.
+type Conference struct {
+	// Active Whether anybody is in the room right now.
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// CreatedBy Null when the account that made it is gone.
+	CreatedBy *UserSummary `json:"created_by"`
+
+	// ExpiresAt Null means it does not expire. See createConference.
+	ExpiresAt *time.Time         `json:"expires_at,omitempty"`
+	Id        openapi_types.UUID `json:"id"`
+	Title     string             `json:"title"`
+}
+
+// ConferencePage defines model for ConferencePage.
+type ConferencePage struct {
+	Conferences []Conference `json:"conferences"`
+}
+
+// ConferencePreview What a link-holder may see before joining. Deliberately thin: whose instance is hosting, what the meeting is called, and whether anybody is in there. Not who created it, not who is in it, and nothing else about the instance.
+// `org_name` was left out of the first draft, on the reasoning that a preview should say as little as possible. That was wrong in a way the contract could have caught itself: `InvitePreview` carries the same field for the equally unauthenticated redemption screen, so the precedent already existed. And the cost of withholding it lands on the visitor — somebody following a link from a chat message, with no way to tell whose meeting they are about to walk into. A link-holder who can see the meeting's title learns nothing dangerous from the name of the organisation hosting it.
+type ConferencePreview struct {
+	Active  bool   `json:"active"`
+	OrgName string `json:"org_name"`
+	Title   string `json:"title"`
+}
+
 // CreateChannelRequest defines model for CreateChannelRequest.
 type CreateChannelRequest struct {
+	// E2ee Omit it and the organisation's encryption mode decides (ADR 011). Send it and it must agree with that mode: under `strict`, false is refused with 400 e2ee_required_by_org; under `compliance`, true is refused with 400 e2ee_forbidden_by_org. There is no per-conversation opt-out, because one would be a hole in exactly the guarantee the mode exists to state. Immutable after creation — the flag is never updated, which is what makes a later mode switch unable to touch this conversation either way.
+	E2ee *bool `json:"e2ee,omitempty"`
+
 	// Kind Direct messages are opened through /api/v1/dms, not here.
 	Kind  CreateChannelRequestKind `json:"kind"`
 	Slug  string                   `json:"slug"`
@@ -424,6 +484,15 @@ type CreateChannelRequest struct {
 // CreateChannelRequestKind Direct messages are opened through /api/v1/dms, not here.
 type CreateChannelRequestKind string
 
+// CreateConferenceRequest defines model for CreateConferenceRequest.
+type CreateConferenceRequest struct {
+	// ExpiresAt Optional, for a link genuinely meant to be short-lived. Absent means it does not expire.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+
+	// Title What to call it. Guests see this before they join.
+	Title *string `json:"title,omitempty"`
+}
+
 // CreateInviteRequest defines model for CreateInviteRequest.
 type CreateInviteRequest struct {
 	ExpiresInHours *int `json:"expires_in_hours,omitempty"`
@@ -432,17 +501,35 @@ type CreateInviteRequest struct {
 	Note *string `json:"note,omitempty"`
 }
 
+// CreateMlsGroupRequest defines model for CreateMlsGroupRequest.
+type CreateMlsGroupRequest struct {
+	// GroupId Base64, at most 64 raw bytes, chosen by the creating client — the MLS GroupId. Opaque to the server; unique across the instance.
+	GroupId string `json:"group_id"`
+}
+
 // CreateScimTokenRequest defines model for CreateScimTokenRequest.
 type CreateScimTokenRequest struct {
 	// Note Optional, and only administrators see it. It exists so a list of opaque tokens can say which system holds which.
 	Note *string `json:"note,omitempty"`
 }
 
+// CreatedConference defines model for CreatedConference.
+type CreatedConference struct {
+	// Conference A conference as its owner or an administrator sees it. Never the link.
+	Conference Conference `json:"conference"`
+
+	// Url The link, shown once. Only its hash is kept, so nothing can redisplay it — send it somewhere you trust.
+	Url string `json:"url"`
+}
+
 // CreatedInvite The link is in this response and nowhere else: only its hash is stored, exactly as password-reset tokens are.
 type CreatedInvite struct {
 	ExpiresAt time.Time          `json:"expires_at"`
 	Id        openapi_types.UUID `json:"id"`
-	Url       string             `json:"url"`
+
+	// Url `{base}/invite#token=<token>`. The token rides the **fragment**, which no browser sends to any server, so it cannot reach an access log, a Referer header or a proxy's history — the same reasoning the emailed reset link follows.
+	// The shape is written down here because leaving it unsaid is not free: this field said only "string" for two phases, the two halves drifted into a path form on the client and a fragment form on the server, and every real invitation landed on the sign-in screen with nothing failing loudly.
+	Url string `json:"url"`
 }
 
 // CreatedScimToken defines model for CreatedScimToken.
@@ -456,8 +543,15 @@ type CreatedScimToken struct {
 
 // EditMessageRequest defines model for EditMessageRequest.
 type EditMessageRequest struct {
+	// Content Non-empty on a plaintext channel. On an e2ee channel it must be the empty string, with the new ciphertext in mls — same rule as send.
 	Content string `json:"content"`
+
+	// Mls The replacement ciphertext. Required on an e2ee channel, refused elsewhere — the same boundary as send, at the same choke point.
+	Mls *MlsMessageEnvelope `json:"mls,omitempty"`
 }
+
+// EncryptionMode Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+type EncryptionMode string
 
 // Error defines model for Error.
 type Error struct {
@@ -478,10 +572,13 @@ type HealthStatus struct {
 // HealthStatusStatus defines model for HealthStatus.Status.
 type HealthStatusStatus string
 
-// InstanceInfo What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere.
+// InstanceInfo What a client needs before it has a session. password_min_length is instance policy served with the form rather than a constant compiled into the client; password_reset_available is false when no mail transport is configured, so the sign-in screen can omit the link instead of offering one that goes nowhere. encryption_mode is here rather than only on the admin settings document because every member's creation surfaces need it and that document answers 403 to them. It is not withheld as a secret: an instance's encryption posture is a product characteristic its own users are entitled to know before they type anything into it, and a client that had to guess would guess wrong somewhere.
 type InstanceInfo struct {
 	// Calls False when no media server is configured -- a development server without the stack, or an install that has not enabled calls. The UI omits call controls rather than offering a door that goes nowhere, the same discipline password_reset_available follows.
 	Calls *bool `json:"calls,omitempty"`
+
+	// EncryptionMode Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+	EncryptionMode EncryptionMode `json:"encryption_mode"`
 
 	// MaxFileSizeBytes The per-file upload cap, published so a client can refuse a file before spending the user's bandwidth on a doomed request. The server enforces it regardless; this is a courtesy, not the check.
 	MaxFileSizeBytes       int64      `json:"max_file_size_bytes"`
@@ -512,6 +609,12 @@ type InvitePreview struct {
 	OrgName string `json:"org_name"`
 }
 
+// JoinConferenceRequest defines model for JoinConferenceRequest.
+type JoinConferenceRequest struct {
+	// DisplayName What the room calls you. Not verified, and cannot be.
+	DisplayName string `json:"display_name"`
+}
+
 // LinkPreview The link-preview card: image, title, description, and the host line the client derives from url. Read-only, and always absent until the Phase 1.3 egress preview proxy exists.
 type LinkPreview struct {
 	Description *string `json:"description,omitempty"`
@@ -539,7 +642,7 @@ type MemberPage struct {
 
 // Message defines model for Message.
 type Message struct {
-	// Attachments Always empty until the Phase 1.3 upload pipeline lands.
+	// Attachments The message's file cards, in the order the sender listed them in attachment_ids. Empty when the message carries no files.
 	Attachments []Attachment `json:"attachments"`
 
 	// Author The public face of a user: everything the chat shell draws (name row, avatar initials and tint are derived client-side from display_name and id) and nothing else. Never carries email, role, or password state.
@@ -562,6 +665,9 @@ type Message struct {
 
 	// LinkPreview Absent until the Phase 1.3 preview proxy lands.
 	LinkPreview *LinkPreview `json:"link_preview,omitempty"`
+
+	// Mls Present on every message of an e2ee channel (until deletion erases it), absent everywhere else — content is empty exactly when this is present.
+	Mls *MlsMessageEnvelope `json:"mls,omitempty"`
 }
 
 // MessagePage One page of history, always ordered ascending by (created_at, id). The two cursors are the handles for the next scrollback and the next forward fetch; each is absent when there is nothing more in that direction.
@@ -574,6 +680,137 @@ type MessagePage struct {
 	Messages     []Message `json:"messages"`
 }
 
+// MlsBackup defines model for MlsBackup.
+type MlsBackup struct {
+	Counter int64 `json:"counter"`
+
+	// Envelope Base64, exactly as stored.
+	Envelope string `json:"envelope"`
+
+	// UpdatedAt When the server last accepted a write. Shown to the person during a restore so a rolled-back envelope has a visible date to disagree with — the only defence available on a first restore, where the device that would hold the floor is the one that was lost.
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// MlsCommit defines model for MlsCommit.
+type MlsCommit struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Epoch The epoch the group REACHED by this commit — the submitted epoch plus one. This is the only numbering under which after_epoch=<your epoch> returns exactly the commits you have not applied, and under which a fresh group at epoch 0 has an empty log.
+	Epoch int64 `json:"epoch"`
+
+	// Message Base64, as submitted.
+	Message string `json:"message"`
+}
+
+// MlsCommitPage defines model for MlsCommitPage.
+type MlsCommitPage struct {
+	// Commits Ascending by epoch. The last epoch received is the next after_epoch; an empty page means caught up — epochs are the cursor, so there is no separate one.
+	Commits []MlsCommit `json:"commits"`
+}
+
+// MlsDevice defines model for MlsDevice.
+type MlsDevice struct {
+	CreatedAt time.Time          `json:"created_at"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// SignaturePublicKey Base64, echoed as registered.
+	SignaturePublicKey string `json:"signature_public_key"`
+}
+
+// MlsGroup defines model for MlsGroup.
+type MlsGroup struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Epoch The server's sequencing claim — how many commits the log holds — not cryptographic truth. Clients trust their own group state and use this to see how far behind they are.
+	Epoch int64 `json:"epoch"`
+
+	// GroupId Base64, as registered at creation.
+	GroupId string `json:"group_id"`
+}
+
+// MlsKeyPackageClaim defines model for MlsKeyPackageClaim.
+type MlsKeyPackageClaim struct {
+	DeviceId openapi_types.UUID `json:"device_id"`
+
+	// KeyPackage Base64. Consumed — this package will never be handed out again.
+	KeyPackage string `json:"key_package"`
+}
+
+// MlsKeyPackageClaims defines model for MlsKeyPackageClaims.
+type MlsKeyPackageClaims struct {
+	Claims []MlsKeyPackageClaim `json:"claims"`
+
+	// MissingDeviceIds The target's devices whose pool was empty — they cannot be added until they replenish. Both lists empty means the target has no MLS devices at all; the client says "cannot add yet" rather than pretending.
+	MissingDeviceIds []openapi_types.UUID `json:"missing_device_ids"`
+}
+
+// MlsKeyPackagePool defines model for MlsKeyPackagePool.
+type MlsKeyPackagePool struct {
+	// UnclaimedCount Unclaimed packages now stored for this device — what the client checks on connect to decide whether to replenish.
+	UnclaimedCount int `json:"unclaimed_count"`
+}
+
+// MlsMemberDevice One member and the signature keys of every device they have registered. A member with no devices yet appears with an empty list rather than being omitted, so a client can tell "has no device" from "is not a member" without a second question.
+type MlsMemberDevice struct {
+	// SignaturePublicKeys Base64, as registered. Opaque to the server.
+	SignaturePublicKeys []string           `json:"signature_public_keys"`
+	UserId              openapi_types.UUID `json:"user_id"`
+}
+
+// MlsMemberDevicePage defines model for MlsMemberDevicePage.
+type MlsMemberDevicePage struct {
+	Members []MlsMemberDevice `json:"members"`
+
+	// NextCursor Present when another page exists. A client must read every page before sweeping: an allow-list built from half the roster would evict the members it had not read yet.
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
+// MlsMessageEnvelope The encrypted half of a message in an e2ee channel. The server stores and echoes it without parsing; content is the empty string wherever this is present, so nothing the server can read ever carries the words. Deleting the message erases the ciphertext exactly as it erases content; editing replaces it and stamps edited_at as for any edit.
+type MlsMessageEnvelope struct {
+	// Ciphertext Base64 MLSMessage (application message). Cap ~32 KiB raw: a 4000-character message plus MLS framing fits with room, and the resulting message_created frame stays far under the 64 KiB WebSocket cap.
+	Ciphertext string `json:"ciphertext"`
+
+	// Epoch The group epoch the sender encrypted at — a routing hint for receivers holding older state, never a server-verified claim.
+	Epoch int64 `json:"epoch"`
+
+	// Mentions Sender-declared notification routing for an encrypted message (ADR 014). The server cannot read the ciphertext, so it cannot derive mentions the way it does on a plaintext channel — the sender names them instead.
+	// Ids that are not current members of the channel are dropped silently, duplicates collapse, and order is irrelevant: the write joins this list against channel_members, which is what keeps a declaration from naming a stranger. Trusting the sender here therefore widens nothing the membership join did not already bound.
+	// Never echoed on reads. Recipients render mentions from the tokens in the decrypted content; this list exists only so the badge and any later notification can outlive the reader's ability to decrypt.
+	// PRIVACY: this list is visible to the server. It is the one content-derived fact an encrypted message discloses — a directed sender-to-member edge — and it is named in the threat model rather than left implicit.
+	Mentions *[]openapi_types.UUID `json:"mentions,omitempty"`
+}
+
+// MlsWelcome defines model for MlsWelcome.
+type MlsWelcome struct {
+	ChannelId openapi_types.UUID `json:"channel_id"`
+	CreatedAt time.Time          `json:"created_at"`
+
+	// DeviceId Which of the caller's devices this Welcome is encrypted to. The others hold bytes they cannot open.
+	DeviceId openapi_types.UUID `json:"device_id"`
+
+	// GroupId Base64.
+	GroupId string             `json:"group_id"`
+	Id      openapi_types.UUID `json:"id"`
+
+	// Welcome Base64.
+	Welcome string `json:"welcome"`
+}
+
+// MlsWelcomeDelivery defines model for MlsWelcomeDelivery.
+type MlsWelcomeDelivery struct {
+	// DeviceIds Every claimed device this Welcome covers. The server stores one pending-Welcome row per device; each recipient extracts its own secrets from the shared blob.
+	DeviceIds []openapi_types.UUID `json:"device_ids"`
+
+	// Welcome Base64 Welcome, encrypted to the claimed key packages of every device it names.
+	Welcome string `json:"welcome"`
+}
+
+// MlsWelcomeList defines model for MlsWelcomeList.
+type MlsWelcomeList struct {
+	// Welcomes Oldest first.
+	Welcomes []MlsWelcome `json:"welcomes"`
+}
+
 // OidcRedirect defines model for OidcRedirect.
 type OidcRedirect struct {
 	// RedirectUrl The provider authorization URL to send the browser to.
@@ -582,6 +819,9 @@ type OidcRedirect struct {
 
 // OpenDirectMessageRequest defines model for OpenDirectMessageRequest.
 type OpenDirectMessageRequest struct {
+	// E2ee Applies only when this call CREATES the DM; reopening an existing one returns it as it is, whatever this says — get-or-create is idempotent and a flag cannot re-decide a conversation that already exists, which is also why a mode switch cannot. On creation the organisation's encryption mode decides when this is omitted, and a value that disagrees with the mode is refused exactly as on channel creation (400 e2ee_required_by_org / e2ee_forbidden_by_org).
+	E2ee *bool `json:"e2ee,omitempty"`
+
 	// UserId The other person. Must not be the caller.
 	UserId openapi_types.UUID `json:"user_id"`
 }
@@ -593,7 +833,16 @@ type OrgSettings struct {
 
 	// DefaultLocale The locale a new account starts in.
 	DefaultLocale OrgSettingsDefaultLocale `json:"default_locale"`
-	OrgName       string                   `json:"org_name"`
+
+	// EncryptedConversations How many conversations this instance holds that are end-to-end encrypted.
+	EncryptedConversations *int `json:"encrypted_conversations,omitempty"`
+
+	// EncryptionMode Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+	EncryptionMode EncryptionMode `json:"encryption_mode"`
+	OrgName        string         `json:"org_name"`
+
+	// PlaintextConversations How many are not. Both totals rather than one "outside the current mode" count, because the switch confirmation has to name what will be outside the mode being CHOSEN — which is the other set in each direction, so a single current-mode count would state the plaintext total as the encrypted one on a screen about encryption. Neither number ever moves on a switch: conversations are never converted, which is the whole of decision 2, so these are also the honest standing answer to "what does the mode not describe".
+	PlaintextConversations *int `json:"plaintext_conversations,omitempty"`
 
 	// RegistrationMode How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
 	RegistrationMode RegistrationMode `json:"registration_mode"`
@@ -635,6 +884,15 @@ type PasswordResetRequest struct {
 // Presence online — a live socket. away — the client reported itself idle. offline — no socket after a short grace period.
 type Presence string
 
+// PutMlsBackupRequest defines model for PutMlsBackupRequest.
+type PutMlsBackupRequest struct {
+	// Counter A readable copy of the counter sealed in the header. The server compares it only to refuse a backward write; the client compares the SEALED one against its own stored floor, which is the check a hostile server cannot pass by lying here.
+	Counter int64 `json:"counter"`
+
+	// Envelope Base64 of `header ‖ iv ‖ ciphertext` (ADR 010). The header is the magic HMLB, a version byte, and the length-prefixed framing of the counter and the user id, used verbatim as the AEAD's additional data — so a server that edits any of it produces a blob that will not open, rather than one that opens differently. The cap is ~512 KiB raw: verification records are kilobytes, and this endpoint is not a blob store.
+	Envelope string `json:"envelope"`
+}
+
 // RecoveryCodes Ten single-use codes in the design's XXXX-XXXX format, shown exactly once — the server keeps only argon2id hashes and can never display them again. Regeneration replaces the entire set.
 type RecoveryCodes struct {
 	Codes []string `json:"codes"`
@@ -649,8 +907,20 @@ type RedeemInviteRequest struct {
 	Username string `json:"username"`
 }
 
+// RegisterMlsDeviceRequest defines model for RegisterMlsDeviceRequest.
+type RegisterMlsDeviceRequest struct {
+	// SignaturePublicKey Base64. The device's MLS signature public key — an opaque identifier to the server, the idempotency key of registration, and the handle other members' clients verify against. Sized for Ed25519 today with headroom for post-quantum suites.
+	SignaturePublicKey string `json:"signature_public_key"`
+}
+
 // RegistrationMode How accounts come into existence. `invite` is the default and the safe one; `open` lets anybody with the URL create an account, which is why the screen warns about it.
 type RegistrationMode string
+
+// ReplaceMlsKeyPackagesRequest defines model for ReplaceMlsKeyPackagesRequest.
+type ReplaceMlsKeyPackagesRequest struct {
+	// KeyPackages Base64 key packages, each single-use. The measured size today is ~275 bytes raw; the cap leaves room for post-quantum suites without renegotiating the contract.
+	KeyPackages []string `json:"key_packages"`
+}
 
 // ScimToken A provisioning token as the table lists it. Never the token.
 type ScimToken struct {
@@ -721,6 +991,7 @@ type SearchSnippetPart struct {
 // SendMessageRequest defines model for SendMessageRequest.
 type SendMessageRequest struct {
 	// AttachmentIds Files previously uploaded to this channel by this caller and not yet attached to any message, attached atomically with the send. An id that names anything else — another channel's file, another person's, one already attached — answers 404 attachment_not_found, one code for every miss so nothing about other people's uploads leaks. Duplicates in the list are a 400.
+	// The ORDER of this list is significant and is preserved: a message's cards come back in it, on the send response and on every later read. It is the order the person arranged their files in, which is not the order the uploads finished — one request per file goes out concurrently, so completion order is a property of the network.
 	AttachmentIds *[]openapi_types.UUID `json:"attachment_ids,omitempty"`
 
 	// ClientMsgId Generated by the client once per message and reused verbatim on every retry. Unique per (channel, author).
@@ -728,6 +999,10 @@ type SendMessageRequest struct {
 
 	// Content Markdown as authored. May be empty only when attachment_ids is non-empty — an image with no caption is an ordinary message, a message with neither text nor files is nothing (400). One extension: a mention is the literal token `<@{user_id}>`. The composer's picker inserts the token and renders it as the person's display name; the server parses tokens (never display names) to populate mention counts. Display names are not unique, are not stable, and in Persian cannot match the username pattern at all — so the wire format carries the id and the rendering carries the name.
 	Content string `json:"content"`
+
+	// Mls Required on an e2ee channel, refused elsewhere — the write path enforces the boundary in both directions rather than trusting clients to keep it. On an e2ee channel content must be the empty string (400 e2ee_required); on a plaintext channel this field is a 400 e2ee_not_enabled. Idempotency by client_msg_id is unchanged.
+	// attachment_ids is permitted beside this field (ADR 013). The ids must name opaque uploads to the same channel; every per-file key and the real filename, type and dimensions travel inside the ciphertext, so the server stores bytes it cannot open and metadata it was never given.
+	Mls *MlsMessageEnvelope `json:"mls,omitempty"`
 }
 
 // SessionFamily One signed-in device — a refresh-token family. Every field is one a settings-sessions row draws.
@@ -754,6 +1029,12 @@ type SessionFamilyList struct {
 	Sessions []SessionFamily `json:"sessions"`
 }
 
+// SetEncryptionModeRequest defines model for SetEncryptionModeRequest.
+type SetEncryptionModeRequest struct {
+	// EncryptionMode Which kind of conversation this instance creates (ADR 011). `strict` means every new channel and DM is end-to-end encrypted and asking for a plaintext one is refused; `compliance` means the reverse, so that server-side search, retention and export can exist. It sets the rule for conversations that are BORN from now on and touches none that already exist — a switch cannot decrypt what is already encrypted, because nobody but the members can, and cannot retroactively protect what was stored in the clear. That is what makes "switching modes can't silently decrypt or expose history" true by construction rather than by a check. `compliance` is defined here from the first day and is **not selectable yet**: it is honest only once encryption at rest, a retention policy and compliance export exist, and a mode that delivered nothing but the absence of E2EE would be the dishonest toggle. Selecting it answers 409 encryption_mode_locked.
+	EncryptionMode EncryptionMode `json:"encryption_mode"`
+}
+
 // SetReadPositionRequest defines model for SetReadPositionRequest.
 type SetReadPositionRequest struct {
 	// MessageId The newest message the caller has seen. Must belong to this channel.
@@ -767,6 +1048,18 @@ type SsoStatus struct {
 
 	// ProviderName What to call the provider on the button. Present whenever enabled is true, and absent otherwise - a configured provider always has a name, defaulting to a generic one, so a client never has to render a button it cannot label.
 	ProviderName *string `json:"provider_name,omitempty"`
+}
+
+// SubmitMlsCommitRequest defines model for SubmitMlsCommitRequest.
+type SubmitMlsCommitRequest struct {
+	// Epoch The epoch this commit was built at. Accepted only while it is still current — the compare-and-swap that makes one commit win each epoch.
+	Epoch int64 `json:"epoch"`
+
+	// Message Base64 MLSMessage carrying the commit. The cap (~256 KiB raw) bounds a commit for a large tree; measured today a two-member commit is under 1 KiB.
+	Message string `json:"message"`
+
+	// Welcomes Welcomes for the devices this commit adds, stored atomically with the commit — a committed add whose Welcome was lost is a forked group. MLS produces ONE Welcome covering every member a commit adds, so a delivery names many devices and carries the blob once; a shape that repeated the blob per device would multiply a tree-sized payload by the member count, which is the 70 MB request the first implementation caught. The whole request is additionally bounded by an 8 MiB body cap on this endpoint, stated here so the per-item caps cannot be read as multiplying past it.
+	Welcomes *[]MlsWelcomeDelivery `json:"welcomes,omitempty"`
 }
 
 // TemporaryCredentials Shown once and never again — the password is stored only as an argon2id hash, so there is nothing to redisplay.
@@ -906,6 +1199,12 @@ type InviteId = openapi_types.UUID
 // MessageId defines model for MessageId.
 type MessageId = openapi_types.UUID
 
+// MlsDeviceId defines model for MlsDeviceId.
+type MlsDeviceId = openapi_types.UUID
+
+// MlsWelcomeId defines model for MlsWelcomeId.
+type MlsWelcomeId = openapi_types.UUID
+
 // UserId defines model for UserId.
 type UserId = openapi_types.UUID
 
@@ -995,6 +1294,19 @@ type ListMessagesParams struct {
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// ListMlsCommitsParams defines parameters for ListMlsCommits.
+type ListMlsCommitsParams struct {
+	AfterEpoch int64 `form:"after_epoch" json:"after_epoch"`
+	Limit      *int  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListMlsMemberDevicesParams defines parameters for ListMlsMemberDevices.
+type ListMlsMemberDevicesParams struct {
+	// Cursor From a previous page's next_cursor.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // SearchParams defines parameters for Search.
 type SearchParams struct {
 	Q     string      `form:"q" json:"q"`
@@ -1020,6 +1332,9 @@ type CreateInviteJSONRequestBody = CreateInviteRequest
 
 // UpdateOrgSettingsJSONRequestBody defines body for UpdateOrgSettings for application/json ContentType.
 type UpdateOrgSettingsJSONRequestBody = UpdateOrgSettingsRequest
+
+// SetOrgEncryptionModeJSONRequestBody defines body for SetOrgEncryptionMode for application/json ContentType.
+type SetOrgEncryptionModeJSONRequestBody = SetEncryptionModeRequest
 
 // CreateScimTokenJSONRequestBody defines body for CreateScimToken for application/json ContentType.
 type CreateScimTokenJSONRequestBody = CreateScimTokenRequest
@@ -1063,8 +1378,20 @@ type SendMessageJSONRequestBody = SendMessageRequest
 // EditMessageJSONRequestBody defines body for EditMessage for application/json ContentType.
 type EditMessageJSONRequestBody = EditMessageRequest
 
+// SubmitMlsCommitJSONRequestBody defines body for SubmitMlsCommit for application/json ContentType.
+type SubmitMlsCommitJSONRequestBody = SubmitMlsCommitRequest
+
+// CreateMlsGroupJSONRequestBody defines body for CreateMlsGroup for application/json ContentType.
+type CreateMlsGroupJSONRequestBody = CreateMlsGroupRequest
+
+// ClaimMlsKeyPackagesJSONRequestBody defines body for ClaimMlsKeyPackages for application/json ContentType.
+type ClaimMlsKeyPackagesJSONRequestBody = ClaimMlsKeyPackagesRequest
+
 // SetReadPositionJSONRequestBody defines body for SetReadPosition for application/json ContentType.
 type SetReadPositionJSONRequestBody = SetReadPositionRequest
+
+// CreateConferenceJSONRequestBody defines body for CreateConference for application/json ContentType.
+type CreateConferenceJSONRequestBody = CreateConferenceRequest
 
 // OpenDirectMessageJSONRequestBody defines body for OpenDirectMessage for application/json ContentType.
 type OpenDirectMessageJSONRequestBody = OpenDirectMessageRequest
@@ -1072,8 +1399,20 @@ type OpenDirectMessageJSONRequestBody = OpenDirectMessageRequest
 // RedeemInviteJSONRequestBody defines body for RedeemInvite for application/json ContentType.
 type RedeemInviteJSONRequestBody = RedeemInviteRequest
 
+// JoinConferenceJSONRequestBody defines body for JoinConference for application/json ContentType.
+type JoinConferenceJSONRequestBody = JoinConferenceRequest
+
 // UpdateCurrentUserJSONRequestBody defines body for UpdateCurrentUser for application/json ContentType.
 type UpdateCurrentUserJSONRequestBody = UpdateCurrentUserRequest
+
+// PutMlsBackupJSONRequestBody defines body for PutMlsBackup for application/json ContentType.
+type PutMlsBackupJSONRequestBody = PutMlsBackupRequest
+
+// RegisterMlsDeviceJSONRequestBody defines body for RegisterMlsDevice for application/json ContentType.
+type RegisterMlsDeviceJSONRequestBody = RegisterMlsDeviceRequest
+
+// ReplaceMlsKeyPackagesJSONRequestBody defines body for ReplaceMlsKeyPackages for application/json ContentType.
+type ReplaceMlsKeyPackagesJSONRequestBody = ReplaceMlsKeyPackagesRequest
 
 // DisableTotpJSONRequestBody defines body for DisableTotp for application/json ContentType.
 type DisableTotpJSONRequestBody = PasswordConfirmRequest
@@ -1104,6 +1443,9 @@ type ServerInterface interface {
 	// UpdateOrgSettings Change the instance's settings.
 	// (PATCH /api/v1/admin/org)
 	UpdateOrgSettings(w http.ResponseWriter, r *http.Request)
+	// SetOrgEncryptionMode Change which kind of conversation this instance creates.
+	// (PUT /api/v1/admin/org/encryption-mode)
+	SetOrgEncryptionMode(w http.ResponseWriter, r *http.Request)
 	// ListScimTokens Provisioning tokens.
 	// (GET /api/v1/admin/scim/tokens)
 	ListScimTokens(w http.ResponseWriter, r *http.Request)
@@ -1194,9 +1536,36 @@ type ServerInterface interface {
 	// EditMessage Edit your own message.
 	// (PATCH /api/v1/channels/{channelId}/messages/{messageId})
 	EditMessage(w http.ResponseWriter, r *http.Request, channelId ChannelId, messageId MessageId)
+	// ListMlsCommits The commit log after a given epoch, ascending.
+	// (GET /api/v1/channels/{channelId}/mls/commits)
+	ListMlsCommits(w http.ResponseWriter, r *http.Request, channelId ChannelId, params ListMlsCommitsParams)
+	// SubmitMlsCommit Submit a commit — first-wins per epoch.
+	// (POST /api/v1/channels/{channelId}/mls/commits)
+	SubmitMlsCommit(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// GetMlsGroup The channel's MLS group, if one exists.
+	// (GET /api/v1/channels/{channelId}/mls/group)
+	GetMlsGroup(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// CreateMlsGroup Create the channel's MLS group.
+	// (POST /api/v1/channels/{channelId}/mls/group)
+	CreateMlsGroup(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// ClaimMlsKeyPackages Claim one key package per device of a member, to add them.
+	// (POST /api/v1/channels/{channelId}/mls/key-package-claims)
+	ClaimMlsKeyPackages(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// ListMlsMemberDevices Every current member's registered device signature keys.
+	// (GET /api/v1/channels/{channelId}/mls/member-devices)
+	ListMlsMemberDevices(w http.ResponseWriter, r *http.Request, channelId ChannelId, params ListMlsMemberDevicesParams)
 	// SetReadPosition Move the caller's read position in a channel.
 	// (PUT /api/v1/channels/{channelId}/read)
 	SetReadPosition(w http.ResponseWriter, r *http.Request, channelId ChannelId)
+	// ListConferences Your conference rooms.
+	// (GET /api/v1/conferences)
+	ListConferences(w http.ResponseWriter, r *http.Request)
+	// CreateConference Make a room anyone with the link can join.
+	// (POST /api/v1/conferences)
+	CreateConference(w http.ResponseWriter, r *http.Request)
+	// RevokeConference Kill the link, and the meeting behind it.
+	// (DELETE /api/v1/conferences/{conferenceId})
+	RevokeConference(w http.ResponseWriter, r *http.Request, conferenceId openapi_types.UUID)
 	// OpenDirectMessage Open — or reuse — the 1:1 direct message with one user.
 	// (POST /api/v1/dms)
 	OpenDirectMessage(w http.ResponseWriter, r *http.Request)
@@ -1209,6 +1578,12 @@ type ServerInterface interface {
 	// RedeemInvite Create an account from an invite.
 	// (POST /api/v1/invites/{token})
 	RedeemInvite(w http.ResponseWriter, r *http.Request, token string)
+	// PreviewConference What is behind this link.
+	// (GET /api/v1/meet/{token})
+	PreviewConference(w http.ResponseWriter, r *http.Request, token string)
+	// JoinConference Join as a guest.
+	// (POST /api/v1/meet/{token}/join)
+	JoinConference(w http.ResponseWriter, r *http.Request, token string)
 	// Search Search messages (and, from Phase 1.3, files).
 	// (GET /api/v1/search)
 	Search(w http.ResponseWriter, r *http.Request, params SearchParams)
@@ -1221,6 +1596,30 @@ type ServerInterface interface {
 	// UpdateCurrentUser Change your own account settings.
 	// (PATCH /api/v1/users/me)
 	UpdateCurrentUser(w http.ResponseWriter, r *http.Request)
+	// DeleteMlsBackup Forget this account's backup.
+	// (DELETE /api/v1/users/me/mls/backup)
+	DeleteMlsBackup(w http.ResponseWriter, r *http.Request)
+	// GetMlsBackup Fetch this account's sealed backup, if one exists.
+	// (GET /api/v1/users/me/mls/backup)
+	GetMlsBackup(w http.ResponseWriter, r *http.Request)
+	// PutMlsBackup Store this account's sealed verification backup.
+	// (PUT /api/v1/users/me/mls/backup)
+	PutMlsBackup(w http.ResponseWriter, r *http.Request)
+	// RegisterMlsDevice Register this client instance as an MLS device.
+	// (POST /api/v1/users/me/mls/device)
+	RegisterMlsDevice(w http.ResponseWriter, r *http.Request)
+	// DeregisterMlsDevice Drop one of this account's devices from the directory.
+	// (DELETE /api/v1/users/me/mls/devices/{deviceId})
+	DeregisterMlsDevice(w http.ResponseWriter, r *http.Request, deviceId MlsDeviceId)
+	// ReplaceMlsKeyPackages Replace this device's pool of unclaimed key packages.
+	// (PUT /api/v1/users/me/mls/devices/{deviceId}/key-packages)
+	ReplaceMlsKeyPackages(w http.ResponseWriter, r *http.Request, deviceId MlsDeviceId)
+	// ListMlsWelcomes Welcomes waiting for any of the caller's devices.
+	// (GET /api/v1/users/me/mls/welcomes)
+	ListMlsWelcomes(w http.ResponseWriter, r *http.Request)
+	// AcknowledgeMlsWelcome Acknowledge a Welcome after successfully joining.
+	// (DELETE /api/v1/users/me/mls/welcomes/{welcomeId})
+	AcknowledgeMlsWelcome(w http.ResponseWriter, r *http.Request, welcomeId MlsWelcomeId)
 	// UnlinkOidcIdentity Disconnect single sign-on from this account.
 	// (DELETE /api/v1/users/me/oidc)
 	UnlinkOidcIdentity(w http.ResponseWriter, r *http.Request)
@@ -1451,6 +1850,20 @@ func (siw *ServerInterfaceWrapper) UpdateOrgSettings(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateOrgSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetOrgEncryptionMode operation middleware
+func (siw *ServerInterfaceWrapper) SetOrgEncryptionMode(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetOrgEncryptionMode(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2280,6 +2693,220 @@ func (siw *ServerInterfaceWrapper) EditMessage(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ListMlsCommits operation middleware
+func (siw *ServerInterfaceWrapper) ListMlsCommits(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListMlsCommitsParams
+
+	// ------------- Required query parameter "after_epoch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "after_epoch", r.URL.Query(), &params.AfterEpoch, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "after_epoch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "after_epoch", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMlsCommits(w, r, channelId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SubmitMlsCommit operation middleware
+func (siw *ServerInterfaceWrapper) SubmitMlsCommit(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SubmitMlsCommit(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMlsGroup operation middleware
+func (siw *ServerInterfaceWrapper) GetMlsGroup(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMlsGroup(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateMlsGroup operation middleware
+func (siw *ServerInterfaceWrapper) CreateMlsGroup(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateMlsGroup(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClaimMlsKeyPackages operation middleware
+func (siw *ServerInterfaceWrapper) ClaimMlsKeyPackages(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClaimMlsKeyPackages(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListMlsMemberDevices operation middleware
+func (siw *ServerInterfaceWrapper) ListMlsMemberDevices(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId ChannelId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", r.PathValue("channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListMlsMemberDevicesParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMlsMemberDevices(w, r, channelId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SetReadPosition operation middleware
 func (siw *ServerInterfaceWrapper) SetReadPosition(w http.ResponseWriter, r *http.Request) {
 
@@ -2297,6 +2924,60 @@ func (siw *ServerInterfaceWrapper) SetReadPosition(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SetReadPosition(w, r, channelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListConferences operation middleware
+func (siw *ServerInterfaceWrapper) ListConferences(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListConferences(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateConference operation middleware
+func (siw *ServerInterfaceWrapper) CreateConference(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateConference(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeConference operation middleware
+func (siw *ServerInterfaceWrapper) RevokeConference(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "conferenceId" -------------
+	var conferenceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "conferenceId", r.PathValue("conferenceId"), &conferenceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "conferenceId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeConference(w, r, conferenceId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2377,6 +3058,58 @@ func (siw *ServerInterfaceWrapper) RedeemInvite(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RedeemInvite(w, r, token)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PreviewConference operation middleware
+func (siw *ServerInterfaceWrapper) PreviewConference(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token" -------------
+	var token string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token", r.PathValue("token"), &token, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PreviewConference(w, r, token)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// JoinConference operation middleware
+func (siw *ServerInterfaceWrapper) JoinConference(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token" -------------
+	var token string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token", r.PathValue("token"), &token, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.JoinConference(w, r, token)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2536,6 +3269,154 @@ func (siw *ServerInterfaceWrapper) UpdateCurrentUser(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateCurrentUser(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteMlsBackup operation middleware
+func (siw *ServerInterfaceWrapper) DeleteMlsBackup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteMlsBackup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMlsBackup operation middleware
+func (siw *ServerInterfaceWrapper) GetMlsBackup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMlsBackup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PutMlsBackup operation middleware
+func (siw *ServerInterfaceWrapper) PutMlsBackup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PutMlsBackup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RegisterMlsDevice operation middleware
+func (siw *ServerInterfaceWrapper) RegisterMlsDevice(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RegisterMlsDevice(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeregisterMlsDevice operation middleware
+func (siw *ServerInterfaceWrapper) DeregisterMlsDevice(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "deviceId" -------------
+	var deviceId MlsDeviceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deviceId", r.PathValue("deviceId"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deviceId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeregisterMlsDevice(w, r, deviceId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ReplaceMlsKeyPackages operation middleware
+func (siw *ServerInterfaceWrapper) ReplaceMlsKeyPackages(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "deviceId" -------------
+	var deviceId MlsDeviceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deviceId", r.PathValue("deviceId"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deviceId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ReplaceMlsKeyPackages(w, r, deviceId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListMlsWelcomes operation middleware
+func (siw *ServerInterfaceWrapper) ListMlsWelcomes(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMlsWelcomes(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AcknowledgeMlsWelcome operation middleware
+func (siw *ServerInterfaceWrapper) AcknowledgeMlsWelcome(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "welcomeId" -------------
+	var welcomeId MlsWelcomeId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "welcomeId", r.PathValue("welcomeId"), &welcomeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "welcomeId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AcknowledgeMlsWelcome(w, r, welcomeId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2911,6 +3792,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/admin/invites/{inviteId}", wrapper.RevokeInvite)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/invites/{token}", wrapper.PreviewInvite)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/invites/{token}", wrapper.RedeemInvite)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/admin/org/encryption-mode", wrapper.SetOrgEncryptionMode)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/org", wrapper.GetOrgSettings)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/admin/org", wrapper.UpdateOrgSettings)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/audit", wrapper.ListAuditEntries)
@@ -2922,6 +3804,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/members", wrapper.ListChannelMembers)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/members", wrapper.AddChannelMember)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/channels/{channelId}/members/{userId}", wrapper.RemoveChannelMember)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/conferences", wrapper.ListConferences)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/conferences", wrapper.CreateConference)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/conferences/{conferenceId}", wrapper.RevokeConference)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/meet/{token}", wrapper.PreviewConference)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/meet/{token}/join", wrapper.JoinConference)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/call", wrapper.GetChannelCall)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/call/token", wrapper.CreateCallToken)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages", wrapper.ListMessages)
@@ -2930,6 +3817,20 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/channels/{channelId}/messages/{messageId}", wrapper.EditMessage)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/files", wrapper.UploadFile)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/channels/{channelId}/read", wrapper.SetReadPosition)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/users/me/mls/device", wrapper.RegisterMlsDevice)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/users/me/mls/devices/{deviceId}/key-packages", wrapper.ReplaceMlsKeyPackages)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/group", wrapper.GetMlsGroup)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/group", wrapper.CreateMlsGroup)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/member-devices", wrapper.ListMlsMemberDevices)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/key-package-claims", wrapper.ClaimMlsKeyPackages)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/commits", wrapper.ListMlsCommits)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels/{channelId}/mls/commits", wrapper.SubmitMlsCommit)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/users/me/mls/backup", wrapper.DeleteMlsBackup)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me/mls/backup", wrapper.GetMlsBackup)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/users/me/mls/backup", wrapper.PutMlsBackup)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/users/me/mls/devices/{deviceId}", wrapper.DeregisterMlsDevice)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/users/me/mls/welcomes", wrapper.ListMlsWelcomes)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/users/me/mls/welcomes/{welcomeId}", wrapper.AcknowledgeMlsWelcome)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/search", wrapper.Search)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/ws", wrapper.ConnectWebSocket)
 

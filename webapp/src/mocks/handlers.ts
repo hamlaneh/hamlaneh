@@ -2,6 +2,7 @@ import { http, HttpResponse } from "msw";
 
 import type { components } from "../api/schema";
 import { chatHandlers, resetMockChat } from "./chat";
+import { mlsHandlers, resetMockMls } from "./mls";
 import { realtimeHandler } from "./ws";
 
 type HealthStatus = components["schemas"]["HealthStatus"];
@@ -299,6 +300,7 @@ function freshAuthState(): MockAuthState {
       password_min_length: 12,
       password_reset_available: true,
       max_file_size_bytes: 25 * 1024 * 1024,
+      encryption_mode: "strict",
       // Configured by default, same reasoning as the reset flag: the screens
       // that offer single sign-on exist, and a case that wants the instance
       // without a provider says so with setMockInstance.
@@ -326,6 +328,7 @@ export function resetMockAuth(): void {
   auth = freshAuthState();
   clearDomCookies();
   resetMockChat();
+  resetMockMls();
 }
 
 /**
@@ -923,6 +926,7 @@ export const handlers = [
   ),
 
   ...chatHandlers,
+  ...mlsHandlers,
   realtimeHandler,
 
   http.post<never, AdminCreateUserRequest, User>(
