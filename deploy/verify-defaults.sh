@@ -29,7 +29,13 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="${SCRIPT_DIR}/.env"
+# The env file this deployment actually runs on. `deploy/.env` is where
+# install.sh puts it, so that stays the default; HAMLANEH_ENV_FILE names it
+# for a stack started with `--env-file` somewhere else, which is how CI runs
+# (its secrets live in the runner temp directory and never touch the tree).
+# Without the override the LiveKit leak check reads no file, finds no secret
+# and fails for want of an input rather than for a leak.
+ENV_FILE="${HAMLANEH_ENV_FILE:-${SCRIPT_DIR}/.env}"
 PROJECT_LABEL="com.docker.compose.project=hamlaneh"
 
 FAILURES=()

@@ -660,7 +660,10 @@ jobs:
       - name: Verify secure defaults
         env:
           HAMLANEH_DOMAIN: localhost
-        run: bash deploy/verify-defaults.sh
+        # The stack was started with --env-file in the runner temp directory,
+        # so point the verifier at the same file: its LiveKit leak check reads
+        # the secret from there, and without this it fails having never had one.
+        run: HAMLANEH_ENV_FILE="$RUNNER_TEMP/compose-smoke.env" bash deploy/verify-defaults.sh
 
       - name: Dump service state and logs on failure
         if: failure()
