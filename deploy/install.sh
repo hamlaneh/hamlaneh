@@ -64,6 +64,12 @@ OS_RELEASE_FILE="${HAMLANEH_OS_RELEASE:-/etc/os-release}"
 
 DOMAIN=""
 NON_INTERACTIVE=0
+# The web ports this install publishes. 80/443 are the product's promise —
+# a domain's trusted certificate is only issuable there — and they move only
+# when something else already holds them AND the operator chooses to move
+# (IP and localhost installs only; resolve_ports owns the conversation).
+HTTP_PORT="${HAMLANEH_HTTP_PORT:-80}"
+HTTPS_PORT="${HAMLANEH_HTTPS_PORT:-443}"
 ADMIN_PASSWORD=""
 ADMIN_PASSWORD_NEW=0
 ADMIN_PASSWORD_APPENDED=0
@@ -80,6 +86,42 @@ FAILED=0
 
 log() { printf '[hamlaneh] %s\n' "$*"; }
 warn() { printf '[hamlaneh] WARNING: %s\n' "$*" >&2; }
+
+# Seconds between heartbeat lines; a test seam so the suite can exercise the
+# beat without waiting twenty real seconds for one.
+HEARTBEAT_INTERVAL="${HAMLANEH_HEARTBEAT_INTERVAL:-20}"
+
+# Runs a long command while proving it is alive. The command's own output
+# still streams; on top of it, every HEARTBEAT_INTERVAL seconds one line
+# says how long it has run and how much the package cache has grown — a real
+# download meter, read from disk. Exists because the longest step of a fresh
+# install is Docker's own installer, whose inner apt/dnf runs fully
+# silenced, and an operator watching multi-minute silence reads it as a hang
+# (a real report from the first VPS install). Returns the command's own
+# status; the ERR trap is cleared in the child so a failure is reported once,
+# by whoever owns the message, not twice.
+heartbeat_run() {
+  local label="$1"
+  shift
+  (
+    trap - ERR
+    "$@"
+  ) &
+  local pid=$! started="$SECONDS" dir cache="" mb
+  for dir in /var/cache/apt/archives /var/cache/dnf /var/cache/yum; do
+    [ -d "$dir" ] && cache="$dir" && break
+  done
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep "$HEARTBEAT_INTERVAL"
+    kill -0 "$pid" 2>/dev/null || break
+    mb=""
+    if [ -n "$cache" ]; then
+      mb=", $(du -sm "$cache" 2>/dev/null | cut -f1 || printf '?') MB in the package cache"
+    fi
+    log "${label} — still working ($(( (SECONDS - started) / 60 ))m$(( (SECONDS - started) % 60 ))s elapsed${mb})"
+  done
+  wait "$pid"
+}
 
 fail() {
   FAILED=1
@@ -318,7 +360,8 @@ install_docker_via_get_docker() {
     rm -f "$tmp"
     fail "could not download https://get.docker.com. Check the host's DNS and outbound HTTPS, then re-run."
   fi
-  if ! sh "$tmp"; then
+  log "Docker's installer downloads a few hundred MB and its package steps print nothing — expect a few silent minutes; the heartbeat below is the proof of life"
+  if ! heartbeat_run "installing Docker" sh "$tmp"; then
     rm -f "$tmp"
     fail "Docker's own install script failed on ${OS_PRETTY}. Its output is above. The usual cause is a distribution release Docker has no repository for yet (or one that has reached end of life); installing Docker Engine by hand per https://docs.docker.com/engine/install/ and re-running this script will finish the install."
   fi
@@ -335,7 +378,11 @@ install_docker_via_rpm_repo() {
   log "installing Docker from Docker's CentOS repository (get.docker.com does not support ${OS_ID})"
   curl -fsSL "$repo" -o /etc/yum.repos.d/docker-ce.repo ||
     fail "could not download ${repo}. Check the host's DNS and outbound HTTPS, then re-run."
-  pkg_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  # The child's own fail() already explains a failure; the parent only has
+  # to not add a second, worse report on top (FAILED quiets the ERR trap).
+  heartbeat_run "installing Docker packages" \
+    pkg_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin ||
+    { FAILED=1; exit 1; }
 }
 
 ensure_docker() {
@@ -495,6 +542,40 @@ current_env_domain() {
   sed -n 's/^HAMLANEH_DOMAIN=//p' "$ENV_FILE" | tail -n 1
 }
 
+current_env_value() {
+  [ -f "$ENV_FILE" ] || return 0
+  sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1
+}
+
+# One `ss`/`netstat` snapshot, shared by the interactive port conversation
+# and the final preflight so the two can never disagree about what "taken"
+# means. Empty output means no lister exists; callers treat that as unknown
+# rather than free-or-taken.
+listening_snapshot() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -lntuH 2>/dev/null || true
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -lntu 2>/dev/null || true
+  fi
+}
+
+snapshot_has_port() {
+  grep -Eq "[:.]$2[[:space:]]" <<<"$1"
+}
+
+# The process name on a listening port — "nginx", not a bare number — so
+# the operator's decision is about something they recognise. Best-effort:
+# needs ss and root; empty when either is missing.
+port_holder() {
+  command -v ss >/dev/null 2>&1 || return 0
+  ss -lntpH "sport = :$1" 2>/dev/null | grep -oE 'users:\(\("[^"]+"' | head -n 1 | cut -d'"' -f2 || true
+}
+
+valid_port() {
+  case "$1" in "" | *[!0-9]*) return 1 ;; esac
+  [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
 validate_domain() {
   local d="$1"
   case "$d" in
@@ -522,8 +603,17 @@ validate_domain() {
 domain_kind() {
   local d="$1"
   case "$d" in
-    localhost) printf 'localhost' ;;
-    *:*) printf 'ipv6' ;;
+    localhost | localhost:[0-9]*) printf 'localhost'; return ;;
+    *:*:*) printf 'ipv6'; return ;;
+  esac
+  # One colon followed by digits is a host:port pair — classify the host.
+  # Only an IP or localhost may actually carry one (resolve_ports enforces
+  # it); classifying the host correctly here is what lets that refusal name
+  # the real problem instead of calling chat.example.com:8443 an IPv6.
+  case "$d" in
+    *:[0-9]*) d="${d%%:*}" ;;
+  esac
+  case "$d" in
     *[!0-9.]*) printf 'domain' ;;
     *) printf 'ipv4' ;;
   esac
@@ -593,19 +683,156 @@ resolve_domain() {
     return
   fi
 
-  # The default an operator most likely wants: this machine's own address,
-  # so a bare "press Enter" on a fresh VPS yields a reachable instance
-  # instead of one only the VPS itself can open.
-  local suggested addrs
+  # A short numbered menu instead of one open question. The first VPS
+  # install's feedback was blunt and right: an operator should see their
+  # choices and their consequences, not guess what shape of answer the
+  # blank after the colon wants.
+  local suggested addrs choice
   suggested="$(detected_ip)"
   suggested="${suggested:-localhost}"
-  addrs="$(machine_addresses | tr '\n' ' ')"
-  [ -z "$addrs" ] || log "addresses on this machine: ${addrs}"
-  log "a domain pointing at this machine gets a browser-trusted certificate; a bare IP works, with a locally-issued certificate every browser warns about once"
-  printf 'Domain or IP to serve Hamlaneh on [%s]: ' "$suggested"
-  read -r DOMAIN
-  DOMAIN="${DOMAIN:-$suggested}"
+  addrs="$(machine_addresses | tr '\n' ' ' | sed 's/ $//')"
+  printf '\n'
+  log "─── Where should people reach this instance? ──────────────────"
+  [ -z "$addrs" ] || log "    addresses on this machine: ${addrs}"
+  log "    1) this server's IP (${suggested}) — works immediately;"
+  log "       browsers show a one-time certificate warning"
+  log "    2) a domain you own (e.g. chat.example.com) — automatic"
+  log "       browser-trusted certificate; its DNS must point here"
+  printf '[hamlaneh] choose 1 or 2 [1]: '
+  read -r choice
+  case "$choice" in
+    "" | 1)
+      DOMAIN="$suggested"
+      ;;
+    2)
+      printf '[hamlaneh] your domain (just the name, no https://): '
+      read -r DOMAIN
+      ;;
+    *)
+      # Whatever they typed that is not a menu number is almost certainly
+      # the address itself — accept it rather than scolding.
+      DOMAIN="$choice"
+      ;;
+  esac
   validate_domain "$DOMAIN"
+  log "serving on: ${DOMAIN}"
+}
+
+# Blocks until both web ports are free, telling the operator what holds
+# them; Enter re-checks. Used when moving ports is not an option (a domain
+# needs 80/443 for its certificate) or not the operator's choice.
+wait_for_free_web_ports() {
+  local snap
+  while :; do
+    printf '[hamlaneh] press Enter to check the ports again (Ctrl-C aborts): '
+    read -r _
+    snap="$(listening_snapshot)"
+    if ! snapshot_has_port "$snap" "$HTTP_PORT" && ! snapshot_has_port "$snap" "$HTTPS_PORT"; then
+      log "ports ${HTTP_PORT} and ${HTTPS_PORT} are free now — continuing"
+      return 0
+    fi
+    log "still in use: $(snapshot_has_port "$snap" "$HTTP_PORT" && printf '%s ' "$HTTP_PORT")$(snapshot_has_port "$snap" "$HTTPS_PORT" && printf '%s' "$HTTPS_PORT")"
+  done
+}
+
+# Asks the operator to pick one free port, with a default and the holder of
+# any refused answer named. First argument is the label, second the default.
+ask_free_port() {
+  local label="$1" default="$2" answer holder
+  while :; do
+    printf '[hamlaneh] %s [%s]: ' "$label" "$default" >&2
+    read -r answer
+    answer="${answer:-$default}"
+    if ! valid_port "$answer"; then
+      log "'${answer}' is not a port (1-65535)" >&2
+      continue
+    fi
+    if snapshot_has_port "$(listening_snapshot)" "$answer"; then
+      holder="$(port_holder "$answer")"
+      log "port ${answer} is also in use${holder:+ (by ${holder})} — pick another" >&2
+      continue
+    fi
+    printf '%s' "$answer"
+    return 0
+  done
+}
+
+# The port conversation, held only when there is something to talk about.
+# Custom web ports exist for exactly one deployment shape: a server where
+# 80/443 already belong to something else (measured on the first real VPS
+# install: 443 held, and "stop your other service" was no answer). They are
+# offered for IP and localhost installs only — a domain's browser-trusted
+# certificate is issued over 80/443 or not at all, and moving a domain's
+# ports would start a certificate order that can never complete.
+resolve_ports() {
+  # A domain carrying a port is refused whichever way it arrived (--domain
+  # included): the trusted certificate it exists for cannot be issued there.
+  case "$DOMAIN" in
+    *:*)
+      [ "$(domain_kind "$DOMAIN")" != "domain" ] ||
+        fail "a domain cannot use a custom port: ${DOMAIN%%:*}'s browser-trusted certificate is only issuable over 80/443. Free those ports, or serve on the IP instead."
+      ;;
+  esac
+  # A re-run inherits its own earlier choice; the running stack holding its
+  # own ports is what success looks like, not a conflict.
+  local env_port
+  env_port="$(current_env_value HAMLANEH_HTTPS_PORT)"
+  [ -z "$env_port" ] || HTTPS_PORT="$env_port"
+  env_port="$(current_env_value HAMLANEH_HTTP_PORT)"
+  [ -z "$env_port" ] || HTTP_PORT="$env_port"
+  if stack_exists; then
+    return 0
+  fi
+
+  local snap taken=() port line="" holder
+  snap="$(listening_snapshot)"
+  [ -n "$snap" ] || return 0
+  for port in "$HTTP_PORT" "$HTTPS_PORT"; do
+    if snapshot_has_port "$snap" "$port"; then
+      taken+=("$port")
+      holder="$(port_holder "$port")"
+      line="${line}${port}${holder:+ (${holder})}  "
+    fi
+  done
+  [ "${#taken[@]}" -gt 0 ] || return 0
+
+  if [ "$NON_INTERACTIVE" -eq 1 ]; then
+    fail "web ports already in use: ${line}— free them, or set HAMLANEH_HTTP_PORT/HAMLANEH_HTTPS_PORT in the environment, and re-run. Nothing was changed."
+  fi
+
+  printf '\n'
+  log "─── Web ports ─────────────────────────────────────────────────"
+  log "    already in use on this machine: ${line}"
+  if [ "$(domain_kind "$DOMAIN")" = "domain" ]; then
+    log "    ${DOMAIN}'s browser-trusted certificate can only be issued over"
+    log "    ports 80/443, so this install needs them. Stop the service that"
+    log "    holds them (often: systemctl disable --now nginx) and re-check."
+    wait_for_free_web_ports
+    return 0
+  fi
+
+  local choice
+  log "    1) I'll stop that service — Hamlaneh uses the standard 80/443"
+  log "    2) run Hamlaneh on other ports — the address becomes"
+  log "       https://${DOMAIN}:<port>, certificate warning as before"
+  printf '[hamlaneh] choose 1 or 2 [2]: '
+  read -r choice
+  if [ "$choice" = "1" ]; then
+    wait_for_free_web_ports
+    return 0
+  fi
+
+  HTTPS_PORT="$(ask_free_port "HTTPS port for Hamlaneh" 8443)"
+  HTTP_PORT="$(ask_free_port "HTTP port (redirects to HTTPS)" 8080)"
+  if [ "$HTTP_PORT" = "$HTTPS_PORT" ]; then
+    fail "the HTTP and HTTPS ports must differ (both were ${HTTPS_PORT}). Re-run and pick two."
+  fi
+  # The one value three consumers read: Caddy listens where the address
+  # says, the server allows the Origin browsers will actually send, and
+  # every printed link is copy-pasteable — because the port travels inside
+  # HAMLANEH_DOMAIN instead of beside it.
+  DOMAIN="${DOMAIN%%:*}:${HTTPS_PORT}"
+  log "the instance will live at https://${DOMAIN}"
 }
 
 write_env() {
@@ -628,7 +855,16 @@ write_env() {
     files="$(files_domain "$DOMAIN")"
     sed -e "s/^HAMLANEH_DOMAIN=.*/HAMLANEH_DOMAIN=${DOMAIN}/" \
         -e "s/^HAMLANEH_FILES_DOMAIN=.*/HAMLANEH_FILES_DOMAIN=${files}/" \
+        -e '/^HAMLANEH_HTTP_PORT=/d' \
+        -e '/^HAMLANEH_HTTPS_PORT=/d' \
         "$ENV_FILE" > "$tmp"
+    # Rewritten rather than edited in place: default ports carry no line at
+    # all, so moving back to 80/443 removes the override instead of pinning
+    # a now-wrong number.
+    if [ "$HTTPS_PORT" != "443" ] || [ "$HTTP_PORT" != "80" ]; then
+      printf 'HAMLANEH_HTTP_PORT=%s\n' "$HTTP_PORT" >> "$tmp"
+      printf 'HAMLANEH_HTTPS_PORT=%s\n' "$HTTPS_PORT" >> "$tmp"
+    fi
     # Derived from the domain, so an .env written before this variable existed
     # gains it here rather than keeping a stale files hostname.
     if ! grep -q '^HAMLANEH_FILES_DOMAIN=' "$tmp"; then
@@ -654,6 +890,10 @@ write_env() {
     printf '# Generated by install.sh on %s — DO NOT COMMIT.\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'HAMLANEH_DOMAIN=%s\n' "$DOMAIN"
     printf 'HAMLANEH_FILES_DOMAIN=%s\n' "$(files_domain "$DOMAIN")"
+    if [ "$HTTPS_PORT" != "443" ] || [ "$HTTP_PORT" != "80" ]; then
+      printf 'HAMLANEH_HTTP_PORT=%s\n' "$HTTP_PORT"
+      printf 'HAMLANEH_HTTPS_PORT=%s\n' "$HTTPS_PORT"
+    fi
     printf 'POSTGRES_PASSWORD=%s\n' "$password"
     printf 'HAMLANEH_FILE_URL_KEY=%s\n' "$file_url_key"
     printf 'HAMLANEH_AUDIT_KEY=%s\n' "$audit_key"
@@ -1011,24 +1251,19 @@ preflight_ports() {
   if stack_exists; then
     return 0
   fi
-  local lister=()
-  if command -v ss >/dev/null 2>&1; then
-    lister=(ss -lntuH)
-  elif command -v netstat >/dev/null 2>&1; then
-    lister=(netstat -lntu)
-  else
-    return 0
-  fi
-
   local listening taken=() port
-  listening="$("${lister[@]}" 2>/dev/null || true)"
-  for port in 80 443 3478 7881 7882; do
-    if grep -Eq "[:.]${port}[[:space:]]" <<<"$listening"; then
+  listening="$(listening_snapshot)"
+  [ -n "$listening" ] || return 0
+  # The web ports are whatever resolve_ports settled on; the media trio is
+  # fixed (ADR 005 — published TURN/ICE ports are part of the calls design,
+  # not an install-time preference).
+  for port in "$HTTP_PORT" "$HTTPS_PORT" 3478 7881 7882; do
+    if snapshot_has_port "$listening" "$port"; then
       taken+=("$port")
     fi
   done
   if [ "${#taken[@]}" -gt 0 ]; then
-    fail "these host ports are already in use by something else: ${taken[*]}. Hamlaneh needs 80, 443, 3478, 7881 and 7882. Stop whatever holds them (often nginx or apache2: 'systemctl disable --now nginx') and re-run. Nothing was changed."
+    fail "these host ports are already in use by something else: ${taken[*]}. Hamlaneh needs ${HTTP_PORT}, ${HTTPS_PORT}, 3478, 7881 and 7882. Stop whatever holds them (often nginx or apache2: 'systemctl disable --now nginx') and re-run. Nothing was changed."
   fi
 }
 
@@ -1088,11 +1323,14 @@ start_stack() {
 # the configured domain as SNI is how verify-defaults.sh does it, and it
 # works whether or not the domain resolves to this machine yet.
 wait_for_stack() {
-  local deadline=$((SECONDS + 300)) code=""
+  local deadline=$((SECONDS + 300)) code="" host="$DOMAIN"
+  # DOMAIN may carry the custom HTTPS port; the probe needs host and port
+  # apart. IPv6 literals are all colons and carry no port (resolve_ports).
+  case "$(domain_kind "$DOMAIN")" in ipv6) ;; *) host="${DOMAIN%%:*}" ;; esac
   log "waiting for the stack to answer /healthz (up to 5 minutes) ..."
   while [ "$SECONDS" -lt "$deadline" ]; do
     code="$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' \
-      --connect-to "${DOMAIN}:443:127.0.0.1:443" "https://${DOMAIN}/healthz" 2>/dev/null || true)"
+      --connect-to "${host}:${HTTPS_PORT}:127.0.0.1:${HTTPS_PORT}" "https://${host}:${HTTPS_PORT}/healthz" 2>/dev/null || true)"
     if [ "$code" = "200" ]; then
       log "the stack is serving (/healthz returned 200)"
       return 0
@@ -1107,7 +1345,7 @@ wait_for_stack() {
   # the server's logs will show it, because the server is fine.
   if [ "$(domain_kind "$DOMAIN")" = "domain" ] &&
     [ "$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' \
-      --resolve "${DOMAIN}:80:127.0.0.1" "http://${DOMAIN}/healthz" 2>/dev/null || true)" != "000" ]; then
+      --resolve "${host}:${HTTP_PORT}:127.0.0.1" "http://${host}:${HTTP_PORT}/healthz" 2>/dev/null || true)" != "000" ]; then
     print_acme_pending_notice
     print_port_notice
     fail "the containers are running and answering on port 80, but HTTPS is not serving yet — see the two notices above. Nothing was deleted and nothing here needs re-running."
@@ -1273,7 +1511,7 @@ print_host_notes() {
 # who needs it most is the one upgrading an existing install onto a locked
 # down VPS, and they would never see a notice that only appeared once.
 print_port_notice() {
-  cat <<'EOF'
+  cat <<EOF
 
   ┌──────────────────────────────────────────────────────────────────────┐
   │  OPEN THESE PORTS IN YOUR CLOUD PROVIDER'S FIREWALL                  │
@@ -1282,9 +1520,9 @@ print_port_notice() {
   │  cloud security group (AWS, Azure NSG, GCP, Hetzner, DigitalOcean),  │
   │  and calls fail silently for as long as those stay shut.             │
   │                                                                      │
-  │      80/tcp    HTTP — redirects to HTTPS, and ACME certificates      │
-  │     443/tcp    HTTPS — the application                               │
-  │     443/udp    HTTP/3                                                │
+  │  $(printf '%6s' "$HTTP_PORT")/tcp    HTTP — redirects to HTTPS, and ACME certificates      │
+  │  $(printf '%6s' "$HTTPS_PORT")/tcp    HTTPS — the application                               │
+  │  $(printf '%6s' "$HTTPS_PORT")/udp    HTTP/3                                                │
   │    3478/udp    calls: TURN, the relay for restrictive networks       │
   │    7881/tcp    calls: media over TCP, where UDP is blocked           │
   │    7882/udp    calls: media                                          │
@@ -1305,6 +1543,7 @@ main() {
   ensure_docker
   ensure_cosign
   resolve_domain
+  resolve_ports
   write_env
   # Order is load-bearing: ensure_postgres_password_env asks
   # install_may_have_data, which reads placeholders that the scrub then
