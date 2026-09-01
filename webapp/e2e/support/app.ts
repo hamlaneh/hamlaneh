@@ -76,10 +76,60 @@ export class App {
   }
 
   /** Fills both fields and submits. */
+  /**
+   * Submits the sign-in form and waits for the submission to SETTLE: the
+   * login screen replaced (success, or a follow-up step such as two-step
+   * verification), or a banner naming the failure. Callers assert whichever
+   * outcome their spec is about, exactly as before — on the happy path and on
+   * an expected-failure path alike, the settling signal appears within
+   * milliseconds of the response, so this adds no time to either.
+   *
+   * ONE failure is handled here rather than surfaced: the "we could not reach
+   * the server" banner, whose entire design is that the person tries again.
+   * CI produced it twice in one morning — a single dropped request under
+   * full-suite load, on a stack that answered the same spec's sibling seconds
+   * later — and each time the spec spent its whole budget waiting for a
+   * screen the drop had made unreachable. The harness now does what the
+   * banner says, at most twice. A third appearance throws: persistent
+   * unreachability is a finding about the stack, not noise to absorb.
+   */
   async signIn(identifier: string, password: string): Promise<void> {
     await this.identifierField.fill(identifier);
     await this.passwordField.fill(password);
-    await this.signInButton.click();
+
+    const networkBanner = this.errorBanner.filter({
+      hasText: this.t("login.error.networkError"),
+    });
+    for (let attempt = 1; ; attempt += 1) {
+      await this.signInButton.click();
+
+      // Whichever the response produces first. The losers keep waiting until
+      // their timeout; the trailing catch on each keeps a late loser from
+      // surfacing as an unhandled rejection after the race is decided.
+      const settled = await Promise.race([
+        this.signInHeading
+          .waitFor({ state: "hidden", timeout: 30_000 })
+          .then(() => "left" as const),
+        this.twoStepHeading.waitFor({ timeout: 30_000 }).then(() => "left" as const),
+        this.errorBanner
+          .or(this.statusBanner)
+          .first()
+          .waitFor({ timeout: 30_000 })
+          .then(() => "banner" as const),
+      ].map((outcome) => outcome.catch(() => "timeout" as const)));
+
+      if (settled !== "banner" || !(await networkBanner.isVisible())) {
+        return;
+      }
+      if (attempt >= 3) {
+        throw new Error(
+          `sign-in (${identifier}): the server was unreachable ${String(attempt)} times in a row`,
+        );
+      }
+      // The failure empties the password box, and refilling it is also the
+      // edit that lifts the notice and re-enables the button.
+      await this.passwordField.fill(password);
+    }
   }
 
   /** The form-level failure banner (NoticeBanner tone="danger"). */
