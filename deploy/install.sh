@@ -3,6 +3,10 @@
 # Hamlaneh installer.
 #
 # Boots the Hamlaneh stack on a fresh Linux host:
+#   0. when run standalone — `bash <(curl -fsSL …/deploy/install.sh)` — it
+#      first fetches the repository into /opt/hamlaneh and hands over to the
+#      installer inside it, because the stack builds from source until the
+#      first published release (see bootstrap_checkout)
 #   1. verifies root and a supported distribution (Ubuntu, Debian, Fedora,
 #      RHEL and its clones) — anything else exits with a clear error before
 #      touching the system
@@ -34,6 +38,7 @@
 #
 # Usage:
 #   sudo ./install.sh [--domain <domain-or-ip>] [--non-interactive]
+#   bash <(curl -fsSL https://raw.githubusercontent.com/hamlaneh/hamlaneh/main/deploy/install.sh)
 #
 # Testing: deploy/install.test.sh sources this file (see the main guard at
 # the bottom) and drives its functions directly. Keep functions free of
@@ -211,9 +216,62 @@ detect_os_from_id_like() {
   esac
 }
 
+# Where a standalone run (`bash <(curl …/install.sh)`) puts the checkout it
+# fetches for itself. The stack builds from source until the first published
+# release, so the files have to exist somewhere; /opt is where an operator
+# expects installed software to live.
+REPO_GIT_URL="https://github.com/hamlaneh/hamlaneh.git"
+REPO_TARBALL_URL="https://github.com/hamlaneh/hamlaneh/archive/refs/heads/main.tar.gz"
+CHECKOUT_DIR="${HAMLANEH_CHECKOUT_DIR:-/opt/hamlaneh}"
+
+# Fetches the repository and hands over to the installer inside it, passing
+# the original arguments through. git when available (a later run can pull),
+# tarball over TLS otherwise — curl and tar are installed if missing, which
+# is why this runs after detect_os. On a refresh, deploy/.env is the
+# instance's identity and is carried over; the rest of the tree is
+# disposable and replaced whole.
+bootstrap_checkout() {
+  [ "${HAMLANEH_BOOTSTRAPPED:-0}" -eq 0 ] ||
+    fail "the fetched checkout at ${CHECKOUT_DIR} is still incomplete — the download or extraction went wrong. Remove ${CHECKOUT_DIR} and re-run, or clone manually: git clone ${REPO_GIT_URL}"
+  log "no checkout around this script — fetching Hamlaneh into ${CHECKOUT_DIR}"
+  if [ -d "${CHECKOUT_DIR}/.git" ] && command -v git >/dev/null 2>&1; then
+    git -C "$CHECKOUT_DIR" pull --ff-only ||
+      fail "git pull in ${CHECKOUT_DIR} failed — fix what it reported (or remove the directory) and re-run."
+  elif command -v git >/dev/null 2>&1 && [ ! -e "$CHECKOUT_DIR" ]; then
+    git clone "$REPO_GIT_URL" "$CHECKOUT_DIR" ||
+      fail "git clone of ${REPO_GIT_URL} failed. Check the host's network and re-run."
+  else
+    command -v curl >/dev/null 2>&1 || pkg_install curl
+    command -v tar >/dev/null 2>&1 || pkg_install tar
+    local tmp extracted
+    tmp="$(mktemp -d)"
+    curl -fsSL "$REPO_TARBALL_URL" -o "${tmp}/src.tar.gz" ||
+      fail "downloading ${REPO_TARBALL_URL} failed. Check the host's network and re-run."
+    tar -xzf "${tmp}/src.tar.gz" -C "$tmp" ||
+      fail "extracting the downloaded archive failed. Re-run to download it again."
+    extracted="$(find "$tmp" -maxdepth 1 -mindepth 1 -type d | head -n 1)"
+    [ -n "$extracted" ] && [ -f "${extracted}/deploy/docker-compose.yml" ] ||
+      fail "the downloaded archive does not look like a Hamlaneh checkout. Re-run, or clone manually: git clone ${REPO_GIT_URL}"
+    if [ -f "${CHECKOUT_DIR}/deploy/.env" ]; then
+      cp "${CHECKOUT_DIR}/deploy/.env" "${extracted}/deploy/.env"
+      chmod 600 "${extracted}/deploy/.env"
+    fi
+    rm -rf "${CHECKOUT_DIR}.old"
+    if [ -e "$CHECKOUT_DIR" ]; then
+      mv "$CHECKOUT_DIR" "${CHECKOUT_DIR}.old"
+    fi
+    mkdir -p "$(dirname "$CHECKOUT_DIR")"
+    mv "$extracted" "$CHECKOUT_DIR"
+    rm -rf "${CHECKOUT_DIR}.old" "$tmp"
+  fi
+  log "handing over to ${CHECKOUT_DIR}/deploy/install.sh"
+  HAMLANEH_BOOTSTRAPPED=1 exec bash "${CHECKOUT_DIR}/deploy/install.sh" "$@"
+}
+
 require_checkout() {
-  [ -f "$COMPOSE_FILE" ] || fail "docker-compose.yml not found next to install.sh — run this from a full Hamlaneh checkout (git clone https://github.com/hamlaneh/hamlaneh.git && cd hamlaneh/deploy)"
-  [ -d "${SCRIPT_DIR}/../server" ] || fail "server/ source directory not found — the stack is built from source, so a full checkout is required, not just deploy/"
+  if [ ! -f "$COMPOSE_FILE" ] || [ ! -d "${SCRIPT_DIR}/../server" ]; then
+    bootstrap_checkout "$@"
+  fi
 }
 
 pkg_install() {
@@ -486,6 +544,25 @@ files_domain() {
   esac
 }
 
+# The address this machine reaches the world from — the prompt's default.
+# `ip route get` asks the kernel which source address it would pick for that
+# destination; no packet is sent and no external service is consulted. On a
+# VPS this is the public address; behind NAT it is the LAN address, which is
+# still the one the household's other machines can reach. Empty output (no
+# route, no iproute2) falls back to localhost at the call site.
+detected_ip() {
+  command -v ip >/dev/null 2>&1 || return 0
+  ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -n 1 || true
+}
+
+# Every global-scope IPv4 this machine holds, one per line — shown before
+# the prompt so an operator on a multi-homed or NATed box can see what there
+# is to choose from instead of guessing what the default was derived from.
+machine_addresses() {
+  command -v ip >/dev/null 2>&1 || return 0
+  ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 || true
+}
+
 resolve_domain() {
   if [ -n "$DOMAIN" ]; then
     validate_domain "$DOMAIN"
@@ -507,14 +584,26 @@ resolve_domain() {
   fi
 
   if [ "$NON_INTERACTIVE" -eq 1 ]; then
+    # Deliberately NOT the detected address: a script's result must not
+    # depend on which machine ran it. Automation states its domain or gets
+    # the one value that means the same thing everywhere.
     DOMAIN="localhost"
     log "non-interactive mode: defaulting domain to localhost"
     return
   fi
 
-  printf 'Domain or IP to serve Hamlaneh on [localhost]: '
+  # The default an operator most likely wants: this machine's own address,
+  # so a bare "press Enter" on a fresh VPS yields a reachable instance
+  # instead of one only the VPS itself can open.
+  local suggested addrs
+  suggested="$(detected_ip)"
+  suggested="${suggested:-localhost}"
+  addrs="$(machine_addresses | tr '\n' ' ')"
+  [ -z "$addrs" ] || log "addresses on this machine: ${addrs}"
+  log "a domain pointing at this machine gets a browser-trusted certificate; a bare IP works, with a locally-issued certificate every browser warns about once"
+  printf 'Domain or IP to serve Hamlaneh on [%s]: ' "$suggested"
   read -r DOMAIN
-  DOMAIN="${DOMAIN:-localhost}"
+  DOMAIN="${DOMAIN:-$suggested}"
   validate_domain "$DOMAIN"
 }
 
@@ -1210,7 +1299,7 @@ main() {
   parse_args "$@"
   require_root
   detect_os
-  require_checkout
+  require_checkout "$@"
   ensure_prereqs
   ensure_docker
   ensure_cosign

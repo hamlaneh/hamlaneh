@@ -253,6 +253,51 @@ test_validate_domain() {
   check_contains "a URL gets an error that says what to pass instead" "A URL is not a domain" "$out"
 }
 
+test_bootstrap_guard() {
+  local out
+  # The one branch of the standalone bootstrap that must never be reached
+  # twice: an exec'd copy that STILL lacks its files means the download or
+  # extraction was broken, and fetching again would loop forever. The guard
+  # env var is set by the exec; with it set, the only correct move is a
+  # clear error naming the directory and the manual way out.
+  out="$(HAMLANEH_BOOTSTRAPPED=1 run_in_subshell eval 'COMPOSE_FILE=/nonexistent/docker-compose.yml; require_checkout')"
+  check_contains "a broken fetched checkout stops instead of looping" "still incomplete" "$out"
+  check_eq "the broken-checkout error exits 1" "1" "$(HAMLANEH_BOOTSTRAPPED=1 status_in_subshell eval 'COMPOSE_FILE=/nonexistent/docker-compose.yml; require_checkout')"
+
+  # From a real checkout (this repository), require_checkout is a no-op —
+  # the bootstrap must never fire when the files are already here.
+  check_eq "a full checkout passes require_checkout untouched" "0" "$(status_in_subshell require_checkout)"
+}
+
+test_resolve_domain_prompt() {
+  local out expected
+  # The same question resolve_domain asks the kernel, asked here so the
+  # expectation tracks whatever machine runs the suite. Empty means this
+  # environment has no route to derive a default from; the prompt must then
+  # fall back to localhost, and that branch is what gets asserted instead.
+  expected="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -n 1)"
+  expected="${expected:-localhost}"
+
+  # Enter on an empty prompt accepts the machine's own address — the whole
+  # point of the default. stdin is a pipe, not a TTY: resolve_domain reads
+  # wherever stdin points, which is also what makes this testable.
+  # shellcheck disable=SC2016
+  out="$(printf '\n' | run_in_subshell eval 'DOMAIN=""; NON_INTERACTIVE=0; resolve_domain; printf "%s" "$DOMAIN"')"
+  check_contains "empty prompt answer takes the detected address" "$expected" "$out"
+  check_contains "the prompt shows its default" "[${expected}]" "$out"
+
+  # A typed answer always wins over the detected default.
+  # shellcheck disable=SC2016
+  out="$(printf 'chat.example.com\n' | run_in_subshell eval 'DOMAIN=""; NON_INTERACTIVE=0; resolve_domain; printf "%s" "$DOMAIN"')"
+  check_contains "a typed domain overrides the default" "chat.example.com" "$out"
+
+  # Non-interactive stays localhost, NOT the detected address: a script's
+  # result must not depend on which machine ran it.
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'DOMAIN=""; NON_INTERACTIVE=1; resolve_domain; printf "%s" "$DOMAIN"')"
+  check_contains "non-interactive default is still localhost" "localhost" "$out"
+}
+
 test_domain_kind() {
   check_eq "domain_kind localhost" "localhost" "$(run_in_subshell domain_kind localhost)"
   check_eq "domain_kind ipv4" "ipv4" "$(run_in_subshell domain_kind 203.0.113.5)"
@@ -758,6 +803,8 @@ main() {
   test_detect_os_rejections
   test_arg_parsing
   test_validate_domain
+  test_bootstrap_guard
+  test_resolve_domain_prompt
   test_domain_kind
   test_write_env_generates_real_secrets
   test_idempotent_rerun
