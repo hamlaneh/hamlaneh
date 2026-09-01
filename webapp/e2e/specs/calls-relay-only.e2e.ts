@@ -303,33 +303,51 @@ test.describe("relay-only calls", () => {
       expect(connected.length, `${who} has no connected peer connection`).toBeGreaterThan(0);
 
       for (const one of connected) {
-        expect(one.policy, `${who}: the peer connection is not relay-only`).toBe("relay");
-        expect(one.nominated, `${who}: no candidate pair was nominated`).toBe(true);
-        expect(one.pairState, `${who}: the nominated pair did not succeed`).toBe("succeeded");
+        // Every check below is SOFT, and none of them is relaxed: a soft
+        // failure still fails the run. What changes is that one stops the
+        // reporting instead of stopping the test, so a red run says which of
+        // the eight facts were wrong AND still reaches the media samples and
+        // the control probe underneath.
+        //
+        // The reason is a real one this gate hit: a mismatch on the candidate
+        // TYPE alone aborted before section 3 ever ran, so the run could not
+        // say whether media was flowing — which is the difference between a
+        // relabelled path and a broken one, and the only thing that tells you
+        // which. A gate whose first failure hides its remaining evidence is
+        // the same defect as one that reports only "passed".
+        expect.soft(one.policy, `${who}: the peer connection is not relay-only`).toBe("relay");
+        expect.soft(one.nominated, `${who}: no candidate pair was nominated`).toBe(true);
+        expect.soft(one.pairState, `${who}: the nominated pair did not succeed`).toBe("succeeded");
 
         const local = one.local;
-        expect(local, `${who}: the nominated pair has no local candidate`).not.toBeNull();
+        expect.soft(local, `${who}: the nominated pair has no local candidate`).not.toBeNull();
         if (local === null) {
           continue;
         }
         // The measurement the whole spec exists for: not "we asked for relay"
         // but "the pair carrying this call has a relay candidate on our side".
-        expect(local.type, `${who}: the nominated local candidate is not a relay`).toBe("relay");
-        expect(local.protocol, `${who}: the relay candidate is not over UDP`).toBe("udp");
-        expect(local.address, `${who}: the relay is not on the advertised node IP`).toBe(
+        expect
+          .soft(local.type, `${who}: the nominated local candidate is not a relay`)
+          .toBe("relay");
+        expect.soft(local.protocol, `${who}: the relay candidate is not over UDP`).toBe("udp");
+        expect.soft(local.address, `${who}: the relay is not on the advertised node IP`).toBe(
           stack.livekit.nodeIP,
         );
-        expect(
-          local.port,
-          `${who}: the relay port ${String(local.port)} is outside LiveKit's relay range`,
-        ).toBeGreaterThanOrEqual(RELAY_RANGE.start);
-        expect(local.port, `${who}: the relay port is outside LiveKit's relay range`).toBeLessThan(
-          RELAY_RANGE.end,
-        );
-        expect(
-          PUBLISHED_PORTS,
-          `${who}: the relay landed on a published port, so it proves nothing`,
-        ).not.toContain(local.port);
+        expect
+          .soft(
+            local.port,
+            `${who}: the relay port ${String(local.port)} is outside LiveKit's relay range`,
+          )
+          .toBeGreaterThanOrEqual(RELAY_RANGE.start);
+        expect
+          .soft(local.port, `${who}: the relay port is outside LiveKit's relay range`)
+          .toBeLessThan(RELAY_RANGE.end);
+        expect
+          .soft(
+            PUBLISHED_PORTS,
+            `${who}: the relay landed on a published port, so it proves nothing`,
+          )
+          .not.toContain(local.port);
         relayPorts.add(local.port);
         evidence.push(
           `${who}: ${one.connectionState}/${one.pairState} nominated local=${local.type}/${local.protocol} ${local.address}:${String(local.port)} remote=${one.remote?.type ?? "?"}/${one.remote?.protocol ?? "?"} ${one.remote?.address ?? "?"}:${String(one.remote?.port ?? 0)}`,
@@ -362,8 +380,11 @@ test.describe("relay-only calls", () => {
       bob: await audioBytes(bobApp.page),
     };
 
-    expect(after.alice, "alice's inbound audio stopped growing").toBeGreaterThan(before.alice);
-    expect(after.bob, "bob's inbound audio stopped growing").toBeGreaterThan(before.bob);
+    // Soft for the same reason as section 2: this is the fact that separates
+    // a relabelled path from a broken one, so the control probe below has to
+    // run and be reported even when it is this line that went red.
+    expect.soft(after.alice, "alice's inbound audio stopped growing").toBeGreaterThan(before.alice);
+    expect.soft(after.bob, "bob's inbound audio stopped growing").toBeGreaterThan(before.bob);
 
     evidence.push(
       `inbound audio over ${String(MEDIA_SAMPLE_MS)}ms: alice ${String(before.alice)} -> ${String(after.alice)} B, bob ${String(before.bob)} -> ${String(after.bob)} B`,
@@ -385,12 +406,12 @@ test.describe("relay-only calls", () => {
     evidence.push(
       `control probe: ${stack.livekit.nodeIP}:${String(TURN_PORT)} (published TURN) ${turn}`,
     );
-    expect(
+    expect.soft(
       turn,
       `the probe's positive control failed: ${stack.livekit.nodeIP}:${String(TURN_PORT)} is published and should answer STUN, but the probe saw "${turn}" — so its negative results below would prove nothing`,
     ).toBe("answered");
 
-    expect(relayPorts.size, "no relay port was observed to probe").toBeGreaterThan(0);
+    expect.soft(relayPorts.size, "no relay port was observed to probe").toBeGreaterThan(0);
     for (const port of relayPorts) {
       const relay = await probePort(stack.livekit.nodeIP, port);
       evidence.push(
@@ -399,7 +420,7 @@ test.describe("relay-only calls", () => {
       // Not "did not answer" — the published media mux does not answer either.
       // Refused is ICMP port-unreachable: nothing is there at all, which is
       // the claim ADR 005 makes about the relay range.
-      expect(
+      expect.soft(
         relay,
         `the nominated relay port ${stack.livekit.nodeIP}:${String(port)} came back "${relay}" rather than refused: something is reachable there from outside the media server's namespace, so this call may have worked for a reason the shipped stack does not provide`,
       ).toBe("refused");
