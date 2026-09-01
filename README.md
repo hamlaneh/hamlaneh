@@ -12,27 +12,35 @@ server is a VPS with a domain, a bare IP address, or a computer at home.
 
 ## Install
 
-On a fresh server with Docker available, from a clone of this repository:
+On a fresh Linux server, as root:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/hamlaneh/hamlaneh/main/deploy/install.sh)
+```
+
+It fetches the repository into `/opt/hamlaneh`, detects the distribution (Ubuntu,
+Debian, Fedora, RHEL-clones including AlmaLinux), installs Docker and cosign if they are
+missing, asks one question — the domain or IP to serve on, with this machine's own
+address as the default — then generates every secret, brings the stack up behind
+automatic HTTPS, and arms the update and backup timers. Re-running it is safe: it will
+not regenerate a secret or overwrite an existing `.env`.
+
+From a clone, the same thing without the fetch (`--domain` skips the question;
+`--non-interactive` never prompts):
 
 ```bash
 sudo deploy/install.sh --domain chat.example.com
 ```
 
-It detects the distribution (Ubuntu, Debian, Fedora, RHEL-clones including AlmaLinux),
-installs Docker and cosign if they are missing, generates every secret, brings the stack
-up behind automatic HTTPS, and arms the update and backup timers. Re-running it is safe:
-it will not regenerate a secret or overwrite an existing `.env`.
+A domain gets a browser-trusted certificate automatically. A bare IP works too — the
+script tells you plainly that the certificate is locally issued in that mode, rather
+than pretending it is the same.
 
-Without a domain, pass `--domain <your-ip>`. The install works, and the script tells you
-plainly what the certificate situation is in that mode rather than pretending it is the
-same.
-
-> **The one-line `curl | bash` install is not live yet.** `get.hamlaneh.com` is not
-> serving, and the installer needs the repository present because the stack currently
-> builds from source rather than pulling a published image. That first build is a Go
-> compile plus a web bundle, so budget several minutes and at least 2 GB of RAM on the
-> machine. Published images are what will make the one-liner and the sub-5-minute
-> install real; see [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Until the first published release, the stack builds from source on your machine.**
+> That first build is a Go compile plus a web bundle, so budget several minutes and at
+> least 2 GB of RAM. The one-liner above fetches `main` over TLS; published, signed
+> images are what will make the install both faster and verifiable end-to-end — see
+> [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Screenshot
 
