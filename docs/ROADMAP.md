@@ -73,23 +73,27 @@ that later phases depend on already exists and can turn red.
       composer. `attachFile` now checks the upload status rather than accepting any response,
       which is what turned a silent 400 into a visible failure.
 
-- [ ] **File sharing is unreachable on a fresh install — a headline feature, absent rather than
-      degraded.** Two individually-correct decisions meet badly: Strict is the schema default
-      (`0018_org_encryption_mode.up.sql` — `NOT NULL DEFAULT 'strict'`) and the only selectable
-      mode, so every channel and DM is born encrypted; and an encrypted conversation refuses
-      attachments (`e2ee_attachments_unsupported`) because encrypted attachments were never
-      built, refusing rather than storing in the clear — which is the right call in isolation.
-      Together they mean **there is no conversation on any install into which any file can be
-      uploaded**, while `README.md` and `CLAUDE.md` both lead with file sharing. This needs
-      encrypted attachments, and it is Phase 3 work that was missed rather than Phase 4 polish
-- [ ] **Mentions notify nobody in an encrypted conversation.** `storage/messages.go` derives them
-      with `ParseMentions(nm.Content)`, and on an encrypted message `content` is `""` by
-      construction, so no `message_mentions` row is ever written. The composer still offers the
-      picker, the recipient's client still renders `@Name` after decryption — so both people see
-      a mention that happened, and only the badge meant to carry it is missing. Silent, and the
-      fix is a design decision rather than a patch: the server cannot read the message, so either
-      the client declares the mention list (metadata the server would then hold) or notification
-      moves client-side. That is an ADR, not a bug fix
+- [x] **Encrypted attachments — file sharing works again** — *2026-08-31*,
+      [ADR 013](adr/013-encrypted-attachments.md). It had been unreachable on every install:
+      Strict is the only selectable mode so every conversation is born encrypted, and an
+      encrypted conversation refused attachments. A fresh 16-byte AES-GCM key per file now
+      rides inside the attaching message's ciphertext, so a file opens exactly when its message
+      reads. The exporter approach was refuted by the system's own forward secrecy — a file
+      needs a key for the past, and merged epochs delete theirs.
+      The upload path is two branches rather than one with conditionals, so the sniff/strip
+      pipeline is *unreachable* from the encrypted path; EXIF stripping and thumbnails moved to
+      the sender, since the server can no longer see an image; and what decides whether
+      decrypted bytes render is a four-signature sniff with SVG deliberately absent, never the
+      sender's declared type
+- [x] **Mentions under E2EE, server half** — *2026-08-31*,
+      [ADR 014](adr/014-mentions-under-e2ee.md). They notified nobody, silently: they were
+      derived from a content column empty by construction, while the composer still offered the
+      picker and the reader still saw `@Name`. The client now declares the list in the envelope.
+      The declared array cannot introduce anybody — the stored id is selected from
+      `channel_members` and the array only narrows it — so a stranger, a departed member and a
+      uuid naming nobody are one case: zero rows, no error, message still lands
+- [ ] **Mentions under E2EE, client half**: the composer must send the declared list. Until it
+      does, an encrypted mention still notifies nobody — the server is ready and nothing feeds it
 - [x] **The backup offer covering the call button** — *2026-08-31*, fixed at the cause rather
       than patched a third time. `.hm-plumbing` meant both "this has no design yet" and "this
       floats", so every undesigned surface inherited popover positioning whether or not it was a
