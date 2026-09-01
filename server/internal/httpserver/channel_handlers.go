@@ -214,6 +214,12 @@ func (s *apiServer) CreateChannel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// After the request's own bounds, so a malformed request is answered
+	// without asking the database anything.
+	nc.E2EE, ok = s.e2eeAtBirth(w, r, store, req.E2ee)
+	if !ok {
+		return
+	}
 
 	ch, err := store.CreateChannel(r.Context(), nc)
 	switch {
@@ -255,6 +261,9 @@ func validateCreateChannel(w http.ResponseWriter, r *http.Request, req api.Creat
 		return fail("kind must be one of: public, private")
 	}
 
+	// E2EE is deliberately not decided here: it is the organisation's mode
+	// rather than a request bound, so the handler fills it from e2eeAtBirth
+	// once everything this function can refuse has been refused.
 	nc := storage.NewChannel{Kind: kind, Slug: req.Slug, CreatedBy: creator}
 	if req.Topic != nil {
 		if !storableText(*req.Topic) {
@@ -295,7 +304,18 @@ func (s *apiServer) OpenDirectMessage(w http.ResponseWriter, r *http.Request) {
 	// The caller comes from the session, never from the body: a DM is opened
 	// between whoever is asking and whoever they named, and no request can
 	// select a pair it is not part of.
-	ch, created, err := store.OpenDirectMessage(r.Context(), prin.user.ID, req.UserId)
+	//
+	// The organisation's mode decides the encryption, exactly as on channel
+	// creation, and it applies only when this call creates the conversation.
+	// Storage enforces that half rather than this handler — the flag is bound
+	// into the INSERT and the reopen path is a plain SELECT — so a second
+	// caller cannot re-decide a DM by asking for the opposite mode, and no
+	// mode switch can either.
+	e2ee, ok := s.e2eeAtBirth(w, r, store, req.E2ee)
+	if !ok {
+		return
+	}
+	ch, created, err := store.OpenDirectMessage(r.Context(), prin.user.ID, req.UserId, e2ee)
 	switch {
 	case errors.Is(err, storage.ErrDMWithSelf):
 		writeError(w, r, http.StatusBadRequest, codeInvalidRequest, "a direct message needs two different users")
@@ -651,6 +671,7 @@ func apiChannel(ch storage.Channel) api.Channel {
 	out := api.Channel{
 		Id:                ch.ID,
 		Kind:              api.ChannelKind(ch.Kind),
+		E2ee:              ch.E2EE,
 		Slug:              ch.Slug,
 		Topic:             ch.Topic,
 		MemberCount:       ch.MemberCount,

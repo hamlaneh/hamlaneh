@@ -56,7 +56,15 @@ export type ServerFrame =
   | { type: "subscribed" | "unsubscribed"; chan: string }
   | { type: "message_created" | "message_updated" | "message_deleted"; chan: string; seq?: number; message: Message }
   | { type: "channel_created" | "channel_updated"; chan?: string; seq?: number; channel: Channel }
-  | { type: "member_added"; chan: string; seq?: number; user: UserSummary }
+  | { type: "member_added" | "member_removed"; chan: string; seq?: number; user: UserSummary }
+  /**
+   * The two MLS nudges (ws-protocol.md §4). Notifications only: a commit blob
+   * can approach 256 KiB, which no frame under the cap can carry, so the
+   * event says something changed and REST says what is true. Missing one
+   * costs latency and nothing else — clients refetch on connect and on open.
+   */
+  | { type: "mls_commit"; chan: string; epoch: number }
+  | { type: "mls_welcome" }
   | { type: "read_position"; chan: string; messageId: string }
   | { type: "typing"; chan: string; userId: string }
   | { type: "presence"; chan: string; userId: string; state: Presence }
@@ -179,13 +187,22 @@ export function parseServerFrame(raw: string): ServerFrame | null {
         channel: channel as unknown as Channel,
       };
     }
-    case "member_added": {
+    case "member_added":
+    case "member_removed": {
       const user = data.user;
       if (chan === null || !isRecord(user) || typeof user.id !== "string") {
         return null;
       }
       return { type, chan, ...(seq === undefined ? {} : { seq }), user: user as unknown as UserSummary };
     }
+    case "mls_commit": {
+      const epoch = data.epoch;
+      return chan === null || typeof epoch !== "number" ? null : { type, chan, epoch };
+    }
+    case "mls_welcome":
+      // No payload by design: which of the caller's devices a Welcome is for
+      // is answered by the fetch, not by a frame every socket receives.
+      return { type };
     case "read_position": {
       const target = chan ?? readString(data, "chan");
       const messageId = readString(data, "message_id");
@@ -245,9 +262,22 @@ export function parseServerFrame(raw: string): ServerFrame | null {
   }
 }
 
-/** Exponential backoff with full jitter: 1 s base, 30 s cap (ws-protocol.md §8). */
-export function fullJitterDelay(attempt: number, random: () => number = Math.random): number {
-  const ceiling = Math.min(30_000, 1000 * 2 ** Math.max(0, attempt));
+/**
+ * Exponential backoff with full jitter. The socket's own reconnect is the
+ * default shape — 1 s base, 30 s cap (ws-protocol.md §8) — and the MLS retry
+ * in useChat passes a slower pair of its own.
+ *
+ * The jitter is not decoration: every client stuck on one cause (a server that
+ * is down, a member who has not signed in) would otherwise wake in lockstep
+ * and retry as a thundering herd.
+ */
+export function fullJitterDelay(
+  attempt: number,
+  random: () => number = Math.random,
+  baseMs = 1000,
+  capMs = 30_000,
+): number {
+  const ceiling = Math.min(capMs, baseMs * 2 ** Math.max(0, attempt));
   return Math.round(random() * ceiling);
 }
 

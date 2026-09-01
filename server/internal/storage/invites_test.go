@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
@@ -30,7 +29,7 @@ const inviteTTL = 24 * time.Hour
 func TestInvitesIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
 	host := mustCreateUser(ctx, t, store, adminUser("invitehost"))
 
@@ -62,19 +61,9 @@ func TestInvitesIntegration(t *testing.T) {
 	t.Run("the raw token is never stored", func(t *testing.T) {
 		mustCreate(t, "secret-token-value", "", inviteTTL)
 
-		conn, err := pgx.Connect(ctx, dsn)
-		if err != nil {
-			t.Fatalf("connect: %v", err)
-		}
-		defer func() {
-			if closeErr := conn.Close(ctx); closeErr != nil {
-				t.Errorf("close: %v", closeErr)
-			}
-		}()
-
 		var n int
-		if err := conn.QueryRow(ctx,
-			`SELECT count(*) FROM invites WHERE token_hash = $1::bytea`,
+		if err := raw.QueryRow(ctx,
+			`SELECT count(*) FROM invites WHERE token_hash = ?`,
 			[]byte("secret-token-value"),
 		).Scan(&n); err != nil {
 			t.Fatalf("count raw tokens: %v", err)

@@ -3,6 +3,9 @@ import { useTranslation } from "react-i18next";
 
 import { api } from "../../../api/client";
 import type { UserSummary } from "../../../chat/types";
+import type { EncryptionMode } from "../../../instance/encryptionMode";
+import { creationRefusalKey } from "./creationRefusal";
+import type { CreationRefusalKey } from "./creationRefusal";
 
 /**
  * UNDESIGNED SURFACE — plain semantic HTML, no styling beyond structure.
@@ -14,18 +17,34 @@ import type { UserSummary } from "../../../chat/types";
 interface PeoplePickerProps {
   title: string;
   actionLabel: string;
-  onPick: (user: UserSummary) => Promise<boolean>;
+  /** Resolves to null on success, or the server's own refusal code. */
+  onPick: (user: UserSummary) => Promise<string | null>;
   onClose: () => void;
+  /**
+   * The organisation's encryption mode, when this picker is the moment a
+   * conversation is created. It decides what the DM is born as — there is no
+   * choice to offer (ADR 011 decision 1). Absent for the invite picker, which
+   * joins a conversation that exists and has already decided.
+   */
+  encryptionMode?: EncryptionMode | undefined;
 }
 
 /** One directory request per pause in typing, not per keystroke. */
 const QUERY_DEBOUNCE_MS = 200;
 
-export function PeoplePicker({ title, actionLabel, onPick, onClose }: PeoplePickerProps) {
+export function PeoplePicker({
+  title,
+  actionLabel,
+  onPick,
+  onClose,
+  encryptionMode,
+}: PeoplePickerProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [people, setPeople] = useState<UserSummary[]>([]);
-  const [failed, setFailed] = useState(false);
+  const [failureKey, setFailureKey] = useState<
+    CreationRefusalKey | "chat.people.failed" | null
+  >(null);
   const queryId = useId();
 
   useEffect(() => {
@@ -59,7 +78,7 @@ export function PeoplePicker({ title, actionLabel, onPick, onClose }: PeoplePick
 
   return (
     <section
-      className="hm-plumbing"
+      className="hm-plumbing hm-plumbing--overlay"
       role="dialog"
       aria-modal="true"
       aria-label={title}
@@ -82,18 +101,28 @@ export function PeoplePicker({ title, actionLabel, onPick, onClose }: PeoplePick
           }}
         />
       </p>
-      {failed ? <p role="alert">{t("chat.people.failed")}</p> : null}
+      {encryptionMode === undefined ? null : (
+        <>
+          {/* Picking the person *is* the creation moment for a DM, and there is
+              nothing to choose: the organisation's mode decides, and it is
+              fixed once the conversation exists. What is shown is therefore
+              the outcome, not a control. */}
+          <p>{t(`chat.people.e2eeByMode.${encryptionMode}`)}</p>
+          <p>{t("chat.people.reopenNote")}</p>
+        </>
+      )}
+      {failureKey === null ? null : <p role="alert">{t(failureKey)}</p>}
       <ul>
         {people.map((person) => (
           <li key={person.id}>
             <button
               type="button"
               onClick={() => {
-                void onPick(person).then((ok) => {
-                  if (ok) {
+                void onPick(person).then((refusal) => {
+                  if (refusal === null) {
                     onClose();
                   } else {
-                    setFailed(true);
+                    setFailureKey(creationRefusalKey(refusal, "chat.people.failed"));
                   }
                 });
               }}

@@ -113,7 +113,7 @@ type Store interface {
 	ChannelForUser(ctx context.Context, channelID, userID uuid.UUID) (storage.Channel, error)
 	UpdateChannelTopic(ctx context.Context, id uuid.UUID, topic string) (storage.Channel, error)
 	ListChannelsForUser(ctx context.Context, userID uuid.UUID, params storage.ListChannelsParams) ([]storage.Channel, error)
-	OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID) (storage.Channel, bool, error)
+	OpenDirectMessage(ctx context.Context, callerID, peerID uuid.UUID, e2ee bool) (storage.Channel, bool, error)
 	AddChannelMember(ctx context.Context, channelID, userID, addedBy uuid.UUID) error
 	RemoveChannelMember(ctx context.Context, channelID, userID uuid.UUID) error
 	ListChannelMembers(ctx context.Context, channelID uuid.UUID, params storage.ListChannelMembersParams) ([]storage.User, error)
@@ -162,10 +162,65 @@ type Store interface {
 	ListScimTokens(ctx context.Context) ([]storage.ScimToken, error)
 	RevokeScimToken(ctx context.Context, id uuid.UUID) error
 
+	// Conference rooms (ADR 005). Only the digest of a link is ever stored,
+	// so nothing here takes or returns a raw one — the same shape
+	// invitations have. LiveConferenceByTokenHash collapses unknown, expired
+	// and revoked into ErrNotFound at the query, so the three cannot be told
+	// apart anywhere above it; ConferenceByID does the same for a revoked
+	// id, and says nothing about who may act on the row — that is
+	// internal/authz's, and it needs the owner this returns to decide it.
+	CreateConference(ctx context.Context, createdBy uuid.UUID, tokenHash []byte, title string, expiresAt *time.Time) (storage.Conference, error)
+	ListConferences(ctx context.Context, ownerID uuid.UUID, all bool) ([]storage.Conference, error)
+	ConferenceByID(ctx context.Context, id uuid.UUID) (storage.Conference, error)
+	RevokeConference(ctx context.Context, id uuid.UUID) error
+	LiveConferenceByTokenHash(ctx context.Context, tokenHash []byte) (storage.Conference, error)
+
+	// The E2EE transport (ADR 006, migration 0017). Every blob crossing this
+	// boundary is opaque: the store sequences and delivers MLS artifacts it
+	// never parses, and nothing on this interface hands one to anything that
+	// could.
+	//
+	// The two that answer a race are the ones worth naming. ClaimMlsKeyPackages
+	// is a CONSUMING read — the packages it returns are deleted in the
+	// transaction that returned them, so no package can be handed out twice —
+	// and SubmitMlsCommit is a compare-and-swap that stores the commit and all
+	// its Welcomes in the same transaction as the epoch it advances.
+	RegisterMlsDevice(ctx context.Context, userID uuid.UUID, signatureKey []byte) (storage.MlsDevice, bool, error)
+	ReplaceMlsKeyPackages(ctx context.Context, userID, deviceID uuid.UUID, packages [][]byte) (int, error)
+	MlsGroupByChannel(ctx context.Context, channelID uuid.UUID) (storage.MlsGroup, error)
+	CreateMlsGroup(ctx context.Context, channelID uuid.UUID, groupID []byte) (storage.MlsGroup, error)
+	ClaimMlsKeyPackages(ctx context.Context, channelID, targetUserID uuid.UUID) ([]storage.MlsKeyPackageClaim, []uuid.UUID, error)
+	ListMlsMemberDevices(ctx context.Context, channelID uuid.UUID, after *uuid.UUID, limit int) ([]storage.MlsMemberDevice, error)
+	SubmitMlsCommit(ctx context.Context, nc storage.NewMlsCommit) (storage.MlsCommitOutcome, error)
+	ListMlsCommits(ctx context.Context, channelID uuid.UUID, afterEpoch int64, limit int) ([]storage.MlsCommit, error)
+	ListMlsWelcomes(ctx context.Context, userID uuid.UUID) ([]storage.MlsWelcome, error)
+	DeleteMlsWelcome(ctx context.Context, userID, welcomeID uuid.UUID) error
+
+	// The recovery surface (ADR 010, migration 0019). The envelope is the one
+	// blob on this interface that is not merely unparsed but sealed: the key
+	// that opens it is derived from a recovery key generated on the device and
+	// never sent here, so there is no method that could be added later to read
+	// it. PutMlsBackup refuses a counter that does not advance — a rail
+	// against the owner's own two devices writing out of order, never the
+	// anti-rollback control, which is client-side by necessity.
+	//
+	// DeregisterMlsDevice is the directory write ADR 007's sweep needs in
+	// order to act, and is deliberately not coupled to session revocation:
+	// un-listing a key and signing a device out answer different questions.
+	PutMlsBackup(ctx context.Context, userID uuid.UUID, envelope []byte, counter int64) error
+	MlsBackupByUser(ctx context.Context, userID uuid.UUID) (storage.MlsBackup, error)
+	DeleteMlsBackup(ctx context.Context, userID uuid.UUID) error
+	DeregisterMlsDevice(ctx context.Context, userID, deviceID uuid.UUID) error
+
 	// Instance settings, including the derived accounts-without-two-step
 	// count the enforcement switch is read beside.
 	OrgSettings(ctx context.Context) (storage.OrgSettings, error)
 	UpdateOrgSettings(ctx context.Context, patch storage.OrgSettingsPatch) (storage.OrgSettings, error)
+	// EncryptionMode is the mode alone, which is what the two conversation
+	// creation paths read; SetEncryptionMode is the only way it is written,
+	// and OrgSettingsPatch deliberately carries no field for it.
+	EncryptionMode(ctx context.Context) (string, error)
+	SetEncryptionMode(ctx context.Context, mode string) (storage.OrgSettings, error)
 }
 
 // The production store satisfies the whole surface at compile time.
@@ -311,6 +366,21 @@ type apiServer struct {
 	// never told its own origin; the link is then site-relative, which still
 	// resolves for the admin looking at it (admin_handlers.go).
 	publicURL string
+
+	// compressAssets gzips the embedded web build. False — the default, and
+	// what every compose install stays on, because Caddy compresses there —
+	// serves the build's bytes as they are. It is read once, when the routes
+	// are built (server.go), and reaches nothing under /api by design
+	// (compress.go).
+	compressAssets bool
+
+	// trustProxy says a reverse proxy sits in front of this listener and may
+	// name the client with X-Forwarded-For. False — the default — reads the
+	// direct peer and nothing else, which is the honest answer for any
+	// deployment with nothing forwarding: the single binary, and every test
+	// fixture. WithTrustedProxy is the only thing that sets it, and
+	// clientIP carries the whole argument.
+	trustProxy bool
 }
 
 var _ api.ServerInterface = (*apiServer)(nil)

@@ -1,0 +1,409 @@
+/* The guest meeting page — the one unauthenticated application screen in the
+ * product besides sign-in. Artboards `meet-guest` and `meet-guest-dead`.
+ *
+ * It deliberately shares nothing with auth.css. The handoff is explicit that
+ * the centred card on a tinted ground, the wordmark lockup and the primary
+ * button are the sign-in treatment, and that wearing them is how a page
+ * starts implying that typing your name into it produces an account. It does
+ * not: a guest gets a ticket to one room.
+ *
+ * Values transcribed from the two artboards; colours only ever come from the
+ * tokens in tokens.css. Nothing new is introduced — no token, no font, no
+ * typography step. Off-scale artboard literals are marked so nobody rounds
+ * them to the nearest token.
+ *
+ * Logical properties only. The page is a full RTL mirror in Persian: identity
+ * at one end of the rule and language at the other means inline-start and
+ * inline-end, never left and right.
+ */
+
+.hm-meet {
+  /* A standalone screen, not a child of the chat or settings shells, so it
+   * declares the mono stack the eyebrow needs rather than inheriting one. */
+  --hm-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  min-block-size: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-canvas);
+}
+
+/* ── the page's own top rule ───────────────────────────────────────── */
+
+/* There is no auth column to hang a switcher in the corner of, so the page
+ * grows a rule carrying identity at one end and language at the other. It has
+ * to be here: a stranger has no account carrying a locale and no Settings
+ * panel to reach. */
+.hm-meet__rule {
+  flex: 0 0 64px; /* off-scale (artboard) */
+  block-size: 64px; /* off-scale (artboard) */
+  box-sizing: border-box;
+  padding-inline: var(--spacing-8);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  background: var(--color-surface);
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+/* Whose meeting this is, or — once joined — which meeting it is. */
+.hm-meet__rule-title {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 var(--text-body) / 1.2 var(--hm-font-ui, var(--font-ui));
+  letter-spacing: -0.005em;
+  color: var(--color-text-primary);
+}
+
+.hm-meet__rule-title:lang(fa) {
+  line-height: 1.6;
+  letter-spacing: normal;
+}
+
+/* Whose meeting this is: the organisation's name and a clause, as two
+ * typographic pieces on one line — the artboard's own structure, and it keeps
+ * its order under the mirror because the name leads in both languages. No
+ * lockup: a wordmark over this page would be the front-door treatment it
+ * refuses everywhere else. */
+.hm-meet__rule-org {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 14px / 1.2 var(--hm-font-ui, var(--font-ui)); /* 14px off-scale (artboard) */
+  letter-spacing: -0.005em;
+  color: var(--color-text-primary);
+}
+
+.hm-meet__rule-org:lang(fa) {
+  line-height: 1.6;
+  letter-spacing: normal;
+}
+
+.hm-meet__rule-divider {
+  flex: 0 0 1px;
+  inline-size: 1px;
+  block-size: 16px; /* off-scale (artboard) */
+  background: var(--color-border-subtle);
+}
+
+.hm-meet__rule-host {
+  flex: 0 0 auto;
+  font: 400 12.5px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.hm-meet__rule-host:lang(fa) {
+  line-height: 1.8;
+}
+
+.hm-meet__rule .hm-language {
+  /* Identity at one end, language at the other, in both directions. */
+  margin-inline-start: auto;
+  --hm-switcher-option-inline-size: 52px; /* off-scale (artboard) */
+}
+
+/* ── the single flush column ───────────────────────────────────────── */
+
+.hm-meet__body {
+  flex: 1;
+  min-block-size: 0;
+  box-sizing: border-box;
+  padding: var(--spacing-16) var(--spacing-8);
+  display: flex;
+  justify-content: center;
+}
+
+.hm-meet__column {
+  inline-size: 100%;
+  max-inline-size: 560px; /* off-scale (artboard) */
+  display: flex;
+  flex-direction: column;
+  gap: 26px; /* off-scale (artboard) */
+}
+
+/* The dead-link column is tighter, and its glyph leads. */
+.hm-meet__column--dead {
+  gap: 22px; /* off-scale (artboard) */
+}
+
+.hm-meet__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 9px; /* off-scale (artboard) */
+}
+
+.hm-meet__eyebrow {
+  font: 500 11px / 1 var(--hm-mono, ui-monospace, monospace); /* 11px off-scale (artboard) */
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.hm-meet__eyebrow:lang(fa) {
+  font-family: var(--font-ui-fa);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.hm-meet__title {
+  margin: 0;
+  font: 600 32px / 1.2 var(--hm-font-ui, var(--font-ui)); /* 32px off-scale (artboard) */
+  letter-spacing: -0.02em;
+  color: var(--color-text-primary);
+}
+
+.hm-meet__title--dead {
+  font-size: var(--text-heading);
+  line-height: 1.25;
+}
+
+.hm-meet__title:lang(fa) {
+  line-height: 1.5;
+  letter-spacing: normal;
+}
+
+/* Arriving before anybody else is a state, not a fault: shape and words, so
+ * it never rests on colour. Nothing here animates — the preview is read once,
+ * when the page loads, and a pulse would promise a liveness it does not have. */
+.hm-meet__presence {
+  display: flex;
+  align-items: center;
+  gap: 7px; /* off-scale (artboard) */
+  font: 400 13.5px / 1.6 var(--hm-font-ui, var(--font-ui)); /* 13.5px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-meet__presence:lang(fa) {
+  line-height: 1.75;
+}
+
+.hm-meet__presence-dot {
+  flex: 0 0 8px; /* off-scale (artboard) */
+  inline-size: 8px;
+  block-size: 8px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--color-border-control);
+  border-radius: 50%;
+}
+
+.hm-meet__presence[data-active="true"] .hm-meet__presence-dot {
+  background: var(--color-success);
+  border-color: var(--color-success);
+}
+
+.hm-meet__body-text {
+  margin: 0;
+  font: 400 15px / 1.7 var(--hm-font-ui, var(--font-ui)); /* 15px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-meet__body-text:lang(fa) {
+  line-height: 1.85;
+}
+
+.hm-meet__divider {
+  block-size: 1px;
+  background: var(--color-border-subtle);
+}
+
+.hm-meet__glyph {
+  flex: 0 0 var(--size-target);
+  inline-size: var(--size-target);
+  block-size: var(--size-target);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 11px; /* off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+/* ── the one field and the one action ──────────────────────────────── */
+
+.hm-meet__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.hm-meet__label {
+  font: 500 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-meet__label:lang(fa) {
+  line-height: 1.7;
+}
+
+/* Stacked by default: a 64-character name and a 44px target cannot share a
+ * 375 row without cramping one of them, and this is the screen most likely to
+ * be opened on a phone from a chat message. */
+.hm-meet__row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px; /* off-scale (artboard) */
+}
+
+.hm-meet__field {
+  flex: 1;
+  min-inline-size: 0;
+}
+
+/* The field treatment is the delivered input, retuned to the drawn 52px — the
+ * same retune the settings panel makes for its denser 44px controls. */
+.hm-meet .hm-input {
+  block-size: 52px; /* off-scale (artboard) */
+  border-radius: 11px; /* off-scale (artboard) */
+}
+
+/* Join matches the auth set's primary height without borrowing its component:
+ * this page is not the front door and must not wear its button. */
+.hm-meet__join {
+  flex: 0 0 auto;
+  block-size: 52px; /* off-scale (artboard) */
+  padding-inline: 22px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px; /* off-scale (artboard) */
+  background: var(--color-brand-primary);
+  border: 1px solid transparent;
+  border-radius: 11px; /* off-scale (artboard) */
+  font: 600 15px / 1 var(--hm-font-ui, var(--font-ui)); /* 15px off-scale (artboard) */
+  color: var(--color-on-brand);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--duration-press) var(--ease-out);
+}
+
+.hm-meet__join:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-meet__join:hover {
+  background: var(--color-brand-hover);
+}
+
+.hm-meet__join:active {
+  background: var(--color-brand-pressed);
+}
+
+/* The way out of a dead link, drawn as an outline control rather than a
+ * primary: it goes to the instance's front door, and it is not an invitation
+ * to make an account. */
+.hm-meet__home {
+  inline-size: max-content;
+  block-size: var(--size-control);
+  box-sizing: border-box;
+  padding-inline: var(--spacing-6);
+  display: flex;
+  align-items: center;
+  gap: 9px; /* off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: 11px; /* off-scale (artboard) */
+  font: 600 var(--text-body) / 1 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+.hm-meet__home:lang(fa) {
+  line-height: 1.7;
+}
+
+.hm-meet__home:hover {
+  background: var(--color-surface-subtle);
+  border-color: var(--color-border-control-hover);
+}
+
+.hm-meet__hint {
+  margin: 0;
+  font: 400 12.5px / 1.65 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-meet__hint:lang(fa) {
+  line-height: 1.8;
+}
+
+/* Says in words that no account is created — the grey note the artboard puts
+ * last, in the neutral tone rather than an information one. */
+.hm-meet__note {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 11px; /* off-scale (artboard) */
+  padding: 14px 16px; /* off-scale (artboard) */
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 11px; /* off-scale (artboard) */
+  font: 400 12.5px / 1.65 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-meet__note:lang(fa) {
+  line-height: 1.8;
+}
+
+.hm-meet__note-icon {
+  flex: 0 0 17px; /* off-scale (artboard) */
+  margin-block-start: 1px;
+  color: var(--color-text-secondary);
+}
+
+/* ── in call ───────────────────────────────────────────────────────── */
+
+/* The in-call surface is the entire page: the same tiles and control bar a
+ * member sees, with the sidebar and message column simply absent. The rule
+ * above persists and carries the meeting title, so a guest always knows where
+ * they are. The call surface itself is `components/calls/`, not this file. */
+.hm-meet__call {
+  flex: 1;
+  min-block-size: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.hm-meet__call > * {
+  flex: 1;
+  min-block-size: 0;
+}
+
+/* ── one row at the desk ───────────────────────────────────────────── */
+
+@media (min-width: 1280px) {
+  .hm-meet__row {
+    flex-direction: row;
+    align-items: center;
+  }
+}
+
+@media (max-width: 899px) {
+  .hm-meet__rule {
+    padding-inline: 14px; /* off-scale (artboard, 375) */
+    gap: 9px; /* off-scale (artboard, 375) */
+  }
+
+  .hm-meet__rule .hm-language {
+    --hm-switcher-option-inline-size: 46px; /* off-scale (artboard, 375) */
+  }
+
+  .hm-meet__body {
+    padding: var(--spacing-6) var(--spacing-4);
+  }
+
+  .hm-meet__title {
+    font-size: 22px; /* off-scale (artboard, 375) */
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+  }
+
+  .hm-meet__join {
+    inline-size: 100%;
+  }
+}

@@ -15,8 +15,9 @@ import (
 // area:resource:verb.
 type Action string
 
-// Phase 1.1 actions. The admin dashboard is the only permissioned surface
-// so far; channels and messages arrive in Phase 1.2.
+// Phase 1.1 actions, the first surface that needed any: the admin dashboard.
+// Channels, messages, calls and conferences are all decided here too now,
+// each in its own block below.
 const (
 	// AdminUsersList is listing users from the admin dashboard.
 	AdminUsersList Action = "admin:users:list"
@@ -52,15 +53,19 @@ const (
 // it is an admin decision like every other one on this list.
 const (
 	// AdminScimTokensList is reading the live provisioning tokens.
-	AdminScimTokensList Action = "admin:scim-tokens:list"
+	AdminScimTokensList Action = "admin:scim-tokens:list" // #nosec G101 -- the NAME of a permission, matched only because it says "tokens"; it authenticates nothing
 	// AdminScimTokensCreate is minting a provisioning token.
-	AdminScimTokensCreate Action = "admin:scim-tokens:create"
+	AdminScimTokensCreate Action = "admin:scim-tokens:create" // #nosec G101 -- as above: a permission name, not a credential
 	// AdminScimTokensRevoke is killing a provisioning token.
-	AdminScimTokensRevoke Action = "admin:scim-tokens:revoke"
+	AdminScimTokensRevoke Action = "admin:scim-tokens:revoke" // #nosec G101 -- as above: a permission name, not a credential
 )
 
 // Can reports whether user may perform action on resource. resource is nil
-// for org-level actions; later phases pass channels, messages, and files.
+// for org-level actions, and otherwise one of the types the switch below
+// names: Channel, Message, Conference. There is no File resource and there
+// deliberately is not one — an uploaded file's permission is the permission
+// of the conversation it lands in, so FileUpload is decided against a
+// Channel.
 //
 // The default is deny: a nil user, an unknown action, or an action the user
 // lacks all deny. ctx is unused today but pinned in the signature so
@@ -74,19 +79,25 @@ func Can(_ context.Context, user *storage.User, action Action, resource any) boo
 		return canChannel(user, action, res)
 	case Message:
 		return canMessage(user, action, res)
+	case Conference:
+		return canConference(user, action, res)
 	}
 	switch action {
 	case AdminUsersList, AdminUsersCreate, AdminUsersUpdate, AdminUsersResetPassword,
 		AdminInvitesList, AdminInvitesCreate, AdminInvitesRevoke,
 		AdminOrgRead, AdminOrgUpdate, AdminAuditList,
-		AdminScimTokensList, AdminScimTokensCreate, AdminScimTokensRevoke:
+		AdminScimTokensList, AdminScimTokensCreate, AdminScimTokensRevoke,
+		ConferenceListAll:
 		return user.IsAdmin
 	case ChannelRead, ChannelUpdate, ChannelMemberAdd, ChannelMemberRemove,
-		MessageSend, MessageEdit, MessageDelete, ReadPositionSet, FileUpload, CallJoin:
+		MessageSend, MessageEdit, MessageDelete, ReadPositionSet, FileUpload, CallJoin,
+		MlsRead, MlsWrite,
+		ConferenceRevoke:
 		// Reached only when the caller passed no resource, or one of the
 		// wrong type. Every channel-scoped action is decided against a channel
-		// or a message; without one there is nothing to decide, and deny is
-		// the only safe answer to a question that was not fully asked.
+		// or a message, and revoking a conference against a conference;
+		// without one there is nothing to decide, and deny is the only safe
+		// answer to a question that was not fully asked.
 		return false
 	default:
 		return false

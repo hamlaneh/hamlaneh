@@ -58,6 +58,11 @@ describe("create channel", () => {
     // Honest copy: membership is the only visibility rule in Phase 1.2.
     expect(within(dialog).getByText(en.chat.createChannel.visibilityNote)).toBeInTheDocument();
 
+    // The organisation's mode decides, so there is no checkbox to offer — only
+    // a statement of what this channel will be (ADR 011 decision 1).
+    expect(within(dialog).queryByRole("checkbox")).toBeNull();
+    expect(within(dialog).getByText(en.chat.createChannel.e2eeByMode.strict)).toBeInTheDocument();
+
     await user.type(within(dialog).getByLabelText(en.chat.createChannel.nameLabel), "rollouts");
     await user.click(within(dialog).getByRole("button", { name: en.chat.createChannel.submit }));
 

@@ -24,12 +24,25 @@ var cspDirectives = []string{
 	// exceptions and the deliberate restatements, never additions.
 	"default-src 'self'",
 
-	// The bundle is one same-origin module script. No inline script and no
-	// eval: Vite emits neither, and the QR code that two-step setup injects
-	// as inline SVG is inert markup precisely because this stays strict. If
-	// a change ever appears to need 'unsafe-inline' or 'unsafe-eval', the
-	// change is the bug — see TestCSPForbidsUnsafeSources.
-	"script-src 'self'",
+	// The bundle is one same-origin module script. No inline script: Vite
+	// emits none, and the QR code that two-step setup injects as inline SVG
+	// is inert markup precisely because this stays strict. If a change ever
+	// appears to need 'unsafe-inline' or 'unsafe-eval', the change is the
+	// bug — see TestCSPForbidsUnsafeSources.
+	//
+	// 'wasm-unsafe-eval' is the one allowance, and it is a security decision
+	// rather than a convenience. It permits WebAssembly compilation and
+	// nothing else: eval() and new Function() stay refused, which is exactly
+	// what separates it from 'unsafe-eval' — that token would grant both,
+	// and is why the standard grew a narrow one. Without it a browser cannot
+	// run the MLS core at all under any CSP (ADR 006): WebAssembly
+	// instantiation is itself what the policy blocks, and the webapp
+	// degrades to its encryption-unavailable state.
+	//
+	// So client-side end-to-end encryption and a wasm-free CSP are mutually
+	// exclusive, and this project chose end-to-end encryption. Removing this
+	// token does not harden the app; it turns E2EE off.
+	"script-src 'self' 'wasm-unsafe-eval'",
 
 	// One same-origin stylesheet. React applies element styles through the
 	// CSSOM, which CSP does not govern, so nothing needs an inline-style

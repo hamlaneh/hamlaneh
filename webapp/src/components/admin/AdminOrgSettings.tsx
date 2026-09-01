@@ -9,6 +9,7 @@ import type { User } from "../../chat/types";
 import { useInstance } from "../../instance/instanceInfo";
 import { AdminLoadFailed } from "./AdminStates";
 import { AdminShell } from "./AdminShell";
+import { EncryptionModeSection } from "./EncryptionModeSection";
 import { NoticeBanner } from "../auth/NoticeBanner";
 import { RefreshCwIcon, TriangleAlertIcon } from "../icons";
 import { SavedMark } from "../settings/SavedMark";
@@ -357,6 +358,13 @@ export function AdminOrgSettings({
               {mark("lifetime")}
               <span className="hm-admin-hint">{t("admin.org.passwordMinNote")}</span>
             </section>
+
+            {/* Outside every `hm-admin-panel` above, and deliberately: the
+                subtitle promises this screen saves the moment you make a
+                change, and the encryption mode is the one setting that must
+                not (ADR 011 decision 2 — it is confirmed, and audited). It is
+                also undesigned, so it borrows none of the panel treatment. */}
+            <EncryptionModeSection settings={current} onSwitched={settings.update} />
           </div>
         </div>
       )}

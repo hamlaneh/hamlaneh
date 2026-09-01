@@ -1,4 +1,4 @@
-import { createChannelApi, inviteApi, uniqueSlug, uploadFileApi } from "../support/chat";
+import { createChannelApi, inviteApi, uniqueSlug } from "../support/chat";
 import { expect, test } from "../support/fixtures";
 
 /**
@@ -18,6 +18,20 @@ const PNG_1X1 = Buffer.from(
 );
 
 test.describe("files", () => {
+  /**
+   * These four were marked `test.fail()` while encrypted attachments did not
+   * exist: ADR 011 had made every conversation encrypted, so there was no
+   * conversation on any install into which a file could be uploaded at all.
+   * ADR 013 built them, the marker went red the moment it stopped being true
+   * — which is exactly what it was chosen to do — and it is gone.
+   *
+   * What it left behind is the arrangement. Uploading over the REST API is
+   * still refused in an encrypted conversation (`400 e2ee_required`, the
+   * anti-downgrade boundary, covered by the server's own tests), so every
+   * spec here attaches through the composer, where the MLS client seals the
+   * bytes first. That is the only way a file enters this product now.
+   */
+
   test("an image attached in the composer is stored and comes back as a card", async ({
     app,
     accounts,
@@ -90,12 +104,18 @@ test.describe("files", () => {
     expect(readerNavigations).toBe(0);
   });
 
-  test("a non-image download is handed over as a file, never sniffed", async ({ accounts }) => {
+  test("a non-image download is handed over as a file, never sniffed", async ({
+    app,
+    accounts,
+  }) => {
     const account = await accounts.createReady("e2efiledl");
     const api = await accounts.open(account.username, account.password);
     const channelId = await createChannelApi(api, uniqueSlug("dl"));
 
-    const attachment = await uploadFileApi(api, channelId, {
+    await app.gotoSignIn(`/c/${channelId}`);
+    await app.signIn(account.username, account.password);
+
+    const attachment = await app.attachFile({
       name: "rollout-notes.txt",
       mimeType: "text/plain",
       buffer: Buffer.from("Canary at 10%.", "utf8"),
@@ -117,7 +137,17 @@ test.describe("files", () => {
     const api = await accounts.open(account.username, account.password);
     const channelId = await createChannelApi(api, uniqueSlug("trap"));
 
-    const attachment = await uploadFileApi(api, channelId, {
+    await app.gotoSignIn(`/c/${channelId}`);
+    await app.signIn(account.username, account.password);
+    await app.chatSidebar.waitFor();
+
+    // What is stored is now ciphertext (ADR 013), so the served bytes are not
+    // this document and could not run whatever the headers said. That makes
+    // the escape binding below a weaker witness than it was, and it is kept
+    // rather than dropped because the headers are the part that still has to
+    // hold: Content-Disposition and nosniff are what stop a *future* plaintext
+    // path — a thumbnail, an export — from becoming a page on this origin.
+    const attachment = await app.attachFile({
       name: "trap.html",
       mimeType: "text/html",
       buffer: Buffer.from(
@@ -125,10 +155,6 @@ test.describe("files", () => {
         "utf8",
       ),
     });
-
-    await app.gotoSignIn(`/c/${channelId}`);
-    await app.signIn(account.username, account.password);
-    await app.chatSidebar.waitFor();
 
     // A binding the uploaded script can reach IF it ever runs. Installed on
     // the page, so it survives the navigation below into every frame.

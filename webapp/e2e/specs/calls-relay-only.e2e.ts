@@ -2,13 +2,12 @@ import dgram from "node:dgram";
 import { randomBytes } from "node:crypto";
 import process from "node:process";
 
-import type { BrowserContext, Page } from "@playwright/test";
+import type { BrowserContext } from "@playwright/test";
 
-import type { App } from "../support/app";
 import { createChannelApi, inviteApi, uniqueSlug } from "../support/chat";
 import { expect, test } from "../support/fixtures";
-import type { Translate } from "../support/i18n";
 import { readStackState } from "../support/stack";
+import { audioBytes, MEDIA_ARGS, peerFacts } from "../support/webrtc";
 
 /**
  * ROADMAP §2 gate 2: a client forced to relay-only ICE completes a call
@@ -19,8 +18,16 @@ import { readStackState } from "../support/stack";
  * because any two of them can be true while the call is worthless:
  *
  *   1. the peer connections reach connected and nominate a pair;
- *   2. the nominated pair's LOCAL candidate really is of type `relay`, on the
- *      address the media server advertises;
+ *   2. every transport either browser GATHERED was a relay allocation on the
+ *      address the media server advertises, inside its relay range — so the
+ *      call had nothing else to ride, whatever label the nominated pair
+ *      carries. (It used to assert the pair's own local candidate is `relay`;
+ *      two CI runs showed that label losing a benign race to `prflx` — the
+ *      name libwebrtc gives a mapping the far side observed on an existing
+ *      socket — while the gathered set, the media and the probe all held.
+ *      The set is the stronger claim: a peer-reflexive candidate is never a
+ *      transport of its own, so relay-only gathering plus a live call IS the
+ *      relay proof, race or no race.)
  *   3. `inbound-rtp` audio grows on both sides between two samples — media
  *      moving, not a handshake that merely looks green.
  *
@@ -80,24 +87,10 @@ import { readStackState } from "../support/stack";
  * lets it run there too, minus the probe, which the runner cannot make.
  */
 
-declare global {
-  interface Window {
-    /** Every peer connection the page opened; installed by forceRelayPolicy. */
-    __hamlanehPeerConnections?: RTCPeerConnection[];
-  }
-}
-
 /** A Linux browser on the stack's own network; see the header. */
 const LINUX_BROWSER = process.env.HAMLANEH_E2E_LINUX_BROWSER;
 const RUNNER_IS_DOCKER_HOST = process.platform === "linux";
 const CAN_RUN = RUNNER_IS_DOCKER_HOST || LINUX_BROWSER !== undefined;
-
-/**
- * Headless Chromium has no capture device, so a call joined without these
- * fails at getUserMedia rather than at anything this test is about. The fake
- * device publishes a real tone, which is what makes `bytesReceived` grow.
- */
-const MEDIA_ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"];
 
 /** LiveKit's own relay allocation range — drill 001 §2, and its startup log. */
 const RELAY_RANGE = { start: 30_000, end: 40_000 };
@@ -159,81 +152,6 @@ function forceRelayPolicy(): void {
 const installRelayShim = async (context: BrowserContext): Promise<void> => {
   await context.addInitScript(forceRelayPolicy);
 };
-
-/* ── reading what the connection actually did ─────────────────────────── */
-
-interface CandidateFacts {
-  type: string;
-  protocol: string;
-  address: string;
-  port: number;
-}
-
-interface PeerFacts {
-  /** What `getConfiguration()` reports — the setting, kept beside the fact. */
-  policy: string;
-  connectionState: string;
-  nominated: boolean;
-  pairState: string;
-  local: CandidateFacts | null;
-  remote: CandidateFacts | null;
-  audioBytesReceived: number;
-  audioPacketsReceived: number;
-}
-
-/** `getStats()` on every peer connection the page opened, reduced to facts. */
-function peerFacts(page: Page): Promise<PeerFacts[]> {
-  return page.evaluate(async () => {
-    const num = (value: unknown): number => (typeof value === "number" ? value : 0);
-    const str = (value: unknown): string => (typeof value === "string" ? value : "");
-
-    const facts: PeerFacts[] = [];
-    for (const connection of window.__hamlanehPeerConnections ?? []) {
-      const entries: Record<string, unknown>[] = [];
-      (await connection.getStats()).forEach((entry: Record<string, unknown>) => {
-        entries.push(entry);
-      });
-
-      const byId = new Map(entries.map((entry) => [str(entry.id), entry]));
-      const pair =
-        entries.find((entry) => entry.type === "candidate-pair" && entry.nominated === true) ??
-        null;
-      const audio = entries.filter(
-        (entry) => entry.type === "inbound-rtp" && entry.kind === "audio",
-      );
-
-      const candidate = (id: unknown): CandidateFacts | null => {
-        const entry = byId.get(str(id));
-        return entry === undefined
-          ? null
-          : {
-              type: str(entry.candidateType),
-              protocol: str(entry.protocol),
-              address: str(entry.address),
-              port: num(entry.port),
-            };
-      };
-
-      facts.push({
-        policy: str(connection.getConfiguration().iceTransportPolicy),
-        connectionState: connection.connectionState,
-        nominated: pair !== null,
-        pairState: pair === null ? "" : str(pair.state),
-        local: pair === null ? null : candidate(pair.localCandidateId),
-        remote: pair === null ? null : candidate(pair.remoteCandidateId),
-        audioBytesReceived: audio.reduce((total, one) => total + num(one.bytesReceived), 0),
-        audioPacketsReceived: audio.reduce((total, one) => total + num(one.packetsReceived), 0),
-      });
-    }
-    return facts;
-  });
-}
-
-/** Bytes of audio this page has received across all of its connections. */
-async function audioBytes(page: Page): Promise<number> {
-  const facts = await peerFacts(page);
-  return facts.reduce((total, one) => total + one.audioBytesReceived, 0);
-}
 
 /* ── the control probe ────────────────────────────────────────────────── */
 
@@ -327,24 +245,6 @@ function probePort(host: string, port: number, timeoutMs = 2_500): Promise<PortO
   });
 }
 
-/* ── driving the call ─────────────────────────────────────────────────── */
-
-/**
- * Clicks the one button in the call strip and waits for the tiles.
- *
- * Located by role rather than by label on purpose: the same control reads
- * "Start a call" or "Join call" depending on whether this person's client has
- * heard about the call yet, and which of the two it says is not this test's
- * subject. The participant list exists only once the session is connected.
- */
-async function joinCall(app: App, t: Translate): Promise<void> {
-  await app.page
-    .getByRole("region", { name: t("calls.strip.label") })
-    .getByRole("button")
-    .click();
-  await app.page.getByRole("list", { name: t("calls.view.participants") }).waitFor();
-}
-
 test.describe("relay-only calls", () => {
   test.skip(
     !CAN_RUN,
@@ -368,11 +268,18 @@ test.describe("relay-only calls", () => {
     const channelId = await createChannelApi(aliceApi, uniqueSlug("relay"));
     await inviteApi(aliceApi, channelId, bob.id);
 
-    const aliceApp = await openApp(alice, `/c/${channelId}`, installRelayShim);
+    // Bob's browser FIRST, and not for convenience. Every conversation is
+    // encrypted now (ADR 011), and a device that has never opened the app has
+    // published no key package for the creator's client to claim: open Alice
+    // first and she bootstraps a group Bob cannot be added to, he sits at
+    // "waiting to join", and his call is refused rather than downgraded — the
+    // product behaving exactly as designed, against a spec that had raced it.
+    // The encryption suite explains the ordering; the protocol requires it.
     const bobApp = await openApp(bob, `/c/${channelId}`, installRelayShim);
+    const aliceApp = await openApp(alice, `/c/${channelId}`, installRelayShim);
 
-    await joinCall(aliceApp, t);
-    await joinCall(bobApp, t);
+    await aliceApp.joinCall();
+    await bobApp.joinCall();
 
     // Both clients agree two people are in the room. This is the application's
     // own account of the call; everything below is the transport's.
@@ -404,36 +311,77 @@ test.describe("relay-only calls", () => {
       expect(connected.length, `${who} has no connected peer connection`).toBeGreaterThan(0);
 
       for (const one of connected) {
-        expect(one.policy, `${who}: the peer connection is not relay-only`).toBe("relay");
-        expect(one.nominated, `${who}: no candidate pair was nominated`).toBe(true);
-        expect(one.pairState, `${who}: the nominated pair did not succeed`).toBe("succeeded");
+        // Every check below is SOFT, and none of them is relaxed: a soft
+        // failure still fails the run. What changes is that one stops the
+        // reporting instead of stopping the test, so a red run names every
+        // wrong fact AND still reaches the media samples and the control
+        // probe underneath — which is what separates a relabelled path from
+        // a broken one when this gate goes red.
+        expect.soft(one.policy, `${who}: the peer connection is not relay-only`).toBe("relay");
+        expect.soft(one.nominated, `${who}: no candidate pair was nominated`).toBe(true);
+        expect.soft(one.pairState, `${who}: the nominated pair did not succeed`).toBe("succeeded");
+
+        // The measurement the whole spec exists for — moved off the nominated
+        // pair's LABEL and onto the gathered candidate SET, on evidence from
+        // two CI runs (2026-09-01) that failed identically. The pair's local
+        // candidate was reported as `prflx` with a redacted address and the
+        // peer-observed port: the label libwebrtc mints when the SFU's
+        // connectivity check arrives before local pairing catches up — a race
+        // this runner loses and drill 001's machine happened to win, on the
+        // same stack, with media flowing and the control probe green both
+        // times.
+        //
+        // Asserting on the gathered set is the STRONGER claim, not a
+        // concession. A peer-reflexive candidate is never a transport of its
+        // own — it is a name for a mapping observed on a socket that already
+        // exists — so proving every transport this side ever had was a relay
+        // allocation on our own SFU proves the call rode one, whatever the
+        // pair chose to call it. The pair-label assert proved the same thing
+        // only when the race fell the right way; this holds either way, and a
+        // real breach (a host or srflx candidate in the pool) fails it
+        // outright.
+        const relays = one.gathered.filter((candidate) => candidate.type === "relay");
+        const foreign = one.gathered.filter(
+          (candidate) => candidate.type !== "relay" && candidate.type !== "prflx",
+        );
+        expect
+          .soft(
+            foreign,
+            `${who}: non-relay transports were gathered — the relay-only policy did not hold`,
+          )
+          .toEqual([]);
+        expect
+          .soft(relays.length, `${who}: no relay candidate was gathered at all`)
+          .toBeGreaterThan(0);
+        for (const relay of relays) {
+          expect
+            .soft(relay.protocol, `${who}: a relay candidate is not over UDP`)
+            .toBe("udp");
+          expect
+            .soft(relay.address, `${who}: a relay candidate is not on the advertised node IP`)
+            .toBe(stack.livekit.nodeIP);
+          expect
+            .soft(
+              relay.port,
+              `${who}: relay port ${String(relay.port)} is outside LiveKit's relay range`,
+            )
+            .toBeGreaterThanOrEqual(RELAY_RANGE.start);
+          expect
+            .soft(relay.port, `${who}: the relay port is outside LiveKit's relay range`)
+            .toBeLessThan(RELAY_RANGE.end);
+          expect
+            .soft(
+              PUBLISHED_PORTS,
+              `${who}: the relay landed on a published port, so it proves nothing`,
+            )
+            .not.toContain(relay.port);
+          relayPorts.add(relay.port);
+        }
 
         const local = one.local;
-        expect(local, `${who}: the nominated pair has no local candidate`).not.toBeNull();
-        if (local === null) {
-          continue;
-        }
-        // The measurement the whole spec exists for: not "we asked for relay"
-        // but "the pair carrying this call has a relay candidate on our side".
-        expect(local.type, `${who}: the nominated local candidate is not a relay`).toBe("relay");
-        expect(local.protocol, `${who}: the relay candidate is not over UDP`).toBe("udp");
-        expect(local.address, `${who}: the relay is not on the advertised node IP`).toBe(
-          stack.livekit.nodeIP,
-        );
-        expect(
-          local.port,
-          `${who}: the relay port ${String(local.port)} is outside LiveKit's relay range`,
-        ).toBeGreaterThanOrEqual(RELAY_RANGE.start);
-        expect(local.port, `${who}: the relay port is outside LiveKit's relay range`).toBeLessThan(
-          RELAY_RANGE.end,
-        );
-        expect(
-          PUBLISHED_PORTS,
-          `${who}: the relay landed on a published port, so it proves nothing`,
-        ).not.toContain(local.port);
-        relayPorts.add(local.port);
         evidence.push(
-          `${who}: ${one.connectionState}/${one.pairState} nominated local=${local.type}/${local.protocol} ${local.address}:${String(local.port)} remote=${one.remote?.type ?? "?"}/${one.remote?.protocol ?? "?"} ${one.remote?.address ?? "?"}:${String(one.remote?.port ?? 0)}`,
+          `${who}: ${one.connectionState}/${one.pairState} nominated local=${local?.type ?? "?"}/${local?.protocol ?? "?"} ${local?.address ?? "?"}:${String(local?.port ?? 0)} remote=${one.remote?.type ?? "?"}/${one.remote?.protocol ?? "?"} ${one.remote?.address ?? "?"}:${String(one.remote?.port ?? 0)}`,
+          `${who}: gathered ${relays.map((relay) => `relay/${relay.protocol} ${relay.address}:${String(relay.port)}`).join(", ") || "none"}${foreign.length > 0 ? ` FOREIGN ${foreign.map((candidate) => candidate.type).join(",")}` : ""}`,
         );
       }
     }
@@ -463,8 +411,11 @@ test.describe("relay-only calls", () => {
       bob: await audioBytes(bobApp.page),
     };
 
-    expect(after.alice, "alice's inbound audio stopped growing").toBeGreaterThan(before.alice);
-    expect(after.bob, "bob's inbound audio stopped growing").toBeGreaterThan(before.bob);
+    // Soft for the same reason as section 2: this is the fact that separates
+    // a relabelled path from a broken one, so the control probe below has to
+    // run and be reported even when it is this line that went red.
+    expect.soft(after.alice, "alice's inbound audio stopped growing").toBeGreaterThan(before.alice);
+    expect.soft(after.bob, "bob's inbound audio stopped growing").toBeGreaterThan(before.bob);
 
     evidence.push(
       `inbound audio over ${String(MEDIA_SAMPLE_MS)}ms: alice ${String(before.alice)} -> ${String(after.alice)} B, bob ${String(before.bob)} -> ${String(after.bob)} B`,
@@ -486,12 +437,12 @@ test.describe("relay-only calls", () => {
     evidence.push(
       `control probe: ${stack.livekit.nodeIP}:${String(TURN_PORT)} (published TURN) ${turn}`,
     );
-    expect(
+    expect.soft(
       turn,
       `the probe's positive control failed: ${stack.livekit.nodeIP}:${String(TURN_PORT)} is published and should answer STUN, but the probe saw "${turn}" — so its negative results below would prove nothing`,
     ).toBe("answered");
 
-    expect(relayPorts.size, "no relay port was observed to probe").toBeGreaterThan(0);
+    expect.soft(relayPorts.size, "no relay port was observed to probe").toBeGreaterThan(0);
     for (const port of relayPorts) {
       const relay = await probePort(stack.livekit.nodeIP, port);
       evidence.push(
@@ -500,7 +451,7 @@ test.describe("relay-only calls", () => {
       // Not "did not answer" — the published media mux does not answer either.
       // Refused is ICMP port-unreachable: nothing is there at all, which is
       // the claim ADR 005 makes about the relay range.
-      expect(
+      expect.soft(
         relay,
         `the nominated relay port ${stack.livekit.nodeIP}:${String(port)} came back "${relay}" rather than refused: something is reachable there from outside the media server's namespace, so this call may have worked for a reason the shipped stack does not provide`,
       ).toBe("refused");

@@ -67,8 +67,9 @@ Every state on the canvas is a variant of these thirteen.
 - Credential failure: `role="alert"`, identifier kept, password cleared, focus to the alert.
 - Reset confirmation: `role="status"` — does not steal focus.
 - Password minimum (12 on the artboards) is instance policy served with the form, not a constant.
-- Fonts self-hosted: Inter and Vazirmatn, both OFL 1.1. No CDN. Weights: 400 body, 500 labels
-  and links, 600 headings and buttons.
+- Fonts self-hosted from `webapp/public/fonts/`: Inter and Vazirmatn, both OFL 1.1, variable
+  plus static 400/500/600. No CDN. Weights: 400 body, 500 labels and links, 600 headings and
+  buttons.
 - Icons: Lucide (ISC), inline SVG, 24×24 viewBox, 1.75 stroke, `currentColor`. Ten glyphs.
   Only `arrow-left` mirrors in RTL.
 - Persian: line-height 1.65–1.75, no negative tracking. Email, URLs and codes stay LTR inside

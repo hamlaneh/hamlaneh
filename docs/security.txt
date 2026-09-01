@@ -1,0 +1,66 @@
+# Hamlaneh security contact — RFC 9116 (https://www.rfc-editor.org/rfc/rfc9116)
+#
+# ============================================================================
+# NOT PUBLISHED YET. THIS FILE IS A DRAFT AND IS NOT SERVED ANYWHERE.
+#
+# When the website exists it must be served, verbatim, over HTTPS at:
+#
+#     https://<website>/.well-known/security.txt
+#
+# and MAY additionally be served at the legacy top-level path
+# https://<website>/security.txt. A copy sitting in a repository is not a
+# security.txt: researchers look for the well-known URI and nowhere else.
+#
+# BEFORE SERVING IT, REPLACE EVERY LINE MARKED  <<< REPLACE  BELOW.
+# An RFC 9116 file whose Contact does not reach a human is worse than no
+# file at all — it converts a researcher who found something into a
+# researcher who gave up, and it looks like a response channel exists when
+# none does.
+# ============================================================================
+
+# --- Where to report --------------------------------------------------------
+# Primary channel, and the one docs/../SECURITY.md already names. Requires
+# "Private vulnerability reporting" to be enabled in the repository's
+# Settings -> Advanced Security; it is OFF by default on GitHub, and a link
+# to a disabled form is a dead contact.
+Contact: https://github.com/hamlaneh/hamlaneh/security/advisories/new
+
+# Fallback for researchers who will not or cannot use GitHub. A real,
+# monitored mailbox — an alias that forwards to a person is fine, an address
+# nobody reads is not.                                          <<< REPLACE
+Contact: mailto:security@REPLACE-WITH-REAL-DOMAIN.example
+
+# --- Validity ---------------------------------------------------------------
+# RFC 9116 requires exactly one Expires, and recommends less than a year out.
+# Set it to one year from the day this file is first served, and refresh it
+# annually thereafter. An expired security.txt is treated as absent.
+#                                                               <<< REPLACE
+Expires: 2027-08-30T00:00:00.000Z
+
+# --- Languages --------------------------------------------------------------
+# Reports are read in English and Persian. English is preferred where the
+# reporter is comfortable in both, because every artifact that follows — the
+# advisory, the fix, the commit — is written in English.
+Preferred-Languages: en, fa
+
+# --- Where this file lives --------------------------------------------------
+# MUST be the exact HTTPS URI this file is served from. RFC 9116 treats a
+# Canonical that does not match the location where the file was found as
+# grounds to consider the file invalid, so this is not decoration.
+#                                                               <<< REPLACE
+Canonical: https://REPLACE-WITH-REAL-DOMAIN.example/.well-known/security.txt
+
+# --- Policy -----------------------------------------------------------------
+# The disclosure policy, response times, threat model and explicit non-goals.
+# This URL must resolve for anonymous readers, so it can only be filled in
+# once the repository is public.                                <<< REPLACE
+Policy: https://github.com/hamlaneh/hamlaneh/blob/main/SECURITY.md
+
+# --- Deliberately absent ----------------------------------------------------
+# Encryption:  no OpenPGP key is published. A key nobody holds the private
+#              half of, or that is never used, is a trap; the GitHub advisory
+#              channel above is already private end to end.
+# Acknowledgments / Hiring: nothing to point at yet.
+# Signature:   this file is not signed. A detached signature over a file with
+#              no published key proves nothing and invites the same trap.
+#              Revisit all four when the website exists.

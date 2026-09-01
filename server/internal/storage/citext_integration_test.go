@@ -14,14 +14,15 @@ import (
 // missing citext type (the fresh, un-migrated database Open pings first) is
 // tolerated, while any other LoadType failure propagates.
 func TestRegisterCitextIntegration(t *testing.T) {
+	testdb.RequiresPostgres(t, "pgx citext type registration — there is no type to register on SQLite, where citext is a Go collation the driver installs")
 	t.Parallel()
 
-	_, dsn := testdb.New(t)
+	_, raw := testdb.New(t)
 	ctx := context.Background()
 
 	connect := func(t *testing.T) *pgx.Conn {
 		t.Helper()
-		conn, err := pgx.Connect(ctx, dsn)
+		conn, err := pgx.Connect(ctx, raw.DSN())
 		if err != nil {
 			t.Fatalf("connect: %v", err)
 		}

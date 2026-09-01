@@ -16,6 +16,7 @@ import (
 var channelActions = []authz.Action{
 	authz.ChannelRead, authz.ChannelUpdate, authz.ChannelMemberAdd,
 	authz.ChannelMemberRemove, authz.MessageSend, authz.ReadPositionSet,
+	authz.MlsRead, authz.MlsWrite,
 }
 
 func TestCanChannel(t *testing.T) {
@@ -44,6 +45,14 @@ func TestCanChannel(t *testing.T) {
 		{"member invites", member, authz.ChannelMemberAdd, asMember, true},
 		{"member sends", member, authz.MessageSend, asMember, true},
 		{"member moves its own read position", member, authz.ReadPositionSet, asMember, true},
+
+		// The E2EE transport (ADR 006). Both are any-member, which is the
+		// ADR's transport rule: who can actually decrypt is the group's own
+		// business, and this server cannot enforce it without reading group
+		// state it is designed to be unable to read. They are two actions so
+		// a later role model has somewhere to separate them.
+		{"member reads the group", member, authz.MlsRead, asMember, true},
+		{"member moves the group", member, authz.MlsWrite, asMember, true},
 
 		// Removing somebody else is the one channel action membership alone
 		// does not buy.
@@ -125,6 +134,12 @@ func TestCanMessage(t *testing.T) {
 		// written before the author was removed is no longer theirs to touch.
 		{"author outside the channel cannot edit", member, authz.MessageEdit, outsideChannel, false},
 		{"admin outside the channel cannot delete", admin, authz.MessageDelete, outsideChannel, false},
+
+		// Channel actions asked with a Message resource are the mirror of
+		// the two rows above them in TestCanChannel: a malformed question,
+		// and the safe answer to one is no.
+		{"mls read asked with a message resource", member, authz.MlsRead, mine, false},
+		{"mls write asked with a message resource", admin, authz.MlsWrite, mine, false},
 	}
 
 	for _, tt := range tests {

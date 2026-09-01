@@ -12,44 +12,57 @@ server is a VPS with a domain, a bare IP address, or a computer at home.
 
 ## Install
 
-> **Coming — not yet functional.** This is the promise we are building toward; the
-> installer does not exist yet. See [Project status](#project-status).
+On a fresh server with Docker available, from a clone of this repository:
 
 ```bash
-curl -fsSL get.hamlaneh.com | bash
+sudo deploy/install.sh --domain chat.example.com
 ```
+
+It detects the distribution (Ubuntu, Debian, Fedora, RHEL-clones including AlmaLinux),
+installs Docker and cosign if they are missing, generates every secret, brings the stack
+up behind automatic HTTPS, and arms the update and backup timers. Re-running it is safe:
+it will not regenerate a secret or overwrite an existing `.env`.
+
+Without a domain, pass `--domain <your-ip>`. The install works, and the script tells you
+plainly what the certificate situation is in that mode rather than pretending it is the
+same.
+
+> **The one-line `curl | bash` install is not live yet.** `get.hamlaneh.com` is not
+> serving, and the installer needs the repository present because the stack currently
+> builds from source rather than pulling a published image. That first build is a Go
+> compile plus a web bundle, so budget several minutes and at least 2 GB of RAM on the
+> machine. Published images are what will make the one-liner and the sub-5-minute
+> install real; see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Screenshot
 
 *Screenshot coming once there is something worth screenshotting.*
 
-## Quick start (walking skeleton)
-
-`docker compose up` boots Caddy, the Go server, and Postgres, and serves the real
-React web application over TLS — the build is embedded in the Go binary, so there is
-no separate web server to run. Sign-in, two-step verification, password reset and the
-settings panel work; the messaging backend does not exist yet, so the chat surface is
-still a shell (see [docs/OVERVIEW.md](docs/OVERVIEW.md) for the honest current state).
+## Running it locally
 
 ```bash
 git clone https://github.com/hamlaneh/hamlaneh.git
-cd hamlaneh/deploy
-cp .env.example .env   # then edit .env and set real values (domain, generated DB password)
-docker compose up
+cd hamlaneh
+sudo deploy/install.sh --domain localhost
 ```
 
-Then open `https://<your-domain>/` (or `https://localhost/` with the default
-`HAMLANEH_DOMAIN=localhost`, accepting Caddy's locally-issued certificate).
+Then open `https://localhost/` and accept Caddy's locally-issued certificate.
+
+Use the installer rather than `cp .env.example .env && docker compose up`: the example
+file ships deliberately non-working placeholders, and the server refuses to start on
+them — a signing key has to be a real key. Copying it also leaves a database volume
+initialised with a password published in this repository, which the installer will then
+refuse to adopt. The installer generates all of it.
 
 ## Tech stack
 
 | Layer | Choice |
 |---|---|
 | Backend | Go (single static binary) |
-| Database | PostgreSQL (server mode); SQLite planned for single-machine home mode |
+| Database | PostgreSQL (server mode); SQLite (single-binary home mode) |
 | Real-time | WebSockets |
 | Calls / video | LiveKit (SFU) + TURN |
-| E2EE | MLS (RFC 9420) via an audited library — never hand-rolled crypto |
+| E2EE | MLS (RFC 9420) via OpenMLS, compiled to WASM — never hand-rolled crypto |
 | Web frontend | React + TypeScript + Vite + Tailwind |
 | Desktop | Tauri v2 wrapping the web UI |
 | TLS / proxy | Caddy (automatic HTTPS) |
@@ -60,42 +73,16 @@ first screen. Repository code and documentation are English.
 
 ## Project status
 
-**Early development — Phase 1 (Core communication).** Phase 0 is complete and
-`docker compose up` now serves the real application over TLS: you can sign in, be forced
-through a first-run password change, turn on two-step verification with recovery codes,
-reset a forgotten password by email, and see and revoke your other signed-in devices.
-The chat interface is built and running against mock data — the messaging backend behind
-it is the slice in progress, so conversations are not real yet. The full plan, with phases and measurable test gates, lives in
+**Early development — Phase 4 (packaging polish).** Phases 0 through 3 are
+code-complete: install stack, identity and enterprise SSO, chat, DMs, files, search,
+admin dashboard, a bilingual UI, calls and conferences on LiveKit, and end-to-end
+encryption with MLS. Phase 4 is the work that makes it installable by a stranger, and
+public launch is gated on that phase's test gate rather than on a date.
+
+Not yet done, and stated here rather than discovered later: there is no tagged release,
+so the update pipeline has never run against a real tag; the desktop app does not build
+in CI yet; and the install has not been timed on real VMs across the distributions it
+claims. [docs/OVERVIEW.md](docs/OVERVIEW.md) is the living description of what exists.
+The full plan, with phases and measurable test gates, lives in
 [docs/ROADMAP.md](docs/ROADMAP.md); strategy and rationale live in
 [docs/PLAN.md](docs/PLAN.md).
-
-## Security
-
-Hamlaneh has **not** been audited. We publish our threat model — including what we
-explicitly do not defend against — in [SECURITY.md](SECURITY.md), along with how to
-report vulnerabilities. Security here is a process we commit to, not a property we
-claim; external penetration testing and a cryptography audit are planned before any
-security language enters marketing.
-
-## How Hamlaneh makes money
-
-Stated up front, because projects that change the deal midstream deserve the backlash:
-
-- **The entire product is open source (AGPL-3.0).** No feature gating, no "enterprise
-  edition", no SSO tax. SSO, SCIM, audit logs, and compliance features ship free to
-  everyone.
-- **Revenue comes from operating it, not from restricting it**: official hosting
-  (Hamlaneh Cloud) and managed instances on customers' own infrastructure.
-- **No license changes are coming.** AGPL-3.0 is the deal, for the whole product.
-- **Security patches are free for everyone, simultaneously, forever.** Never paywalled,
-  never delayed for non-payers.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, repository layout, and workflow
-conventions. For vulnerabilities, see [SECURITY.md](SECURITY.md) — never open a public
-issue for a security problem.
-
-## License
-
-[AGPL-3.0](LICENSE) — the entire product, no proprietary features.

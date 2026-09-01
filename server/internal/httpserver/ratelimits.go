@@ -105,7 +105,9 @@ import (
 //   - GET /api/v1/ws is budgeted by the gateway, not here. ws-protocol.md §8
 //     keys the connect budget per session family AND per IP, and requires it
 //     to be enforceable on an already-open socket (close code 4429), which
-//     nothing request-scoped can do. Still open — ROADMAP 1.2a.
+//     nothing request-scoped can do. It lives in
+//     internal/wsgateway/connectbudget.go, which is where the table below
+//     points as well.
 //
 // Moving any of those into this table would have made it tidier and the
 // control weaker, which is the wrong trade.
@@ -137,6 +139,12 @@ const (
 	budgetSSOFlow           budgetName = "sso-flow"
 	budgetSSOSettings       budgetName = "sso-settings"
 	budgetCallToken         budgetName = "call-token"
+	budgetConferenceCreate  budgetName = "conference-create"
+	budgetConferenceGuest   budgetName = "conference-guest"
+	budgetMlsDirectory      budgetName = "mls-directory"
+	budgetMlsGroupWork      budgetName = "mls-group-work"
+	budgetMlsMemberDevices  budgetName = "mls-member-devices"
+	budgetMlsBackup         budgetName = "mls-backup"
 )
 
 // budgetSpec is one budget: how many requests fit its sliding window, how
@@ -232,17 +240,17 @@ var budgetSpecs = map[budgetName]budgetSpec{
 	// what is being bounded here is server work, not disclosure.
 	budgetDirectory: {limit: 120, window: time.Minute},
 
-	// The two admin actions that mint a one-shot secret: a forced password
-	// reset and an invitation link. One window per admin across both,
-	// because an attacker holding an admin session picks whichever is
-	// cheaper for them and per-endpoint budgets would only multiply the
-	// total.
+	// The admin-only actions that mint a one-shot secret. One window per
+	// admin across all of them — grep this name in endpointBudgets for the
+	// current list — because an attacker holding an admin session picks
+	// whichever is cheapest for them and per-endpoint budgets would only
+	// multiply the total. Every endpoint that joins says so at its entry.
 	//
 	// What is bounded is server work, not guessing: the forced reset runs a
 	// full argon2id hash (64 MiB) per call, and every invitation is a row
 	// that stays live until it expires. 30 a minute is far past an admin
-	// clicking through a row-action menu and far below what either loop
-	// needs to hurt.
+	// clicking through a row-action menu and far below what any of those
+	// loops needs to hurt.
 	budgetAdminSecret: {limit: 30, window: time.Minute},
 
 	// The two public halves of the single sign-on flow share one per-IP
@@ -274,18 +282,130 @@ var budgetSpecs = map[budgetName]budgetSpec{
 	// above anyone's real reconfiguration and far below a useful loop.
 	budgetSSOSettings: {limit: 10, window: 5 * time.Minute},
 
-	// Minting a join ticket is the fourth endpoint in this server that hands
-	// back a credential, and the only one a plain member may ask for. What is
-	// bounded is repetition: a ticket is a two-minute bearer capability for
-	// one room, and a caller who can mint them without limit can keep an
-	// arbitrarily long queue of live tickets for a channel they may be
-	// removed from at any moment. Signing itself is cheap, so this is about
-	// the standing set of live tickets rather than about CPU.
+	// Minting a join ticket hands a credential back to a plain member, which
+	// is why it does not join budgetAdminSecret: that window's argument is
+	// about an administrator choosing the cheapest of the admin-only mints,
+	// and this is neither admin-only nor part of that choice.
+	//
+	// What is bounded is repetition: a ticket is a two-minute bearer
+	// capability for one room, and a caller who can mint them without limit
+	// can keep an arbitrarily long queue of live tickets for a channel they
+	// may be removed from at any moment. Signing itself is cheap, so this is
+	// about the standing set of live tickets rather than about CPU.
 	//
 	// 30 a minute is far above the real flow — a ticket is one click, and a
 	// media client re-mints only on a rejoin — and low enough that the live
 	// set stays roughly one minute's worth.
 	budgetCallToken: {limit: 30, window: time.Minute},
+
+	// Making a conference answers with a one-shot secret a plain member may
+	// ask for. It gets its own window rather than joining budgetAdminSecret,
+	// for the reason budgetCallToken does, and its own rather than joining
+	// budgetCallToken, because what the two bound is not the same thing.
+	//
+	// What is bounded is the standing set of live doors. A conference link
+	// does not expire by default (ADR 005), so every call leaves a row that
+	// admits strangers until somebody revokes it — a loop would fill an
+	// administrator's revocation list with links they cannot tell apart. 30 a
+	// minute per account is far above the real flow, which is one click per
+	// meeting, and far below what such a loop needs.
+	budgetConferenceCreate: {limit: 30, window: time.Minute},
+
+	// The two public halves of a conference link share one per-IP window, for
+	// the reason the SSO flow's two halves do: each preview is meant to come
+	// back as one join, so splitting the budget would only multiply the
+	// total, and there is no account to key on — the whole point of the
+	// endpoint is that the caller may not have one.
+	//
+	// It is not a guessing defence: the link is 256 bits, and no budget makes
+	// that more or less findable. What it bounds is work a stranger can ask
+	// for — each preview and each join is a round trip to the media server,
+	// and each join mints a ticket. 30 a minute per address absorbs an
+	// office's worth of people behind one NAT joining a meeting together
+	// (each arrival is two requests) and is far below a useful loop.
+	budgetConferenceGuest: {limit: 30, window: time.Minute, perIP: true},
+
+	// The E2EE key-package directory: registering a device and republishing
+	// its pool. One window per account across both, because they are the
+	// same startup handshake seen twice and an attacker would otherwise pick
+	// whichever is cheaper.
+	//
+	// What is bounded is standing storage. A device row is permanent, and a
+	// republish writes up to 50 packages of 8 KiB each — 400 KiB per call
+	// that the previous pool's deletion only reclaims for THAT device, so a
+	// loop registering fresh devices leaves both behind.
+	//
+	// 30 a minute is far above the real flow, which is one register and one
+	// republish per client startup, and clears a reconnect storm: a client
+	// republishes on every connect, and an exponential backoff on a flapping
+	// network fits roughly a dozen connects into the first minute. A loop
+	// filling the tables wants thousands.
+	budgetMlsDirectory: {limit: 30, window: time.Minute},
+
+	// Group work: creating a group, claiming key packages, and submitting
+	// commits. One window per account across the three, for the reason the
+	// conversation-write budget shares one across its three — they are the
+	// steps of a single flow, and per-endpoint budgets would only multiply
+	// the total an attacker gets.
+	//
+	// The number is set by the real burst rather than by a round figure.
+	// Bootstrapping a 50-member channel is one create, 50 claims and up to
+	// 50 commits — 101 calls in the seconds after the first member's client
+	// finds an e2ee channel with no group. On top of that, every commit that
+	// loses its epoch race retries, and during a bootstrap several clients
+	// may be committing at once, so the budget has to clear 101 with room or
+	// it would refuse the one flow it exists to permit. 180 a minute does,
+	// and is still far below what filling the commit log needs.
+	//
+	// The commit body is the expensive half (up to 8 MiB, mls_handlers.go),
+	// which is the other reason this is not simply folded into
+	// conversation-write: those are one small row each.
+	budgetMlsGroupWork: {limit: 180, window: time.Minute},
+
+	// The member-device directory (ADR 007): the roster read a client
+	// assembles its eviction allow-list from. It gets its own window rather
+	// than joining budgetMlsGroupWork, which is a WRITE budget whose number
+	// is argued from commit bodies of up to 8 MiB; this is one indexed range
+	// scan over the channel_members primary key.
+	//
+	// The burst it must clear is set by the protocol rather than by the user,
+	// which is what makes it the loosest MLS budget. Every accepted commit in
+	// a channel nudges every member, and every nudged client reconciles — so
+	// a group bootstrap of many members costs each member's client one read
+	// per commit it hears about, not one per action its user took. A large
+	// roster then multiplies that by its page count (200 members a page). The
+	// idle client beside it spends 12 a minute on the 5-second retry poll.
+	//
+	// 240 a minute clears that storm with room and is still far below what
+	// walking the roster in a loop needs. Making it tighter would fail the
+	// one flow it exists to permit, and the failure would be silent in the
+	// worst way: a client refused mid-walk assembles a PARTIAL allow-list,
+	// and a sweep run against a partial roster evicts the members it never
+	// read. So the direction of error matters here — this budget is
+	// deliberately generous, and the endpoint is a bounded page over data
+	// co-members already learn at claim time, so the disclosure it bounds is
+	// nil and the work it bounds is small.
+	budgetMlsMemberDevices: {limit: 240, window: time.Minute},
+
+	// The sealed backup upload (ADR 010). It gets its own window rather than
+	// joining any MLS budget beside it, because what it bounds is unlike all
+	// of them: one row of up to ~512 KiB that is REPLACED on every write, so
+	// the standing storage is fixed and what a loop buys is bytes over the
+	// wire and write amplification on one row.
+	//
+	// The burst it must clear is the write-behind. The client re-seals and
+	// re-uploads whenever its verification records change, and records change
+	// in bursts — a first start pins every member of every conversation it
+	// reconciles, and a client opening a dozen channels after a reconnect can
+	// legitimately produce a dozen uploads inside a minute. 30 clears that
+	// several times over.
+	//
+	// It is also the ceiling on how fast one account can move this row, which
+	// matters more than the bytes: two of the owner's browser profiles racing
+	// the counter (ADR 010, decision 3) turn into 409s rather than a tight
+	// loop of accepted writes, and 30 a minute is far below anything that
+	// looks like a fight and far above one device keeping its backup current.
+	budgetMlsBackup: {limit: 30, window: time.Minute},
 
 	// Redeeming an invitation is a public route keyed on the client
 	// address (like the SSO flow above). It hashes the chosen
@@ -327,7 +447,7 @@ var endpointBudgets = map[string]budgetName{
 	"POST /api/v1/auth/login/totp":     budgetElsewhere, // totp_handlers.go: per IP and per account
 	"POST /api/v1/auth/reset-request":  budgetElsewhere, // internal/passwordreset: per address and per IP
 	"POST /api/v1/auth/reset-complete": budgetElsewhere, // internal/passwordreset: per IP
-	"GET /api/v1/ws":                   budgetElsewhere, // internal/wsgateway: per family and per IP — still to build
+	"GET /api/v1/ws":                   budgetElsewhere, // internal/wsgateway/connectbudget.go: per family and per IP
 
 	// Single sign-on. The two flow halves are the public per-IP window
 	// declared above; the Settings pair shares one per-account window.
@@ -382,6 +502,9 @@ var endpointBudgets = map[string]budgetName{
 	"DELETE /api/v1/admin/invites/{inviteId}":          budgetNone,
 	"GET /api/v1/admin/org":                            budgetNone,
 	"PATCH /api/v1/admin/org":                          budgetNone,
+	// The encryption mode. One indexed update of one column by an admin who
+	// already holds the instance, and the contract reserves no 429 on it.
+	"PUT /api/v1/admin/org/encryption-mode": budgetNone,
 	// The preview is public and carries no 429 in the contract. It runs one
 	// indexed lookup against a hash and answers the same 404 to everything
 	// that is not live, so there is nothing here a budget would protect that
@@ -391,9 +514,9 @@ var endpointBudgets = map[string]budgetName{
 	// already holds the instance; the contract reserves no 429 on it.
 	"GET /api/v1/admin/audit": budgetNone,
 
-	// Phase 1.6 SCIM provisioning tokens. Minting one is the third admin
-	// action that answers with a one-shot secret, so it joins the window the
-	// other two share — an attacker holding an admin session would otherwise
+	// Phase 1.6 SCIM provisioning tokens. Minting one is an admin action that
+	// answers with a one-shot secret, so it joins the window every other one
+	// of those shares — an attacker holding an admin session would otherwise
 	// have a fresh budget to walk to. The list and the revocation are a read
 	// and an indexed update, and the contract reserves no 429 on either.
 	//
@@ -423,6 +546,63 @@ var endpointBudgets = map[string]budgetName{
 	// openapi.yaml first and the budget follows it here.
 	"POST /api/v1/channels/{channelId}/call/token": budgetCallToken,
 	"GET /api/v1/channels/{channelId}/call":        budgetNone,
+
+	// Phase 2 conferences. Exactly the three routes the contract reserves a
+	// 429 on are budgeted. The list is the caller's own view and the
+	// revocation is one indexed update by somebody who already holds the
+	// authority to make it; both do cost one round trip to the media server,
+	// and if that ever needs bounding the 429 goes in openapi.yaml first and
+	// the budget follows it here.
+	"POST /api/v1/conferences":                  budgetConferenceCreate,
+	"GET /api/v1/meet/{token}":                  budgetConferenceGuest,
+	"POST /api/v1/meet/{token}/join":            budgetConferenceGuest,
+	"GET /api/v1/conferences":                   budgetNone,
+	"DELETE /api/v1/conferences/{conferenceId}": budgetNone,
+
+	// Phase 3 slice 1: the E2EE transport (ADR 006). Exactly the five routes
+	// the contract reserves a 429 on are budgeted, and the four it does not
+	// are declared unbudgeted rather than left out — the reads are what a
+	// client does on connect and on channel open, and acknowledging a
+	// Welcome is one indexed delete of a row the caller already holds.
+	"POST /api/v1/users/me/mls/device":                         budgetMlsDirectory,
+	"PUT /api/v1/users/me/mls/devices/{deviceId}/key-packages": budgetMlsDirectory,
+	"POST /api/v1/channels/{channelId}/mls/group":              budgetMlsGroupWork,
+	"POST /api/v1/channels/{channelId}/mls/key-package-claims": budgetMlsGroupWork,
+	"POST /api/v1/channels/{channelId}/mls/commits":            budgetMlsGroupWork,
+	"GET /api/v1/users/me/mls/welcomes":                        budgetNone,
+	"DELETE /api/v1/users/me/mls/welcomes/{welcomeId}":         budgetNone,
+	"GET /api/v1/channels/{channelId}/mls/group":               budgetNone,
+	"GET /api/v1/channels/{channelId}/mls/commits":             budgetNone,
+
+	// Phase 3 slice 2: the member-device directory (ADR 007). Unlike the two
+	// reads above it, the contract DOES reserve a 429 on this one, and this
+	// table follows the contract rather than the family resemblance. The
+	// difference is real: those two hand back state a client applies to its
+	// own group, while this one is the answer an eviction decision is made
+	// from, and a read that important is better with a declared ceiling than
+	// with none.
+	"GET /api/v1/channels/{channelId}/mls/member-devices": budgetMlsMemberDevices,
+
+	// Phase 3 slice 5: encrypted backups (ADR 010). Exactly the two routes the
+	// contract reserves a 429 on are budgeted, and the two it does not are
+	// declared unbudgeted rather than left out.
+	//
+	// Deregistering a lost device joins the directory window rather than
+	// getting one of its own: registering a device, republishing its pool and
+	// dropping it are three writes to the same directory, and an attacker
+	// holding a session picks whichever is cheapest — separate windows would
+	// only multiply the total. It is also the rarest call in the contract (a
+	// person loses a laptop, not a laptop a minute), so it can never crowd out
+	// the startup handshake it shares the window with.
+	//
+	// The fetch is unbudgeted because the contract reserves no 429 on it and
+	// it is one indexed read of one row by its own owner; the delete is
+	// unbudgeted for the same reason, and because refusing somebody's "stop
+	// keeping a copy of this" is the wrong direction to fail in.
+	"PUT /api/v1/users/me/mls/backup":                budgetMlsBackup,
+	"DELETE /api/v1/users/me/mls/devices/{deviceId}": budgetMlsDirectory,
+	"GET /api/v1/users/me/mls/backup":                budgetNone,
+	"DELETE /api/v1/users/me/mls/backup":             budgetNone,
 
 	// Reads and edits the contract reserves no 429 on. Listing messages is
 	// the read a client repeats most — a budget nobody declared must not
@@ -497,7 +677,7 @@ func (s *apiServer) rateLimitMiddleware(next http.Handler) http.Handler {
 // silently drop the budget instead.
 func (s *apiServer) budgetKey(w http.ResponseWriter, r *http.Request, name budgetName) (string, bool) {
 	if budgetSpecs[name].perIP {
-		_, ipKey := clientIP(r)
+		_, ipKey := s.clientIP(r)
 		return ipKey, true
 	}
 	prin, ok := principalFrom(r.Context())

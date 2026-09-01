@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 	"github.com/hamlaneh/hamlaneh/server/internal/testdb"
@@ -26,7 +25,7 @@ func newUser(name string) storage.NewUser {
 	}
 }
 
-func mustCreateUser(ctx context.Context, t *testing.T, store *storage.Store, nu storage.NewUser) storage.User {
+func mustCreateUser(ctx context.Context, t *testing.T, store testdb.Store, nu storage.NewUser) storage.User {
 	t.Helper()
 	u, err := store.CreateUser(ctx, nu)
 	if err != nil {
@@ -286,33 +285,16 @@ func TestListUsersKeysetIntegration(t *testing.T) {
 func TestListUsersEqualCreatedAtIntegration(t *testing.T) {
 	t.Parallel()
 
-	store, dsn := testdb.New(t)
+	store, raw := testdb.New(t)
 	ctx := context.Background()
-
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect for raw inserts: %v", err)
-	}
-	defer func() {
-		if closeErr := conn.Close(context.Background()); closeErr != nil {
-			t.Errorf("close raw connection: %v", closeErr)
-		}
-	}()
-	// The raw connection needs the citext type registered to bind the
-	// username parameter, exactly like the pool's connections.
-	if err := storage.RegisterCitext(ctx, conn); err != nil {
-		t.Fatalf("register citext on raw connection: %v", err)
-	}
 
 	shared := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	insert := func(name string, createdAt time.Time) {
 		t.Helper()
-		if _, execErr := conn.Exec(ctx,
-			`INSERT INTO users (username, password_hash, created_at, updated_at) VALUES ($1, $2, $3, $3)`,
-			name, "fake-hash-"+name, createdAt,
-		); execErr != nil {
-			t.Fatalf("insert %s: %v", name, execErr)
-		}
+		raw.Exec(ctx, t,
+			`INSERT INTO users (id, username, password_hash, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?)`,
+			uuid.New(), name, "fake-hash-"+name, createdAt, createdAt)
 	}
 
 	const tied = 5

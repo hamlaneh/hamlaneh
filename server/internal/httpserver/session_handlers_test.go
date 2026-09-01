@@ -339,7 +339,7 @@ func familyOf(t *testing.T, list api.SessionFamilyList, device string) uuid.UUID
 }
 
 // mustSignUp creates a fixture account with a known password.
-func mustSignUp(ctx context.Context, t *testing.T, store *storage.Store, username, pw string) {
+func mustSignUp(ctx context.Context, t *testing.T, store testdb.Store, username, pw string) {
 	t.Helper()
 
 	if _, err := store.CreateUser(ctx, storage.NewUser{
