@@ -250,8 +250,9 @@ bootstrap_checkout() {
     tar -xzf "${tmp}/src.tar.gz" -C "$tmp" ||
       fail "extracting the downloaded archive failed. Re-run to download it again."
     extracted="$(find "$tmp" -maxdepth 1 -mindepth 1 -type d | head -n 1)"
-    [ -n "$extracted" ] && [ -f "${extracted}/deploy/docker-compose.yml" ] ||
+    if [ -z "$extracted" ] || [ ! -f "${extracted}/deploy/docker-compose.yml" ]; then
       fail "the downloaded archive does not look like a Hamlaneh checkout. Re-run, or clone manually: git clone ${REPO_GIT_URL}"
+    fi
     if [ -f "${CHECKOUT_DIR}/deploy/.env" ]; then
       cp "${CHECKOUT_DIR}/deploy/.env" "${extracted}/deploy/.env"
       chmod 600 "${extracted}/deploy/.env"
