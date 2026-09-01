@@ -192,7 +192,14 @@ EOF
   section "server leg: bringing up a real PostgreSQL and a real uploads volume"
   docker compose -f "$COMPOSE_FILE" up -d >/dev/null
   local deadline=$((SECONDS + 120))
-  until docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U hamlaneh -d hamlaneh >/dev/null 2>&1; do
+  # A real query, not pg_isready. The postgres image's first boot runs a
+  # bootstrap server on the unix socket while initdb works, and pg_isready
+  # answers "ready" against it — then it shuts down and the real server
+  # starts, so a psql issued in that window dies with "the database system
+  # is starting up" (measured: CI run 33485399012, 0.2s after the old wait
+  # said ready). The wait now proves the exact thing the next line needs:
+  # a session that can run a statement.
+  until docker compose -f "$COMPOSE_FILE" exec -T db psql -U hamlaneh -d hamlaneh -tAc 'select 1' >/dev/null 2>&1; do
     [ "$SECONDS" -lt "$deadline" ] || { printf 'ERROR: postgres never became ready\n' >&2; exit 2; }
     sleep 2
   done
