@@ -452,9 +452,14 @@ install** — same webapp, same binary, same compose stack, zero extra setup —
 public registration is off by default, it is **the** way users come into existence.
 
 - [x] Admin dashboard on its own path (`/admin`), reachable only by admins
-- [ ] Optional IP allow-list on the admin path — deferred: it protects an already
-      session-and-role-gated surface, and on a self-hosted instance behind one Caddy the
-      operator's own firewall is the better place for it. Revisit if hosted multi-tenant lands
+- [x] **The admin surface moves to its own port** — *2026-09-02*, [ADR 015](adr/015-admin-origin.md).
+      This entry used to defer an IP allow-list on the admin *path*, arguing the operator's own
+      firewall was the better place for it. The argument held; the mechanism did not, because a
+      firewall filters by port and `/admin` is a client-side route that protects nothing when
+      blocked. The dashboard, `/api/v1/admin/*` and `/scim/v2/*` now answer on a port of their
+      own, enforced in the server rather than only in the proxy, and the installer asks whether
+      that port faces the internet or the machine only. The allow-list is not built: the same
+      operator now applies the same restriction to one port, where it works upstream of the host
 - [x] User lifecycle from the dashboard: create users, generate invite links, deactivate/
       offboard (kills all sessions + sockets), unlock/reset access
 - [x] Role & permission management from the dashboard (org admin/member now; channel-level
@@ -917,12 +922,13 @@ security *marketing*, not launch.
       stop distinguishing anyone, while trusting the proxy naively would make the leftmost hop
       spoofable. The fix is code, not documentation: rightmost-untrusted parsing plus a
       trusted-proxy list behind one env var. Until then the guide tells operators not to try
-- [ ] **IP allow-listing is promised in PLAN §6.5 and reachable only by editing a baked-in
-      Caddyfile**, which `up -d --build` rebuilds and any upgrade overwrites. One env var
-      (`HAMLANEH_ADMIN_ALLOW_CIDRS`) consumed by the Caddyfile turns a documented workaround
-      into a supported default — and note the trap the guide had to correct: `/admin` is a
-      client-side route served the same index.html as everything else, so blocking it protects
-      nothing. The surfaces with power are `/api/v1/admin/*` and `/scim/v2/*`
+- [x] **The admin surface is separable without editing a baked-in Caddyfile** — *2026-09-02*,
+      [ADR 015](adr/015-admin-origin.md). This entry asked for `HAMLANEH_ADMIN_ALLOW_CIDRS`, and
+      contradicted Phase 1.4, which had deferred the same idea. Both are answered by moving the
+      surface instead of filtering it: `/api/v1/admin/*` and `/scim/v2/*` — the two the trap
+      above correctly named as the ones with power — leave the app port entirely, so an
+      operator restricts them with a firewall rule rather than a rebuilt image, and an upgrade
+      cannot silently drop the restriction
 - [x] **Operator backup tooling** — *2026-08-30*, the same work the Phase 4 automated-backups
       box ticks: `deploy/hamlaneh-backup.sh`, its own test suite beside it, a `backup-tooling`
       job in `ci.yml`, and the restore runbook in [`docs/backups.md`](backups.md). This line
