@@ -17,6 +17,19 @@
 # Note: this file is baked into the proxy image (Dockerfile.caddy).
 # After editing it, re-run: docker compose up -d --build
 
+# A client that connects by IP address sends no SNI — the TLS extension
+# that names the site — because SNI is defined for hostnames only. With two
+# certificates in its cache (the app's and the files origin's) and no name
+# to pick by, Caddy answers such a handshake with a TLS "internal error"
+# alert, and a bare-IP install is unreachable from every browser (measured
+# on the first custom-port install; latent for bare IP on 443 too). This
+# names the certificate to serve when no name arrives: the app's own host,
+# written by install.sh without any port. For a domain install it is inert,
+# since browsers always send SNI for a hostname.
+{
+	default_sni {$HAMLANEH_DEFAULT_SNI:localhost}
+}
+
 # The https:// is load-bearing, not decoration. Without a scheme, Caddy
 # only applies automatic HTTPS to a site on its default HTTPS port — an
 # address carrying a custom port (the "443 was taken" installs write

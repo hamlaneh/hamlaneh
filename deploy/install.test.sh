@@ -360,6 +360,21 @@ test_domain_kind() {
   check_eq "domain_kind ipv4:port" "ipv4" "$(run_in_subshell domain_kind 203.0.113.5:8443)"
   check_eq "domain_kind localhost:port" "localhost" "$(run_in_subshell domain_kind localhost:8443)"
   check_eq "domain_kind domain:port" "domain" "$(run_in_subshell domain_kind chat.example.com:8443)"
+  # The host alone is what Caddy's default_sni needs — an IP client sends
+  # no SNI, and a port in the name would match no certificate.
+  check_eq "domain_host strips a custom port" "203.0.113.5" "$(run_in_subshell domain_host 203.0.113.5:8443)"
+  check_eq "domain_host leaves a plain domain alone" "chat.example.com" "$(run_in_subshell domain_host chat.example.com)"
+  check_eq "domain_host leaves an IPv6 literal whole" "2001:db8::1" "$(run_in_subshell domain_host 2001:db8::1)"
+  # And write_env records it, on a fresh file and on a domain change alike.
+  local sni_env="${WORK}/sni/.env"
+  mkdir -p "${WORK}/sni"
+  # shellcheck disable=SC2016
+  TEST_ENV_FILE="$sni_env" run_in_subshell eval 'DOMAIN=203.0.113.5:8443; HTTPS_PORT=8443; HTTP_PORT=8080; write_env' >/dev/null
+  check_contains "a fresh .env carries the port-less SNI host" "HAMLANEH_DEFAULT_SNI=203.0.113.5" "$(cat "$sni_env")"
+  # shellcheck disable=SC2016
+  TEST_ENV_FILE="$sni_env" run_in_subshell eval 'DOMAIN=chat.example.com; write_env' >/dev/null
+  check_contains "a domain change rewrites the SNI host" "HAMLANEH_DEFAULT_SNI=chat.example.com" "$(cat "$sni_env")"
+  check_eq "the SNI line is written once, not appended twice" "1" "$(grep -c '^HAMLANEH_DEFAULT_SNI=' "$sni_env")"
 }
 
 # The generated .env must carry a real value for every secret compose marks
@@ -456,7 +471,10 @@ $(diff <(printf '%s' "$before") <(printf '%s' "$after") || true)"
 # hostname the install just stopped using.
 test_domain_change_keeps_secrets() {
   local env_file="${WORK}/env/domain.env" before after
-  local derived='^HAMLANEH_DOMAIN=\|^HAMLANEH_FILES_DOMAIN='
+  # Three lines derive from the domain: the domain itself, the files
+  # hostname, and the default SNI host Caddy serves to clients that name
+  # no site. Everything else — every secret — must survive byte for byte.
+  local derived='^HAMLANEH_DOMAIN=\|^HAMLANEH_FILES_DOMAIN=\|^HAMLANEH_DEFAULT_SNI='
   rm -f "$env_file"
   TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=old.example.com; write_env' >/dev/null
   before="$(grep -v "$derived" "$env_file")"
@@ -468,10 +486,13 @@ test_domain_change_keeps_secrets() {
   check_eq "domain change updates the files hostname with it" \
     "HAMLANEH_FILES_DOMAIN=files.new.example.com" \
     "$(grep '^HAMLANEH_FILES_DOMAIN=' "$env_file")"
+  check_eq "domain change updates the default SNI host with it" \
+    "HAMLANEH_DEFAULT_SNI=new.example.com" \
+    "$(grep '^HAMLANEH_DEFAULT_SNI=' "$env_file")"
   if [ "$before" = "$after" ]; then
     ok "domain change leaves every other line untouched"
   else
-    bad "domain change altered lines other than the two derived from the domain"
+    bad "domain change altered lines other than the three derived from the domain"
   fi
 }
 

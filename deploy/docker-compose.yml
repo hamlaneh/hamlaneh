@@ -53,6 +53,10 @@ services:
       # Its own variable, not "files." glued onto the one above: see the
       # Caddyfile block that reads it.
       HAMLANEH_FILES_DOMAIN: ${HAMLANEH_FILES_DOMAIN:-files.localhost}
+      # The name to assume for a TLS client that sends none — every client
+      # that connects by IP address. install.sh writes the app's host here,
+      # port stripped; see the Caddyfile's global block for why.
+      HAMLANEH_DEFAULT_SNI: ${HAMLANEH_DEFAULT_SNI:-localhost}
     ports:
       # The web ports are host-configurable for one deployment shape: a
       # server where something else already holds 80/443 (install.sh asks,
