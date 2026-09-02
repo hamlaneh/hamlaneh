@@ -1338,6 +1338,45 @@ start_stack() {
   fi
 }
 
+# `up -d --build` rebuilds an image whose inputs changed, but a container
+# already running the OLD image is not reliably replaced with it — measured
+# on the first upgrade of a live install: the server image was rebuilt and
+# took the tag, docker showed the container's image as a bare sha256, and
+# the container kept running the fourteen-hour-old binary while reporting
+# healthy. An update that builds but does not deploy is worse than one that
+# fails, because it reports success. So, per built service, compare the
+# image the container runs with the image the tag now names and recreate
+# only the ones that differ — a no-change re-run bounces nothing.
+recreate_stale_containers() {
+  local svc cid running current
+  for svc in server caddy; do
+    cid="$(compose ps -q "$svc" 2>/dev/null | head -n 1)"
+    [ -n "$cid" ] || continue
+    running="$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null || true)"
+    current="$(docker image inspect -f '{{.Id}}' "${COMPOSE_PROJECT}-${svc}" 2>/dev/null || true)"
+    if [ -z "$running" ] || [ -z "$current" ]; then
+      continue
+    fi
+    if [ "$running" != "$current" ]; then
+      log "${svc}: the running container is on an older image than the one just built — recreating it"
+      compose up -d --no-deps --force-recreate "$svc" ||
+        fail "recreating the ${svc} container failed. Its output is above; re-running this script is safe."
+    fi
+  done
+}
+
+# Every rebuild leaves the previous image untagged on disk and nothing ever
+# collected them, so an install that updates weekly grows by a toolchain's
+# worth of layers a week. Untagged images only: nothing the stack runs is
+# untagged (recreate_stale_containers just made sure of that), so nothing
+# in use can be pulled out from under it.
+prune_dangling_images() {
+  local out reclaimed
+  out="$(docker image prune -f 2>/dev/null || true)"
+  reclaimed="$(printf '%s\n' "$out" | grep -o 'Total reclaimed space: .*' || true)"
+  log "old build images removed (${reclaimed:-nothing to remove})"
+}
+
 # "docker compose up -d" returning 0 means the containers were CREATED. It
 # says nothing about whether the server booted: a bad secret, a failed
 # migration or an OOM-killed process all leave a crash-looping container and
@@ -1583,9 +1622,11 @@ main() {
   ensure_livekit_env
   preflight
   start_stack
+  recreate_stale_containers
   wait_for_stack
   enable_update_timer
   enable_backup_timer
+  prune_dangling_images
   print_success
 }
 
