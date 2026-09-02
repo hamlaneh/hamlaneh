@@ -57,6 +57,10 @@ services:
       # that connects by IP address. install.sh writes the app's host here,
       # port stripped; see the Caddyfile's global block for why.
       HAMLANEH_DEFAULT_SNI: ${HAMLANEH_DEFAULT_SNI:-localhost}
+      # "internal" for an IP or localhost install, "acme" for a domain —
+      # a public IP gets no certificate from Caddy unless told to issue one
+      # itself. install.sh writes it; the Caddyfile's global block explains.
+      HAMLANEH_CERT_ISSUER: ${HAMLANEH_CERT_ISSUER:-acme}
     ports:
       # The web ports are host-configurable for one deployment shape: a
       # server where something else already holds 80/443 (install.sh asks,

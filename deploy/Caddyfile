@@ -8,11 +8,12 @@
 #     via ACME, plus HTTP->HTTPS redirect
 # Switching between the two needs no edits here — only the env var.
 #
-# The bare-IP line is not out of date, so before "fixing" it: Let's Encrypt has
-# issued certificates for IP addresses since January 2026, but only under its
-# short-lived profile, and Caddy classifies every IP address as an internal
-# name and issues locally without asking a public CA at all. Caddy 2.10, which
-# Dockerfile.caddy pins, has no way to be talked out of that.
+# On bare IPs, measured rather than assumed: Let's Encrypt has issued
+# certificates for IP addresses since January 2026, but only under its
+# short-lived profile, and Caddy does not request them. Nor does Caddy issue
+# locally for a PUBLIC IP on its own — only loopback and localhost count as
+# internal to it; a public address got a TLS site with no certificate at
+# all. That is why the global block below names the issuer explicitly.
 #
 # Note: this file is baked into the proxy image (Dockerfile.caddy).
 # After editing it, re-run: docker compose up -d --build
@@ -28,6 +29,15 @@
 # since browsers always send SNI for a hostname.
 {
 	default_sni {$HAMLANEH_DEFAULT_SNI:localhost}
+	# Who issues the site's certificate. Caddy issues locally, unasked, only
+	# for names it classes as internal — localhost and loopback; a PUBLIC IP
+	# address is neither internal nor something a public CA will be asked
+	# for, so an install on one got a TLS site with no certificate behind it
+	# and every handshake ended in an "internal error" alert (measured, twice,
+	# after the scheme and SNI fixes). install.sh writes "internal" for an
+	# IP or localhost install and "acme" for a domain; the default here is
+	# what Caddy would do on its own for a domain.
+	cert_issuer {$HAMLANEH_CERT_ISSUER:acme}
 }
 
 # The https:// is load-bearing, not decoration. Without a scheme, Caddy
