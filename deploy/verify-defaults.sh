@@ -23,6 +23,10 @@
 #      /rtc reaches LiveKit, its RoomService admin API and debug dumps do
 #      not, its HTTP port is unpublished, it publishes exactly the three
 #      ports the ADR names, and its API secret is in no public response
+#   8. Caddy publishes exactly the ports this deployment configured, on the
+#      interfaces it configured them for — and where the admin surface has
+#      moved to its own port (ADR 015), it is GONE from the web port rather
+#      than merely refusing there
 #
 # Prints every check; exits non-zero listing every failed one.
 
@@ -396,6 +400,43 @@ check_livekit() {
   fi
 }
 
+# Caddy's published ports — the ones the internet can actually reach.
+#
+# Asserted as a sorted SET, the way check_livekit asserts LiveKit's, so a port
+# silently ADDED here fails as loudly as a missing one. Nothing checked caddy's
+# ports at all before ADR 015; the admin port is exactly the kind of thing that
+# has to be checked, because the operator's control over it is "do not open
+# this port" and a publication that ignored HAMLANEH_ADMIN_BIND would hand the
+# admin API to the internet on an install whose operator asked for loopback.
+#
+# The host IP travels in the assertion beside the port for that reason: an
+# empty one means every interface, "127.0.0.1" means this machine only, and the
+# difference is the entire feature.
+check_caddy_ports() {
+  local cid bindings want
+  cid="$(docker ps -q \
+    --filter "label=${PROJECT_LABEL}" \
+    --filter "label=com.docker.compose.service=caddy" | head -n 1)"
+  if [ -z "$cid" ]; then
+    failure "caddy container is not running"
+    return
+  fi
+
+  bindings="$(docker inspect \
+    -f '{{range $p, $c := .HostConfig.PortBindings}}{{range $c}}{{$p}}@{{.HostIp}} {{end}}{{end}}' "$cid" |
+    tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+  # Container-side ports: the HTTP publication is <host>:80, so 80 is what the
+  # container listens on however the host port was moved.
+  want="$(printf '80/tcp@\n%s/tcp@\n%s/udp@\n%s/tcp@%s\n' \
+    "$HTTPS_PORT" "$HTTPS_PORT" "$ADMIN_PORT" "$ADMIN_BIND_IP" |
+    sort -u | tr '\n' ' ' | sed 's/ $//')"
+  if [ "$bindings" = "$want" ]; then
+    pass "caddy publishes exactly '${bindings}' — the admin port among them, on the interface it was configured for"
+  else
+    failure "caddy publishes '${bindings}'; deploy/.env says it should publish exactly '${want}'"
+  fi
+}
+
 check_nonroot_containers() {
   local svc cid user uid
   for svc in caddy server livekit db; do
@@ -430,8 +471,22 @@ check_auth_defaults() {
     failure "/readyz returned '${code:-000}' (expected 200)"
   fi
 
+  # The admin API on the WEB port. Which answer is correct depends on whether
+  # this install moved the admin surface to its own port (ADR 015), and the
+  # two are not interchangeable:
+  #   split off — 401. The surface is here and refuses anonymous callers.
+  #   split on  — 404. The surface is GONE from this port. A 401 would mean it
+  #               is still answering here, so an operator who shut the admin
+  #               port in their cloud firewall has shut nothing, which is the
+  #               exact failure this ADR exists to prevent.
   code="$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' "${CONNECT[@]}" "https://${DOMAIN}/api/v1/admin/users" || true)"
-  if [ "$code" = "401" ]; then
+  if [ -n "$ADMIN_SPLIT" ]; then
+    if [ "$code" = "404" ]; then
+      pass "the admin API is gone from the web port, not merely refused there (404)"
+    else
+      failure "GET /api/v1/admin/users on the web port returned '${code:-000}'; this install moved the admin surface to port ${ADMIN_PORT}, so the web port must answer 404 (gone) and not 401 (here, refusing)"
+    fi
+  elif [ "$code" = "401" ]; then
     pass "anonymous request to admin API is rejected (401)"
   else
     failure "anonymous GET /api/v1/admin/users returned '${code:-000}' (expected 401)"
@@ -483,6 +538,37 @@ resolve_host() {
   esac
 }
 
+# The admin origin (ADR 015). These three mirror deploy/docker-compose.yml's
+# own defaults, because what is being verified is what compose published:
+#   _PORT is published whether or not the split is on (a compose ports entry
+#   cannot be conditionally omitted), so it defaults to 9443 here too;
+#   _BIND distinguishes an ABSENT line from an EMPTY one exactly as the
+#   compose entry's single-dash default does — absent is loopback, empty is
+#   every interface, and reading them the same way would make this check agree
+#   with a deployment it should be failing;
+#   _ADDR is the one that says whether the split is actually ON, since it is
+#   what starts the server's second listener.
+resolve_admin_port() {
+  local p=""
+  if [ -f "$ENV_FILE" ]; then
+    p="$(sed -n 's/^HAMLANEH_ADMIN_PORT=//p' "$ENV_FILE" | tail -n 1)"
+  fi
+  printf '%s' "${p:-9443}"
+}
+
+resolve_admin_bind_ip() {
+  if [ -f "$ENV_FILE" ] && grep -q '^HAMLANEH_ADMIN_BIND=' "$ENV_FILE"; then
+    sed -n 's/^HAMLANEH_ADMIN_BIND=//p' "$ENV_FILE" | tail -n 1 | sed 's/:$//'
+    return
+  fi
+  printf '127.0.0.1'
+}
+
+resolve_admin_split() {
+  [ -f "$ENV_FILE" ] || return 0
+  sed -n 's/^HAMLANEH_ADMIN_ADDR=//p' "$ENV_FILE" | tail -n 1
+}
+
 main() {
   require_tools
 
@@ -490,8 +576,17 @@ main() {
   FILES_DOMAIN="$(resolve_files_domain)"
   HTTPS_PORT="$(resolve_https_port)"
   HOST="$(resolve_host)"
+  ADMIN_PORT="$(resolve_admin_port)"
+  ADMIN_BIND_IP="$(resolve_admin_bind_ip)"
+  ADMIN_SPLIT="$(resolve_admin_split)"
   CONNECT=(--connect-to "${HOST}:${HTTPS_PORT}:127.0.0.1:${HTTPS_PORT}")
-  printf 'Verifying secure defaults for https://%s/ (via 127.0.0.1:%s)\n\n' "$DOMAIN" "$HTTPS_PORT"
+  printf 'Verifying secure defaults for https://%s/ (via 127.0.0.1:%s)\n' "$DOMAIN" "$HTTPS_PORT"
+  if [ -n "$ADMIN_SPLIT" ]; then
+    printf 'Admin surface on its own port %s, published on %s (ADR 015)\n\n' \
+      "$ADMIN_PORT" "${ADMIN_BIND_IP:-every interface}"
+  else
+    printf 'Admin surface shares the web port (ADR 015 split off)\n\n'
+  fi
 
   check_security_headers
   check_webapp_served
@@ -499,6 +594,7 @@ main() {
   check_files_origin
   check_auth_defaults
   check_livekit
+  check_caddy_ports
   check_db_not_exposed
   check_nonroot_containers
 

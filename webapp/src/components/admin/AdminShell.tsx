@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, NavLink } from "react-router";
+import { NavLink } from "react-router";
 
 import { formatCount } from "../../chat/format";
 import type { User } from "../../chat/types";
@@ -78,11 +78,20 @@ export function AdminShell({
     <div className="hm-admin">
       <nav className="hm-admin__sidebar" aria-label={t("admin.nav.label")}>
         <div className="hm-admin__head">
-          {/* First in the tab order: admin is somewhere you visit. */}
-          <Link className="hm-admin__exit" to="/">
+          {/* First in the tab order: admin is somewhere you visit.
+              A plain anchor rather than a router <Link>, and that is
+              load-bearing since ADR 015. The dashboard may be served from its
+              own ORIGIN — the same host on another port — and a client-side
+              route to "/" would paint the chat shell there, where every API
+              call it makes is cross-origin and refused. A real navigation asks
+              the origin instead: on a single-origin install "/" is the app, and
+              on a split one the proxy sends it back to the app origin. The cost
+              is one page load on the way out of a mode you are leaving
+              anyway. */}
+          <a className="hm-admin__exit" href="/">
             <ArrowLeftIcon size={17} strokeWidth={1.85} />
             {t("admin.backToChat")}
-          </Link>
+          </a>
           <div className="hm-admin__org">
             <NestMark size={26} />
             <span className="hm-admin__org-text">

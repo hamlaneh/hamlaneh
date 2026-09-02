@@ -65,6 +65,17 @@ services:
       # certificate they do not trust, with no way to proceed), the full
       # set on a domain. install.sh writes it; the Caddyfile explains.
       HAMLANEH_HTTP_PROTOCOLS: ${HAMLANEH_HTTP_PROTOCOLS:-h1 h2 h3}
+      # The admin origin (ADR 015). This is the port the admin site block in
+      # the Caddyfile listens on, and it is the same number on both sides of
+      # the publication below for the same reason HAMLANEH_HTTPS_PORT is:
+      # browsers send the port in the Host header, so a mapping that renamed
+      # it would match no site.
+      HAMLANEH_ADMIN_PORT: ${HAMLANEH_ADMIN_PORT:-9443}
+      # The paths the app site must refuse once the admin surface has moved.
+      # Empty means it has not moved, and the sentinel below — which matches
+      # no path any client will request — is what "not moved" looks like to
+      # Caddy. It must stay identical to the Caddyfile's own default.
+      HAMLANEH_ADMIN_MOVED_PATHS: ${HAMLANEH_ADMIN_MOVED_PATHS:-/__admin-has-not-moved__}
     ports:
       # The web ports are host-configurable for one deployment shape: a
       # server where something else already holds 80/443 (install.sh asks,
@@ -77,6 +88,24 @@ services:
       - "${HAMLANEH_HTTP_PORT:-80}:80"
       - "${HAMLANEH_HTTPS_PORT:-443}:${HAMLANEH_HTTPS_PORT:-443}"
       - "${HAMLANEH_HTTPS_PORT:-443}:${HAMLANEH_HTTPS_PORT:-443}/udp" # HTTP/3 (QUIC)
+      # The admin origin (ADR 015). Note the SINGLE dash in the bind prefix:
+      # `-` falls back only when the variable is UNSET, `:-` would also fall
+      # back when it is set-but-empty. That distinction is the whole control.
+      #   absent      -> 127.0.0.1: — an install that never answered the
+      #                  question publishes this port to the machine only,
+      #                  which is the closed default
+      #   127.0.0.1:  -> the operator chose "this machine only"
+      #   empty       -> the operator chose "reachable from the internet"
+      # Writing `:-` here would silently turn the internet answer back into
+      # loopback; writing the internet answer as a non-empty value would make
+      # the publication IPv4-only, which the other ports are not.
+      #
+      # The port is published whether or not the split is on, because a
+      # compose ports entry cannot be conditionally omitted (an empty entry is
+      # a hard error). With the split off nothing is listening behind it and
+      # it is bound to loopback, so it is a closed door on this machine
+      # rather than a surface.
+      - "${HAMLANEH_ADMIN_BIND-127.0.0.1:}${HAMLANEH_ADMIN_PORT:-9443}:${HAMLANEH_ADMIN_PORT:-9443}"
     volumes:
       - caddy_data:/data # certificates and internal CA — must persist
       - caddy_config:/config
@@ -122,6 +151,14 @@ services:
       HAMLANEH_ADMIN_USERNAME: ${HAMLANEH_ADMIN_USERNAME:-}
       HAMLANEH_ADMIN_PASSWORD: ${HAMLANEH_ADMIN_PASSWORD:-}
       HAMLANEH_ADMIN_LOCALE: ${HAMLANEH_ADMIN_LOCALE:-en}
+      # The admin surface's own listener (ADR 015). Empty — the default — means
+      # no second listener and every admin route stays on :8080 exactly where
+      # it is today. Set, it is the address that listener binds, and the main
+      # listener stops routing /admin, /api/v1/admin/* and /scim/v2/*.
+      # install.sh writes ":9090"; deploy/Caddyfile's admin site proxies to
+      # server:9090, so the two are one number in two files — change both or
+      # neither.
+      HAMLANEH_ADMIN_ADDR: ${HAMLANEH_ADMIN_ADDR:-}
       # Absolute public origin, used to build emailed links. Caddy owns it,
       # so the server is told rather than left to guess.
       HAMLANEH_PUBLIC_URL: ${HAMLANEH_PUBLIC_URL:-https://${HAMLANEH_DOMAIN:-localhost}}

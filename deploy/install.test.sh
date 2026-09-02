@@ -363,6 +363,136 @@ test_resolve_ports() {
   check_contains "a re-run inherits its earlier ports" "8080 8443" "$out"
 }
 
+# The admin dashboard's own port (ADR 015).
+#
+# The subject is the conversation and what it writes, never this machine's
+# sockets: the listening snapshot and the port holder are stubbed per branch.
+# The property that matters most is the LAST one — that "this machine only"
+# really produces a 127.0.0.1 publication — because getting it wrong publishes
+# the admin API to the internet on an install whose operator asked for the
+# opposite, and nothing else in this suite would notice.
+test_resolve_admin_port() {
+  local out env_file="${WORK}/admin/.env"
+  mkdir -p "${WORK}/admin"
+
+  # Answer 1, default port. "Reachable from the internet" is an EMPTY bind,
+  # because empty is what a docker port mapping reads as every interface.
+  # shellcheck disable=SC2016
+  out="$(printf '1\n\n' | run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "the internet answer takes the default port and no bind" "RESULT [9443] []" "$out"
+  check_contains "the internet answer says to open the port" "open 9443/tcp in your cloud firewall" "$out"
+
+  # Answer 2, default port: loopback, and the tunnel command carries the real
+  # port rather than a placeholder.
+  # shellcheck disable=SC2016
+  out="$(printf '2\n\n' | run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "the loopback answer binds 127.0.0.1" "RESULT [9443] [127.0.0.1:]" "$out"
+  check_contains "the loopback answer prints a usable tunnel command" "ssh -L 9443:localhost:9443 <you>@203.0.113.5" "$out"
+  # The menu itself describes what option 1 would cost, so the assertion is
+  # about the CONFIRMATION: having chosen "this machine only", the operator
+  # must not then be told to open the port in their cloud firewall.
+  if grep -q 'open 9443/tcp in your cloud firewall' <<<"$out"; then
+    bad "the loopback answer told the operator to open the port in their cloud firewall"
+  else
+    ok "the loopback answer does not tell the operator to open the port"
+  fi
+
+  # A taken port is re-asked with its holder named, and the tunnel command
+  # then shows the port that was actually chosen.
+  # shellcheck disable=SC2016
+  out="$(printf '2\n\n9444\n' | run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:9443 \n"; }; port_holder() { printf "grafana"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "a taken admin port names its holder" "port 9443 is also in use (by grafana)" "$out"
+  check_contains "the re-asked answer is the one that sticks" "RESULT [9444] [127.0.0.1:]" "$out"
+  check_contains "the tunnel command shows the chosen port, not the default" "ssh -L 9444:localhost:9444" "$out"
+
+  # The admin port is published whether or not the split is on, so a web port
+  # that equals it is a clash inside our own compose file. Both the chosen
+  # number and the default that stands in when nothing was chosen are covered,
+  # because the second one is the case nobody would think to test.
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'stack_exists() { return 1; }; ADMIN_PORT=9443; HTTP_PORT=80; HTTPS_PORT=9443; preflight_ports')"
+  check_contains "an admin port that collides with a web port is refused" "is a web port here AND where deploy/docker-compose.yml publishes the admin dashboard" "$out"
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'stack_exists() { return 1; }; ADMIN_PORT=; HTTP_PORT=80; HTTPS_PORT=9443; preflight_ports')"
+  check_contains "the split being off does not hide the collision" "port 9443 is a web port here" "$out"
+
+  # Non-interactive leaves the split OFF: an existing script's admin and SCIM
+  # calls must keep answering on the web port.
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'DOMAIN=203.0.113.5; NON_INTERACTIVE=1; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "non-interactive leaves the admin split off" "RESULT [] []" "$out"
+  if grep -q 'Admin dashboard' <<<"$out"; then
+    bad "non-interactive mode asked the admin-port question"
+  else
+    ok "non-interactive mode asks nothing about the admin port"
+  fi
+
+  # A re-run inherits the earlier answer: the question does not come back and
+  # the choice is not lost.
+  local rerun_env="${WORK}/admin/rerun.env"
+  printf 'HAMLANEH_DOMAIN=203.0.113.5\nHAMLANEH_ADMIN_ADDR=:9090\nHAMLANEH_ADMIN_PORT=9443\nHAMLANEH_ADMIN_BIND=127.0.0.1:\n' > "$rerun_env"
+  # shellcheck disable=SC2016
+  out="$(TEST_ENV_FILE="$rerun_env" run_in_subshell eval 'DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "a re-run inherits its earlier admin port and bind" "RESULT [9443] [127.0.0.1:]" "$out"
+  if grep -q 'Admin dashboard' <<<"$out"; then
+    bad "a re-run asked the admin-port question again"
+  else
+    ok "a re-run does not ask the admin-port question again"
+  fi
+
+  # What the answers actually write, and what compose then does with it.
+  rm -f "$env_file"
+  # shellcheck disable=SC2016
+  TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=203.0.113.5; ADMIN_PORT=9443; ADMIN_BIND=127.0.0.1:; write_env' >/dev/null
+  check_contains "the loopback answer is written as a 127.0.0.1 bind" "HAMLANEH_ADMIN_BIND=127.0.0.1:" "$(cat "$env_file")"
+  check_contains "the answer turns the server's second listener on" "HAMLANEH_ADMIN_ADDR=:9090" "$(cat "$env_file")"
+  check_contains "the app port is told which paths have moved" 'HAMLANEH_ADMIN_MOVED_PATHS=^/(api/v1/admin|scim/v2)/' "$(cat "$env_file")"
+  # The link that makes the line above mean anything. The SINGLE dash is the
+  # whole control: with ":-" an internet answer, written as an empty value,
+  # would silently fall back to loopback — and worse, a missing line would not
+  # fall back at all if the default were dropped, publishing to the world.
+  # shellcheck disable=SC2016 # the needle is compose's literal text, not an expansion
+  check_contains "compose publishes the admin port through that bind, loopback by default" \
+    '"${HAMLANEH_ADMIN_BIND-127.0.0.1:}${HAMLANEH_ADMIN_PORT:-9443}:${HAMLANEH_ADMIN_PORT:-9443}"' \
+    "$(cat "${SCRIPT_DIR}/docker-compose.yml")"
+
+  # The internet answer writes an EMPTY line, not a missing one — deleting it
+  # would mean loopback.
+  rm -f "$env_file"
+  # shellcheck disable=SC2016
+  TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=203.0.113.5; ADMIN_PORT=9443; ADMIN_BIND=; write_env' >/dev/null
+  check_eq "the internet answer writes an empty bind line, not no line" "1" \
+    "$(grep -c '^HAMLANEH_ADMIN_BIND=$' "$env_file")"
+
+  # Off writes nothing at all: absence is what "off" is.
+  rm -f "$env_file"
+  # shellcheck disable=SC2016
+  TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=203.0.113.5; write_env' >/dev/null
+  if grep -q '^HAMLANEH_ADMIN_ADDR=\|^HAMLANEH_ADMIN_PORT=\|^HAMLANEH_ADMIN_MOVED_PATHS=' "$env_file"; then
+    bad "the split being off still wrote admin lines into .env"
+  else
+    ok "the split being off writes no admin lines at all"
+  fi
+
+  # And the closing notice tells the truth for each mode.
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'ADMIN_PORT=9443; ADMIN_BIND=127.0.0.1:; print_port_notice')"
+  check_contains "the notice marks a loopback admin port as not-to-be-opened" \
+    "9443/tcp    admin dashboard: this machine only, do NOT open it" "$out"
+  check_eq "the admin row keeps the box square" \
+    "$(grep '7882/udp' <<<"$out" | wc -c)" "$(grep 'admin dashboard' <<<"$out" | wc -c)"
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'ADMIN_PORT=9443; ADMIN_BIND=; print_port_notice')"
+  check_contains "the notice tells an internet admin port to be opened" \
+    "9443/tcp    admin dashboard: open this one too" "$out"
+  out="$(run_in_subshell print_port_notice)"
+  if grep -q 'admin dashboard' <<<"$out"; then
+    bad "the notice named an admin port on an install that has none"
+  else
+    ok "the notice names no admin port when the split is off"
+  fi
+}
+
 test_domain_kind() {
   check_eq "domain_kind localhost" "localhost" "$(run_in_subshell domain_kind localhost)"
   check_eq "domain_kind ipv4" "ipv4" "$(run_in_subshell domain_kind 203.0.113.5)"
@@ -996,6 +1126,7 @@ main() {
   test_heartbeat_run
   test_resolve_domain_prompt
   test_resolve_ports
+  test_resolve_admin_port
   test_domain_kind
   test_write_env_generates_real_secrets
   test_idempotent_rerun
