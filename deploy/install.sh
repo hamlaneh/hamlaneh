@@ -955,9 +955,11 @@ write_env() {
         -e '/^HAMLANEH_CERT_ISSUER=/d' \
         -e '/^HAMLANEH_HTTP_PROTOCOLS=/d' \
         "$ENV_FILE" > "$tmp"
-    printf 'HAMLANEH_DEFAULT_SNI=%s\n' "$(domain_host "$DOMAIN")" >> "$tmp"
-    printf 'HAMLANEH_CERT_ISSUER=%s\n' "$(cert_issuer "$DOMAIN")" >> "$tmp"
-    printf 'HAMLANEH_HTTP_PROTOCOLS=%s\n' "$(http_protocols "$DOMAIN")" >> "$tmp"
+    {
+      printf 'HAMLANEH_DEFAULT_SNI=%s\n' "$(domain_host "$DOMAIN")"
+      printf 'HAMLANEH_CERT_ISSUER=%s\n' "$(cert_issuer "$DOMAIN")"
+      printf 'HAMLANEH_HTTP_PROTOCOLS=%s\n' "$(http_protocols "$DOMAIN")"
+    } >> "$tmp"
     # Rewritten rather than edited in place: default ports carry no line at
     # all, so moving back to 80/443 removes the override instead of pinning
     # a now-wrong number.
