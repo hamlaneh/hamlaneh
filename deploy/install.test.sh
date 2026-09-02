@@ -106,10 +106,23 @@ setup_workdir() {
 
   # A stub `docker` whose answers this suite controls. db_volume_exists and
   # stack_exists are the only two functions that shell out to it.
+  # Every invocation is appended to STUB_LOG when set, so a test can assert
+  # what the installer asked docker to do. The image answers come from the
+  # environment: a container "running" STUB_CONTAINER_IMAGE while the tag
+  # names STUB_SERVICE_IMAGE is the stale-container case.
   cat > "${WORK}/bin/docker" <<'STUB'
 #!/usr/bin/env bash
+[ -z "${STUB_LOG:-}" ] || printf '%s\n' "$*" >> "$STUB_LOG"
 case "$1 $2" in
   "volume inspect") [ "${STUB_DB_VOLUME:-0}" = "1" ] ;;
+  "image inspect") printf '%s\n' "${STUB_SERVICE_IMAGE:-sha256:same}" ;;
+  "image prune") printf 'Total reclaimed space: 1.2GB\n' ;;
+  "inspect -f") printf '%s\n' "${STUB_CONTAINER_IMAGE:-sha256:same}" ;;
+  "compose -f")
+    case " $* " in
+      *" ps -q "*) printf 'cid123\n' ;;
+    esac
+    ;;
   *) exit 0 ;;
 esac
 STUB
@@ -810,6 +823,32 @@ test_background_jobs_summary() {
   check_contains "a half-armed summary says so" "Something above is off" "$out"
 }
 
+test_recreate_stale_containers() {
+  local logf="${WORK}/docker.log" out
+  # A container running an image the tag no longer names is stale, and the
+  # only correct move is to replace it — silently reporting success on the
+  # old binary is the failure this function exists to stop.
+  : > "$logf"
+  STUB_LOG="$logf" STUB_CONTAINER_IMAGE=sha256:old STUB_SERVICE_IMAGE=sha256:new \
+    run_in_subshell recreate_stale_containers >/dev/null
+  check_contains "a container on an older image is recreated" "--force-recreate server" "$(cat "$logf")"
+  check_contains "recreation is scoped to that service" "--no-deps" "$(cat "$logf")"
+
+  # An up-to-date container is left alone: a no-change re-run must bounce
+  # nothing, or the idempotency promise is a restart in disguise.
+  : > "$logf"
+  STUB_LOG="$logf" STUB_CONTAINER_IMAGE=sha256:same STUB_SERVICE_IMAGE=sha256:same \
+    run_in_subshell recreate_stale_containers >/dev/null
+  if grep -q -- "--force-recreate" "$logf"; then
+    bad "an up-to-date container was bounced"
+  else
+    ok "an up-to-date container is left running"
+  fi
+
+  out="$(run_in_subshell prune_dangling_images)"
+  check_contains "the prune reports what it reclaimed" "Total reclaimed space: 1.2GB" "$out"
+}
+
 test_help_output() {
   local out
   out="$(run_in_subshell usage)"
@@ -907,6 +946,7 @@ main() {
   test_cosign_pin_matches_ci
   test_companion_enablement
   test_background_jobs_summary
+  test_recreate_stale_containers
   test_help_output
   finish
 }
