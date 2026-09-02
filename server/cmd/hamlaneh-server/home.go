@@ -152,6 +152,19 @@ func homeMode() (mode, error) {
 		}
 	}
 
+	// The admin listener is refused for the same reason and by the same
+	// shape (ADR 015). Home mode has no proxy to publish a second port with
+	// and one machine to defend, so the split would be a boundary that is
+	// not there — and an operator who set this and was quietly ignored would
+	// believe in it anyway, which is precisely the failure the whole
+	// decision exists to prevent.
+	if os.Getenv(httpserver.EnvAdminAddr) != "" {
+		return mode{}, fmt.Errorf(
+			"home mode has no admin listener, so %s must not be set: "+
+				"the split exists so a firewall can filter the dashboard by port, and this mode "+
+				"binds loopback with nothing in front of it (ADR 015)", httpserver.EnvAdminAddr)
+	}
+
 	dir := os.Getenv(blobstore.EnvDataDir)
 	if dir == "" {
 		cfgDir, err := os.UserConfigDir()

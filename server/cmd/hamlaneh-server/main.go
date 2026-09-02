@@ -47,6 +47,16 @@
 // /api/v1/admin, and the /scim/v2 provisioning surface answer there and
 // nowhere else, and the main listener answers 404 for all three. Unset — the
 // default and every install before this — keeps all of them where they are.
+// Home mode has no proxy to publish a second port with and refuses the
+// variable rather than ignoring it.
+//
+// That listener is a complete minimal app, not a bare admin surface: the web
+// build, /api/v1/instance, /api/v1/users/me and the whole of /api/v1/auth
+// answer on BOTH listeners, so an operator who binds this port to loopback
+// and reaches it through an SSH tunnel can sign in, change a first password
+// and use the dashboard without ever opening the chat port. Those endpoints
+// are shared, not moved; the main listener keeps every one of them.
+//
 // The port is a deployment boundary, so a firewall can filter it; it is not
 // an authorization decision, and reaching it still faces the same session
 // and the same role check.
@@ -385,7 +395,8 @@ func start(ctx context.Context, m mode) error {
 		// (ADR 015). It moves the dashboard, /api/v1/admin and /scim/v2
 		// off the listener above and onto this one, so a firewall can
 		// filter them by port; it moves no authorization decision with
-		// them. Home mode never sets it.
+		// them, and it leaves the session endpoints a page needs on both.
+		// Home mode refuses the variable outright.
 		httpserver.WithAdminListener(m.adminAddr),
 	)
 

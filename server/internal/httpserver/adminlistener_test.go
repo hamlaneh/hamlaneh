@@ -3,6 +3,7 @@ package httpserver_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
@@ -60,8 +61,10 @@ func TestAdminListenerRoutesBothWays(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		path string
+		name   string
+		method string // empty means GET
+		path   string
+		body   string
 		// The three answers, in the order the listeners are built above.
 		wantAdmin   int
 		wantMain    int
@@ -113,14 +116,46 @@ func TestAdminListenerRoutesBothWays(t *testing.T) {
 			wantUnsplit: http.StatusOK,
 		},
 		{
-			// The allow-list, from the other side: a contract route that
-			// did not move is not reachable on the admin listener merely
-			// because it is a contract route.
-			name:        "an unmoved contract route",
+			// The shared endpoints (ADR 015 as amended): served by BOTH
+			// listeners, because the admin listener is a complete minimal
+			// app and a page there must be able to exist. Being on two
+			// listeners is not being moved — the main listener keeps every
+			// one of them, exactly as it keeps /assets/.
+			name:        "shared: the instance document",
 			path:        "/api/v1/instance",
-			wantAdmin:   http.StatusNotFound,
+			wantAdmin:   http.StatusOK,
 			wantMain:    http.StatusOK,
 			wantUnsplit: http.StatusOK,
+		},
+		{
+			// 401 on all three: present everywhere, and everywhere it is
+			// the session check that answers.
+			name:        "shared: who is signed in",
+			path:        "/api/v1/users/me",
+			wantAdmin:   http.StatusUnauthorized,
+			wantMain:    http.StatusUnauthorized,
+			wantUnsplit: http.StatusUnauthorized,
+		},
+		{
+			// 400, not 404: the route exists on every listener and read the
+			// (empty) body. TestAdminListenerSignsInAndAdministers walks the
+			// real sign-in on the admin port.
+			name:        "shared: sign-in",
+			method:      http.MethodPost,
+			path:        "/api/v1/auth/login",
+			wantAdmin:   http.StatusBadRequest,
+			wantMain:    http.StatusBadRequest,
+			wantUnsplit: http.StatusBadRequest,
+		},
+		{
+			// The allow-list, from the other side: a contract route that
+			// neither moved nor is shared is not reachable on the admin
+			// listener merely because it is a contract route.
+			name:        "an unmoved, unshared contract route",
+			path:        "/api/v1/channels",
+			wantAdmin:   http.StatusNotFound,
+			wantMain:    http.StatusUnauthorized,
+			wantUnsplit: http.StatusUnauthorized,
 		},
 		{
 			name:        "a chat permalink",
@@ -161,10 +196,14 @@ func TestAdminListenerRoutesBothWays(t *testing.T) {
 				{"the one listener (split off)", unsplit, tt.wantUnsplit},
 			}
 			for _, l := range listeners {
-				rec := doHandler(t, l.handler, request(http.MethodGet, tt.path, ""))
+				method := tt.method
+				if method == "" {
+					method = http.MethodGet
+				}
+				rec := doHandler(t, l.handler, request(method, tt.path, tt.body))
 				if rec.Code != l.want {
-					t.Errorf("GET %s on %s = %d, want %d (body %s)",
-						tt.path, l.label, rec.Code, l.want, rec.Body.String())
+					t.Errorf("%s %s on %s = %d, want %d (body %s)",
+						method, tt.path, l.label, rec.Code, l.want, rec.Body.String())
 				}
 			}
 		})
@@ -191,6 +230,77 @@ func TestAdminListenerRefusesWithoutRevealing(t *testing.T) {
 	if rec.Body.String() == scimMarker {
 		t.Error("the provisioning surface answered on the main listener after the split")
 	}
+}
+
+// TestAdminRoutesAreNotAuthRoutes guards the one way the shared set could
+// quietly undo the split. /api/v1/auth is shared, so the main listener keeps
+// it; /api/v1/admin moved, so the main listener must not. The two prefixes
+// are neighbours under /api/v1 and a widened shared prefix would swallow the
+// admin API back onto the port ADR 015 took it off — which would look like
+// nothing at all until somebody probed for it.
+func TestAdminRoutesAreNotAuthRoutes(t *testing.T) {
+	t.Parallel()
+
+	main, admin, _ := splitHandlers(t, &fakeStore{})
+
+	for _, path := range []string{"/api/v1/admin/users", "/api/v1/admin/org", "/api/v1/admin/audit"} {
+		// On the admin listener the surface is present, so the session
+		// check is what answers.
+		if rec := doHandler(t, admin, request(http.MethodGet, path, "")); rec.Code != http.StatusUnauthorized {
+			t.Errorf("GET %s on the admin listener = %d, want 401 (body %s)",
+				path, rec.Code, rec.Body.String())
+		}
+		// On the main listener it is gone, however much the shared
+		// /api/v1/auth prefix sits beside it.
+		if rec := doHandler(t, main, request(http.MethodGet, path, "")); rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s on the main listener = %d, want 404: an admin route is not an auth route",
+				path, rec.Code)
+		}
+	}
+}
+
+// TestAdminListenerSignsInAndAdministers walks the tunnel-only operator's
+// whole path on one listener: the one who binds the admin port to this
+// machine, reaches it over SSH, and never opens the chat port at all. Sign
+// in there, then use an admin route there, and get the real answer.
+//
+// This is what the whole /api/v1/auth prefix is shared FOR, and the test
+// that fails if a later trim of that prefix leaves that operator locked out.
+func TestAdminListenerSignsInAndAdministers(t *testing.T) {
+	t.Parallel()
+
+	_, admin, _ := splitHandlers(t, adminLoginStore())
+
+	sc := login(t, admin, "member", fixturePassword)
+
+	rec := doHandler(t, admin, request(http.MethodGet, "/api/v1/admin/invites", "", withSession(sc)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an admin who signed in on the admin listener got %d from its own admin API, want 200 (body %s)",
+			rec.Code, rec.Body.String())
+	}
+}
+
+// adminLoginStore authenticates the fixture admin by password and then by
+// the session that sign-in mints, and answers the invites read they are here
+// to make.
+func adminLoginStore() *fakeStore {
+	admin := fixtureUser()
+	admin.IsAdmin = true
+
+	store := authedStore(admin)
+	store.userByIdentifier = func(_ context.Context, identifier string) (storage.User, error) {
+		if strings.EqualFold(identifier, admin.Username) {
+			return admin, nil
+		}
+		return storage.User{}, storage.ErrNotFound
+	}
+	store.createSession = func(context.Context, storage.NewSession) (storage.Session, error) {
+		return fixtureSession(), nil
+	}
+	store.listOpenInvites = func(context.Context, storage.ListInvitesParams) ([]storage.Invite, error) {
+		return nil, nil
+	}
+	return store
 }
 
 // TestAdminListenerDoesNotAuthorize is the failure ADR 015 forbids by name:

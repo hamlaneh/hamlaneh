@@ -38,6 +38,7 @@ func homeTestEnv(t *testing.T) string {
 		filesign.EnvKey, audit.EnvKey,
 		calls.EnvAPIKey, calls.EnvAPISecret, calls.EnvURL,
 		passwordreset.EnvPublicURL, httpserver.EnvCompressResponses,
+		httpserver.EnvAdminAddr,
 		bootstrap.EnvUsername, bootstrap.EnvPassword, bootstrap.EnvLocale,
 		mailer.EnvHost, mailer.EnvPort, mailer.EnvUsername, mailer.EnvPassword,
 		mailer.EnvFrom, mailer.EnvFromName, mailer.EnvEncryption,
@@ -148,6 +149,43 @@ func TestHomeModeRefusesLiveKit(t *testing.T) {
 				t.Errorf("error %q does not name %s", err, name)
 			}
 		})
+	}
+}
+
+// TestHomeModeRefusesAdminListener is ADR 015's "untouched" clause, enforced
+// rather than assumed. Home mode has no proxy to publish a second port with
+// and one machine to defend, so the split would be a boundary that is not
+// there — and silently ignoring the variable would leave the operator
+// believing in it anyway, which is the failure the whole decision is about.
+// It refuses in the shape a LiveKit variable already does.
+func TestHomeModeRefusesAdminListener(t *testing.T) {
+	homeTestEnv(t)
+	t.Setenv(httpserver.EnvAdminAddr, ":9090")
+
+	_, err := homeMode()
+	if err == nil {
+		t.Fatalf("homeMode() with %s set returned no error, want a refusal", httpserver.EnvAdminAddr)
+	}
+	if !strings.Contains(err.Error(), httpserver.EnvAdminAddr) {
+		t.Errorf("error %q does not name %s, so nobody is told which variable to unset",
+			err, httpserver.EnvAdminAddr)
+	}
+}
+
+// TestServerModeReadsTheAdminListener is the other side of it: server mode is
+// where a second published port is a control an operator already has, so the
+// variable reaches the wiring there — and stays off when it is unset, which
+// is what keeps every existing install unsplit.
+func TestServerModeReadsTheAdminListener(t *testing.T) {
+	homeTestEnv(t)
+	if addr := serverMode().adminAddr; addr != "" {
+		t.Errorf("serverMode().adminAddr = %q with %s unset, want empty: the split must be off by default",
+			addr, httpserver.EnvAdminAddr)
+	}
+
+	t.Setenv(httpserver.EnvAdminAddr, ":9090")
+	if addr := serverMode().adminAddr; addr != ":9090" {
+		t.Errorf("serverMode().adminAddr = %q, want \":9090\"", addr)
 	}
 }
 

@@ -100,6 +100,9 @@ func WithTrustedProxy(trusted bool) Option {
 // for all three. Empty — the default, home mode, and every install before
 // that decision — leaves every route exactly where it has always been.
 //
+// That listener carries a complete minimal app rather than a bare admin
+// surface, so a page on it can exist: sharedSurface is the set both keep.
+//
 // The address is a deployment boundary and never an authorization decision.
 // Both listeners run the same securityMiddleware over the same router, so
 // the one admin authz.Can call site still decides who may use the surface.
@@ -244,9 +247,12 @@ func route(s *apiServer, web fs.FS) (main, admin http.Handler) {
 const adminAPIPrefix = "/api/v1/admin/"
 
 // adminSurface reports whether path is part of what ADR 015 moves to the
-// admin listener: the dashboard document and the subtree its panes are
-// bookmarked under, the API behind it, and the provisioning surface, whose
-// bearer token is worth exactly as much as an admin session.
+// admin listener — and moving means the main listener loses it, which is
+// what separates this set from sharedSurface below.
+//
+// It is the dashboard document and the subtree its panes are bookmarked
+// under, the API behind it, and the provisioning surface, whose bearer token
+// is worth exactly as much as an admin session.
 //
 // It answers a routing question and nothing else. Nothing here decides
 // whether a caller MAY use these paths — securityMiddleware's one authz.Can
@@ -257,19 +263,51 @@ func adminSurface(path string) bool {
 		strings.HasPrefix(path, scimPrefix)
 }
 
+// The paths that do NOT move and are carried by BOTH listeners. The admin
+// listener is a complete minimal app rather than a bare admin surface: a
+// signed-in page there has to be able to load its own bundle, say what this
+// instance is, say who is signed in, and sign somebody in or out.
+//
+// authPrefix is the whole of /api/v1/auth deliberately, not the two or three
+// routes the dashboard happens to call today. The installer offers a
+// loopback bind reached through an SSH tunnel, and an operator on that shape
+// may never open the chat port at all — so sign-in, the two-step step, the
+// forced first password change and password reset each have to work here, or
+// that deployment is broken on first use. It confers nothing: signing in on
+// this port is the same sign-in, spending the same rate-limit budget, and
+// every admin route behind it still runs the same one authz.Can.
+const (
+	instancePath    = "/api/v1/instance"
+	currentUserPath = "/api/v1/users/me"
+	authPrefix      = "/api/v1/auth/"
+	assetsPrefix    = "/assets/"
+	brandPrefix     = "/brand/"
+)
+
+// sharedSurface reports whether path is carried by both listeners.
+func sharedSurface(path string) bool {
+	return path == instancePath || path == currentUserPath ||
+		strings.HasPrefix(path, authPrefix) ||
+		strings.HasPrefix(path, assetsPrefix) ||
+		strings.HasPrefix(path, brandPrefix)
+}
+
 // mainListenerServes reports whether the main listener still carries path
-// once the split is on: everything except what moved.
+// once the split is on: everything except what moved. It consults
+// adminSurface and NOTHING else, and that is the structural guarantee behind
+// the whole decision — sharedSurface cannot un-move a path, because the main
+// listener never reads it. Widening a shared prefix by mistake can only add
+// something to the admin listener, never hand the admin API back to the port
+// ADR 015 took it off.
 func mainListenerServes(path string) bool { return !adminSurface(path) }
 
 // adminListenerServes reports whether the admin listener carries path: what
-// moved, plus the two static prefixes the dashboard's own bundle and brand
-// marks are fetched from. Without those the document loads and renders
-// nothing, and they stay on the main listener too — they are the same
-// public bytes either way, and the chat app needs them.
+// moved, plus what is shared. adminSurface is asked FIRST and its answer is
+// final — /api/v1/admin is the admin surface, never an /api/v1/auth route,
+// however alike the two prefixes may come to look
+// (TestAdminRoutesAreNotAuthRoutes).
 func adminListenerServes(path string) bool {
-	return adminSurface(path) ||
-		strings.HasPrefix(path, "/assets/") ||
-		strings.HasPrefix(path, "/brand/")
+	return adminSurface(path) || sharedSurface(path)
 }
 
 // servePaths passes a request to next only when serves says this listener
