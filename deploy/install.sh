@@ -647,6 +647,19 @@ cert_issuer() {
   esac
 }
 
+# The HTTP versions the proxy offers. HTTP/3 rides QUIC, and browsers refuse
+# QUIC to a certificate they do not trust with no way to proceed — so on a
+# locally-issued certificate, advertising it turns the second request into
+# "could not reach the server" (measured: the sign-in fetch, on the first IP
+# install, while curl said 200). A domain's certificate is trusted; it keeps
+# the full set.
+http_protocols() {
+  case "$(cert_issuer "$1")" in
+    acme) printf 'h1 h2 h3' ;;
+    *) printf 'h1 h2' ;;
+  esac
+}
+
 # The host alone — DOMAIN with any custom port stripped. An IPv6 literal is
 # all colons and never carries a port (resolve_ports), so it passes whole.
 domain_host() {
@@ -919,6 +932,7 @@ write_env() {
       [ "$(current_env_value HAMLANEH_FILES_DOMAIN)" = "$(files_domain "$DOMAIN")" ] &&
       [ "$(current_env_value HAMLANEH_DEFAULT_SNI)" = "$(domain_host "$DOMAIN")" ] &&
       [ "$(current_env_value HAMLANEH_CERT_ISSUER)" = "$(cert_issuer "$DOMAIN")" ] &&
+      [ "$(current_env_value HAMLANEH_HTTP_PROTOCOLS)" = "$(http_protocols "$DOMAIN")" ] &&
       [ "$(current_env_value HAMLANEH_HTTPS_PORT)" = "$([ "$HTTPS_PORT" != "443" ] || [ "$HTTP_PORT" != "80" ] && printf '%s' "$HTTPS_PORT")" ]; then
       log "deploy/.env already up to date — leaving it untouched"
       return
@@ -939,9 +953,11 @@ write_env() {
         -e '/^HAMLANEH_HTTPS_PORT=/d' \
         -e '/^HAMLANEH_DEFAULT_SNI=/d' \
         -e '/^HAMLANEH_CERT_ISSUER=/d' \
+        -e '/^HAMLANEH_HTTP_PROTOCOLS=/d' \
         "$ENV_FILE" > "$tmp"
     printf 'HAMLANEH_DEFAULT_SNI=%s\n' "$(domain_host "$DOMAIN")" >> "$tmp"
     printf 'HAMLANEH_CERT_ISSUER=%s\n' "$(cert_issuer "$DOMAIN")" >> "$tmp"
+    printf 'HAMLANEH_HTTP_PROTOCOLS=%s\n' "$(http_protocols "$DOMAIN")" >> "$tmp"
     # Rewritten rather than edited in place: default ports carry no line at
     # all, so moving back to 80/443 removes the override instead of pinning
     # a now-wrong number.
@@ -978,6 +994,7 @@ write_env() {
     printf 'HAMLANEH_FILES_DOMAIN=%s\n' "$(files_domain "$DOMAIN")"
     printf 'HAMLANEH_DEFAULT_SNI=%s\n' "$(domain_host "$DOMAIN")"
     printf 'HAMLANEH_CERT_ISSUER=%s\n' "$(cert_issuer "$DOMAIN")"
+    printf 'HAMLANEH_HTTP_PROTOCOLS=%s\n' "$(http_protocols "$DOMAIN")"
     if [ "$HTTPS_PORT" != "443" ] || [ "$HTTP_PORT" != "80" ]; then
       printf 'HAMLANEH_HTTP_PORT=%s\n' "$HTTP_PORT"
       printf 'HAMLANEH_HTTPS_PORT=%s\n' "$HTTPS_PORT"

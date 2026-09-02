@@ -390,6 +390,10 @@ test_domain_kind() {
   check_eq "cert_issuer: ipv4 -> internal" "internal" "$(run_in_subshell cert_issuer 203.0.113.5:8443)"
   check_eq "cert_issuer: localhost -> internal" "internal" "$(run_in_subshell cert_issuer localhost)"
   check_eq "cert_issuer: domain -> acme" "acme" "$(run_in_subshell cert_issuer chat.example.com)"
+  # HTTP/3 only where a browser will actually speak it — a trusted cert.
+  check_contains "an IP install offers no HTTP/3" "HAMLANEH_HTTP_PROTOCOLS=h1 h2" "$(cat "$sni_env")"
+  check_eq "http_protocols: ipv4 -> h1 h2" "h1 h2" "$(run_in_subshell http_protocols 203.0.113.5:8443)"
+  check_eq "http_protocols: domain -> h1 h2 h3" "h1 h2 h3" "$(run_in_subshell http_protocols chat.example.com)"
   # shellcheck disable=SC2016
   TEST_ENV_FILE="$sni_env" run_in_subshell eval 'DOMAIN=chat.example.com; write_env' >/dev/null
   check_contains "a domain change rewrites the SNI host" "HAMLANEH_DEFAULT_SNI=chat.example.com" "$(cat "$sni_env")"
@@ -512,7 +516,7 @@ test_domain_change_keeps_secrets() {
   # Three lines derive from the domain: the domain itself, the files
   # hostname, and the default SNI host Caddy serves to clients that name
   # no site. Everything else — every secret — must survive byte for byte.
-  local derived='^HAMLANEH_DOMAIN=\|^HAMLANEH_FILES_DOMAIN=\|^HAMLANEH_DEFAULT_SNI=\|^HAMLANEH_CERT_ISSUER='
+  local derived='^HAMLANEH_DOMAIN=\|^HAMLANEH_FILES_DOMAIN=\|^HAMLANEH_DEFAULT_SNI=\|^HAMLANEH_CERT_ISSUER=\|^HAMLANEH_HTTP_PROTOCOLS='
   rm -f "$env_file"
   TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=old.example.com; write_env' >/dev/null
   before="$(grep -v "$derived" "$env_file")"

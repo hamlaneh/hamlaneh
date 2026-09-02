@@ -61,6 +61,10 @@ services:
       # a public IP gets no certificate from Caddy unless told to issue one
       # itself. install.sh writes it; the Caddyfile's global block explains.
       HAMLANEH_CERT_ISSUER: ${HAMLANEH_CERT_ISSUER:-acme}
+      # "h1 h2" on a locally-issued certificate (browsers refuse QUIC to a
+      # certificate they do not trust, with no way to proceed), the full
+      # set on a domain. install.sh writes it; the Caddyfile explains.
+      HAMLANEH_HTTP_PROTOCOLS: ${HAMLANEH_HTTP_PROTOCOLS:-h1 h2 h3}
     ports:
       # The web ports are host-configurable for one deployment shape: a
       # server where something else already holds 80/443 (install.sh asks,

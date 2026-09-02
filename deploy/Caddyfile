@@ -38,6 +38,17 @@
 	# IP or localhost install and "acme" for a domain; the default here is
 	# what Caddy would do on its own for a domain.
 	cert_issuer {$HAMLANEH_CERT_ISSUER:acme}
+	# HTTP/3 rides QUIC, and browsers refuse QUIC to a certificate they do
+	# not trust — there is no "proceed anyway" for it, as there is for TLS
+	# over TCP. So on an install whose certificate is locally issued (an IP,
+	# localhost), advertising h3 is a trap: the first page loads over TCP,
+	# the browser learns the Alt-Svc, tries QUIC for the next request, and
+	# the sign-in fetch dies with "could not reach the server" while curl
+	# from anywhere says 200. install.sh writes "h1 h2" for those installs
+	# and the full set for a domain, whose certificate every browser trusts.
+	servers {
+		protocols {$HAMLANEH_HTTP_PROTOCOLS:h1 h2 h3}
+	}
 }
 
 # The https:// is load-bearing, not decoration. Without a scheme, Caddy
