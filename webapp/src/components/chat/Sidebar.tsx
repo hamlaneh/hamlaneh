@@ -5,8 +5,18 @@ import { NavLink } from "react-router";
 import { formatCount } from "../../chat/format";
 import { PRESENCE_LABEL_KEY } from "../../chat/presence";
 import type { Channel, Presence, User } from "../../chat/types";
-import { HashIcon, LockIcon, NestMark, PlusIcon, SettingsIcon, XIcon } from "../icons";
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  HashIcon,
+  LockIcon,
+  NestMark,
+  PlusIcon,
+  SettingsIcon,
+  XIcon,
+} from "../icons";
 import { Avatar } from "./Avatar";
+import { ACCOUNT_MENU_ID } from "./plumbing/overlay";
 
 interface SidebarProps {
   channels: readonly Channel[];
@@ -191,13 +201,17 @@ export function Sidebar({
       </div>
 
       <div className="hm-sidebar__footer">
-        {/* The identity is the account menu's trigger and the gear beside it
-            opens Settings directly — chat-addendum-account-menu-light says so
-            in as many words. */}
+        {/* The identity block is the account popover's trigger and nothing
+            else: Settings and Admin are never nested inside it
+            (chat-addendum-menu-components -> 03). The popover is an anchored
+            non-modal dialog, so the trigger says `dialog`, not `menu`. */}
         <button
           type="button"
           className="hm-sidebar__identity"
           aria-label={t("account.title")}
+          aria-haspopup="dialog"
+          aria-expanded={accountMenu !== null}
+          aria-controls={ACCOUNT_MENU_ID}
           onClick={onToggleAccountMenu}
         >
           <Avatar
@@ -212,6 +226,11 @@ export function Sidebar({
             <span className="hm-sidebar__me-name">{currentUser.display_name}</span>
             {/* The visible label that keeps the dot from carrying state alone. */}
             <span className="hm-sidebar__me-presence">{presenceLabel}</span>
+          </span>
+          {/* Vertical disclosure: up means the popover opens upward. It never
+              rotates in RTL. */}
+          <span className="hm-sidebar__identity-chevron" aria-hidden="true">
+            {accountMenu === null ? <ChevronDownIcon size={15} /> : <ChevronUpIcon size={15} />}
           </span>
         </button>
         <button
