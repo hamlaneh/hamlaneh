@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hamlaneh/hamlaneh/server/internal/api"
@@ -93,14 +94,49 @@ func WithTrustedProxy(trusted bool) Option {
 	return func(s *apiServer) { s.trustProxy = trusted }
 }
 
-// New returns an *http.Server bound to addr with the Hamlaneh router and
-// hardened timeouts configured. store backs everything stateful and may be
+// WithAdminListener moves the admin surface onto its own listener at addr
+// (ADR 015): the dashboard document, /api/v1/admin and the provisioning
+// surface answer there and nowhere else, and the main listener answers 404
+// for all three. Empty — the default, home mode, and every install before
+// that decision — leaves every route exactly where it has always been.
+//
+// The address is a deployment boundary and never an authorization decision.
+// Both listeners run the same securityMiddleware over the same router, so
+// the one admin authz.Can call site still decides who may use the surface.
+// Reaching this port is not being an admin.
+func WithAdminListener(addr string) Option {
+	return func(s *apiServer) { s.adminAddr = addr }
+}
+
+// EnvAdminAddr names the address the admin listener binds. Unset or
+// empty is off, which is what every install that has not asked for the
+// split runs (WithAdminListener).
+const EnvAdminAddr = "HAMLANEH_ADMIN_ADDR"
+
+// New returns the servers this configuration needs, bound and hardened: the
+// main one on addr always, and — when WithAdminListener named an address —
+// a second carrying the admin surface alone (ADR 015). admin is nil when it
+// did not, which is the default. store backs everything stateful and may be
 // nil in unit tests (readyz then reports degraded and authenticated routes
-// answer 500). The caller owns the server's lifecycle.
-func New(addr string, store Store, opts ...Option) *http.Server {
+// answer 500). The caller owns both servers' lifecycles.
+//
+// The two share one router and one apiServer, so one set of rate-limit
+// budgets, one audit chain and one session check covers both listeners.
+func New(addr string, store Store, opts ...Option) (main, admin *http.Server) {
+	s := newAPIServer(store, opts...)
+	mainHandler, adminHandler := route(s, webassets.FS())
+	main = listener(addr, mainHandler)
+	if adminHandler != nil {
+		admin = listener(s.adminAddr, adminHandler)
+	}
+	return main, admin
+}
+
+// listener wraps h in an http.Server on addr with the hardened timeouts.
+func listener(addr string, h http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
-		Handler:           Handler(store, opts...),
+		Handler:           h,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -134,6 +170,10 @@ func New(addr string, store Store, opts ...Option) *http.Server {
 //
 // The whole result is wrapped in securityHeaders, so the HTML document is
 // covered by the same policy as the API.
+//
+// This is the main listener's handler. An install that split the admin
+// surface onto its own port (WithAdminListener, ADR 015) also has a second
+// one, over this same router; New is what builds both.
 func Handler(store Store, opts ...Option) http.Handler {
 	return handler(store, webassets.FS(), opts...)
 }
@@ -143,11 +183,21 @@ func Handler(store Store, opts ...Option) http.Handler {
 // build in a plain checkout is only the placeholder, and asset behaviour has
 // to be exercised against something that looks like a real one.
 func handler(store Store, web fs.FS, opts ...Option) http.Handler {
+	main, _ := route(newAPIServer(store, opts...), web)
+	return main
+}
+
+// route assembles the router over s and returns one root handler per
+// listener this configuration needs. admin is nil unless WithAdminListener
+// named an address; when it did, both handlers wrap the SAME router — the
+// same securityHeaders, the same securityMiddleware, the same gates — and
+// differ in one thing only: which paths each will pass through to it
+// (adminSurface below, ADR 015).
+func route(s *apiServer, web fs.FS) (main, admin http.Handler) {
 	mux := http.NewServeMux()
 
-	// Built before the web routes because one option — compression — decides
+	// Read before the web routes because one option — compression — decides
 	// how the build itself is served (compress.go).
-	s := newAPIServer(store, opts...)
 	routeWebapp(mux, web, s.compressAssets)
 
 	// Registered on the base mux, deliberately outside the contract router
@@ -182,7 +232,67 @@ func handler(store Store, web fs.FS, opts ...Option) http.Handler {
 		Middlewares:      []api.MiddlewareFunc{s.rateLimitMiddleware, s.securityMiddleware},
 		ErrorHandlerFunc: requestErrorHandler,
 	})
-	return securityHeaders(routed)
+	if s.adminAddr == "" {
+		return securityHeaders(routed), nil
+	}
+	return securityHeaders(servePaths(routed, mainListenerServes)),
+		securityHeaders(servePaths(routed, adminListenerServes))
+}
+
+// adminAPIPrefix is the powered half of the admin surface: the dashboard
+// document renders nothing without it (docs/hardening.md).
+const adminAPIPrefix = "/api/v1/admin/"
+
+// adminSurface reports whether path is part of what ADR 015 moves to the
+// admin listener: the dashboard document and the subtree its panes are
+// bookmarked under, the API behind it, and the provisioning surface, whose
+// bearer token is worth exactly as much as an admin session.
+//
+// It answers a routing question and nothing else. Nothing here decides
+// whether a caller MAY use these paths — securityMiddleware's one authz.Can
+// call site still does that, on whichever listener served the request.
+func adminSurface(path string) bool {
+	return path == "/admin" || strings.HasPrefix(path, "/admin/") ||
+		strings.HasPrefix(path, adminAPIPrefix) ||
+		strings.HasPrefix(path, scimPrefix)
+}
+
+// mainListenerServes reports whether the main listener still carries path
+// once the split is on: everything except what moved.
+func mainListenerServes(path string) bool { return !adminSurface(path) }
+
+// adminListenerServes reports whether the admin listener carries path: what
+// moved, plus the two static prefixes the dashboard's own bundle and brand
+// marks are fetched from. Without those the document loads and renders
+// nothing, and they stay on the main listener too — they are the same
+// public bytes either way, and the chat app needs them.
+func adminListenerServes(path string) bool {
+	return adminSurface(path) ||
+		strings.HasPrefix(path, "/assets/") ||
+		strings.HasPrefix(path, "/brand/")
+}
+
+// servePaths passes a request to next only when serves says this listener
+// carries its path, and otherwise answers as though the path did not exist:
+// the contract's JSON error under /api/, a plain 404 everywhere else, which
+// is exactly what either listener answers for a path nobody registered.
+//
+// Absent, not refused, is the point. A 401 or a 403 on the main listener
+// would confirm that the admin API is there and merely shut, and the port
+// is meant to take the surface away rather than to guard it. It runs before
+// the router, so a moved path costs the other listener no session lookup
+// and no budget.
+func servePaths(next http.Handler, serves func(string) bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case serves(r.URL.Path):
+			next.ServeHTTP(w, r)
+		case strings.HasPrefix(r.URL.Path, "/api/"):
+			handleUnknownAPIPath(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
 }
 
 // routeSCIM mounts the provisioning surface, when one is configured, on

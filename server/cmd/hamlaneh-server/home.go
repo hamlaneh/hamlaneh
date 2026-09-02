@@ -99,6 +99,12 @@ type mode struct {
 	// Origin check, the invitation links and the reset links are built from
 	// it.
 	publicURL string
+
+	// adminAddr is the second listen address the admin surface moves to when
+	// an operator asks for the split (ADR 015). Empty is off, and home mode
+	// leaves it empty always: it binds loopback already, its threat model is
+	// one machine, and it has no proxy to publish a second port with.
+	adminAddr string
 }
 
 // serverMode is the deployment the compose stack runs: PostgreSQL from the
@@ -110,8 +116,12 @@ func serverMode() mode {
 		dir = blobstore.DefaultDataDir
 	}
 	return mode{
-		addr:      listenAddr,
-		dataDir:   dir,
+		addr:    listenAddr,
+		dataDir: dir,
+		// Off unless the operator named an address (ADR 015). The compose
+		// stack is where a second published port is a control an operator
+		// already has, so this is the only mode that reads it.
+		adminAddr: os.Getenv(httpserver.EnvAdminAddr),
 		compress:  os.Getenv(httpserver.EnvCompressResponses) == "1",
 		publicURL: os.Getenv(passwordreset.EnvPublicURL),
 	}

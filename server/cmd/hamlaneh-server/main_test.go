@@ -101,7 +101,8 @@ func TestServeOnATakenPortSaysHowToMoveIt(t *testing.T) {
 	}()
 
 	remedy := (mode{home: true}).addrInUseRemedy()
-	err = serve(context.Background(), remedy, httpserver.New(held.Addr().String(), nil))
+	srv, _ := httpserver.New(held.Addr().String(), nil)
+	err = serve(context.Background(), remedy, srv)
 	if err == nil {
 		t.Fatal("serve on a port already held returned no error")
 	}
@@ -115,8 +116,9 @@ func TestServeShutsDownOnContextCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	srv, _ := httpserver.New("127.0.0.1:0", nil)
 	go func() {
-		done <- serve(ctx, "", httpserver.New("127.0.0.1:0", nil))
+		done <- serve(ctx, "", srv)
 	}()
 
 	// Give the server a moment to start, then request shutdown.
@@ -139,7 +141,8 @@ func TestServeInvalidAddress(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if err := serve(ctx, "", httpserver.New("127.0.0.1:99999", nil)); err == nil {
+	srv, _ := httpserver.New("127.0.0.1:99999", nil)
+	if err := serve(ctx, "", srv); err == nil {
 		t.Error("serve() with an invalid port returned nil, want error")
 	}
 }

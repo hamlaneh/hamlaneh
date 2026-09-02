@@ -42,6 +42,15 @@
 // lazy and retried — an identity provider that is down never stops this
 // server booting, and password sign-in is unaffected while it is.
 //
+// HAMLANEH_ADMIN_ADDR moves the admin surface onto a second listener at that
+// address (ADR 015): the dashboard at /admin, everything under
+// /api/v1/admin, and the /scim/v2 provisioning surface answer there and
+// nowhere else, and the main listener answers 404 for all three. Unset — the
+// default and every install before this — keeps all of them where they are.
+// The port is a deployment boundary, so a firewall can filter it; it is not
+// an authorization decision, and reaching it still faces the same session
+// and the same role check.
+//
 // HAMLANEH_COMPRESS_RESPONSES=1 gzips the embedded web build on the way out.
 // It is for home mode, which is a single binary with nothing in front of it:
 // the compose stack's Caddy already runs `encode zstd gzip`, so leaving it
@@ -334,7 +343,7 @@ func start(ctx context.Context, m mode) error {
 		slog.Info("home mode ready", "open", m.publicURL, "data_dir", m.dataDir)
 	}
 
-	return serve(ctx, m.addrInUseRemedy(), httpserver.New(m.addr, offboarding{db, media},
+	srv, adminSrv := httpserver.New(m.addr, offboarding{db, media},
 		httpserver.WithPasswordReset(reset),
 		httpserver.WithSSO(sso),
 		httpserver.WithCalls(media),
@@ -372,7 +381,20 @@ func start(ctx context.Context, m mode) error {
 		// translate.
 		httpserver.WithSCIM(scim.New(offboarding{db, media},
 			scim.WithAudit(audit.NewRecorder(auditChain, db)))),
-	))
+		// The admin surface's own port, off unless an operator named one
+		// (ADR 015). It moves the dashboard, /api/v1/admin and /scim/v2
+		// off the listener above and onto this one, so a firewall can
+		// filter them by port; it moves no authorization decision with
+		// them. Home mode never sets it.
+		httpserver.WithAdminListener(m.adminAddr),
+	)
+
+	srvs := []*http.Server{srv}
+	if adminSrv != nil {
+		slog.Info("admin surface split onto its own listener", "addr", adminSrv.Addr)
+		srvs = append(srvs, adminSrv)
+	}
+	return serve(ctx, m.addrInUseRemedy(), srvs...)
 }
 
 // offboarding is ADR 005's second removal hook: an account that is
@@ -538,18 +560,23 @@ func isAddrInUse(err error) bool {
 	return errors.As(err, &errno) && uintptr(errno) == wsaeAddrInUse
 }
 
-// serve runs srv until ctx is canceled, then shuts it down gracefully within
-// shutdownTimeout.
+// serve runs every server in srvs until ctx is canceled, then shuts them all
+// down gracefully within one shutdownTimeout. There are two only when the
+// admin surface has its own port (ADR 015); the second is not optional once
+// it exists, so the first listen failure stops the process rather than
+// leaving half an instance up.
 //
 // addrInUse is what to tell the operator when the port is taken, and it is a
 // parameter because the way out differs by mode: home mode has an environment
 // variable, a compose deployment has a port mapping to edit instead.
-func serve(ctx context.Context, addrInUse string, srv *http.Server) error {
-	serveErr := make(chan error, 1)
-	go func() {
-		serveErr <- srv.ListenAndServe()
-	}()
-	slog.Info("hamlaneh-server listening", "addr", srv.Addr)
+func serve(ctx context.Context, addrInUse string, srvs ...*http.Server) error {
+	serveErr := make(chan error, len(srvs))
+	for _, srv := range srvs {
+		go func() {
+			serveErr <- srv.ListenAndServe()
+		}()
+		slog.Info("hamlaneh-server listening", "addr", srv.Addr)
+	}
 
 	select {
 	case err := <-serveErr:
@@ -568,12 +595,16 @@ func serve(ctx context.Context, addrInUse string, srv *http.Server) error {
 	slog.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutdown: %w", err)
+	for _, srv := range srvs {
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown: %w", err)
+		}
 	}
 
-	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("serve: %w", err)
+	for range srvs {
+		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve: %w", err)
+		}
 	}
 	return nil
 }
