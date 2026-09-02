@@ -374,20 +374,57 @@ test_resolve_ports() {
 test_resolve_admin_port() {
   local out env_file="${WORK}/admin/.env"
   mkdir -p "${WORK}/admin"
+  # A fresh install: no deploy/.env yet, so nothing on this machine can break.
+  # Named explicitly rather than left to the default so no earlier test's
+  # leftovers can change which question shape these exercise.
+  local fresh_env="${WORK}/admin/never-created.env"
+  rm -f "$fresh_env"
 
   # Answer 1, default port. "Reachable from the internet" is an EMPTY bind,
   # because empty is what a docker port mapping reads as every interface.
   # shellcheck disable=SC2016
-  out="$(printf '1\n\n' | run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  out="$(printf '1\n\n' | TEST_ENV_FILE="$fresh_env" run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
   check_contains "the internet answer takes the default port and no bind" "RESULT [9443] []" "$out"
   check_contains "the internet answer says to open the port" "open 9443/tcp in your cloud firewall" "$out"
 
   # Answer 2, default port: loopback, and the tunnel command carries the real
   # port rather than a placeholder.
   # shellcheck disable=SC2016
-  out="$(printf '2\n\n' | run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  out="$(printf '2\n\n' | TEST_ENV_FILE="$fresh_env" run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
   check_contains "the loopback answer binds 127.0.0.1" "RESULT [9443] [127.0.0.1:]" "$out"
   check_contains "the loopback answer prints a usable tunnel command" "ssh -L 9443:localhost:9443 <you>@203.0.113.5" "$out"
+  check_contains "the loopback answer says the app's Admin control will not reach it" \
+    "the Admin control will not reach this port" "$out"
+
+  # On a machine with no instance yet, Enter is the CLOSED answer: nothing can
+  # break, so the default is the safe one rather than the timid one.
+  # shellcheck disable=SC2016
+  out="$(printf '\n\n' | TEST_ENV_FILE="$fresh_env" run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "a fresh install defaults to the loopback answer" "RESULT [9443] [127.0.0.1:]" "$out"
+  check_contains "a fresh install is offered two answers" "choose 1 or 2 [2]" "$out"
+
+  # An install that PREDATES this feature is the case that must not move on
+  # its own. Its SCIM provisioning may be pointed at the web port right now,
+  # and an operator pressing Enter through a question they have never seen is
+  # not consent to move it. Third answer, and it is the default.
+  local legacy_env="${WORK}/admin/legacy.env"
+  printf 'HAMLANEH_DOMAIN=203.0.113.5\nPOSTGRES_PASSWORD=keep-me\n' > "$legacy_env"
+  # shellcheck disable=SC2016
+  out="$(printf '\n' | TEST_ENV_FILE="$legacy_env" run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "an existing install is offered a third answer" "3) leave it where it is" "$out"
+  check_contains "and that third answer is its default" "choose 1, 2 or 3 [3]" "$out"
+  check_contains "pressing Enter on an existing install moves nothing" "RESULT [] []" "$out"
+  if grep -q 'admin dashboard port' <<<"$out"; then
+    bad "an existing install was asked for a port after choosing to leave the surface alone"
+  else
+    ok "leaving it alone asks for no port"
+  fi
+
+  # The third answer is a default, not a wall: an operator who says 2 still
+  # gets the split on an existing install.
+  # shellcheck disable=SC2016
+  out="$(printf '2\n\n' | TEST_ENV_FILE="$legacy_env" run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "an existing install can still choose to move the surface" "RESULT [9443] [127.0.0.1:]" "$out"
   # The menu itself describes what option 1 would cost, so the assertion is
   # about the CONFIRMATION: having chosen "this machine only", the operator
   # must not then be told to open the port in their cloud firewall.
@@ -400,7 +437,7 @@ test_resolve_admin_port() {
   # A taken port is re-asked with its holder named, and the tunnel command
   # then shows the port that was actually chosen.
   # shellcheck disable=SC2016
-  out="$(printf '2\n\n9444\n' | run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:9443 \n"; }; port_holder() { printf "grafana"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  out="$(printf '2\n\n9444\n' | TEST_ENV_FILE="$fresh_env" run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:9443 \n"; }; port_holder() { printf "grafana"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
   check_contains "a taken admin port names its holder" "port 9443 is also in use (by grafana)" "$out"
   check_contains "the re-asked answer is the one that sticks" "RESULT [9444] [127.0.0.1:]" "$out"
   check_contains "the tunnel command shows the chosen port, not the default" "ssh -L 9444:localhost:9444" "$out"
@@ -446,16 +483,21 @@ test_resolve_admin_port() {
   TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=203.0.113.5; ADMIN_PORT=9443; ADMIN_BIND=127.0.0.1:; write_env' >/dev/null
   check_contains "the loopback answer is written as a 127.0.0.1 bind" "HAMLANEH_ADMIN_BIND=127.0.0.1:" "$(cat "$env_file")"
   check_contains "the answer turns the server's second listener on" "HAMLANEH_ADMIN_ADDR=:9090" "$(cat "$env_file")"
-  # What the app port refuses has to be exactly what moved. A wider expression
-  # would take the sign-in routes off the chat port with it; a narrower one
-  # would leave the admin API answering there, which is the thing the operator
-  # was told they had shut.
-  check_contains "the app port is told which paths have moved" \
-    'HAMLANEH_ADMIN_MOVED_PATHS=^/(admin(/|$)|api/v1/admin/|scim/v2/)' "$(cat "$env_file")"
-  local moved_re
+  # What the app port does with the admin surface, in two halves that must not
+  # blur into each other. The POWERED half is refused: a wider expression would
+  # take the sign-in routes off the chat port with it, a narrower one would
+  # leave the admin API answering there, which is the thing the operator was
+  # told they had shut. The PAGE half is redirected instead, which is what lets
+  # the sidebar keep a plain "/admin" — so the page must NOT be in the refusal.
+  check_contains "the app port is told which powered paths have moved" \
+    'HAMLANEH_ADMIN_MOVED_PATHS=^/(api/v1/admin/|scim/v2/)' "$(cat "$env_file")"
+  check_contains "the app port is told which page paths to send on" \
+    'HAMLANEH_ADMIN_PAGE_PATHS=^/admin(/|$)' "$(cat "$env_file")"
+  local moved_re page_re
   moved_re="$(sed -n 's/^HAMLANEH_ADMIN_MOVED_PATHS=//p' "$env_file" | tail -n 1)"
-  local moved stays
-  for moved in /admin /admin/audit /api/v1/admin/users /scim/v2/Users; do
+  page_re="$(sed -n 's/^HAMLANEH_ADMIN_PAGE_PATHS=//p' "$env_file" | tail -n 1)"
+  local moved stays redirected
+  for moved in /api/v1/admin/users /scim/v2/Users; do
     if grep -Eq "$moved_re" <<<"$moved"; then
       ok "the app port refuses ${moved} once the surface has moved"
     else
@@ -463,14 +505,30 @@ test_resolve_admin_port() {
     fi
   done
   # server.go's sharedSurface: carried by BOTH listeners, so the app port must
-  # keep them. /api/v1/administrators is not a route — it is here because a
-  # sloppier expression would swallow it along with anything else that merely
-  # starts with the same letters.
-  for stays in /api/v1/auth/login /api/v1/instance /api/v1/users/me /assets/app.js /brand/logo.svg /api/v1/administrators; do
+  # keep them. The dashboard page is here too — it is redirected, never
+  # refused. /api/v1/administrators is not a route at all; it is in the list
+  # because a sloppier expression would swallow it along with anything else
+  # that merely starts with the same letters.
+  for stays in /admin /admin/audit /api/v1/auth/login /api/v1/instance /api/v1/users/me /assets/app.js /brand/logo.svg /api/v1/administrators; do
     if grep -Eq "$moved_re" <<<"$stays"; then
-      bad "${stays} is shared by both listeners but the app port would refuse it"
+      bad "${stays} must not be part of the app port's refusal"
     else
-      ok "the app port keeps serving ${stays}"
+      ok "the app port does not refuse ${stays}"
+    fi
+  done
+  for redirected in /admin /admin/ /admin/audit; do
+    if grep -Eq "$page_re" <<<"$redirected"; then
+      ok "the app port sends ${redirected} on to the admin origin"
+    else
+      bad "${redirected} is the dashboard page but the app port would serve it itself"
+    fi
+  done
+  # The page expression must not reach past the dashboard's own subtree.
+  for stays in /administrators /api/v1/admin/users; do
+    if grep -Eq "$page_re" <<<"$stays"; then
+      bad "${stays} is not the dashboard page but would be redirected as one"
+    else
+      ok "the page redirect does not reach ${stays}"
     fi
   done
   # The link that makes the line above mean anything. The SINGLE dash is the
@@ -489,6 +547,19 @@ test_resolve_admin_port() {
   TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=203.0.113.5; ADMIN_PORT=9443; ADMIN_BIND=; write_env' >/dev/null
   check_eq "the internet answer writes an empty bind line, not no line" "1" \
     "$(grep -c '^HAMLANEH_ADMIN_BIND=$' "$env_file")"
+
+  # An .env carrying an OLD expression is not "up to date" merely because its
+  # port and bind still match — the same trap the SNI and issuer variables fell
+  # into on a live install, where an unchanged domain meant a fix on disk never
+  # reached the proxy.
+  printf 'HAMLANEH_DOMAIN=203.0.113.5\nHAMLANEH_ADMIN_ADDR=:9090\nHAMLANEH_ADMIN_PORT=9443\nHAMLANEH_ADMIN_BIND=127.0.0.1:\nHAMLANEH_ADMIN_MOVED_PATHS=^/(admin|api/v1/admin/|scim/v2/)\n' > "$env_file"
+  # shellcheck disable=SC2016
+  out="$(TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=203.0.113.5; ADMIN_PORT=9443; ADMIN_BIND=127.0.0.1:; write_env')"
+  check_contains "a stale admin expression is not mistaken for up to date" "updating the domain-derived lines" "$out"
+  check_contains "and it is rewritten to the shipped one" \
+    'HAMLANEH_ADMIN_MOVED_PATHS=^/(api/v1/admin/|scim/v2/)' "$(cat "$env_file")"
+  check_eq "the rewritten expression is written once, not appended twice" "1" \
+    "$(grep -c '^HAMLANEH_ADMIN_MOVED_PATHS=' "$env_file")"
 
   # Off writes nothing at all: absence is what "off" is.
   rm -f "$env_file"

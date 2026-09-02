@@ -71,11 +71,16 @@ services:
       # browsers send the port in the Host header, so a mapping that renamed
       # it would match no site.
       HAMLANEH_ADMIN_PORT: ${HAMLANEH_ADMIN_PORT:-9443}
-      # The paths the app site must refuse once the admin surface has moved.
-      # Empty means it has not moved, and the sentinel below — which matches
-      # no path any client will request — is what "not moved" looks like to
-      # Caddy. It must stay identical to the Caddyfile's own default.
+      # What the app site does with the admin surface once it has moved: the
+      # powered paths are REFUSED, the dashboard page is REDIRECTED to the
+      # admin origin (a page that renders nothing without its API protects
+      # nothing by 404ing, and sending it on is what keeps the client free of
+      # any deployment fact). Empty means it has not moved, and the sentinel —
+      # which matches no path any client will request — is what "not moved"
+      # looks like to Caddy. Both must stay identical to the Caddyfile's own
+      # defaults.
       HAMLANEH_ADMIN_MOVED_PATHS: ${HAMLANEH_ADMIN_MOVED_PATHS:-/__admin-has-not-moved__}
+      HAMLANEH_ADMIN_PAGE_PATHS: ${HAMLANEH_ADMIN_PAGE_PATHS:-/__admin-has-not-moved__}
     ports:
       # The web ports are host-configurable for one deployment shape: a
       # server where something else already holds 80/443 (install.sh asks,

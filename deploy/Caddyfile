@@ -112,10 +112,15 @@ https://{$HAMLANEH_DOMAIN:localhost} {
 	}
 
 	# SECURITY INVARIANT — this matcher is the app port's half of ADR 015: the
-	# admin surface must be GONE from here, not merely unlinked. /admin is a
-	# client-side route, so hiding the page hides nothing; the surfaces with
-	# power are /api/v1/admin/* and /scim/v2/*, and an operator who shut the
-	# admin port in their cloud firewall has to be right about that.
+	# powered admin surface must be GONE from here, not merely unlinked. The
+	# surfaces with power are /api/v1/admin/* and /scim/v2/*, and an operator
+	# who shut the admin port in their cloud firewall has to be right about
+	# that. Nothing may be added here that answers instead of vanishing.
+	#
+	# The PAGE half below is deliberately friendlier, and it is not an
+	# exception to this: /admin is a client-side route that renders nothing
+	# until the API answers (docs/hardening.md), so 404ing it would protect
+	# nothing and a redirect discloses nothing a port scan does not.
 	#
 	# The server is the enforcement point (ADR 015: "in the server, not only
 	# in the proxy") — home mode has no proxy at all. This is the second lock,
@@ -130,6 +135,22 @@ https://{$HAMLANEH_DOMAIN:localhost} {
 	@adminmoved path_regexp {$HAMLANEH_ADMIN_MOVED_PATHS:/__admin-has-not-moved__}
 	handle @adminmoved {
 		respond 404
+	}
+
+	# The page half: /admin and everything bookmarked under it move too, but
+	# they are sent on rather than denied. This is what lets the sidebar's
+	# Admin control stay a plain "/admin" — the client needs no deployment
+	# fact, so the admin port never has to be published in a document served
+	# to anonymous visitors. {uri} carries the pane with it, so a bookmark to
+	# /admin/audit still lands on /admin/audit.
+	#
+	# On a loopback-bound admin port this redirect goes somewhere the public
+	# app cannot reach, and that is what "this machine only" means; the
+	# installer says so when that answer is given. A correct absolute URL
+	# would have been just as dead.
+	@adminpage path_regexp {$HAMLANEH_ADMIN_PAGE_PATHS:/__admin-has-not-moved__}
+	handle @adminpage {
+		redir https://{$HAMLANEH_DEFAULT_SNI:localhost}:{$HAMLANEH_ADMIN_PORT:9443}{uri}
 	}
 
 	# SECURITY INVARIANT — do not add trusted_proxies here without changing

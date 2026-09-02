@@ -931,15 +931,24 @@ resolve_ports() {
 # it here and there, or neither.
 ADMIN_LISTEN_PORT=9090
 ADMIN_PORT_DEFAULT=9443
-# What the app port must then refuse: server.go's adminSurface, written as a
-# regular expression. It mirrors that function and nothing wider — the SHARED
-# paths (/api/v1/auth, /api/v1/instance, /api/v1/users/me, /assets, /brand) are
-# carried by both listeners and must keep answering here.
+# server.go's adminSurface, split in two by what the app port should DO with
+# each half. Both mirror that function and nothing wider — the SHARED paths
+# (/api/v1/auth, /api/v1/instance, /api/v1/users/me, /assets, /brand) are
+# carried by both listeners and must keep answering on the web port.
 #
-# One expression rather than a prefix list because it travels through one
-# environment variable into one Caddy matcher, and /admin, /api/v1/admin and
-# /scim/v2 share no prefix to fold them into.
-ADMIN_MOVED_PATH_RE='^/(admin(/|$)|api/v1/admin/|scim/v2/)'
+# The powered half is refused outright: an operator who shut the admin port in
+# their firewall has to be right that it is gone from here.
+#
+# The page half is redirected to the admin origin instead, because /admin is a
+# client-side route that renders nothing until the API answers — 404ing it
+# would protect nothing, and sending it on is what lets the sidebar's Admin
+# control stay a plain "/admin" instead of the client being handed the admin
+# port in a document anonymous visitors read.
+#
+# Expressions rather than prefix lists because each travels through one
+# environment variable into one Caddy matcher.
+ADMIN_MOVED_PATH_RE='^/(api/v1/admin/|scim/v2/)'
+ADMIN_PAGE_PATH_RE='^/admin(/|$)'
 
 # The admin-port conversation (ADR 015).
 #
@@ -979,7 +988,15 @@ resolve_admin_port() {
     return 0
   fi
 
-  local choice host
+  # An .env that exists but carries none of these variables is an install that
+  # PREDATES this feature, and it may have a working SCIM integration pointed
+  # at the web port. Moving that because somebody pressed Enter through a
+  # question they had never seen would be exactly the silent breakage the
+  # idempotency promise exists to prevent — so those get a third answer, and
+  # it is the default. A machine with no instance on it yet has nothing to
+  # break, and keeps the closed two-answer default.
+  local choice host existing=0
+  [ ! -f "$ENV_FILE" ] || existing=1
   host="$(domain_host "$DOMAIN")"
   printf '\n'
   log "─── Admin dashboard ──────────────────────────────────────────"
@@ -988,8 +1005,18 @@ resolve_admin_port() {
   log "    1) reachable from the internet — open this port in your"
   log "       cloud firewall to use it"
   log "    2) this machine only — reach it with:  ssh -L ${ADMIN_PORT_DEFAULT}:localhost:${ADMIN_PORT_DEFAULT}"
-  printf '[hamlaneh] choose 1 or 2 [2]: '
+  if [ "$existing" -eq 1 ]; then
+    log "    3) leave it where it is — the dashboard and its API stay on"
+    log "       the web port"
+    printf '[hamlaneh] choose 1, 2 or 3 [3]: '
+  else
+    printf '[hamlaneh] choose 1 or 2 [2]: '
+  fi
   read -r choice
+  if [ "$existing" -eq 1 ] && [ "$choice" != "1" ] && [ "$choice" != "2" ]; then
+    log "leaving the admin dashboard on the web port — nothing moves. Re-run and choose 1 or 2 to move it."
+    return 0
+  fi
   ADMIN_PORT="$(ask_free_port "admin dashboard port" "$ADMIN_PORT_DEFAULT")"
   # Anything that is not "1" is read as the closed answer: the one that can
   # cost an operator their way in is the open one, so it has to be typed.
@@ -1002,6 +1029,7 @@ resolve_admin_port() {
     log "the admin dashboard will listen on this machine only. Reach it with:"
     log "  ssh -L ${ADMIN_PORT}:localhost:${ADMIN_PORT} <you>@${host}"
     log "then open https://localhost:${ADMIN_PORT}/admin"
+    log "From the public chat app the Admin control will not reach this port — that is what 'this machine only' means. Opened through the tunnel, the control works normally."
   fi
 }
 
@@ -1021,6 +1049,8 @@ write_env() {
       [ "$(current_env_value HAMLANEH_HTTP_PROTOCOLS)" = "$(http_protocols "$DOMAIN")" ] &&
       [ "$(current_env_value HAMLANEH_ADMIN_PORT)" = "$ADMIN_PORT" ] &&
       [ "$(current_env_value HAMLANEH_ADMIN_BIND)" = "$ADMIN_BIND" ] &&
+      [ "$(current_env_value HAMLANEH_ADMIN_MOVED_PATHS)" = "${ADMIN_PORT:+$ADMIN_MOVED_PATH_RE}" ] &&
+      [ "$(current_env_value HAMLANEH_ADMIN_PAGE_PATHS)" = "${ADMIN_PORT:+$ADMIN_PAGE_PATH_RE}" ] &&
       [ "$(current_env_value HAMLANEH_HTTPS_PORT)" = "$([ "$HTTPS_PORT" != "443" ] || [ "$HTTP_PORT" != "80" ] && printf '%s' "$HTTPS_PORT")" ]; then
       log "deploy/.env already up to date — leaving it untouched"
       return
@@ -1046,6 +1076,7 @@ write_env() {
         -e '/^HAMLANEH_ADMIN_PORT=/d' \
         -e '/^HAMLANEH_ADMIN_BIND=/d' \
         -e '/^HAMLANEH_ADMIN_MOVED_PATHS=/d' \
+        -e '/^HAMLANEH_ADMIN_PAGE_PATHS=/d' \
         "$ENV_FILE" > "$tmp"
     {
       printf 'HAMLANEH_DEFAULT_SNI=%s\n' "$(domain_host "$DOMAIN")"
@@ -1070,6 +1101,7 @@ write_env() {
         printf 'HAMLANEH_ADMIN_PORT=%s\n' "$ADMIN_PORT"
         printf 'HAMLANEH_ADMIN_BIND=%s\n' "$ADMIN_BIND"
         printf 'HAMLANEH_ADMIN_MOVED_PATHS=%s\n' "$ADMIN_MOVED_PATH_RE"
+        printf 'HAMLANEH_ADMIN_PAGE_PATHS=%s\n' "$ADMIN_PAGE_PATH_RE"
       } >> "$tmp"
     fi
     # Derived from the domain, so an .env written before this variable existed
@@ -1111,6 +1143,7 @@ write_env() {
       printf 'HAMLANEH_ADMIN_PORT=%s\n' "$ADMIN_PORT"
       printf 'HAMLANEH_ADMIN_BIND=%s\n' "$ADMIN_BIND"
       printf 'HAMLANEH_ADMIN_MOVED_PATHS=%s\n' "$ADMIN_MOVED_PATH_RE"
+      printf 'HAMLANEH_ADMIN_PAGE_PATHS=%s\n' "$ADMIN_PAGE_PATH_RE"
     fi
     printf 'POSTGRES_PASSWORD=%s\n' "$password"
     printf 'HAMLANEH_FILE_URL_KEY=%s\n' "$file_url_key"
