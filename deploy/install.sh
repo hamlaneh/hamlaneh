@@ -931,10 +931,15 @@ resolve_ports() {
 # it here and there, or neither.
 ADMIN_LISTEN_PORT=9090
 ADMIN_PORT_DEFAULT=9443
-# What the app port must then refuse. A path regular expression rather than a
-# prefix list because it travels through one environment variable into one
-# Caddy matcher; /api/v1/admin and /scim/v2 share no prefix to fold them into.
-ADMIN_MOVED_PATH_RE='^/(api/v1/admin|scim/v2)/'
+# What the app port must then refuse: server.go's adminSurface, written as a
+# regular expression. It mirrors that function and nothing wider — the SHARED
+# paths (/api/v1/auth, /api/v1/instance, /api/v1/users/me, /assets, /brand) are
+# carried by both listeners and must keep answering here.
+#
+# One expression rather than a prefix list because it travels through one
+# environment variable into one Caddy matcher, and /admin, /api/v1/admin and
+# /scim/v2 share no prefix to fold them into.
+ADMIN_MOVED_PATH_RE='^/(admin(/|$)|api/v1/admin/|scim/v2/)'
 
 # The admin-port conversation (ADR 015).
 #

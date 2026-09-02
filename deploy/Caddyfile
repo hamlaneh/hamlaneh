@@ -179,15 +179,24 @@ https://{$HAMLANEH_DEFAULT_SNI:localhost}:{$HAMLANEH_ADMIN_PORT:9443} {
 	# as the admin one, and every path they believed they had shut — sign-in,
 	# the WebSocket, /files/* — would answer on it.
 	#
-	# /assets/ and /brand/ are in the list because the bundle has to load, and
-	# for no other reason. The upstream is the server's SECOND listener, which
-	# serves these paths and nothing else; the port below must match the port
-	# in HAMLANEH_ADMIN_ADDR, which install.sh writes as :9090.
+	# The first four are what MOVED — the main listener loses them. The rest
+	# are SHARED, carried by both listeners, because the admin listener is a
+	# complete minimal app rather than a bare admin surface (server.go,
+	# sharedSurface): the page has to load its bundle, learn what this instance
+	# is, learn who is signed in, and — for the operator who bound this port to
+	# loopback and reaches it through an SSH tunnel, having never opened the
+	# chat port at all — sign in on it. Being on two listeners is not being
+	# moved, and this list has to mirror adminListenerServes or the dashboard
+	# serves a document that can never finish loading.
+	#
+	# The upstream is the server's SECOND listener; the port below must match
+	# the port in HAMLANEH_ADMIN_ADDR, which install.sh writes as :9090.
 	#
 	# The port is a DEPLOYMENT boundary and never an authorization decision
 	# (ADR 015). Reaching it is not being an admin: the same session and the
-	# same authz.Can call refuse everyone else, exactly as on the app port.
-	@adminsurface path /admin /admin/* /api/v1/admin/* /scim/v2/* /assets/* /brand/*
+	# same authz.Can call refuse everyone else, exactly as on the app port —
+	# which is why sharing the sign-in routes confers nothing.
+	@adminsurface path /admin /admin/* /api/v1/admin/* /scim/v2/* /api/v1/instance /api/v1/users/me /api/v1/auth/* /assets/* /brand/*
 	handle @adminsurface {
 		reverse_proxy server:9090
 	}

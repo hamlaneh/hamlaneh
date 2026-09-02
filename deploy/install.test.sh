@@ -446,7 +446,33 @@ test_resolve_admin_port() {
   TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=203.0.113.5; ADMIN_PORT=9443; ADMIN_BIND=127.0.0.1:; write_env' >/dev/null
   check_contains "the loopback answer is written as a 127.0.0.1 bind" "HAMLANEH_ADMIN_BIND=127.0.0.1:" "$(cat "$env_file")"
   check_contains "the answer turns the server's second listener on" "HAMLANEH_ADMIN_ADDR=:9090" "$(cat "$env_file")"
-  check_contains "the app port is told which paths have moved" 'HAMLANEH_ADMIN_MOVED_PATHS=^/(api/v1/admin|scim/v2)/' "$(cat "$env_file")"
+  # What the app port refuses has to be exactly what moved. A wider expression
+  # would take the sign-in routes off the chat port with it; a narrower one
+  # would leave the admin API answering there, which is the thing the operator
+  # was told they had shut.
+  check_contains "the app port is told which paths have moved" \
+    'HAMLANEH_ADMIN_MOVED_PATHS=^/(admin(/|$)|api/v1/admin/|scim/v2/)' "$(cat "$env_file")"
+  local moved_re
+  moved_re="$(sed -n 's/^HAMLANEH_ADMIN_MOVED_PATHS=//p' "$env_file" | tail -n 1)"
+  local moved stays
+  for moved in /admin /admin/audit /api/v1/admin/users /scim/v2/Users; do
+    if grep -Eq "$moved_re" <<<"$moved"; then
+      ok "the app port refuses ${moved} once the surface has moved"
+    else
+      bad "${moved} moved to the admin port but the app port would still serve it"
+    fi
+  done
+  # server.go's sharedSurface: carried by BOTH listeners, so the app port must
+  # keep them. /api/v1/administrators is not a route — it is here because a
+  # sloppier expression would swallow it along with anything else that merely
+  # starts with the same letters.
+  for stays in /api/v1/auth/login /api/v1/instance /api/v1/users/me /assets/app.js /brand/logo.svg /api/v1/administrators; do
+    if grep -Eq "$moved_re" <<<"$stays"; then
+      bad "${stays} is shared by both listeners but the app port would refuse it"
+    else
+      ok "the app port keeps serving ${stays}"
+    fi
+  done
   # The link that makes the line above mean anything. The SINGLE dash is the
   # whole control: with ":-" an internet answer, written as an empty value,
   # would silently fall back to loopback — and worse, a missing line would not
