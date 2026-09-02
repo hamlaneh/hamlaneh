@@ -11,9 +11,9 @@ import {
 } from "../../chat/uploads";
 import { entriesFor } from "../../mls/attachments";
 import { useInstance } from "../../instance/instanceInfo";
-import { CircleAlertIcon, FileTextIcon, PaperclipIcon, SendIcon, XIcon } from "../icons";
+import { CircleAlertIcon, FileTextIcon, PaperclipIcon, SendIcon, UserIcon, XIcon } from "../icons";
 import { AttachmentList } from "./AttachmentCards";
-import { MentionPicker } from "./plumbing/MentionPicker";
+import { useMentions } from "./plumbing/MentionPicker";
 
 interface ComposerProps {
   channelId: string;
@@ -69,6 +69,10 @@ export function Composer({
   const [tooMany, setTooMany] = useState(false);
   const fieldRef = useRef<HTMLTextAreaElement | null>(null);
   const pickerRef = useRef<HTMLInputElement | null>(null);
+  /* The mention list is an editable combobox over this very field: focus
+     never leaves the composer, and the picker only ever edits the draft
+     (chat-addendum-overlay-components -> 03). */
+  const mentions = useMentions({ channelId, draft, setDraft, fieldRef });
 
   useEffect(() => {
     const field = fieldRef.current;
@@ -245,10 +249,33 @@ export function Composer({
           disabled={disabled}
           placeholder={t("chat.composer.placeholder", { target })}
           aria-label={t("chat.composer.placeholder", { target })}
+          /* The combobox semantics belong to the moment there is a list to
+             navigate. Closed, this is the plain multi-line message field the
+             rest of the shell (and every caller) treats it as. */
+          {...(mentions.open
+            ? {
+                role: "combobox",
+                "aria-expanded": true,
+                "aria-autocomplete": "list" as const,
+                "aria-controls": mentions.listId,
+                ...(mentions.activeId === undefined
+                  ? {}
+                  : { "aria-activedescendant": mentions.activeId }),
+              }
+            : {})}
           onChange={(event) => {
             setDraft(event.target.value);
+            mentions.sync();
           }}
+          onKeyUp={mentions.sync}
+          onClick={mentions.sync}
           onKeyDown={(event) => {
+            // The picker answers first: while it is open, Enter inserts rather
+            // than sends and the arrows move the active row instead of the
+            // caret. Tab and Left/Right fall through on purpose.
+            if (mentions.handleKeyDown(event)) {
+              return;
+            }
             // Enter sends, Shift+Enter opens a line. The hint row below says
             // so permanently rather than teaching it once.
             if (event.key === "Enter" && !event.shiftKey) {
@@ -257,6 +284,21 @@ export function Composer({
             }
           }}
         />
+
+        {/* No artboard draws this control, so it is assembled from delivered
+            parts: the composer's own icon button, carrying the delivered
+            "Mention someone" name. It opens the same listbox a typed `@`
+            does, and hands focus straight back to the field. */}
+        <button
+          type="button"
+          className="hm-icon-button"
+          disabled={disabled}
+          aria-label={t("chat.composer.mention")}
+          aria-expanded={mentions.open}
+          onClick={mentions.openFromTrigger}
+        >
+          <UserIcon size={18} />
+        </button>
 
         <button
           type="submit"
@@ -271,13 +313,7 @@ export function Composer({
         </button>
       </div>
 
-      <MentionPicker
-        channelId={channelId}
-        onInsert={(token) => {
-          setDraft((current) => (current === "" ? token : `${current} ${token}`));
-          fieldRef.current?.focus();
-        }}
-      />
+      {mentions.popover}
 
       {disabled && disabledReason !== null ? (
         <p className="hm-composer__reason" role="status">

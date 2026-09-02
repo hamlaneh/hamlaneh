@@ -276,6 +276,28 @@ export function ChatShell({
   /* The per-person sheet, opened from the warning. Null when closed. */
   const [verifyFor, setVerifyFor] = useState<string | null>(null);
 
+  /*
+   * "Topic saved." announces politely from here, not from Channel actions:
+   * that popover closes on success, so a live region inside it would be gone
+   * before it could speak (chat-addendum-menu-components -> 02).
+   */
+  const [topicSaved, setTopicSaved] = useState(false);
+
+  /*
+   * The channel-actions trigger renders only where there is something behind
+   * it, and is absent from the DOM otherwise — not disabled, and never a
+   * popover that exists to say nothing is available
+   * (chat-addendum-menu-components -> 03).
+   *
+   * The sheet says "absent in a DM". It predates the verification ceremony,
+   * whose only calm entry point is this popover: without it nobody could
+   * verify anybody until a key had already changed. So an encrypted DM keeps
+   * the trigger and a plain one does not. Flagged in the slice report.
+   */
+  const channelActionsAvailable =
+    activeChannel !== undefined &&
+    (activeChannel.kind !== "dm" || (activeChannel.e2ee && activeChannel.dm_peer !== undefined));
+
   return (
     <MessageBodyProvider resolve={mls.bodyOf}>
       {/* The chat behind the panel is inert, not merely dimmed — the settings
@@ -307,7 +329,18 @@ export function ChatShell({
         settingsButtonRef={settingsButtonRef}
         accountMenu={
           overlay === "account" ? (
-            <AccountMenu user={currentUser} onLogout={onLogout} onClose={closeOverlay} />
+            <AccountMenu
+              user={currentUser}
+              presence={myPresence}
+              onChangePassword={() => {
+                // The Settings Security panel already owns the voluntary
+                // change flow; no second password form is designed here.
+                closeOverlay();
+                setSettingsOpen(true);
+              }}
+              onLogout={onLogout}
+              onClose={closeOverlay}
+            />
           ) : null
         }
       />
@@ -340,8 +373,12 @@ export function ChatShell({
             setDrawerOpen(true);
           }}
           onToggleChannelMenu={() => {
+            // Cleared on reopen so a second save announces again: a live
+            // region only speaks when its text changes.
+            setTopicSaved(false);
             setOverlay(overlay === "channelMenu" ? "none" : "channelMenu");
           }}
+          channelActions={channelActionsAvailable}
           channelMenu={
             overlay === "channelMenu" && activeChannel !== undefined ? (
               <ChannelMenu
@@ -349,7 +386,15 @@ export function ChatShell({
                 onInvite={() => {
                   setOverlay("invite");
                 }}
-                onSetTopic={chat.setTopic}
+                onSetTopic={async (topic) => {
+                  const ok = await chat.setTopic(topic);
+                  if (ok) {
+                    // Announced from here rather than from the popover, which
+                    // has closed by the time the region would speak.
+                    setTopicSaved(true);
+                  }
+                  return ok;
+                }}
                 onVerify={
                   activeChannel.e2ee && activeChannel.dm_peer !== undefined
                     ? () => {
@@ -606,6 +651,8 @@ export function ChatShell({
         <PeoplePicker
           title={t("chat.empty.invite")}
           actionLabel={t("chat.people.invite")}
+          busyLabel={t("chat.people.inviting")}
+          channelSlug={activeChannel?.slug ?? undefined}
           onPick={async (user) => ((await chat.inviteMember(user.id)) ? null : "unexpected")}
           onClose={closeOverlay}
         />
@@ -615,6 +662,7 @@ export function ChatShell({
         <PeoplePicker
           title={t("chat.sidebar.newDirectMessage")}
           actionLabel={t("chat.people.message")}
+          busyLabel={t("chat.people.opening")}
           encryptionMode={info.encryption_mode}
           onPick={async (user) => {
             // The mode's value, asserted rather than omitted, so a stale view
@@ -654,6 +702,11 @@ export function ChatShell({
           }}
         />
       )}
+
+      {/* Polite, and it never steals focus. */}
+      <p className="hm-visually-hidden" role="status">
+        {topicSaved ? t("chat.channelMenu.topicSaved") : ""}
+      </p>
       </div>
 
       {/* Outside the chat container, so a ring is still answerable while the

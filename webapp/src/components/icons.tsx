@@ -531,3 +531,35 @@ export function UserMinusIcon(props: IconProps) {
     </Glyph>
   );
 }
+
+/* ── chat overlay addendum (chat-addendum-menu-components -> 08 · icons) ── */
+
+export function ChevronUpIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="m18 15-6-6-6 6" />
+    </Glyph>
+  );
+}
+
+/* The addendum's icon list names key-round; the account artboard draws
+ * Lucide `key`, and the artboard is the value to build. */
+export function KeyIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="m15.5 7.5 3 3L22 7l-3-3" />
+      <path d="m9.6 13.4 4.9-4.9" />
+      <circle cx="6" cy="17" r="4" />
+    </Glyph>
+  );
+}
+
+export function LogOutIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="m16 17 5-5-5-5" />
+      <path d="M21 12H9" />
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+    </Glyph>
+  );
+}

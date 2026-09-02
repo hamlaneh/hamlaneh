@@ -164,14 +164,24 @@ function surfacesBreakingTheRule(page: Page): Promise<string[]> {
 test("an undesigned surface stays in flow unless it opts into the overlay", async ({ page }) => {
   await conversationWithBackupOffer(page);
 
-  // The encryption notice and the backup offer are already up; the picker adds
-  // a plain `--overlay`, and the account menu the `--overlay --footer` pair,
-  // whose modifier has to keep winning the tie it shares with `--overlay`.
-  // Opening the account menu closes the picker (one overlay at a time in the
-  // shell), so the rule is asked twice rather than once.
+  // The encryption notice and the backup offer are already up, and they are
+  // what `.hm-plumbing` still means: the picker and the account menu left the
+  // class behind when their delivered design landed (2026-09-02). The rule is
+  // asked with each of them open anyway, because what it guards is the
+  // NOTICES underneath — a designed overlay opening above them is exactly the
+  // moment the old bug used to surface.
+  //
+  // The picker is dismissed before the account menu rather than being closed
+  // by it. It is a modal dialog now, with the scrim the mobile drawer uses
+  // (chat-addendum-overlay-components §01), so nothing behind it is
+  // pressable — which is the design working, and the reason the old
+  // click-straight-through flow timed out here rather than in the product.
   await page.getByRole("button", { name: t("chat.empty.invite") }).click();
   await expect(page.getByRole("dialog", { name: t("chat.empty.invite") })).toBeVisible();
   expect(await surfacesBreakingTheRule(page)).toEqual([]);
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: t("chat.empty.invite") })).toBeHidden();
 
   await page.getByRole("button", { name: t("account.title") }).click();
   await expect(page.getByRole("dialog", { name: t("account.title") })).toBeVisible();

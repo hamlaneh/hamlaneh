@@ -154,7 +154,9 @@
     "title": "Account",
     "signedInAs": "Signed in as {{name}}",
     "logout": "Log out",
-    "adminDashboard": "Administration"
+    "adminDashboard": "Administration",
+    "changePassword": "Change password",
+    "loggingOut": "Logging out…"
   },
   "admin": {
     "kicker": "ADMINISTRATION",
@@ -691,7 +693,8 @@
   "chat": {
     "common": {
       "cancel": "Cancel",
-      "close": "Close"
+      "close": "Close",
+      "retry": "Try again"
     },
     "fileSize": {
       "b": "{{value}} B",
@@ -827,12 +830,28 @@
         "strict": "This channel will be end-to-end encrypted. Your organization encrypts every conversation created here, and a channel's encryption is fixed when it is created.",
         "compliance": "This channel will not be end-to-end encrypted. Your organization stores conversations so the server can read them, which is what lets search, retention and export exist, and a channel's encryption is fixed when it is created."
       },
-      "e2eeNote": "Encrypted channels have no server-side search, no link previews and no mention badges, and files cannot be attached yet."
+      "e2eeNote": "Encrypted channels have no server-side search, no link previews and no mention badges, and files cannot be attached yet.",
+      "nameHelper": "Lowercase letters, numbers, hyphens and underscores. The # is not part of the name.",
+      "publicNote": "Anyone invited can take part.",
+      "privateNote": "Invitation only, same as public.",
+      "submitting": "Creating…",
+      "invalidSlug": "Use 2–64 lowercase letters, numbers, hyphens, or underscores.",
+      "duplicate": "That channel name is already in use."
     },
     "channelMenu": {
       "topicLabel": "Topic",
       "saveTopic": "Save topic",
-      "dmNote": "A direct message has no topic and its membership is fixed."
+      "dmNote": "A direct message has no topic and its membership is fixed.",
+      "topicHelper": "Leave empty to clear the topic.",
+      "saving": "Saving…",
+      "topicTooLong": "Topic must be 250 characters or fewer.",
+      "topicSaveFailed": "The topic could not be saved. Try again.",
+      "topicSaved": "Topic saved.",
+      "topicCounter": "{{used}} / {{limit}}",
+      "discardTitle": "Discard topic changes?",
+      "discardBody": "Your unsaved topic changes will be lost.",
+      "keepEditing": "Keep editing",
+      "discardChanges": "Discard changes"
     },
     "people": {
       "searchLabel": "Find someone",
@@ -843,7 +862,14 @@
         "strict": "A new conversation started here will be end-to-end encrypted. Your organization encrypts every conversation created here.",
         "compliance": "A new conversation started here will not be end-to-end encrypted. Your organization stores conversations so the server can read them, which is what lets search, retention and export exist."
       },
-      "reopenNote": "This applies only if the conversation does not exist yet. Reopening one you already have keeps whatever it was opened as, whatever the mode is now."
+      "reopenNote": "This applies only if the conversation does not exist yet. Reopening one you already have keeps whatever it was opened as, whatever the mode is now.",
+      "searchPlaceholder": "Name or username",
+      "loading": "Loading people…",
+      "noResults": "No people found.",
+      "directoryEmpty": "No one else is available.",
+      "loadFailed": "People could not be loaded. Try again.",
+      "inviting": "Inviting…",
+      "opening": "Opening…"
     },
     "e2eeByOrg": {
       "requiredError": "Your organization now encrypts every conversation created here, so this one was not created. Nothing was made — try again and it will be end-to-end encrypted.",
@@ -932,6 +958,12 @@
         "noKeyWhatContinues": "Your account and your conversations continue. Your recorded trust decisions are gone, so you will be asked to verify people again.",
         "noKeyByDesign": "This is how the feature is built, not a fault and not something support can undo."
       }
+    },
+    "mention": {
+      "listLabel": "Mention a channel member",
+      "loading": "Loading members…",
+      "noMatch": "No matching members.",
+      "loadFailed": "Members could not be loaded. Try again."
     }
   },
   "calls": {

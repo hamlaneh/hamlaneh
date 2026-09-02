@@ -5,6 +5,7 @@ import { formatCount } from "../../chat/format";
 import { PRESENCE_LABEL_KEY } from "../../chat/presence";
 import type { Channel } from "../../chat/types";
 import { EllipsisVerticalIcon, MenuIcon, SearchIcon, UsersIcon } from "../icons";
+import { CHANNEL_MENU_ID } from "./plumbing/overlay";
 
 interface ChatHeaderProps {
   channel: Channel | undefined;
@@ -16,8 +17,16 @@ interface ChatHeaderProps {
   onToggleSearch: () => void;
   onOpenDrawer: () => void;
   onToggleChannelMenu: () => void;
+  /**
+   * Whether the channel-actions trigger exists at all. It renders only where
+   * there is something behind it; otherwise it is absent from the DOM — not
+   * disabled, and never a popover that exists to say nothing is available
+   * (chat-addendum-menu-components -> 03).
+   */
+  channelActions: boolean;
   channelMenu: ReactNode;
 }
+
 
 /**
  * Channel name, topic, member count and search. Below 900px the same header
@@ -34,6 +43,7 @@ export function ChatHeader({
   onToggleSearch,
   onOpenDrawer,
   onToggleChannelMenu,
+  channelActions,
   channelMenu,
 }: ChatHeaderProps) {
   const { t, i18n } = useTranslation();
@@ -114,14 +124,19 @@ export function ChatHeader({
         <SearchIcon size={19} strokeWidth={1.85} />
       </button>
 
-      <button
-        type="button"
-        className="hm-icon-button hm-chat-header__actions"
-        onClick={onToggleChannelMenu}
-        aria-label={t("chat.header.channelActions")}
-      >
-        <EllipsisVerticalIcon size={18} strokeWidth={2} />
-      </button>
+      {channelActions ? (
+        <button
+          type="button"
+          className="hm-icon-button hm-chat-header__actions"
+          onClick={onToggleChannelMenu}
+          aria-label={t("chat.header.channelActions")}
+          aria-haspopup="dialog"
+          aria-expanded={channelMenu !== null}
+          aria-controls={CHANNEL_MENU_ID}
+        >
+          <EllipsisVerticalIcon size={18} strokeWidth={2} />
+        </button>
+      ) : null}
       {channelMenu}
     </header>
   );

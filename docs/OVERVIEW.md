@@ -288,7 +288,19 @@ slice covers and, more usefully, what it does not.
 A DM now carries its peer, resolved by a join in the same query that draws the sidebar rather
 than a lookup per row; mentions are parsed from the contract's `<@{id}>` token when a message is
 sent, and only members of the conversation get a row — so no mention can ever name somebody who
-was not entitled to read the message it points at.
+was not entitled to read the message it points at. Since 2026-09-02 a mention is also *typed*:
+an `@` at the current composer token opens the same picker the Mention control does — one
+combobox over one listbox, `aria-activedescendant`, focus never leaving the composer, Enter
+inserts, Escape closes on the caret, Tab closes without inserting. Filtering is client-side over
+the member list already loaded for the channel, so no server search endpoint exists for it, and
+what is stored is still the `<@{id}>` token: the UUID is never rendered.
+
+The five chat overlays — create channel, people picker (invite and new DM), mention picker,
+channel actions and the account menu — carry their delivered design as of the same date, having
+been unstyled plumbing since the mockup landed. Channel actions and the account menu are anchored
+non-modal dialogs rather than ARIA menus, because one holds a form and the other a radio group.
+[`docs/design/STATUS.md`](design/STATUS.md) records the handful of places where an existing test
+pins an older contract and the picture did not win.
 
 - **Bilingual UI and the PWA baseline (Phase 1.5).** A web manifest with `any` and maskable
   icons generated from the committed brand marks, an `apple-touch-icon`, and theme colours taken

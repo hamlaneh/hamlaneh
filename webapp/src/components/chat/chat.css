@@ -391,6 +391,31 @@
   cursor: not-allowed;
 }
 
+/* Locked correction (chat-addendum-menu-components -> 03): the two popover
+ * triggers grow from the delivered 34px to the 44px product floor, everywhere.
+ * The ten earlier chat artboards still draw 34 — they are the historical
+ * record, and this sheet is the value to build. */
+.hm-chat-header__actions {
+  --hm-icon-button-size: var(--size-target);
+
+  border-radius: var(--radius-md);
+}
+
+.hm-sidebar__identity {
+  min-block-size: var(--size-target);
+}
+
+/* Open tints with brand.soft and the chevron flips (AccountTrigger variant). */
+.hm-sidebar__identity[aria-expanded="true"] {
+  background: var(--color-brand-soft);
+  border-radius: var(--radius-sm);
+}
+
+.hm-sidebar__identity-chevron {
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+}
+
 /* ── conversation column ───────────────────────────────────────────── */
 
 .hm-chat__main {
@@ -1116,6 +1141,9 @@
 /* ── composer ──────────────────────────────────────────────────────── */
 
 .hm-composer {
+  /* The anchor for the mention popover, which sits above the composer with a
+     12px gap and is clamped to this column (overlay-components -> 01). */
+  position: relative;
   flex: 0 0 auto;
   padding: 0 var(--hm-list-padding-inline) var(--hm-list-padding-block);
   display: flex;
@@ -1531,11 +1559,13 @@
 /* ── plumbing surfaces (no design yet — docs/design/STATUS.md) ─────── */
 
 /*
- * Create channel, invite people, the DM picker, the mention picker, the
- * account menu, the encryption notice, the verification surfaces and the
- * backup offer are not drawn anywhere in the mockup. Per the UI pipeline they
- * are plain semantic HTML with no styling beyond structure; they get their
- * appearance when a design lands.
+ * What is left here after the chat addenda landed: the encryption notice, the
+ * verification surfaces and the backup offer. Create channel, the two people
+ * pickers, the mention list and the two menus were drawn on 2026-08-21 and now
+ * live in the overlay section above; only genuinely undesigned surfaces still
+ * take this class. Per the UI pipeline the remainder are plain semantic HTML
+ * with no styling beyond structure; they get their appearance when a design
+ * lands.
  *
  * THE BASE CLASS DOES NOT POSITION ANYTHING, and that is the whole point of
  * splitting it. It went the other way for three slices and cost a control
@@ -1593,10 +1623,12 @@
 }
 
 /*
- * The popover treatment, for the surfaces that genuinely sit over the
- * conversation: the account and channel menus, the create dialog, the people
- * picker, the verification sheet. Each is opened by a control the person just
- * pressed, so covering what is behind it is the intent.
+ * The popover treatment, for an undesigned surface that genuinely sits over
+ * the conversation because a control the person just pressed opened it, so
+ * covering what is behind it is the intent. The designed overlays no longer
+ * use it — they have their own geometry above — but the invariant the layout
+ * spec enforces (`e2e/layout/plumbing-overlap.layout.ts`: positioned if and
+ * only if `--overlay`) has to keep holding for the next one.
  *
  * A notice is never one of these, and neither is an account-level prompt: it
  * arrives unasked, so the one thing it must not do is land on top of whatever
@@ -1612,6 +1644,923 @@
 .hm-plumbing--footer {
   inset-block-start: auto;
   inset-block-end: var(--hm-footer-block-size);
+}
+
+/* ── overlays: dialogs, popovers, pickers ──────────────────────────── */
+
+/*
+ * The delivered addenda (docs/design/CHAT_HANDOFF.md "Addendum" and
+ * "Addendum 2", artboards `chat-addendum-*`). Every value is transcribed from
+ * `chat-addendum-overlay-components` §01 and `chat-addendum-menu-components`
+ * §01 or from the full frames; no new token is introduced, exactly as both
+ * spec sheets say.
+ *
+ * Two families, and they are not interchangeable:
+ *
+ *   .hm-dialog   modal, aria-modal="true", z-index 4 over a z-index 3 scrim —
+ *                the same layering the mobile drawer already uses.
+ *   .hm-popover  anchored, aria-modal="false", no scrim, no focus trap. The
+ *                mention list is a popover too, and the one that also refuses
+ *                to take focus at all.
+ */
+
+.hm-overlay-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  border: 0;
+  padding: 0;
+  /* The artboard's rgba(28,39,36,.42) — the same ink the drawer scrim uses. */
+  background: rgb(28 39 36 / 0.42);
+}
+
+.hm-dialog {
+  position: fixed;
+  inset-block-start: 50%;
+  /* Centred with logical inset plus auto margin and a vertical-only
+     transform. A physical X translation mis-shifts under dir="rtl"
+     (chat-addendum-menu-components -> 06). */
+  inset-inline: 0;
+  margin-inline: auto;
+  transform: translateY(-50%);
+  z-index: 4;
+  inline-size: 560px;
+  max-inline-size: calc(100% - 2 * var(--spacing-4));
+  max-block-size: calc(100dvh - var(--spacing-12));
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 14px; /* off-scale (artboard) */
+  box-shadow: var(--shadow-overlay);
+  color: var(--color-text-primary);
+  text-align: start;
+}
+
+/* 520 x 616 — and 470 tall in the three-row Persian frame, which is what a
+   shorter list inside the same cap already gives. */
+.hm-dialog--people {
+  inline-size: 520px;
+  block-size: 616px;
+}
+
+.hm-dialog__header {
+  box-sizing: border-box;
+  padding: 20px 22px 16px; /* off-scale (artboard) */
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px; /* off-scale (artboard) */
+  border-block-end: 1px solid var(--color-surface-subtle);
+}
+
+.hm-dialog__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 5px; /* off-scale (artboard) */
+  min-inline-size: 0;
+}
+
+.hm-dialog__title {
+  margin: 0;
+  font: 600 19px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 19px off-scale (artboard) */
+  letter-spacing: -0.015em;
+  color: var(--color-text-primary);
+}
+
+.hm-dialog__title:lang(fa) {
+  letter-spacing: normal;
+}
+
+/* The channel a dialog or popover is about: hash glyph plus the slug as one
+   isolated LTR run, so it never reads as "deploys#". */
+.hm-dialog__subject {
+  display: flex;
+  align-items: center;
+  gap: 6px; /* off-scale (artboard) */
+  font: 400 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-slug {
+  font-family: var(--hm-mono);
+  font-size: 13px; /* off-scale (artboard) */
+}
+
+.hm-dialog__body {
+  box-sizing: border-box;
+  padding: 20px 24px; /* off-scale (artboard) */
+  display: flex;
+  flex-direction: column;
+  gap: 20px; /* off-scale (artboard) */
+  overflow-y: auto;
+}
+
+.hm-dialog__footer {
+  box-sizing: border-box;
+  padding: 16px 24px 20px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: 10px; /* off-scale (artboard) */
+  border-block-start: 1px solid var(--color-surface-subtle);
+}
+
+/* Close is 44x44 everywhere (menu-components -> 01 and 06). */
+.hm-close-button {
+  --hm-icon-button-size: var(--size-target);
+
+  border-radius: var(--radius-md);
+}
+
+/* ── overlay form parts ────────────────────────────────────────────── */
+
+.hm-overlay-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px; /* off-scale (artboard) */
+}
+
+.hm-overlay-field__label {
+  font: 500 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-overlay-field__helper {
+  font: 400 12px / 1.5 var(--hm-font-ui, var(--font-ui)); /* 12px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-overlay-field__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px; /* off-scale (artboard) */
+  font: 400 12px / 1.5 var(--hm-font-ui, var(--font-ui)); /* 12px off-scale (artboard) */
+  color: var(--color-danger);
+}
+
+.hm-overlay-field__error svg {
+  flex: 0 0 auto;
+  margin-block-start: 1px;
+}
+
+/* Input shell: the boundary is drawn here and the focus ring sits on the
+   shell, because the field inside it has no chrome of its own. */
+.hm-input-shell {
+  display: flex;
+  align-items: stretch;
+  block-size: var(--size-target);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.hm-input-shell:focus-within {
+  border-color: var(--color-focus);
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.hm-input-shell[data-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+/* Decoration, never part of the submitted value (overlay-components -> 03). */
+.hm-input-shell__prefix {
+  inline-size: 38px; /* off-scale (artboard) */
+  flex: 0 0 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-subtle);
+  border-inline-end: 1px solid var(--color-border-subtle);
+  font: 500 15px / 1 var(--hm-mono); /* 15px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-input-shell__field {
+  flex: 1;
+  min-inline-size: 0;
+  padding-inline: var(--spacing-3);
+  background: transparent;
+  border: 0;
+  color: var(--color-text-primary);
+  font: 400 var(--text-body) / 1 var(--hm-font-ui, var(--font-ui));
+}
+
+/* The slug is a technical string: monospace and an isolated LTR run, in
+   Persian too (overlay-components -> 05). */
+.hm-input-shell__field--slug {
+  font-family: var(--hm-mono);
+}
+
+.hm-input-shell__field:focus-visible {
+  outline: none;
+}
+
+.hm-choice-set {
+  display: flex;
+  flex-direction: column;
+  gap: 9px; /* off-scale (artboard) */
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.hm-choice-set__legend {
+  padding: 0;
+  font: 500 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-choice-row {
+  display: flex;
+  gap: 10px; /* off-scale (artboard) */
+}
+
+.hm-choice {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px; /* off-scale (artboard) */
+  padding: 13px; /* off-scale (artboard) */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.hm-choice:has(input:checked) {
+  background: var(--color-brand-soft);
+  border-color: var(--color-brand-primary);
+}
+
+.hm-choice:has(input:focus-visible) {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* The native radio carries selection, arrow keys and the tab order; the ring
+   beside it is what the artboard draws. */
+.hm-choice__input {
+  position: absolute;
+  opacity: 0;
+  inline-size: 1px;
+  block-size: 1px;
+}
+
+.hm-choice__mark {
+  inline-size: 18px; /* off-scale (artboard) */
+  block-size: 18px;
+  flex: 0 0 18px;
+  margin-block-start: 1px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border-control); /* off-scale (artboard) */
+  background: var(--color-surface);
+}
+
+.hm-choice:has(input:checked) .hm-choice__mark {
+  border: 5px solid var(--color-brand-primary); /* off-scale (artboard) */
+}
+
+.hm-choice__text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px; /* off-scale (artboard) */
+}
+
+.hm-choice__name {
+  display: flex;
+  align-items: center;
+  gap: 7px; /* off-scale (artboard) */
+  font: 600 var(--text-body) / 1.3 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+}
+
+.hm-choice__note {
+  font: 400 12px / 1.5 var(--hm-font-ui, var(--font-ui)); /* 12px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+/* The persistent visibility note — never a tooltip (create-channel artboard). */
+.hm-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px; /* off-scale (artboard) */
+  padding: 12px 13px; /* off-scale (artboard) */
+  background: var(--color-info-soft);
+  border: 1px solid var(--color-info);
+  border-radius: var(--radius-md);
+  font: 400 12.5px / 1.6 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-note__glyph {
+  flex: 0 0 auto;
+  margin-block-start: 1px;
+  color: var(--color-info);
+}
+
+.hm-overlay-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px; /* off-scale (artboard) */
+  padding: 12px 13px; /* off-scale (artboard) */
+  background: var(--color-danger-soft);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  font: 400 12.5px / 1.6 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-overlay-banner__glyph {
+  flex: 0 0 auto;
+  margin-block-start: 1px;
+  color: var(--color-danger);
+}
+
+/* ── overlay buttons ───────────────────────────────────────────────── */
+
+.hm-overlay-button {
+  block-size: var(--size-target);
+  padding-inline: 18px; /* off-scale (artboard) */
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font: 600 13px / 1 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  cursor: pointer;
+  transition: background-color var(--duration-press) var(--ease-out);
+}
+
+.hm-overlay-button:hover:not(:disabled) {
+  background: var(--color-surface-subtle);
+}
+
+.hm-overlay-button--primary {
+  background: var(--color-brand-primary);
+  border-color: var(--color-brand-primary);
+  color: var(--color-on-brand);
+  font-size: var(--text-body);
+}
+
+.hm-overlay-button--primary:hover:not(:disabled) {
+  background: var(--color-brand-hover);
+  border-color: var(--color-brand-hover);
+}
+
+/* Busy and disabled never rest on colour: a dashed boundary carries disabled,
+   a spinner carries busy (overlay-components -> 02). */
+.hm-overlay-button:disabled {
+  background: var(--color-surface-disabled);
+  border: 1px dashed var(--color-border-disabled);
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
+}
+
+/* Fixed width so the busy label cannot resize the control mid-request. */
+.hm-overlay-button--fixed {
+  inline-size: 170px; /* off-scale (artboard) */
+  padding-inline: 0;
+}
+
+.hm-overlay-button--fixed-narrow {
+  inline-size: 130px; /* off-scale (artboard) */
+  padding-inline: 0;
+}
+
+/* A full-width row inside a popover: Change password, Log out. */
+.hm-menu-action {
+  inline-size: 100%;
+  block-size: var(--size-target);
+  padding-inline: var(--spacing-3);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 11px; /* off-scale (artboard) */
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font: 500 13.5px / 1 var(--hm-font-ui, var(--font-ui)); /* 13.5px off-scale (artboard) */
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--duration-press) var(--ease-out);
+}
+
+.hm-menu-action:hover:not(:disabled) {
+  background: var(--color-surface-subtle);
+}
+
+.hm-menu-action:disabled {
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
+}
+
+.hm-menu-action__glyph {
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+}
+
+.hm-menu-action__label {
+  flex: 1;
+  min-inline-size: 0;
+}
+
+/* Invite people is the one outlined row: it leaves for another surface. */
+.hm-menu-action--outlined {
+  inline-size: auto;
+  border-color: var(--color-border-control);
+  font-weight: 600;
+  font-size: 13px; /* off-scale (artboard) */
+  padding-inline: 14px; /* off-scale (artboard) */
+}
+
+.hm-menu-action--outlined .hm-menu-action__glyph {
+  color: var(--color-text-primary);
+}
+
+/* ── popovers ──────────────────────────────────────────────────────── */
+
+.hm-popover {
+  position: absolute;
+  z-index: 4;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+  color: var(--color-text-primary);
+  text-align: start;
+}
+
+/* Anchored under the header ellipsis at logical inline-end, gap 12 from the
+   header (menu-components -> 01). Capped, then it scrolls inside itself. */
+.hm-popover--channel {
+  inline-size: 344px; /* off-scale (artboard) */
+  inset-block-start: calc(var(--hm-region-block-size) + var(--spacing-3));
+  inset-inline-end: var(--spacing-6);
+  max-block-size: calc(100dvh - var(--hm-region-block-size) - var(--spacing-6));
+}
+
+/* Anchored above the identity trigger at logical inline-start. */
+.hm-popover--account {
+  inline-size: 292px; /* off-scale (artboard) */
+  inset-block-end: calc(var(--hm-footer-block-size) + 10px); /* off-scale (artboard) */
+  inset-inline-start: var(--spacing-3);
+  max-block-size: calc(100dvh - var(--spacing-6));
+}
+
+.hm-popover__header {
+  padding-block: 14px 12px; /* off-scale (artboard) */
+  padding-inline: 16px 12px; /* off-scale (artboard) */
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px; /* off-scale (artboard) */
+  border-block-end: 1px solid var(--color-surface-subtle);
+}
+
+.hm-popover__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 5px; /* off-scale (artboard) */
+  min-inline-size: 0;
+}
+
+.hm-popover__title {
+  margin: 0;
+  font: 600 15px / 1.35 var(--hm-font-ui, var(--font-ui)); /* 15px off-scale (artboard) */
+  color: var(--color-text-primary);
+}
+
+.hm-popover__subject {
+  display: flex;
+  align-items: center;
+  gap: 6px; /* off-scale (artboard) */
+  font: 400 12px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 12px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-popover__subject .hm-slug {
+  font-size: 12px; /* off-scale (artboard) */
+}
+
+.hm-popover__kind {
+  font: 500 11px / 1.3 var(--hm-font-ui, var(--font-ui)); /* 11px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-popover__body {
+  padding: 12px 16px 14px; /* off-scale (artboard) */
+  display: flex;
+  flex-direction: column;
+  gap: 14px; /* off-scale (artboard) */
+  overflow-y: auto;
+}
+
+.hm-popover__group {
+  padding: 6px 8px 10px; /* off-scale (artboard) */
+  display: flex;
+  flex-direction: column;
+  gap: 2px; /* off-scale (artboard) */
+}
+
+.hm-popover__rule {
+  block-size: 1px;
+  margin-inline: var(--spacing-3);
+  background: var(--color-surface-subtle);
+}
+
+.hm-rule {
+  block-size: 1px;
+  background: var(--color-surface-subtle);
+}
+
+/* Vertical divider between two pieces of one line — @username and presence. */
+.hm-tick {
+  inline-size: 1px;
+  block-size: 11px; /* off-scale (artboard) */
+  background: var(--color-border-subtle);
+}
+
+/* ── account popover ───────────────────────────────────────────────── */
+
+.hm-account__identity {
+  padding: 12px 12px 6px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: 11px; /* off-scale (artboard) */
+}
+
+.hm-account__signed-in {
+  flex: 1;
+  min-inline-size: 0;
+  font: 400 13px / 1.5 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-account__name {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.hm-account__language {
+  padding: 2px 16px 12px; /* off-scale (artboard) */
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.hm-account__language-label {
+  font: 500 12px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 12px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+/* ── topic editor ──────────────────────────────────────────────────── */
+
+.hm-topic__meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+
+.hm-topic__helper {
+  font: 400 11.5px / 1.5 var(--hm-font-ui, var(--font-ui)); /* 11.5px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+/* ASCII in both languages, and it never announces per keystroke. */
+.hm-topic__counter {
+  font: 400 11.5px / 1.5 var(--hm-mono); /* 11.5px off-scale (artboard) */
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.hm-topic__field {
+  block-size: var(--size-target);
+  box-sizing: border-box;
+  inline-size: 100%;
+  padding-inline: var(--spacing-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font: 400 13.5px / 1 var(--hm-font-ui, var(--font-ui)); /* 13.5px off-scale (artboard) */
+}
+
+.hm-topic__field[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+/* Hierarchy and copy, never accent red: red stays reserved for message
+   deletion (menu-components -> 02). */
+.hm-discard {
+  padding: 12px 16px 14px; /* off-scale (artboard) */
+  display: flex;
+  flex-direction: column;
+  gap: 10px; /* off-scale (artboard) */
+}
+
+.hm-discard__body {
+  font: 400 12.5px / 1.6 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-discard__actions {
+  display: flex;
+  gap: 10px; /* off-scale (artboard) */
+}
+
+/* ── people picker ─────────────────────────────────────────────────── */
+
+.hm-people__search {
+  box-sizing: border-box;
+  padding: 16px 22px 12px; /* off-scale (artboard) */
+  display: flex;
+  flex-direction: column;
+  gap: 7px; /* off-scale (artboard) */
+}
+
+.hm-people__search-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  block-size: var(--size-target);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md);
+}
+
+.hm-people__search-shell:focus-within {
+  border-color: var(--color-focus);
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.hm-people__search-icon {
+  position: absolute;
+  inset-inline-start: var(--spacing-3);
+  display: flex;
+  color: var(--color-text-secondary);
+}
+
+.hm-people__search-field {
+  flex: 1;
+  min-inline-size: 0;
+  padding-inline-start: 36px; /* off-scale (artboard) */
+  padding-inline-end: var(--spacing-3);
+  background: transparent;
+  border: 0;
+  color: var(--color-text-primary);
+  font: 400 var(--text-body) / 1 var(--hm-font-ui, var(--font-ui));
+}
+
+.hm-people__search-field:focus-visible {
+  outline: none;
+}
+
+.hm-people__list {
+  flex: 1;
+  min-block-size: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 14px 14px; /* off-scale (artboard) */
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px; /* off-scale (artboard) */
+  list-style: none;
+}
+
+/* The whole row is one button — no nested control, no checkbox, no chip. */
+.hm-person {
+  inline-size: 100%;
+  box-sizing: border-box;
+  min-block-size: 56px; /* off-scale (artboard) */
+  padding: 10px 12px; /* off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  background: var(--color-surface);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--duration-press) var(--ease-out);
+}
+
+.hm-person:hover:not(:disabled) {
+  background: var(--color-surface-subtle);
+}
+
+.hm-person:active:not(:disabled) {
+  background: var(--color-brand-soft);
+}
+
+.hm-person:disabled {
+  cursor: not-allowed;
+}
+
+.hm-person__text {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px; /* off-scale (artboard) */
+}
+
+.hm-person__name {
+  font: 600 var(--text-body) / 1.3 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-person__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font: 400 12px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 12px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+/* Complete @username, monospace, always an isolated LTR run. */
+.hm-username {
+  font-family: var(--hm-mono);
+  font-size: 12px; /* off-scale (artboard) */
+}
+
+/* 34 high inside a 56 row; the row is the target, so it grows, not the pill. */
+.hm-person__action {
+  block-size: 34px; /* off-scale (artboard) */
+  padding-inline: 13px; /* off-scale (artboard) */
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px; /* off-scale (artboard) */
+  background: transparent;
+  border: 1px solid var(--color-border-control);
+  border-radius: 9px; /* off-scale (artboard) */
+  color: var(--color-text-primary);
+  font: 600 12px / 1 var(--hm-font-ui, var(--font-ui)); /* 12px off-scale (artboard) */
+  white-space: nowrap;
+}
+
+.hm-person:disabled .hm-person__action {
+  border-style: dashed;
+  border-color: var(--color-border-disabled);
+  color: var(--color-text-secondary);
+}
+
+/* Loading and empty states occupy reserved space so nothing shifts when the
+   results land (overlay-components -> acceptance). */
+.hm-people__state {
+  flex: 1;
+  min-block-size: 120px; /* off-scale (artboard) */
+  padding: var(--spacing-6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-3);
+  font: 400 13px / 1.5 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+/* ── mention popover ───────────────────────────────────────────────── */
+
+/*
+ * No scrim, no focus trap, and it never takes focus: the composer stays the
+ * focused element and owns the keyboard (overlay-components -> 03). Clamped
+ * clear of the sidebar by the composer it is anchored to, and to the viewport.
+ */
+.hm-mention-popover {
+  position: absolute;
+  inset-inline-start: var(--spacing-3);
+  inset-block-end: calc(100% + var(--spacing-3));
+  inline-size: 380px; /* off-scale (artboard) */
+  max-inline-size: calc(100% - 2 * var(--spacing-3));
+  max-block-size: 268px; /* off-scale (artboard) */
+  z-index: 4;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+}
+
+.hm-mention-popover__header {
+  box-sizing: border-box;
+  padding: 9px 12px; /* off-scale (artboard) */
+  border-block-end: 1px solid var(--color-surface-subtle);
+  font: 600 10px / 1 var(--hm-mono); /* 10px off-scale (artboard) */
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.hm-mention-list {
+  flex: 1;
+  min-block-size: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 6px; /* off-scale (artboard) */
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  list-style: none;
+}
+
+.hm-mention-row {
+  position: relative;
+  box-sizing: border-box;
+  min-block-size: 48px; /* off-scale (artboard) */
+  padding: var(--spacing-2) 10px; /* 10px off-scale (artboard) */
+  display: flex;
+  align-items: center;
+  gap: 11px; /* off-scale (artboard) */
+  background: transparent;
+  border-radius: 9px; /* off-scale (artboard) */
+  cursor: pointer;
+}
+
+/* Pointer hover tints. The keyboard-active descendant additionally gains
+   weight, an inline-start bar and the Enter hint, so the two never look the
+   same (overlay-components -> 02). */
+.hm-mention-row:hover {
+  background: var(--color-surface-subtle);
+}
+
+.hm-mention-row[aria-selected="true"] {
+  background: var(--color-brand-soft);
+}
+
+.hm-mention-row[aria-selected="true"]::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block: 9px; /* off-scale (artboard) */
+  inline-size: 3px; /* off-scale (artboard) */
+  border-radius: 2px;
+  background: var(--color-brand-primary);
+}
+
+.hm-mention-row__text {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 9px; /* off-scale (artboard) */
+  overflow: hidden;
+}
+
+.hm-mention-row__name {
+  font: 500 var(--text-body) / 1.3 var(--hm-font-ui, var(--font-ui));
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-mention-row[aria-selected="true"] .hm-mention-row__name {
+  font-weight: 600;
+}
+
+.hm-mention-row__username {
+  font: 400 12.5px / 1.3 var(--hm-mono); /* 12.5px off-scale (artboard) */
+  color: var(--color-text-secondary);
+}
+
+.hm-mention-row__hint {
+  font: 500 10px / 1 var(--hm-mono); /* 10px off-scale (artboard) */
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-brand-primary);
+}
+
+.hm-mention-popover__state {
+  padding: var(--spacing-3);
+  font: 400 12.5px / 1.5 var(--hm-font-ui, var(--font-ui)); /* 12.5px off-scale (artboard) */
+  color: var(--color-text-secondary);
 }
 
 /* ── responsive ────────────────────────────────────────────────────── */
@@ -1700,9 +2649,49 @@
   }
 
   .hm-chat-header__topic,
-  .hm-chat-header__members,
-  .hm-chat-header__actions {
+  .hm-chat-header__members {
     display: none;
+  }
+
+  /* Corrected by chat-addendum-menu-components -> 03: the mobile build used
+   * to hide the trigger entirely. A 44x44 control now sits beside search. */
+  .hm-chat-header__actions {
+    display: flex;
+    border-radius: var(--radius-md);
+    color: var(--color-text-primary);
+  }
+
+  /* Both dialogs become full-bleed sheets with a 16px inline gutter and the
+   * existing safe-area padding — no new breakpoint (overlay-components -> 05). */
+  .hm-dialog {
+    inline-size: auto;
+    inset-inline: var(--spacing-4);
+    inset-block: var(--spacing-4) calc(var(--spacing-4) + env(safe-area-inset-bottom));
+    max-block-size: none;
+    margin-inline: 0;
+    transform: none;
+  }
+
+  .hm-dialog--people {
+    block-size: auto;
+  }
+
+  /* Fluid inside a 10px inline inset (menu-components -> 01). */
+  .hm-popover--channel {
+    inline-size: auto;
+    inset-inline: 10px; /* off-scale (artboard) */
+  }
+
+  /* Clamped inside the 300px drawer as well as the viewport. */
+  .hm-popover--account {
+    inline-size: 280px; /* off-scale (artboard) */
+    max-inline-size: calc(var(--hm-sidebar-inline-size) - 2 * var(--spacing-3));
+  }
+
+  /* 16px computed so iOS Safari does not auto-zoom when the software keyboard
+   * opens (menu-components -> 07). */
+  .hm-topic__field {
+    font-size: var(--text-control);
   }
 
   /* The drawn mobile bar has no search field; it appears when the search
