@@ -635,6 +635,17 @@ files_domain() {
   esac
 }
 
+# Who issues the certificate: Caddy's own CA for anything that is not a
+# domain, because a public IP is neither a name Caddy issues for unasked
+# nor one a public CA will be asked for; ACME for a domain, which is what
+# Caddy does on its own.
+cert_issuer() {
+  case "$(domain_kind "$1")" in
+    domain) printf 'acme' ;;
+    *) printf 'internal' ;;
+  esac
+}
+
 # The host alone — DOMAIN with any custom port stripped. An IPv6 literal is
 # all colons and never carries a port (resolve_ports), so it passes whole.
 domain_host() {
@@ -867,8 +878,10 @@ write_env() {
         -e '/^HAMLANEH_HTTP_PORT=/d' \
         -e '/^HAMLANEH_HTTPS_PORT=/d' \
         -e '/^HAMLANEH_DEFAULT_SNI=/d' \
+        -e '/^HAMLANEH_CERT_ISSUER=/d' \
         "$ENV_FILE" > "$tmp"
     printf 'HAMLANEH_DEFAULT_SNI=%s\n' "$(domain_host "$DOMAIN")" >> "$tmp"
+    printf 'HAMLANEH_CERT_ISSUER=%s\n' "$(cert_issuer "$DOMAIN")" >> "$tmp"
     # Rewritten rather than edited in place: default ports carry no line at
     # all, so moving back to 80/443 removes the override instead of pinning
     # a now-wrong number.
@@ -902,6 +915,7 @@ write_env() {
     printf 'HAMLANEH_DOMAIN=%s\n' "$DOMAIN"
     printf 'HAMLANEH_FILES_DOMAIN=%s\n' "$(files_domain "$DOMAIN")"
     printf 'HAMLANEH_DEFAULT_SNI=%s\n' "$(domain_host "$DOMAIN")"
+    printf 'HAMLANEH_CERT_ISSUER=%s\n' "$(cert_issuer "$DOMAIN")"
     if [ "$HTTPS_PORT" != "443" ] || [ "$HTTP_PORT" != "80" ]; then
       printf 'HAMLANEH_HTTP_PORT=%s\n' "$HTTP_PORT"
       printf 'HAMLANEH_HTTPS_PORT=%s\n' "$HTTPS_PORT"

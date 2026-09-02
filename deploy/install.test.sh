@@ -371,9 +371,16 @@ test_domain_kind() {
   # shellcheck disable=SC2016
   TEST_ENV_FILE="$sni_env" run_in_subshell eval 'DOMAIN=203.0.113.5:8443; HTTPS_PORT=8443; HTTP_PORT=8080; write_env' >/dev/null
   check_contains "a fresh .env carries the port-less SNI host" "HAMLANEH_DEFAULT_SNI=203.0.113.5" "$(cat "$sni_env")"
+  # An IP install issues its own certificate; a domain asks ACME. A public
+  # IP gets nothing from Caddy unless told, which is the whole point.
+  check_contains "an IP install issues internally" "HAMLANEH_CERT_ISSUER=internal" "$(cat "$sni_env")"
+  check_eq "cert_issuer: ipv4 -> internal" "internal" "$(run_in_subshell cert_issuer 203.0.113.5:8443)"
+  check_eq "cert_issuer: localhost -> internal" "internal" "$(run_in_subshell cert_issuer localhost)"
+  check_eq "cert_issuer: domain -> acme" "acme" "$(run_in_subshell cert_issuer chat.example.com)"
   # shellcheck disable=SC2016
   TEST_ENV_FILE="$sni_env" run_in_subshell eval 'DOMAIN=chat.example.com; write_env' >/dev/null
   check_contains "a domain change rewrites the SNI host" "HAMLANEH_DEFAULT_SNI=chat.example.com" "$(cat "$sni_env")"
+  check_contains "a domain change switches the issuer to ACME" "HAMLANEH_CERT_ISSUER=acme" "$(cat "$sni_env")"
   check_eq "the SNI line is written once, not appended twice" "1" "$(grep -c '^HAMLANEH_DEFAULT_SNI=' "$sni_env")"
 }
 
@@ -474,7 +481,7 @@ test_domain_change_keeps_secrets() {
   # Three lines derive from the domain: the domain itself, the files
   # hostname, and the default SNI host Caddy serves to clients that name
   # no site. Everything else — every secret — must survive byte for byte.
-  local derived='^HAMLANEH_DOMAIN=\|^HAMLANEH_FILES_DOMAIN=\|^HAMLANEH_DEFAULT_SNI='
+  local derived='^HAMLANEH_DOMAIN=\|^HAMLANEH_FILES_DOMAIN=\|^HAMLANEH_DEFAULT_SNI=\|^HAMLANEH_CERT_ISSUER='
   rm -f "$env_file"
   TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=old.example.com; write_env' >/dev/null
   before="$(grep -v "$derived" "$env_file")"
