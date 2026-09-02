@@ -90,7 +90,7 @@ resolve_files_domain() {
 check_security_headers() {
   local headers
   if ! headers="$(curl -skI --max-time 10 "${CONNECT[@]}" "https://${DOMAIN}/")"; then
-    failure "HTTPS endpoint https://${DOMAIN}/ unreachable via 127.0.0.1:443"
+    failure "HTTPS endpoint https://${DOMAIN}/ unreachable via 127.0.0.1:${HTTPS_PORT}"
     return
   fi
 
@@ -231,6 +231,15 @@ check_files_origin() {
   local probe="/files/00000000-0000-0000-0000-000000000000"
 
   assert_opaque_blob_headers "app origin" "https://${DOMAIN}${probe}" "${CONNECT[@]}"
+  # The files site lives on Caddy's own 443, and a custom-port install is
+  # by definition one where the host's 443 belongs to something else — so
+  # that site is unreachable from the host, by design, and files are served
+  # from the app origin probed above. Saying so beats failing on a probe of
+  # somebody else's port.
+  if [ "$HTTPS_PORT" != "443" ]; then
+    printf 'SKIP: files origin (%s) is not published on a custom-port install; files ride the app origin, checked above\n' "$FILES_DOMAIN"
+    return
+  fi
   assert_opaque_blob_headers "files origin (${FILES_DOMAIN})" \
     "https://${FILES_DOMAIN}${probe}" --connect-to "${FILES_DOMAIN}:443:127.0.0.1:443"
 }
@@ -454,13 +463,35 @@ check_auth_defaults() {
   fi
 }
 
+# The published HTTPS port — 443 unless install.sh moved it because 443
+# already belonged to something else. When it did, HAMLANEH_DOMAIN carries
+# the same port (ip:8000), so the URLs below are right as they are; only the
+# --connect-to mapping needs the host and the port apart, which is what
+# these two resolve.
+resolve_https_port() {
+  local p=""
+  if [ -f "$ENV_FILE" ]; then
+    p="$(sed -n 's/^HAMLANEH_HTTPS_PORT=//p' "$ENV_FILE" | tail -n 1)"
+  fi
+  printf '%s' "${p:-443}"
+}
+
+resolve_host() {
+  case "$DOMAIN" in
+    *:*:*) printf '%s' "$DOMAIN" ;;   # an IPv6 literal, never with a port
+    *) printf '%s' "${DOMAIN%%:*}" ;;
+  esac
+}
+
 main() {
   require_tools
 
   DOMAIN="$(resolve_domain)"
   FILES_DOMAIN="$(resolve_files_domain)"
-  CONNECT=(--connect-to "${DOMAIN}:443:127.0.0.1:443")
-  printf 'Verifying secure defaults for https://%s/ (via 127.0.0.1)\n\n' "$DOMAIN"
+  HTTPS_PORT="$(resolve_https_port)"
+  HOST="$(resolve_host)"
+  CONNECT=(--connect-to "${HOST}:${HTTPS_PORT}:127.0.0.1:${HTTPS_PORT}")
+  printf 'Verifying secure defaults for https://%s/ (via 127.0.0.1:%s)\n\n' "$DOMAIN" "$HTTPS_PORT"
 
   check_security_headers
   check_webapp_served
