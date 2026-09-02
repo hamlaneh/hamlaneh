@@ -193,7 +193,7 @@ export function PeoplePicker({
 
         <div className="hm-people__search">
           {/* The label stays visible; the placeholder is supplementary. */}
-          <label className="hm-field__label" htmlFor={queryId}>
+          <label className="hm-overlay-field__label" htmlFor={queryId}>
             {t("chat.people.searchLabel")}
           </label>
           <div className="hm-people__search-shell">
@@ -220,15 +220,15 @@ export function PeoplePicker({
                 nothing to choose: the organisation's mode decides, and it is
                 fixed once the conversation exists. What is shown is therefore
                 the outcome, not a control. */}
-            <p className="hm-field__helper">{t(`chat.people.e2eeByMode.${encryptionMode}`)}</p>
-            <p className="hm-field__helper">{t("chat.people.reopenNote")}</p>
+            <p className="hm-overlay-field__helper">{t(`chat.people.e2eeByMode.${encryptionMode}`)}</p>
+            <p className="hm-overlay-field__helper">{t("chat.people.reopenNote")}</p>
           </div>
         )}
 
         {failureKey === null ? null : (
           <div className="hm-people__search">
-            <p className="hm-banner" role="alert">
-              <span className="hm-banner__glyph">
+            <p className="hm-overlay-banner" role="alert">
+              <span className="hm-overlay-banner__glyph">
                 <CircleAlertIcon size={16} strokeWidth={1.85} />
               </span>
               {t(failureKey)}
@@ -248,7 +248,7 @@ export function PeoplePicker({
             <p role="alert">{t("chat.people.loadFailed")}</p>
             <button
               type="button"
-              className="hm-button"
+              className="hm-overlay-button"
               onClick={() => {
                 setLoadState("loading");
                 setReloads((count) => count + 1);
@@ -329,7 +329,7 @@ export function PeoplePicker({
         )}
 
         <div className="hm-dialog__footer">
-          <button type="button" className="hm-button" onClick={onClose}>
+          <button type="button" className="hm-overlay-button" onClick={onClose}>
             {t("chat.common.cancel")}
           </button>
         </div>

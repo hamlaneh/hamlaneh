@@ -1776,23 +1776,23 @@
 
 /* ── overlay form parts ────────────────────────────────────────────── */
 
-.hm-field {
+.hm-overlay-field {
   display: flex;
   flex-direction: column;
   gap: 7px; /* off-scale (artboard) */
 }
 
-.hm-field__label {
+.hm-overlay-field__label {
   font: 500 13px / 1.4 var(--hm-font-ui, var(--font-ui)); /* 13px off-scale (artboard) */
   color: var(--color-text-primary);
 }
 
-.hm-field__helper {
+.hm-overlay-field__helper {
   font: 400 12px / 1.5 var(--hm-font-ui, var(--font-ui)); /* 12px off-scale (artboard) */
   color: var(--color-text-secondary);
 }
 
-.hm-field__error {
+.hm-overlay-field__error {
   display: flex;
   align-items: flex-start;
   gap: 6px; /* off-scale (artboard) */
@@ -1800,7 +1800,7 @@
   color: var(--color-danger);
 }
 
-.hm-field__error svg {
+.hm-overlay-field__error svg {
   flex: 0 0 auto;
   margin-block-start: 1px;
 }
@@ -1964,7 +1964,7 @@
   color: var(--color-info);
 }
 
-.hm-banner {
+.hm-overlay-banner {
   display: flex;
   align-items: flex-start;
   gap: 10px; /* off-scale (artboard) */
@@ -1976,7 +1976,7 @@
   color: var(--color-text-primary);
 }
 
-.hm-banner__glyph {
+.hm-overlay-banner__glyph {
   flex: 0 0 auto;
   margin-block-start: 1px;
   color: var(--color-danger);
@@ -1984,7 +1984,7 @@
 
 /* ── overlay buttons ───────────────────────────────────────────────── */
 
-.hm-button {
+.hm-overlay-button {
   block-size: var(--size-target);
   padding-inline: 18px; /* off-scale (artboard) */
   box-sizing: border-box;
@@ -2001,25 +2001,25 @@
   transition: background-color var(--duration-press) var(--ease-out);
 }
 
-.hm-button:hover:not(:disabled) {
+.hm-overlay-button:hover:not(:disabled) {
   background: var(--color-surface-subtle);
 }
 
-.hm-button--primary {
+.hm-overlay-button--primary {
   background: var(--color-brand-primary);
   border-color: var(--color-brand-primary);
   color: var(--color-on-brand);
   font-size: var(--text-body);
 }
 
-.hm-button--primary:hover:not(:disabled) {
+.hm-overlay-button--primary:hover:not(:disabled) {
   background: var(--color-brand-hover);
   border-color: var(--color-brand-hover);
 }
 
 /* Busy and disabled never rest on colour: a dashed boundary carries disabled,
    a spinner carries busy (overlay-components -> 02). */
-.hm-button:disabled {
+.hm-overlay-button:disabled {
   background: var(--color-surface-disabled);
   border: 1px dashed var(--color-border-disabled);
   color: var(--color-text-secondary);
@@ -2027,12 +2027,12 @@
 }
 
 /* Fixed width so the busy label cannot resize the control mid-request. */
-.hm-button--fixed {
+.hm-overlay-button--fixed {
   inline-size: 170px; /* off-scale (artboard) */
   padding-inline: 0;
 }
 
-.hm-button--fixed-narrow {
+.hm-overlay-button--fixed-narrow {
   inline-size: 130px; /* off-scale (artboard) */
   padding-inline: 0;
 }

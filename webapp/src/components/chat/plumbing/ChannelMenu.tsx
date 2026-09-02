@@ -183,7 +183,7 @@ export function ChannelMenu({
           <div className="hm-discard__actions">
             <button
               type="button"
-              className="hm-button hm-button--primary"
+              className="hm-overlay-button hm-overlay-button--primary"
               onClick={() => {
                 setPendingExit(null);
                 topicRef.current?.focus();
@@ -195,7 +195,7 @@ export function ChannelMenu({
                 reserved for message deletion. */}
             <button
               type="button"
-              className="hm-button"
+              className="hm-overlay-button"
               onClick={() => {
                 if (pendingExit === "invite") {
                   onInvite();
@@ -210,12 +210,12 @@ export function ChannelMenu({
         </div>
       ) : dm ? (
         <div className="hm-popover__body">
-          <p className="hm-field__helper">{t("chat.channelMenu.dmNote")}</p>
+          <p className="hm-overlay-field__helper">{t("chat.channelMenu.dmNote")}</p>
           {/* The way in when nothing is wrong. Without it the ceremony would be
               reachable only from the warning, so nobody could verify anybody
               until a key had already changed — which is backwards. */}
           {onVerify === undefined ? null : (
-            <button type="button" className="hm-button" onClick={onVerify}>
+            <button type="button" className="hm-overlay-button" onClick={onVerify}>
               {t("chat.e2ee.verification.openSheet")}
             </button>
           )}
@@ -238,13 +238,13 @@ export function ChannelMenu({
           <span className="hm-rule" aria-hidden="true" />
 
           <form
-            className="hm-field"
+            className="hm-overlay-field"
             onSubmit={(event) => {
               event.preventDefault();
               save();
             }}
           >
-            <label className="hm-field__label" htmlFor={topicId}>
+            <label className="hm-overlay-field__label" htmlFor={topicId}>
               {t("chat.channelMenu.topicLabel")}
             </label>
             <input
@@ -274,18 +274,18 @@ export function ChannelMenu({
               </span>
             </div>
             {tooLong ? (
-              <p className="hm-field__error" id={errorId} role="alert">
+              <p className="hm-overlay-field__error" id={errorId} role="alert">
                 {t("chat.channelMenu.topicTooLong")}
               </p>
             ) : failed ? (
               // Beside the action it concerns, and it does not steal focus.
-              <p className="hm-field__error" id={errorId} role="alert">
+              <p className="hm-overlay-field__error" id={errorId} role="alert">
                 {t("chat.channelMenu.topicSaveFailed")}
               </p>
             ) : null}
             <button
               type="submit"
-              className="hm-button hm-button--primary hm-button--fixed-narrow"
+              className="hm-overlay-button hm-overlay-button--primary hm-overlay-button--fixed-narrow"
               disabled={!dirty || tooLong || saving}
             >
               {saving ? (

@@ -185,8 +185,8 @@ export function CreateChannelDialog({ mode, onCreate, onClose }: CreateChannelDi
           }}
         >
           <div className="hm-dialog__body">
-            <div className="hm-field">
-              <label className="hm-field__label" htmlFor={slugId}>
+            <div className="hm-overlay-field">
+              <label className="hm-overlay-field__label" htmlFor={slugId}>
                 {t("chat.createChannel.nameLabel")}
               </label>
               <div className="hm-input-shell" data-invalid={invalidVisible}>
@@ -215,12 +215,12 @@ export function CreateChannelDialog({ mode, onCreate, onClose }: CreateChannelDi
                 />
               </div>
               {invalidVisible ? (
-                <p className="hm-field__error" id={errorId} role="alert">
+                <p className="hm-overlay-field__error" id={errorId} role="alert">
                   <CircleAlertIcon size={14} strokeWidth={2} />
                   {t("chat.createChannel.invalidSlug")}
                 </p>
               ) : (
-                <p className="hm-field__helper" id={helperId}>
+                <p className="hm-overlay-field__helper" id={helperId}>
                   {t("chat.createChannel.nameHelper")}
                 </p>
               )}
@@ -270,14 +270,14 @@ export function CreateChannelDialog({ mode, onCreate, onClose }: CreateChannelDi
                 the server would refuse is offering a refusal, so what is shown is
                 the outcome — stated, because it is fixed at creation and can never
                 be changed for this channel afterwards. */}
-            <p className="hm-field__helper">{t(`chat.createChannel.e2eeByMode.${mode}`)}</p>
+            <p className="hm-overlay-field__helper">{t(`chat.createChannel.e2eeByMode.${mode}`)}</p>
             {bornEncrypted(mode) ? (
-              <p className="hm-field__helper">{t("chat.createChannel.e2eeNote")}</p>
+              <p className="hm-overlay-field__helper">{t("chat.createChannel.e2eeNote")}</p>
             ) : null}
 
             {failureKey === null ? null : (
-              <p className="hm-banner" role="alert">
-                <span className="hm-banner__glyph">
+              <p className="hm-overlay-banner" role="alert">
+                <span className="hm-overlay-banner__glyph">
                   <CircleAlertIcon size={16} strokeWidth={1.85} />
                 </span>
                 {t(failureKey)}
@@ -288,7 +288,7 @@ export function CreateChannelDialog({ mode, onCreate, onClose }: CreateChannelDi
           <div className="hm-dialog__footer">
             <button
               type="submit"
-              className="hm-button hm-button--primary hm-button--fixed"
+              className="hm-overlay-button hm-overlay-button--primary hm-overlay-button--fixed"
               disabled={!valid || submitting}
             >
               {submitting ? (
@@ -300,7 +300,7 @@ export function CreateChannelDialog({ mode, onCreate, onClose }: CreateChannelDi
                 t("chat.createChannel.submit")
               )}
             </button>
-            <button type="button" className="hm-button" onClick={onClose}>
+            <button type="button" className="hm-overlay-button" onClick={onClose}>
               {t("chat.common.cancel")}
             </button>
           </div>
