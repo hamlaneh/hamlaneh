@@ -70,6 +70,7 @@ NON_INTERACTIVE=0
 # (IP and localhost installs only; resolve_ports owns the conversation).
 HTTP_PORT="${HAMLANEH_HTTP_PORT:-80}"
 HTTPS_PORT="${HAMLANEH_HTTPS_PORT:-443}"
+ADMIN_USERNAME="admin"
 ADMIN_PASSWORD=""
 ADMIN_PASSWORD_NEW=0
 ADMIN_PASSWORD_APPENDED=0
@@ -738,6 +739,56 @@ resolve_domain() {
   log "serving on: ${DOMAIN}"
 }
 
+# The first admin account, asked for on a fresh install — the one thing the
+# first real operator wanted the wizard to ask and it did not: their install
+# bootstrapped an admin whose password they never saw, because the run that
+# would have printed it failed later and the re-run had nothing new to
+# print. A generated password is the default and is shown once at the end;
+# a chosen one has to clear the server's own minimum (12), since a shorter
+# one would be refused at the first forced change anyway. A re-run never
+# asks: the bootstrap applies only while the user table is empty, so a new
+# answer would be recorded and never used.
+ADMIN_PASSWORD_MIN=12
+
+valid_username() {
+  case "$1" in "" | *[!A-Za-z0-9._-]*) return 1 ;; esac
+  [ "${#1}" -le 64 ]
+}
+
+resolve_admin() {
+  if [ -n "$(current_env_value HAMLANEH_ADMIN_USERNAME)" ] || [ "$NON_INTERACTIVE" -eq 1 ]; then
+    return 0
+  fi
+  local answer
+  printf '\n'
+  log "─── First admin account ───────────────────────────────────────"
+  log "    this signs in first and creates everyone else; its password"
+  log "    must be changed at that first sign-in"
+  while :; do
+    printf '[hamlaneh] admin username [admin]: '
+    read -r answer
+    answer="${answer:-admin}"
+    if valid_username "$answer"; then
+      ADMIN_USERNAME="$answer"
+      break
+    fi
+    log "usernames are letters, digits, dots, underscores and hyphens (up to 64)"
+  done
+  while :; do
+    printf '[hamlaneh] admin password [Enter = generate one and show it at the end]: '
+    read -rs answer
+    printf '\n'
+    if [ -z "$answer" ]; then
+      break
+    fi
+    if [ "${#answer}" -ge "$ADMIN_PASSWORD_MIN" ]; then
+      ADMIN_PASSWORD="$answer"
+      break
+    fi
+    log "at least ${ADMIN_PASSWORD_MIN} characters — the server refuses shorter ones"
+  done
+}
+
 # Blocks until both web ports are free, telling the operator what holds
 # them; Enter re-checks. Used when moving ports is not an option (a domain
 # needs 80/443 for its certificate) or not the operator's choice.
@@ -915,7 +966,9 @@ write_env() {
   password="$(openssl rand -base64 32)"
   file_url_key="$(openssl rand -base64 32)"
   audit_key="$(openssl rand -base64 32)"
-  ADMIN_PASSWORD="$(openssl rand -base64 18)"
+  # resolve_admin may have taken these from the operator; a generated
+  # password is the default, and is printed once at the end.
+  [ -n "$ADMIN_PASSWORD" ] || ADMIN_PASSWORD="$(openssl rand -base64 18)"
   ADMIN_PASSWORD_NEW=1
   old_umask="$(umask)"
   umask 077
@@ -934,7 +987,7 @@ write_env() {
     printf 'HAMLANEH_AUDIT_KEY=%s\n' "$audit_key"
     printf 'HAMLANEH_LIVEKIT_API_KEY=%s\n' "$(new_livekit_api_key)"
     printf 'HAMLANEH_LIVEKIT_API_SECRET=%s\n' "$(new_livekit_api_secret)"
-    printf 'HAMLANEH_ADMIN_USERNAME=admin\n'
+    printf 'HAMLANEH_ADMIN_USERNAME=%s\n' "$ADMIN_USERNAME"
     printf 'HAMLANEH_ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD"
     printf 'HAMLANEH_ADMIN_LOCALE=en\n'
     print_mail_env
@@ -1618,6 +1671,7 @@ main() {
   ensure_cosign
   resolve_domain
   resolve_ports
+  resolve_admin
   write_env
   # Order is load-bearing: ensure_postgres_password_env asks
   # install_may_have_data, which reads placeholders that the scrub then

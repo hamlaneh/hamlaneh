@@ -841,6 +841,49 @@ test_background_jobs_summary() {
   check_contains "a half-armed summary says so" "Something above is off" "$out"
 }
 
+test_resolve_admin() {
+  local out
+  # Enter twice: the defaults — "admin", and a password generated later by
+  # write_env, so nothing is chosen for the operator that they did not see.
+  # shellcheck disable=SC2016
+  out="$(printf '\n\n' | run_in_subshell eval 'NON_INTERACTIVE=0; resolve_admin; printf "RESULT %s [%s]" "$ADMIN_USERNAME" "$ADMIN_PASSWORD"')"
+  check_contains "empty answers keep admin and defer to a generated password" "RESULT admin []" "$out"
+
+  # A chosen pair is taken as given.
+  # shellcheck disable=SC2016
+  out="$(printf 'amir\ncorrect-horse-battery\n' | run_in_subshell eval 'NON_INTERACTIVE=0; resolve_admin; printf "RESULT %s [%s]" "$ADMIN_USERNAME" "$ADMIN_PASSWORD"')"
+  check_contains "a chosen username and password are used" "RESULT amir [correct-horse-battery]" "$out"
+
+  # Too short is re-asked, not accepted and then refused by the server.
+  # shellcheck disable=SC2016
+  out="$(printf '\nshort\nlong-enough-password\n' | run_in_subshell eval 'NON_INTERACTIVE=0; resolve_admin; printf "RESULT [%s]" "$ADMIN_PASSWORD"')"
+  check_contains "a short password is re-asked" "at least 12 characters" "$out"
+  check_contains "the retry is accepted" "RESULT [long-enough-password]" "$out"
+
+  # A bad username is re-asked too.
+  # shellcheck disable=SC2016
+  out="$(printf 'bad name!\nok_name\n\n' | run_in_subshell eval 'NON_INTERACTIVE=0; resolve_admin; printf "RESULT %s" "$ADMIN_USERNAME"')"
+  check_contains "an invalid username is re-asked" "RESULT ok_name" "$out"
+
+  # Non-interactive never prompts, and a re-run never asks again.
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'NON_INTERACTIVE=1; resolve_admin; printf "RESULT %s" "$ADMIN_USERNAME"')"
+  check_contains "non-interactive keeps the default admin" "RESULT admin" "$out"
+  local env_fixture="${WORK}/admin/.env"
+  mkdir -p "${WORK}/admin"
+  printf 'HAMLANEH_ADMIN_USERNAME=existing\n' > "$env_fixture"
+  # shellcheck disable=SC2016
+  out="$(printf 'ignored\nignored-password-1\n' | TEST_ENV_FILE="$env_fixture" run_in_subshell eval 'NON_INTERACTIVE=0; resolve_admin; printf "RESULT %s" "$ADMIN_USERNAME"')"
+  check_contains "a re-run with an existing admin does not ask" "RESULT admin" "$out"
+
+  # And the chosen pair reaches the file write_env produces.
+  local fresh="${WORK}/admin/fresh.env"
+  # shellcheck disable=SC2016
+  TEST_ENV_FILE="$fresh" run_in_subshell eval 'DOMAIN=localhost; ADMIN_USERNAME=amir; ADMIN_PASSWORD=correct-horse-battery; write_env' >/dev/null
+  check_contains "write_env records the chosen username" "HAMLANEH_ADMIN_USERNAME=amir" "$(cat "$fresh")"
+  check_contains "write_env records the chosen password" "HAMLANEH_ADMIN_PASSWORD=correct-horse-battery" "$(cat "$fresh")"
+}
+
 test_recreate_stale_containers() {
   local logf="${WORK}/docker.log" out
   # A container running an image the tag no longer names is stale, and the
@@ -965,6 +1008,7 @@ main() {
   test_companion_enablement
   test_background_jobs_summary
   test_recreate_stale_containers
+  test_resolve_admin
   test_help_output
   finish
 }
