@@ -858,15 +858,24 @@ resolve_ports() {
 write_env() {
   if [ -f "$ENV_FILE" ]; then
     chmod 600 "$ENV_FILE"
-    local existing
-    existing="$(current_env_domain)"
-    if [ "$existing" = "$DOMAIN" ]; then
+    # "Up to date" means every line DERIVED from the domain is present and
+    # right, not merely that the domain itself matches. Measured on a live
+    # install: a re-run after the SNI and issuer variables were introduced
+    # saw an unchanged domain, declared the file current, and never wrote
+    # them — so Caddy kept asking Let's Encrypt for an IP certificate it
+    # will not issue, and the fix that was on disk never reached the proxy.
+    if [ "$(current_env_domain)" = "$DOMAIN" ] &&
+      [ "$(current_env_value HAMLANEH_FILES_DOMAIN)" = "$(files_domain "$DOMAIN")" ] &&
+      [ "$(current_env_value HAMLANEH_DEFAULT_SNI)" = "$(domain_host "$DOMAIN")" ] &&
+      [ "$(current_env_value HAMLANEH_CERT_ISSUER)" = "$(cert_issuer "$DOMAIN")" ] &&
+      [ "$(current_env_value HAMLANEH_HTTPS_PORT)" = "$([ "$HTTPS_PORT" != "443" ] || [ "$HTTP_PORT" != "80" ] && printf '%s' "$HTTPS_PORT")" ]; then
       log "deploy/.env already up to date — leaving it untouched"
       return
     fi
 
-    # Only the domain changes; every generated secret is always kept.
-    log "updating HAMLANEH_DOMAIN in deploy/.env (existing secrets kept)"
+    # Only the lines derived from the domain change; every generated
+    # secret is always kept.
+    log "updating the domain-derived lines in deploy/.env (existing secrets kept)"
     local tmp
     tmp="$(mktemp "${ENV_FILE}.XXXXXX")"
     chmod 600 "$tmp"

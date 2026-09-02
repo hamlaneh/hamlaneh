@@ -395,6 +395,24 @@ test_domain_kind() {
   check_contains "a domain change rewrites the SNI host" "HAMLANEH_DEFAULT_SNI=chat.example.com" "$(cat "$sni_env")"
   check_contains "a domain change switches the issuer to ACME" "HAMLANEH_CERT_ISSUER=acme" "$(cat "$sni_env")"
   check_eq "the SNI line is written once, not appended twice" "1" "$(grep -c '^HAMLANEH_DEFAULT_SNI=' "$sni_env")"
+
+  # The live-install regression: an .env from before these variables
+  # existed, re-run with the SAME domain, must gain them — "unchanged
+  # domain" is not "up to date". Secrets stay byte-identical.
+  local old_env="${WORK}/sni/old.env" secret_before secret_after
+  printf 'HAMLANEH_DOMAIN=203.0.113.5:8000\nHAMLANEH_FILES_DOMAIN=files.localhost\nHAMLANEH_HTTP_PORT=8080\nHAMLANEH_HTTPS_PORT=8000\nPOSTGRES_PASSWORD=keep-me-exactly\n' > "$old_env"
+  secret_before="$(grep '^POSTGRES_PASSWORD=' "$old_env")"
+  # shellcheck disable=SC2016
+  TEST_ENV_FILE="$old_env" run_in_subshell eval 'DOMAIN=203.0.113.5:8000; HTTPS_PORT=8000; HTTP_PORT=8080; write_env' >/dev/null
+  secret_after="$(grep '^POSTGRES_PASSWORD=' "$old_env")"
+  check_contains "a same-domain re-run adds a missing SNI line" "HAMLANEH_DEFAULT_SNI=203.0.113.5" "$(cat "$old_env")"
+  check_contains "a same-domain re-run adds a missing issuer line" "HAMLANEH_CERT_ISSUER=internal" "$(cat "$old_env")"
+  check_contains "a same-domain re-run keeps the custom ports" "HAMLANEH_HTTPS_PORT=8000" "$(cat "$old_env")"
+  check_eq "a same-domain re-run keeps every secret byte for byte" "$secret_before" "$secret_after"
+  # And once complete, the next re-run really is a no-op.
+  # shellcheck disable=SC2016
+  out="$(TEST_ENV_FILE="$old_env" run_in_subshell eval 'DOMAIN=203.0.113.5:8000; HTTPS_PORT=8000; HTTP_PORT=8080; write_env')"
+  check_contains "a complete .env is left untouched" "already up to date" "$out"
 }
 
 # The generated .env must carry a real value for every secret compose marks
