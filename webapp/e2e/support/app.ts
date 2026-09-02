@@ -327,7 +327,9 @@ export class App {
     await this.composerForm
       .getByRole("button", { name: this.t("chat.composer.mention") })
       .click();
-    await this.composerForm.getByRole("button", { name: displayName, exact: true }).click();
+    // A listbox row, not a button: the mention list is a combobox popover
+    // over the composer (chat-addendum-overlay-components §03).
+    await this.composerForm.getByRole("option", { name: displayName }).click();
   }
 
   /** The channel or DM name in the header — "#slug", or the peer's name. */

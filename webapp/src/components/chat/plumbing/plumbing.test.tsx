@@ -107,7 +107,13 @@ describe("the mention picker", () => {
     const user = await openDeploys();
 
     await user.click(screen.getByRole("button", { name: en.chat.composer.mention }));
-    await user.click(await screen.findByRole("button", { name: CHAT_USERS.nasrin.display_name }));
+    // The delivered design (chat-addendum-overlay-components §03) makes the
+    // list a real listbox with `aria-activedescendant`, so a row is an option
+    // and its name carries the `@username` beside the display name. The
+    // assertion below is untouched: the token, never the name.
+    await user.click(
+      await screen.findByRole("option", { name: new RegExp(CHAT_USERS.nasrin.display_name) }),
+    );
 
     const field = screen.getByRole("textbox", {
       name: new RegExp(en.chat.composer.placeholder.replace("{{target}}", "")),
