@@ -51,11 +51,14 @@
 // variable rather than ignoring it.
 //
 // That listener is a complete minimal app, not a bare admin surface: the web
-// build, /api/v1/instance, /api/v1/users/me and the whole of /api/v1/auth
-// answer on BOTH listeners, so an operator who binds this port to loopback
-// and reaches it through an SSH tunnel can sign in, change a first password
-// and use the dashboard without ever opening the chat port. Those endpoints
-// are shared, not moved; the main listener keeps every one of them.
+// build, /api/v1/instance, /api/v1/users/me, the whole of /api/v1/auth and
+// the two-step enrolment endpoints answer on BOTH listeners, so an operator
+// who binds this port to loopback and reaches it through an SSH tunnel can
+// sign in, clear both mandatory gates — the forced first password change and
+// two-step enrolment — and use the dashboard without ever opening the chat
+// port. Those endpoints are shared, not moved; the main listener keeps every
+// one of them, and the gates still stand in front of the admin surface here
+// exactly as they do there.
 //
 // The port is a deployment boundary, so a firewall can filter it; it is not
 // an authorization decision, and reaching it still faces the same session

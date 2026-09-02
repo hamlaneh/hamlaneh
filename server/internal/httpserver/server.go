@@ -264,22 +264,36 @@ func adminSurface(path string) bool {
 }
 
 // The paths that do NOT move and are carried by BOTH listeners. The admin
-// listener is a complete minimal app rather than a bare admin surface: a
-// signed-in page there has to be able to load its own bundle, say what this
-// instance is, say who is signed in, and sign somebody in or out.
+// listener is a complete minimal app rather than a bare admin surface, and
+// that set is two things:
 //
-// authPrefix is the whole of /api/v1/auth deliberately, not the two or three
-// routes the dashboard happens to call today. The installer offers a
-// loopback bind reached through an SSH tunnel, and an operator on that shape
-// may never open the chat port at all — so sign-in, the two-step step, the
-// forced first password change and password reset each have to work here, or
-// that deployment is broken on first use. It confers nothing: signing in on
-// this port is the same sign-in, spending the same rate-limit budget, and
-// every admin route behind it still runs the same one authz.Can.
+// The session machinery — the bundle, what this instance is, who is signed
+// in, and signing in or out — because a page that cannot answer those cannot
+// exist at all.
+//
+// And EVERY MANDATORY GATE. securityMiddleware makes a session clear two
+// before any route answers: the forced password change (authPrefix) and the
+// TOTP enrolment (totpPrefix). A gate you cannot pass on a listener is the
+// same bug as a bootstrap call that 404s there — the operator is stuck
+// either way — and the two gates sitting in different corners of the URL
+// space is an accident, not a decision. So: adding a gate to
+// securityMiddleware means asking whether its endpoints belong here, and the
+// answer is yes unless something makes it no.
+//
+// The prefixes are taken whole rather than route by route, deliberately. The
+// installer offers a loopback bind reached through an SSH tunnel, and an
+// operator on that shape may never open the chat port at all, so sign-in,
+// the two-step step, the forced first password change, password reset and
+// enrolment each have to work here or that deployment is broken on first
+// use. None of it confers anything: signing in on this port is the same
+// sign-in, spending the same rate-limit budget, and every admin route behind
+// it still runs the same one authz.Can — which the gates above still stand
+// in front of, on this listener exactly as on the other.
 const (
 	instancePath    = "/api/v1/instance"
 	currentUserPath = "/api/v1/users/me"
 	authPrefix      = "/api/v1/auth/"
+	totpPrefix      = "/api/v1/users/me/totp"
 	assetsPrefix    = "/assets/"
 	brandPrefix     = "/brand/"
 )
@@ -288,6 +302,7 @@ const (
 func sharedSurface(path string) bool {
 	return path == instancePath || path == currentUserPath ||
 		strings.HasPrefix(path, authPrefix) ||
+		strings.HasPrefix(path, totpPrefix) ||
 		strings.HasPrefix(path, assetsPrefix) ||
 		strings.HasPrefix(path, brandPrefix)
 }

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
 )
@@ -132,6 +134,17 @@ func TestAdminListenerRoutesBothWays(t *testing.T) {
 			// the session check that answers.
 			name:        "shared: who is signed in",
 			path:        "/api/v1/users/me",
+			wantAdmin:   http.StatusUnauthorized,
+			wantMain:    http.StatusUnauthorized,
+			wantUnsplit: http.StatusUnauthorized,
+		},
+		{
+			// The second mandatory gate's own way out. Shared for the same
+			// reason the first one is: a gate that cannot be passed on this
+			// listener locks the tunnel-only operator out of everything
+			// behind it (TestAdminListenerEnrolmentIsReachableAndStillGates).
+			name:        "shared: the enrolment endpoint",
+			path:        "/api/v1/users/me/totp",
 			wantAdmin:   http.StatusUnauthorized,
 			wantMain:    http.StatusUnauthorized,
 			wantUnsplit: http.StatusUnauthorized,
@@ -301,6 +314,45 @@ func adminLoginStore() *fakeStore {
 		return nil, nil
 	}
 	return store
+}
+
+// TestAdminListenerEnrolmentIsReachableAndStillGates pins BOTH halves of a
+// mandatory gate on the admin listener, and the second half is the one that
+// matters. Reachability alone would pass on a listener that had quietly
+// stopped gating — the enrolment endpoint answering proves only that a path
+// is routed, not that the wall behind it still stands.
+//
+// The session here is an ADMIN's, flagged for enrolment: the role check
+// would let it through, and the gate in front of that check must not.
+func TestAdminListenerEnrolmentIsReachableAndStillGates(t *testing.T) {
+	t.Parallel()
+
+	admin := fixtureUser()
+	admin.IsAdmin = true
+	store := totpPendingStore(admin)
+	store.totpByUser = func(context.Context, uuid.UUID) (storage.Totp, error) {
+		return storage.Totp{}, storage.ErrNotFound
+	}
+	// Wired so an admin route that got past the gate would answer 200, and
+	// the 403 below cannot be an unwired store in disguise.
+	store.listOpenInvites = func(context.Context, storage.ListInvitesParams) ([]storage.Invite, error) {
+		return nil, nil
+	}
+
+	_, adminListener, _ := splitHandlers(t, store)
+
+	// Reachable: the way out of the gate answers here.
+	rec := doHandler(t, adminListener, request(http.MethodGet, "/api/v1/users/me/totp", "",
+		withSessionCookie("tok")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("enrolment on the admin listener = %d, want 200: the gate has no exit on this port (body %s)",
+			rec.Code, rec.Body.String())
+	}
+
+	// Still gated: until enrolment completes, the admin surface on this same
+	// listener is refused by the gate and not by the port.
+	wantError(t, doHandler(t, adminListener, request(http.MethodGet, "/api/v1/admin/invites", "",
+		withSessionCookie("tok"))), http.StatusForbidden, "totp_enrollment_required")
 }
 
 // TestAdminListenerDoesNotAuthorize is the failure ADR 015 forbids by name:
