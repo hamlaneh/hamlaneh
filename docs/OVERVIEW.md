@@ -185,8 +185,19 @@ would plan around a feature nobody can use.
   falls back to REST backfill. The handshake is guarded by a strict Origin check — the
   cross-site-hijacking defense standing in for the CSRF header a browser cannot send on an
   upgrade — and a revoked session closes its sockets within a tested 10 seconds.
-- **The admin dashboard (Phase 1.4).** Users, invitations, org settings and the audit log, on
-  their own path inside the same install — same binary, same compose stack, no extra setup. It
+- **The admin dashboard (Phase 1.4, and its own port since 2026-09-02).** Users, invitations,
+  org settings and the audit log, inside the same install — same binary, same compose stack,
+  no extra setup. Since [ADR 015](adr/015-admin-origin.md) the dashboard, `/api/v1/admin/*`
+  and `/scim/v2/*` can answer on a **port of their own**, and the installer asks whether that
+  port faces the internet or the machine only. It is a port rather than a hostname because
+  cookies here are host-only: a second hostname would take the session away, which is why the
+  files origin had to become cookie-less (ADR 003) and why the most authenticated surface in
+  the product could not follow it. On the web port the powered paths are then **gone** — 404,
+  not 403 — while `/admin` itself is redirected on, since hiding a client-side route protects
+  nothing. The split is off by default, enforced in the server rather than only in the proxy
+  (home mode has none and refuses the variable outright), and it is a deployment boundary and
+  never an authorization decision: reaching the port is not being an admin, and the same single
+  `authz.Can` call site still decides. It
   is also how people come into existence, because public registration is off by default. Two
   rules the dashboard is deliberately unable to break: the last administrator cannot be removed
   (checked inside the transaction that would remove them, under a lock, so two admins demoting
