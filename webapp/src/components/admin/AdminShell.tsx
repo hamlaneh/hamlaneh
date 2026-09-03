@@ -87,8 +87,15 @@ export function AdminShell({
               the origin instead: on a single-origin install "/" is the app, and
               on a split one the proxy sends it back to the app origin. The cost
               is one page load on the way out of a mode you are leaving
-              anyway. */}
-          <a className="hm-admin__exit" href="/">
+              anyway.
+
+              `?to=chat` is what tells the proxy this is the way OUT. Bare "/"
+              on the admin origin is the way IN and lands on the dashboard,
+              because somebody who types host:port there can mean nothing else.
+              The marker rides the exit because the exit is the caller we
+              control. On a single-origin install it is ignored: the query is
+              not part of the route, so "/" is the app either way. */}
+          <a className="hm-admin__exit" href="/?to=chat">
             <ArrowLeftIcon size={17} strokeWidth={1.85} />
             {t("admin.backToChat")}
           </a>

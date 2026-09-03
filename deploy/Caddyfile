@@ -229,11 +229,42 @@ https://{$HAMLANEH_DEFAULT_SNI:localhost}:{$HAMLANEH_ADMIN_PORT:9443} {
 		reverse_proxy server:9090
 	}
 
+	# "/" on this port means two opposite things, and the first operator to
+	# open the admin origin met the wrong one: they typed the bare host:port,
+	# which can only mean "show me the dashboard", and the catch-all below
+	# sent them to the chat app instead. Nothing else lives on this port for
+	# them to have meant.
+	#
+	# So the two readings are told apart by a marker the dashboard's own exit
+	# control sets, rather than by guessing:
+	#
+	#   /?to=chat   clicked Back to chat from inside the dashboard -> the app
+	#   /           typed, bookmarked, or followed from anywhere else -> /admin
+	#
+	# The marker is on the way OUT because that is the caller we control; the
+	# way in is whatever a person types, and it gets the useful answer. Both
+	# targets are fixed — one a configured host, one a literal path — so
+	# neither reads anything from the request and there is no open redirect.
+	@exit {
+		path /
+		query to=chat
+	}
+	handle @exit {
+		redir https://{$HAMLANEH_DOMAIN:localhost}/
+	}
+
+	@dashboard path /
+	handle @dashboard {
+		# The `*` is required, not decoration: a first argument beginning with
+		# "/" is read as a path matcher, so `redir /admin` parses as a matcher
+		# with no destination and Caddy refuses the file outright.
+		redir * /admin
+	}
+
 	# Everything else on this port belongs to the app, so say so instead of
-	# answering 404. This is what makes leaving the dashboard work: the exit
-	# controls are real navigations to "/", and on this origin "/" means "go
-	# back to the app". The target is a fixed configured host, never anything
-	# from the request, so there is no open redirect here.
+	# answering 404: a chat route reached here would paint a shell whose every
+	# call is cross-origin and refused. The target is a fixed configured host,
+	# never anything from the request, so there is no open redirect here.
 	handle {
 		redir https://{$HAMLANEH_DOMAIN:localhost}{uri}
 	}
