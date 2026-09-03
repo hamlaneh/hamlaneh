@@ -623,6 +623,32 @@ test_caddy_admin_allowlist() {
   check_contains "the app site redirects the page half to the admin origin" \
     'redir https://{$HAMLANEH_DEFAULT_SNI:localhost}:{$HAMLANEH_ADMIN_PORT:9443}{uri}' \
     "$(cat "${SCRIPT_DIR}/Caddyfile")"
+
+  # "/" on the admin origin means the way IN, and the exit marker means the
+  # way OUT. The first operator to open that port met the wrong one — a bare
+  # host:port bounced them to the chat app — so both readings are pinned, in
+  # the order Caddy needs them: the marked exit is matched before the bare
+  # root, and the bare root before the catch-all that sends chat routes home.
+  local admin_block order
+  admin_block="$(sed -n '/^# The admin origin (ADR 015)/,/^}/p' "${SCRIPT_DIR}/Caddyfile")"
+  check_contains "the exit control's marker is matched on the admin origin" \
+    "query to=chat" "$admin_block"
+  # shellcheck disable=SC2016 # the needle is the Caddyfile's literal text
+  check_contains "a marked exit leaves for the app origin" \
+    'redir https://{$HAMLANEH_DOMAIN:localhost}/' "$admin_block"
+  check_contains "a bare admin origin lands on the dashboard" "redir * /admin" "$admin_block"
+
+  # The `*` is not decoration: `redir /admin` parses as a path matcher with no
+  # destination and Caddy refuses the whole file. Losing it is a stack that
+  # will not boot, so the check above spells it and this one says why.
+  order="$(printf '%s\n' "$admin_block" | grep -nE '@exit|@dashboard|^\s*handle \{' | cut -d: -f1 | tr '\n' ' ')"
+  check_eq "exit, then dashboard, then the catch-all — in that order" \
+    "$(printf '%s\n' "$order" | tr ' ' '\n' | grep -v '^$' | sort -n | tr '\n' ' ')" "$order"
+
+  # And the exit control must actually set the marker, or the proxy's
+  # distinction is a rule nothing exercises.
+  check_contains "the dashboard's exit control carries the marker" 'href="/?to=chat"' \
+    "$(cat "${SCRIPT_DIR}/../webapp/src/components/admin/AdminShell.tsx")"
 }
 
 test_domain_kind() {
