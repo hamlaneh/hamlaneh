@@ -168,7 +168,7 @@ Products like this are almost never broken through cryptography; they're broken 
 
 ### 6.5 Secure by default
 
-Customers won't harden anything, so defaults carry the load: public registration **off**; org-wide 2FA enforcement available; admin panel on a separate path with optional IP allow-listing; HSTS on; database never exposed to the network; containers non-root with read-only filesystems, minimal/distroless images, dropped capabilities; encrypted automated backups **on**. A hardening guide is published — and assumed unread.
+Customers won't harden anything, so defaults carry the load: public registration **off**; org-wide 2FA enforcement available; the admin dashboard and its API on their own port, so a firewall can reach them separately from the chat app ([ADR 015](adr/015-admin-origin.md)); HSTS on; database never exposed to the network; containers non-root with read-only filesystems, minimal/distroless images, dropped capabilities; encrypted automated backups **on**. A hardening guide is published — and assumed unread.
 
 ### 6.6 Supply chain & updates
 

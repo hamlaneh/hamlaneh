@@ -381,6 +381,17 @@ type apiServer struct {
 	// fixture. WithTrustedProxy is the only thing that sets it, and
 	// clientIP carries the whole argument.
 	trustProxy bool
+
+	// adminAddr is the address the admin listener binds when the admin
+	// surface has been split off onto its own port (ADR 015). Empty — the
+	// default, home mode, and every install before that decision — keeps
+	// every route on the one listener. It is read once, when the routes are
+	// built (server.go).
+	//
+	// It decides ROUTING and nothing else. No gate reads it, and reaching
+	// the port it names is not being an admin: securityMiddleware's one
+	// authz.Can call site still decides that, identically on both listeners.
+	adminAddr string
 }
 
 var _ api.ServerInterface = (*apiServer)(nil)

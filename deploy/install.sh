@@ -70,6 +70,13 @@ NON_INTERACTIVE=0
 # (IP and localhost installs only; resolve_ports owns the conversation).
 HTTP_PORT="${HAMLANEH_HTTP_PORT:-80}"
 HTTPS_PORT="${HAMLANEH_HTTPS_PORT:-443}"
+# The admin dashboard's own port (ADR 015), and which host interface publishes
+# it. Both empty means the split is OFF — every admin route stays on the web
+# port, exactly where it was before this feature — and that is what a
+# --non-interactive run gets, so no existing script changes meaning.
+# resolve_admin_port owns the conversation.
+ADMIN_PORT=""
+ADMIN_BIND=""
 ADMIN_USERNAME="admin"
 ADMIN_PASSWORD=""
 ADMIN_PASSWORD_NEW=0
@@ -919,6 +926,113 @@ resolve_ports() {
   log "the instance will live at https://${DOMAIN}"
 }
 
+# Where the server's second listener binds inside the compose network, and the
+# port deploy/Caddyfile's admin site proxies to. One number in two files: change
+# it here and there, or neither.
+ADMIN_LISTEN_PORT=9090
+ADMIN_PORT_DEFAULT=9443
+# server.go's adminSurface, split in two by what the app port should DO with
+# each half. Both mirror that function and nothing wider — the SHARED paths
+# (/api/v1/auth, /api/v1/instance, /api/v1/users/me, /assets, /brand) are
+# carried by both listeners and must keep answering on the web port.
+#
+# The powered half is refused outright: an operator who shut the admin port in
+# their firewall has to be right that it is gone from here.
+#
+# The page half is redirected to the admin origin instead, because /admin is a
+# client-side route that renders nothing until the API answers — 404ing it
+# would protect nothing, and sending it on is what lets the sidebar's Admin
+# control stay a plain "/admin" instead of the client being handed the admin
+# port in a document anonymous visitors read.
+#
+# Expressions rather than prefix lists because each travels through one
+# environment variable into one Caddy matcher.
+ADMIN_MOVED_PATH_RE='^/(api/v1/admin/|scim/v2/)'
+ADMIN_PAGE_PATH_RE='^/admin(/|$)'
+
+# The admin-port conversation (ADR 015).
+#
+# The dashboard and its API move to a port of their own on the same host, so a
+# cloud firewall — which filters by port and never by path — can reach them
+# separately from the chat app. The question is not whether to move them but
+# whether the moved port faces the internet or this machine only, because the
+# answer decides whether an operator who binds it to loopback has a way back
+# in. That is why this asks rather than assumes, and prints the tunnel command
+# with the loopback answer.
+#
+# NOT asked in --non-interactive mode: the split stays off there, every admin
+# route stays on the web port, and a script that has been running against
+# /api/v1/admin or /scim/v2 keeps working untouched.
+#
+# The port is a DEPLOYMENT boundary and never an authorization decision.
+# Nothing below reads it as a permission; the same session and the same role
+# check refuse everybody else on either port.
+resolve_admin_port() {
+  # A re-run inherits its own earlier answer, so neither the question comes
+  # back nor the choice is lost. Reading it here also keeps ask_free_port away
+  # from a port our own Caddy is already holding.
+  local env_port
+  env_port="$(current_env_value HAMLANEH_ADMIN_PORT)"
+  if [ -n "$env_port" ]; then
+    ADMIN_PORT="$env_port"
+    ADMIN_BIND="$(current_env_value HAMLANEH_ADMIN_BIND)"
+    return 0
+  fi
+  [ "$NON_INTERACTIVE" -eq 0 ] || return 0
+  # An IPv6 literal has to be bracketed to carry a port, and the proxy's site
+  # address is written from the unbracketed host. Rather than write a second,
+  # differently-quoted copy of the same host, this install keeps the admin
+  # surface where it is and says so once.
+  if [ "$(domain_kind "$DOMAIN")" = "ipv6" ]; then
+    log "IPv6 install: the admin dashboard stays on the web port (a bracketed host:port site address is not written here)."
+    return 0
+  fi
+
+  # An .env that exists but carries none of these variables is an install that
+  # PREDATES this feature, and it may have a working SCIM integration pointed
+  # at the web port. Moving that because somebody pressed Enter through a
+  # question they had never seen would be exactly the silent breakage the
+  # idempotency promise exists to prevent — so those get a third answer, and
+  # it is the default. A machine with no instance on it yet has nothing to
+  # break, and keeps the closed two-answer default.
+  local choice host existing=0
+  [ ! -f "$ENV_FILE" ] || existing=1
+  host="$(domain_host "$DOMAIN")"
+  printf '\n'
+  log "─── Admin dashboard ──────────────────────────────────────────"
+  log "    the dashboard and its API move to their own port, so your"
+  log "    firewall can reach them separately from the chat app"
+  log "    1) reachable from the internet — open this port in your"
+  log "       cloud firewall to use it"
+  log "    2) this machine only — reach it with:  ssh -L ${ADMIN_PORT_DEFAULT}:localhost:${ADMIN_PORT_DEFAULT}"
+  if [ "$existing" -eq 1 ]; then
+    log "    3) leave it where it is — the dashboard and its API stay on"
+    log "       the web port"
+    printf '[hamlaneh] choose 1, 2 or 3 [3]: '
+  else
+    printf '[hamlaneh] choose 1 or 2 [2]: '
+  fi
+  read -r choice
+  if [ "$existing" -eq 1 ] && [ "$choice" != "1" ] && [ "$choice" != "2" ]; then
+    log "leaving the admin dashboard on the web port — nothing moves. Re-run and choose 1 or 2 to move it."
+    return 0
+  fi
+  ADMIN_PORT="$(ask_free_port "admin dashboard port" "$ADMIN_PORT_DEFAULT")"
+  # Anything that is not "1" is read as the closed answer: the one that can
+  # cost an operator their way in is the open one, so it has to be typed.
+  if [ "$choice" = "1" ]; then
+    ADMIN_BIND=""
+    log "the admin dashboard will live at https://${host}:${ADMIN_PORT}/admin"
+    log "open ${ADMIN_PORT}/tcp in your cloud firewall, or it will not answer"
+  else
+    ADMIN_BIND="127.0.0.1:"
+    log "the admin dashboard will listen on this machine only. Reach it with:"
+    log "  ssh -L ${ADMIN_PORT}:localhost:${ADMIN_PORT} <you>@${host}"
+    log "then open https://localhost:${ADMIN_PORT}/admin"
+    log "From the public chat app the Admin control will not reach this port — that is what 'this machine only' means. Opened through the tunnel, the control works normally."
+  fi
+}
+
 write_env() {
   if [ -f "$ENV_FILE" ]; then
     chmod 600 "$ENV_FILE"
@@ -933,6 +1047,10 @@ write_env() {
       [ "$(current_env_value HAMLANEH_DEFAULT_SNI)" = "$(domain_host "$DOMAIN")" ] &&
       [ "$(current_env_value HAMLANEH_CERT_ISSUER)" = "$(cert_issuer "$DOMAIN")" ] &&
       [ "$(current_env_value HAMLANEH_HTTP_PROTOCOLS)" = "$(http_protocols "$DOMAIN")" ] &&
+      [ "$(current_env_value HAMLANEH_ADMIN_PORT)" = "$ADMIN_PORT" ] &&
+      [ "$(current_env_value HAMLANEH_ADMIN_BIND)" = "$ADMIN_BIND" ] &&
+      [ "$(current_env_value HAMLANEH_ADMIN_MOVED_PATHS)" = "${ADMIN_PORT:+$ADMIN_MOVED_PATH_RE}" ] &&
+      [ "$(current_env_value HAMLANEH_ADMIN_PAGE_PATHS)" = "${ADMIN_PORT:+$ADMIN_PAGE_PATH_RE}" ] &&
       [ "$(current_env_value HAMLANEH_HTTPS_PORT)" = "$([ "$HTTPS_PORT" != "443" ] || [ "$HTTP_PORT" != "80" ] && printf '%s' "$HTTPS_PORT")" ]; then
       log "deploy/.env already up to date — leaving it untouched"
       return
@@ -954,6 +1072,11 @@ write_env() {
         -e '/^HAMLANEH_DEFAULT_SNI=/d' \
         -e '/^HAMLANEH_CERT_ISSUER=/d' \
         -e '/^HAMLANEH_HTTP_PROTOCOLS=/d' \
+        -e '/^HAMLANEH_ADMIN_ADDR=/d' \
+        -e '/^HAMLANEH_ADMIN_PORT=/d' \
+        -e '/^HAMLANEH_ADMIN_BIND=/d' \
+        -e '/^HAMLANEH_ADMIN_MOVED_PATHS=/d' \
+        -e '/^HAMLANEH_ADMIN_PAGE_PATHS=/d' \
         "$ENV_FILE" > "$tmp"
     {
       printf 'HAMLANEH_DEFAULT_SNI=%s\n' "$(domain_host "$DOMAIN")"
@@ -966,6 +1089,20 @@ write_env() {
     if [ "$HTTPS_PORT" != "443" ] || [ "$HTTP_PORT" != "80" ]; then
       printf 'HAMLANEH_HTTP_PORT=%s\n' "$HTTP_PORT" >> "$tmp"
       printf 'HAMLANEH_HTTPS_PORT=%s\n' "$HTTPS_PORT" >> "$tmp"
+    fi
+    # Rewritten as a group for the same reason: the split being OFF is the
+    # ABSENCE of these lines, so turning it back off has to remove them rather
+    # than leave a port nothing listens on. HAMLANEH_ADMIN_BIND is written even
+    # when empty — empty means "every interface", and deleting the line would
+    # mean "loopback" (see the compose ports entry).
+    if [ -n "$ADMIN_PORT" ]; then
+      {
+        printf 'HAMLANEH_ADMIN_ADDR=:%s\n' "$ADMIN_LISTEN_PORT"
+        printf 'HAMLANEH_ADMIN_PORT=%s\n' "$ADMIN_PORT"
+        printf 'HAMLANEH_ADMIN_BIND=%s\n' "$ADMIN_BIND"
+        printf 'HAMLANEH_ADMIN_MOVED_PATHS=%s\n' "$ADMIN_MOVED_PATH_RE"
+        printf 'HAMLANEH_ADMIN_PAGE_PATHS=%s\n' "$ADMIN_PAGE_PATH_RE"
+      } >> "$tmp"
     fi
     # Derived from the domain, so an .env written before this variable existed
     # gains it here rather than keeping a stale files hostname.
@@ -1000,6 +1137,13 @@ write_env() {
     if [ "$HTTPS_PORT" != "443" ] || [ "$HTTP_PORT" != "80" ]; then
       printf 'HAMLANEH_HTTP_PORT=%s\n' "$HTTP_PORT"
       printf 'HAMLANEH_HTTPS_PORT=%s\n' "$HTTPS_PORT"
+    fi
+    if [ -n "$ADMIN_PORT" ]; then
+      printf 'HAMLANEH_ADMIN_ADDR=:%s\n' "$ADMIN_LISTEN_PORT"
+      printf 'HAMLANEH_ADMIN_PORT=%s\n' "$ADMIN_PORT"
+      printf 'HAMLANEH_ADMIN_BIND=%s\n' "$ADMIN_BIND"
+      printf 'HAMLANEH_ADMIN_MOVED_PATHS=%s\n' "$ADMIN_MOVED_PATH_RE"
+      printf 'HAMLANEH_ADMIN_PAGE_PATHS=%s\n' "$ADMIN_PAGE_PATH_RE"
     fi
     printf 'POSTGRES_PASSWORD=%s\n' "$password"
     printf 'HAMLANEH_FILE_URL_KEY=%s\n' "$file_url_key"
@@ -1355,22 +1499,36 @@ preflight() {
 # 80 and 443 is our own Caddy, and a pre-flight that fails on that would
 # break the idempotency this script promises.
 preflight_ports() {
+  # Checked before the socket scan and before the stack-exists shortcut,
+  # because this one is a collision inside our OWN compose file rather than
+  # with anything on the host. The admin dashboard's port is published whether
+  # or not the split is on — a compose ports entry cannot be conditionally
+  # omitted — so the number compose will use, chosen or default, has to differ
+  # from the web ports. Docker reports the clash as "port is already
+  # allocated", which names neither file nor variable.
+  local admin_published="${ADMIN_PORT:-$ADMIN_PORT_DEFAULT}"
+  if [ "$admin_published" = "$HTTP_PORT" ] || [ "$admin_published" = "$HTTPS_PORT" ]; then
+    fail "port ${admin_published} is a web port here AND where deploy/docker-compose.yml publishes the admin dashboard, so the stack could not start. Re-run and choose different web ports, or set HAMLANEH_ADMIN_PORT in deploy/.env to a free one. Nothing was changed."
+  fi
   if stack_exists; then
     return 0
   fi
-  local listening taken=() port
+  local listening taken=() port needed
   listening="$(listening_snapshot)"
   [ -n "$listening" ] || return 0
   # The web ports are whatever resolve_ports settled on; the media trio is
   # fixed (ADR 005 — published TURN/ICE ports are part of the calls design,
-  # not an install-time preference).
-  for port in "$HTTP_PORT" "$HTTPS_PORT" 3478 7881 7882; do
+  # not an install-time preference). The admin port joins the list only when
+  # the split is on, because with it off nothing publishes one.
+  needed=("$HTTP_PORT" "$HTTPS_PORT" 3478 7881 7882)
+  [ -z "$ADMIN_PORT" ] || needed+=("$ADMIN_PORT")
+  for port in "${needed[@]}"; do
     if snapshot_has_port "$listening" "$port"; then
       taken+=("$port")
     fi
   done
   if [ "${#taken[@]}" -gt 0 ]; then
-    fail "these host ports are already in use by something else: ${taken[*]}. Hamlaneh needs ${HTTP_PORT}, ${HTTPS_PORT}, 3478, 7881 and 7882. Stop whatever holds them (often nginx or apache2: 'systemctl disable --now nginx') and re-run. Nothing was changed."
+    fail "these host ports are already in use by something else: ${taken[*]}. Hamlaneh needs ${needed[*]}. Stop whatever holds them (often nginx or apache2: 'systemctl disable --now nginx') and re-run. Nothing was changed."
   fi
 }
 
@@ -1657,6 +1815,19 @@ print_host_notes() {
 # who needs it most is the one upgrading an existing install onto a locked
 # down VPS, and they would never see a notice that only appeared once.
 print_port_notice() {
+  # The admin port's row, or nothing when the split is off. The loopback
+  # answer must NOT be told to open it in a cloud firewall — that is the one
+  # sentence in this box that would undo the choice the operator just made.
+  # Built here rather than inline because a heredoc cannot skip a line, and
+  # ASCII-only because printf pads by bytes: an em dash would shorten the row
+  # by two columns and bend the box.
+  local admin="" row=""
+  if [ -n "$ADMIN_PORT" ] && [ -n "$ADMIN_BIND" ]; then
+    row="$(printf '%6s' "$ADMIN_PORT")/tcp    admin dashboard: this machine only, do NOT open it"
+  elif [ -n "$ADMIN_PORT" ]; then
+    row="$(printf '%6s' "$ADMIN_PORT")/tcp    admin dashboard: open this one too"
+  fi
+  [ -z "$row" ] || admin="$(printf '\n  │  %-68s│' "$row")"
   cat <<EOF
 
   ┌──────────────────────────────────────────────────────────────────────┐
@@ -1668,7 +1839,7 @@ print_port_notice() {
   │                                                                      │
   │  $(printf '%6s' "$HTTP_PORT")/tcp    HTTP — redirects to HTTPS, and ACME certificates      │
   │  $(printf '%6s' "$HTTPS_PORT")/tcp    HTTPS — the application                               │
-  │  $(printf '%6s' "$HTTPS_PORT")/udp    HTTP/3                                                │
+  │  $(printf '%6s' "$HTTPS_PORT")/udp    HTTP/3                                                │${admin}
   │    3478/udp    calls: TURN, the relay for restrictive networks       │
   │    7881/tcp    calls: media over TCP, where UDP is blocked           │
   │    7882/udp    calls: media                                          │
@@ -1690,6 +1861,7 @@ main() {
   ensure_cosign
   resolve_domain
   resolve_ports
+  resolve_admin_port
   resolve_admin
   write_env
   # Order is load-bearing: ensure_postgres_password_env asks

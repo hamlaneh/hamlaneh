@@ -13,6 +13,7 @@ import {
   NestMark,
   PlusIcon,
   SettingsIcon,
+  ShieldIcon,
   XIcon,
 } from "../icons";
 import { Avatar } from "./Avatar";
@@ -242,6 +243,20 @@ export function Sidebar({
         >
           <SettingsIcon size={17} />
         </button>
+        {/* Admin sits HERE, beside the gear — never inside the identity button
+            (chat-addendum-menu-components → 03, "Settings and Admin are never
+            nested inside it"). A link rather than a button because the
+            dashboard is a place with a URL, and the whole mode signal is that
+            admin is somewhere you visit and come back from.
+
+            Admins only. The server refuses everyone else regardless, so this
+            is not the permission check — a dashboard that painted and then
+            errored would be the lie this avoids. */}
+        {currentUser.is_admin ? (
+          <a className="hm-icon-button" href="/admin" aria-label={t("account.adminDashboard")}>
+            <ShieldIcon size={17} />
+          </a>
+        ) : null}
         {accountMenu}
       </div>
     </nav>

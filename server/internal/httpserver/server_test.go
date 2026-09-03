@@ -157,12 +157,17 @@ func TestServedDocumentCSPCompliance(t *testing.T) {
 func TestNewSetsTimeouts(t *testing.T) {
 	t.Parallel()
 
-	srv := httpserver.New(":8080", nil)
+	srv, admin := httpserver.New(":8080", nil)
 	if srv.Addr != ":8080" {
 		t.Errorf("got addr %q, want %q", srv.Addr, ":8080")
 	}
 	if srv.Handler == nil {
 		t.Error("handler is nil")
+	}
+	// No WithAdminListener, so there is no second listener to shut down and
+	// nothing moved off the first (ADR 015).
+	if admin != nil {
+		t.Errorf("New built an admin listener on %q without being asked for one", admin.Addr)
 	}
 	if srv.ReadHeaderTimeout <= 0 {
 		t.Error("ReadHeaderTimeout is not set")

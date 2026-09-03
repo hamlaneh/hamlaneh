@@ -363,6 +363,268 @@ test_resolve_ports() {
   check_contains "a re-run inherits its earlier ports" "8080 8443" "$out"
 }
 
+# The admin dashboard's own port (ADR 015).
+#
+# The subject is the conversation and what it writes, never this machine's
+# sockets: the listening snapshot and the port holder are stubbed per branch.
+# The property that matters most is the LAST one — that "this machine only"
+# really produces a 127.0.0.1 publication — because getting it wrong publishes
+# the admin API to the internet on an install whose operator asked for the
+# opposite, and nothing else in this suite would notice.
+test_resolve_admin_port() {
+  local out env_file="${WORK}/admin/.env"
+  mkdir -p "${WORK}/admin"
+  # A fresh install: no deploy/.env yet, so nothing on this machine can break.
+  # Named explicitly rather than left to the default so no earlier test's
+  # leftovers can change which question shape these exercise.
+  local fresh_env="${WORK}/admin/never-created.env"
+  rm -f "$fresh_env"
+
+  # Answer 1, default port. "Reachable from the internet" is an EMPTY bind,
+  # because empty is what a docker port mapping reads as every interface.
+  # shellcheck disable=SC2016
+  out="$(printf '1\n\n' | TEST_ENV_FILE="$fresh_env" run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "the internet answer takes the default port and no bind" "RESULT [9443] []" "$out"
+  check_contains "the internet answer says to open the port" "open 9443/tcp in your cloud firewall" "$out"
+
+  # Answer 2, default port: loopback, and the tunnel command carries the real
+  # port rather than a placeholder.
+  # shellcheck disable=SC2016
+  out="$(printf '2\n\n' | TEST_ENV_FILE="$fresh_env" run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "the loopback answer binds 127.0.0.1" "RESULT [9443] [127.0.0.1:]" "$out"
+  check_contains "the loopback answer prints a usable tunnel command" "ssh -L 9443:localhost:9443 <you>@203.0.113.5" "$out"
+  check_contains "the loopback answer says the app's Admin control will not reach it" \
+    "the Admin control will not reach this port" "$out"
+
+  # On a machine with no instance yet, Enter is the CLOSED answer: nothing can
+  # break, so the default is the safe one rather than the timid one.
+  # shellcheck disable=SC2016
+  out="$(printf '\n\n' | TEST_ENV_FILE="$fresh_env" run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "a fresh install defaults to the loopback answer" "RESULT [9443] [127.0.0.1:]" "$out"
+  check_contains "a fresh install is offered two answers" "choose 1 or 2 [2]" "$out"
+
+  # An install that PREDATES this feature is the case that must not move on
+  # its own. Its SCIM provisioning may be pointed at the web port right now,
+  # and an operator pressing Enter through a question they have never seen is
+  # not consent to move it. Third answer, and it is the default.
+  local legacy_env="${WORK}/admin/legacy.env"
+  printf 'HAMLANEH_DOMAIN=203.0.113.5\nPOSTGRES_PASSWORD=keep-me\n' > "$legacy_env"
+  # shellcheck disable=SC2016
+  out="$(printf '\n' | TEST_ENV_FILE="$legacy_env" run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "an existing install is offered a third answer" "3) leave it where it is" "$out"
+  check_contains "and that third answer is its default" "choose 1, 2 or 3 [3]" "$out"
+  check_contains "pressing Enter on an existing install moves nothing" "RESULT [] []" "$out"
+  if grep -q 'admin dashboard port' <<<"$out"; then
+    bad "an existing install was asked for a port after choosing to leave the surface alone"
+  else
+    ok "leaving it alone asks for no port"
+  fi
+
+  # The third answer is a default, not a wall: an operator who says 2 still
+  # gets the split on an existing install.
+  # shellcheck disable=SC2016
+  out="$(printf '2\n\n' | TEST_ENV_FILE="$legacy_env" run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:22 \n"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "an existing install can still choose to move the surface" "RESULT [9443] [127.0.0.1:]" "$out"
+  # The menu itself describes what option 1 would cost, so the assertion is
+  # about the CONFIRMATION: having chosen "this machine only", the operator
+  # must not then be told to open the port in their cloud firewall.
+  if grep -q 'open 9443/tcp in your cloud firewall' <<<"$out"; then
+    bad "the loopback answer told the operator to open the port in their cloud firewall"
+  else
+    ok "the loopback answer does not tell the operator to open the port"
+  fi
+
+  # A taken port is re-asked with its holder named, and the tunnel command
+  # then shows the port that was actually chosen.
+  # shellcheck disable=SC2016
+  out="$(printf '2\n\n9444\n' | TEST_ENV_FILE="$fresh_env" run_in_subshell eval 'listening_snapshot() { printf "tcp LISTEN 0 128 0.0.0.0:9443 \n"; }; port_holder() { printf "grafana"; }; DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "a taken admin port names its holder" "port 9443 is also in use (by grafana)" "$out"
+  check_contains "the re-asked answer is the one that sticks" "RESULT [9444] [127.0.0.1:]" "$out"
+  check_contains "the tunnel command shows the chosen port, not the default" "ssh -L 9444:localhost:9444" "$out"
+
+  # The admin port is published whether or not the split is on, so a web port
+  # that equals it is a clash inside our own compose file. Both the chosen
+  # number and the default that stands in when nothing was chosen are covered,
+  # because the second one is the case nobody would think to test.
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'stack_exists() { return 1; }; ADMIN_PORT=9443; HTTP_PORT=80; HTTPS_PORT=9443; preflight_ports')"
+  check_contains "an admin port that collides with a web port is refused" "is a web port here AND where deploy/docker-compose.yml publishes the admin dashboard" "$out"
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'stack_exists() { return 1; }; ADMIN_PORT=; HTTP_PORT=80; HTTPS_PORT=9443; preflight_ports')"
+  check_contains "the split being off does not hide the collision" "port 9443 is a web port here" "$out"
+
+  # Non-interactive leaves the split OFF: an existing script's admin and SCIM
+  # calls must keep answering on the web port.
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'DOMAIN=203.0.113.5; NON_INTERACTIVE=1; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "non-interactive leaves the admin split off" "RESULT [] []" "$out"
+  if grep -q 'Admin dashboard' <<<"$out"; then
+    bad "non-interactive mode asked the admin-port question"
+  else
+    ok "non-interactive mode asks nothing about the admin port"
+  fi
+
+  # A re-run inherits the earlier answer: the question does not come back and
+  # the choice is not lost.
+  local rerun_env="${WORK}/admin/rerun.env"
+  printf 'HAMLANEH_DOMAIN=203.0.113.5\nHAMLANEH_ADMIN_ADDR=:9090\nHAMLANEH_ADMIN_PORT=9443\nHAMLANEH_ADMIN_BIND=127.0.0.1:\n' > "$rerun_env"
+  # shellcheck disable=SC2016
+  out="$(TEST_ENV_FILE="$rerun_env" run_in_subshell eval 'DOMAIN=203.0.113.5; NON_INTERACTIVE=0; resolve_admin_port; printf "RESULT [%s] [%s]" "$ADMIN_PORT" "$ADMIN_BIND"')"
+  check_contains "a re-run inherits its earlier admin port and bind" "RESULT [9443] [127.0.0.1:]" "$out"
+  if grep -q 'Admin dashboard' <<<"$out"; then
+    bad "a re-run asked the admin-port question again"
+  else
+    ok "a re-run does not ask the admin-port question again"
+  fi
+
+  # What the answers actually write, and what compose then does with it.
+  rm -f "$env_file"
+  # shellcheck disable=SC2016
+  TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=203.0.113.5; ADMIN_PORT=9443; ADMIN_BIND=127.0.0.1:; write_env' >/dev/null
+  check_contains "the loopback answer is written as a 127.0.0.1 bind" "HAMLANEH_ADMIN_BIND=127.0.0.1:" "$(cat "$env_file")"
+  check_contains "the answer turns the server's second listener on" "HAMLANEH_ADMIN_ADDR=:9090" "$(cat "$env_file")"
+  # What the app port does with the admin surface, in two halves that must not
+  # blur into each other. The POWERED half is refused: a wider expression would
+  # take the sign-in routes off the chat port with it, a narrower one would
+  # leave the admin API answering there, which is the thing the operator was
+  # told they had shut. The PAGE half is redirected instead, which is what lets
+  # the sidebar keep a plain "/admin" — so the page must NOT be in the refusal.
+  check_contains "the app port is told which powered paths have moved" \
+    'HAMLANEH_ADMIN_MOVED_PATHS=^/(api/v1/admin/|scim/v2/)' "$(cat "$env_file")"
+  check_contains "the app port is told which page paths to send on" \
+    'HAMLANEH_ADMIN_PAGE_PATHS=^/admin(/|$)' "$(cat "$env_file")"
+  local moved_re page_re
+  moved_re="$(sed -n 's/^HAMLANEH_ADMIN_MOVED_PATHS=//p' "$env_file" | tail -n 1)"
+  page_re="$(sed -n 's/^HAMLANEH_ADMIN_PAGE_PATHS=//p' "$env_file" | tail -n 1)"
+  local moved stays redirected
+  for moved in /api/v1/admin/users /scim/v2/Users; do
+    if grep -Eq "$moved_re" <<<"$moved"; then
+      ok "the app port refuses ${moved} once the surface has moved"
+    else
+      bad "${moved} moved to the admin port but the app port would still serve it"
+    fi
+  done
+  # server.go's sharedSurface: carried by BOTH listeners, so the app port must
+  # keep them. The dashboard page is here too — it is redirected, never
+  # refused. /api/v1/administrators is not a route at all; it is in the list
+  # because a sloppier expression would swallow it along with anything else
+  # that merely starts with the same letters.
+  for stays in /admin /admin/audit /api/v1/auth/login /api/v1/instance /api/v1/users/me /assets/app.js /brand/logo.svg /api/v1/administrators; do
+    if grep -Eq "$moved_re" <<<"$stays"; then
+      bad "${stays} must not be part of the app port's refusal"
+    else
+      ok "the app port does not refuse ${stays}"
+    fi
+  done
+  for redirected in /admin /admin/ /admin/audit; do
+    if grep -Eq "$page_re" <<<"$redirected"; then
+      ok "the app port sends ${redirected} on to the admin origin"
+    else
+      bad "${redirected} is the dashboard page but the app port would serve it itself"
+    fi
+  done
+  # The page expression must not reach past the dashboard's own subtree.
+  for stays in /administrators /api/v1/admin/users; do
+    if grep -Eq "$page_re" <<<"$stays"; then
+      bad "${stays} is not the dashboard page but would be redirected as one"
+    else
+      ok "the page redirect does not reach ${stays}"
+    fi
+  done
+  # The link that makes the line above mean anything. The SINGLE dash is the
+  # whole control: with ":-" an internet answer, written as an empty value,
+  # would silently fall back to loopback — and worse, a missing line would not
+  # fall back at all if the default were dropped, publishing to the world.
+  # shellcheck disable=SC2016 # the needle is compose's literal text, not an expansion
+  check_contains "compose publishes the admin port through that bind, loopback by default" \
+    '"${HAMLANEH_ADMIN_BIND-127.0.0.1:}${HAMLANEH_ADMIN_PORT:-9443}:${HAMLANEH_ADMIN_PORT:-9443}"' \
+    "$(cat "${SCRIPT_DIR}/docker-compose.yml")"
+
+  # The internet answer writes an EMPTY line, not a missing one — deleting it
+  # would mean loopback.
+  rm -f "$env_file"
+  # shellcheck disable=SC2016
+  TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=203.0.113.5; ADMIN_PORT=9443; ADMIN_BIND=; write_env' >/dev/null
+  check_eq "the internet answer writes an empty bind line, not no line" "1" \
+    "$(grep -c '^HAMLANEH_ADMIN_BIND=$' "$env_file")"
+
+  # An .env carrying an OLD expression is not "up to date" merely because its
+  # port and bind still match — the same trap the SNI and issuer variables fell
+  # into on a live install, where an unchanged domain meant a fix on disk never
+  # reached the proxy.
+  printf 'HAMLANEH_DOMAIN=203.0.113.5\nHAMLANEH_ADMIN_ADDR=:9090\nHAMLANEH_ADMIN_PORT=9443\nHAMLANEH_ADMIN_BIND=127.0.0.1:\nHAMLANEH_ADMIN_MOVED_PATHS=^/(admin|api/v1/admin/|scim/v2/)\n' > "$env_file"
+  # shellcheck disable=SC2016
+  out="$(TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=203.0.113.5; ADMIN_PORT=9443; ADMIN_BIND=127.0.0.1:; write_env')"
+  check_contains "a stale admin expression is not mistaken for up to date" "updating the domain-derived lines" "$out"
+  check_contains "and it is rewritten to the shipped one" \
+    'HAMLANEH_ADMIN_MOVED_PATHS=^/(api/v1/admin/|scim/v2/)' "$(cat "$env_file")"
+  check_eq "the rewritten expression is written once, not appended twice" "1" \
+    "$(grep -c '^HAMLANEH_ADMIN_MOVED_PATHS=' "$env_file")"
+
+  # Off writes nothing at all: absence is what "off" is.
+  rm -f "$env_file"
+  # shellcheck disable=SC2016
+  TEST_ENV_FILE="$env_file" run_in_subshell eval 'DOMAIN=203.0.113.5; write_env' >/dev/null
+  if grep -q '^HAMLANEH_ADMIN_ADDR=\|^HAMLANEH_ADMIN_PORT=\|^HAMLANEH_ADMIN_MOVED_PATHS=' "$env_file"; then
+    bad "the split being off still wrote admin lines into .env"
+  else
+    ok "the split being off writes no admin lines at all"
+  fi
+
+  # And the closing notice tells the truth for each mode.
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'ADMIN_PORT=9443; ADMIN_BIND=127.0.0.1:; print_port_notice')"
+  check_contains "the notice marks a loopback admin port as not-to-be-opened" \
+    "9443/tcp    admin dashboard: this machine only, do NOT open it" "$out"
+  check_eq "the admin row keeps the box square" \
+    "$(grep '7882/udp' <<<"$out" | wc -c)" "$(grep 'admin dashboard' <<<"$out" | wc -c)"
+  # shellcheck disable=SC2016
+  out="$(run_in_subshell eval 'ADMIN_PORT=9443; ADMIN_BIND=; print_port_notice')"
+  check_contains "the notice tells an internet admin port to be opened" \
+    "9443/tcp    admin dashboard: open this one too" "$out"
+  out="$(run_in_subshell print_port_notice)"
+  if grep -q 'admin dashboard' <<<"$out"; then
+    bad "the notice named an admin port on an install that has none"
+  else
+    ok "the notice names no admin port when the split is off"
+  fi
+}
+
+# The admin origin's allow-list in deploy/Caddyfile, stated here independently
+# of that file — the same discipline expected_family_for uses above, and for
+# the same reason: if somebody changes the list there, they have to change it
+# here too, deliberately.
+#
+# It exists because this list has already drifted behind the server's
+# adminListenerServes twice in one slice, and neither time did the symptom look
+# like a proxy problem: the dashboard served a document whose boot calls went to
+# the app origin, were refused cross-origin, and left a page that never
+# finished loading. A path added to sharedSurface or adminSurface in
+# server/internal/httpserver/server.go has to be added below in the same change.
+EXPECTED_ADMIN_ALLOWLIST='/admin /admin/* /api/v1/admin/* /scim/v2/* /api/v1/instance /api/v1/users/me /api/v1/users/me/totp* /api/v1/auth/* /assets/* /brand/*'
+
+test_caddy_admin_allowlist() {
+  local line got
+  line="$(grep -F '@adminsurface path ' "${SCRIPT_DIR}/Caddyfile" | head -n 1)"
+  if [ -z "$line" ]; then
+    bad "deploy/Caddyfile declares no @adminsurface matcher"
+    return
+  fi
+  got="${line#*@adminsurface path }"
+  check_eq "the admin origin serves exactly the paths the server's admin listener does" \
+    "$EXPECTED_ADMIN_ALLOWLIST" "$got"
+
+  # And the app site must still send the page on and refuse the API — the two
+  # halves are not interchangeable, so neither handler may quietly become the
+  # other.
+  check_contains "the app site refuses the powered half" "@adminmoved path_regexp" \
+    "$(cat "${SCRIPT_DIR}/Caddyfile")"
+  # shellcheck disable=SC2016 # the needle is the Caddyfile's literal text
+  check_contains "the app site redirects the page half to the admin origin" \
+    'redir https://{$HAMLANEH_DEFAULT_SNI:localhost}:{$HAMLANEH_ADMIN_PORT:9443}{uri}' \
+    "$(cat "${SCRIPT_DIR}/Caddyfile")"
+}
+
 test_domain_kind() {
   check_eq "domain_kind localhost" "localhost" "$(run_in_subshell domain_kind localhost)"
   check_eq "domain_kind ipv4" "ipv4" "$(run_in_subshell domain_kind 203.0.113.5)"
@@ -996,6 +1258,8 @@ main() {
   test_heartbeat_run
   test_resolve_domain_prompt
   test_resolve_ports
+  test_resolve_admin_port
+  test_caddy_admin_allowlist
   test_domain_kind
   test_write_env_generates_real_secrets
   test_idempotent_rerun

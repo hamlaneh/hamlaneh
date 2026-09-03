@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { PRESENCE_LABEL_KEY } from "../../../chat/presence";
 import type { Presence, User } from "../../../chat/types";
-import { KeyIcon, LoaderCircleIcon, LogOutIcon, ShieldIcon, XIcon } from "../../icons";
+import { KeyIcon, LoaderCircleIcon, LogOutIcon, XIcon } from "../../icons";
 import { LanguageSwitcher } from "../../LanguageSwitcher";
 import { Avatar } from "../Avatar";
 import { ACCOUNT_MENU_ID, useRestoreFocus } from "./overlay";
@@ -118,23 +118,6 @@ export function AccountMenu({
           </span>
           <span className="hm-menu-action__label">{t("account.changePassword")}</span>
         </button>
-        {/* Admins only, and it is a link rather than a button because the
-            dashboard is a place with a URL — the handoff's whole mode signal
-            is that admin is somewhere you visit and come back from. Non-admins
-            are not shown it, and the server refuses them regardless: a
-            dashboard that paints and then errors would be a lie.
-
-            The sheet says Admin "stays separate where applicable"; the shell
-            has no separate Admin control to move it to, so removing it here
-            would remove the only way in. Flagged in the slice report. */}
-        {user.is_admin ? (
-          <a className="hm-menu-action" href="/admin" onClick={onClose}>
-            <span className="hm-menu-action__glyph">
-              <ShieldIcon size={17} />
-            </span>
-            <span className="hm-menu-action__label">{t("account.adminDashboard")}</span>
-          </a>
-        ) : null}
       </div>
 
       <div className="hm-account__language">

@@ -36,3 +36,11 @@ var ContentSecurityPolicy = contentSecurityPolicy
 func HandlerWithWebBuild(store Store, web fs.FS, opts ...Option) http.Handler {
 	return handler(store, web, opts...)
 }
+
+// HandlersWithWebBuild is HandlerWithWebBuild for both listeners: the root
+// handler New would give the main server and the one it would give the
+// admin server. admin is nil unless WithAdminListener is among opts, which
+// is what lets one test assert both shapes of the split (ADR 015).
+func HandlersWithWebBuild(store Store, web fs.FS, opts ...Option) (main, admin http.Handler) {
+	return route(newAPIServer(store, opts...), web)
+}

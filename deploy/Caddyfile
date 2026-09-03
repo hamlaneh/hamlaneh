@@ -111,6 +111,48 @@ https://{$HAMLANEH_DOMAIN:localhost} {
 		reverse_proxy livekit:7880
 	}
 
+	# SECURITY INVARIANT — this matcher is the app port's half of ADR 015: the
+	# powered admin surface must be GONE from here, not merely unlinked. The
+	# surfaces with power are /api/v1/admin/* and /scim/v2/*, and an operator
+	# who shut the admin port in their cloud firewall has to be right about
+	# that. Nothing may be added here that answers instead of vanishing.
+	#
+	# The PAGE half below is deliberately friendlier, and it is not an
+	# exception to this: /admin is a client-side route that renders nothing
+	# until the API answers (docs/hardening.md), so 404ing it would protect
+	# nothing and a redirect discloses nothing a port scan does not.
+	#
+	# The server is the enforcement point (ADR 015: "in the server, not only
+	# in the proxy") — home mode has no proxy at all. This is the second lock,
+	# not the only one.
+	#
+	# It is a variable rather than a literal because the split is OFF by
+	# default: with no admin port configured every admin route still belongs
+	# here, exactly as it did before ADR 015, and a --non-interactive install
+	# must not change meaning. install.sh writes the expression when the
+	# operator moves the surface; the default below matches no path anything
+	# will ever request. Widening it to /api/v1/* would 404 the whole API.
+	@adminmoved path_regexp {$HAMLANEH_ADMIN_MOVED_PATHS:/__admin-has-not-moved__}
+	handle @adminmoved {
+		respond 404
+	}
+
+	# The page half: /admin and everything bookmarked under it move too, but
+	# they are sent on rather than denied. This is what lets the sidebar's
+	# Admin control stay a plain "/admin" — the client needs no deployment
+	# fact, so the admin port never has to be published in a document served
+	# to anonymous visitors. {uri} carries the pane with it, so a bookmark to
+	# /admin/audit still lands on /admin/audit.
+	#
+	# On a loopback-bound admin port this redirect goes somewhere the public
+	# app cannot reach, and that is what "this machine only" means; the
+	# installer says so when that answer is given. A correct absolute URL
+	# would have been just as dead.
+	@adminpage path_regexp {$HAMLANEH_ADMIN_PAGE_PATHS:/__admin-has-not-moved__}
+	handle @adminpage {
+		redir https://{$HAMLANEH_DEFAULT_SNI:localhost}:{$HAMLANEH_ADMIN_PORT:9443}{uri}
+	}
+
 	# SECURITY INVARIANT — do not add trusted_proxies here without changing
 	# the Go server. With no trusted_proxies (this default), Caddy strips any
 	# client-supplied X-Forwarded-For and forwards only the true peer IP; the
@@ -120,6 +162,80 @@ https://{$HAMLANEH_DOMAIN:localhost} {
 	# parsing first, or login rate limiting becomes spoofable.
 	handle {
 		reverse_proxy server:8080
+	}
+}
+
+# The admin origin (ADR 015). The dashboard and its API move to their own
+# PORT on the same host, because a cloud firewall filters by port and not by
+# path — "do not open this port" is a control the operator already has, and it
+# works upstream of the host where no matcher in this file can reach.
+#
+# The host is deliberately the app's own, port stripped: the same name, so
+# nothing new enters Caddy's certificate cache and the default_sni/cert_issuer
+# machinery a bare-IP install depends on is untouched. A second HOSTNAME would
+# have re-run ADR 003's failure and, being a different origin, would have taken
+# the session cookie away — cookies here are host-only and are NOT port-scoped,
+# which is the whole reason a port works and a hostname does not.
+#
+# HAMLANEH_DEFAULT_SNI is reused rather than duplicated: it is already "the
+# app's host with any custom port removed", written by install.sh for every
+# install, and a second variable holding the same thing is a second thing to
+# drift.
+https://{$HAMLANEH_DEFAULT_SNI:localhost}:{$HAMLANEH_ADMIN_PORT:9443} {
+	encode zstd gzip
+
+	# Same ownership rule as the app site: HSTS and hiding the server
+	# software are all this proxy sets. HSTS is host-scoped rather than
+	# origin-scoped, so this and the app site are talking about the same
+	# host — they must not disagree about the max-age.
+	header {
+		Strict-Transport-Security "max-age=15552000"
+		-Server
+	}
+
+	# SECURITY INVARIANT — this matcher is an allow-list of exactly the admin
+	# surface, never a prefix of the whole service. The port exists so that
+	# closing it closes the dashboard and SCIM; proxying the site root here
+	# would put the entire application on a port an operator was told to treat
+	# as the admin one, and every path they believed they had shut — sign-in,
+	# the WebSocket, /files/* — would answer on it.
+	#
+	# The first four are what MOVED — the main listener loses them. The rest
+	# are SHARED, carried by both listeners, because the admin listener is a
+	# complete minimal app rather than a bare admin surface (server.go,
+	# sharedSurface): the page has to load its bundle, learn what this instance
+	# is, learn who is signed in, and — for the operator who bound this port to
+	# loopback and reaches it through an SSH tunnel, having never opened the
+	# chat port at all — sign in on it and clear every mandatory gate on it,
+	# the forced password change and two-step enrolment alike. A gate with no
+	# exit on this port strands that operator exactly as a missing bootstrap
+	# call would.
+	#
+	# This list has to mirror adminListenerServes. It has drifted behind it
+	# twice already, and both times the symptom was a dashboard that could not
+	# finish loading rather than anything that looked like a proxy problem —
+	# so install.test.sh pins it, and a path added to sharedSurface has to be
+	# added here in the same change.
+	#
+	# The upstream is the server's SECOND listener; the port below must match
+	# the port in HAMLANEH_ADMIN_ADDR, which install.sh writes as :9090.
+	#
+	# The port is a DEPLOYMENT boundary and never an authorization decision
+	# (ADR 015). Reaching it is not being an admin: the same session and the
+	# same authz.Can call refuse everyone else, exactly as on the app port —
+	# which is why sharing the sign-in routes confers nothing.
+	@adminsurface path /admin /admin/* /api/v1/admin/* /scim/v2/* /api/v1/instance /api/v1/users/me /api/v1/users/me/totp* /api/v1/auth/* /assets/* /brand/*
+	handle @adminsurface {
+		reverse_proxy server:9090
+	}
+
+	# Everything else on this port belongs to the app, so say so instead of
+	# answering 404. This is what makes leaving the dashboard work: the exit
+	# controls are real navigations to "/", and on this origin "/" means "go
+	# back to the app". The target is a fixed configured host, never anything
+	# from the request, so there is no open redirect here.
+	handle {
+		redir https://{$HAMLANEH_DOMAIN:localhost}{uri}
 	}
 }
 
