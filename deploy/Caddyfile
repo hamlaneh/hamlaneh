@@ -206,9 +206,16 @@ https://{$HAMLANEH_DEFAULT_SNI:localhost}:{$HAMLANEH_ADMIN_PORT:9443} {
 	# sharedSurface): the page has to load its bundle, learn what this instance
 	# is, learn who is signed in, and — for the operator who bound this port to
 	# loopback and reaches it through an SSH tunnel, having never opened the
-	# chat port at all — sign in on it. Being on two listeners is not being
-	# moved, and this list has to mirror adminListenerServes or the dashboard
-	# serves a document that can never finish loading.
+	# chat port at all — sign in on it and clear every mandatory gate on it,
+	# the forced password change and two-step enrolment alike. A gate with no
+	# exit on this port strands that operator exactly as a missing bootstrap
+	# call would.
+	#
+	# This list has to mirror adminListenerServes. It has drifted behind it
+	# twice already, and both times the symptom was a dashboard that could not
+	# finish loading rather than anything that looked like a proxy problem —
+	# so install.test.sh pins it, and a path added to sharedSurface has to be
+	# added here in the same change.
 	#
 	# The upstream is the server's SECOND listener; the port below must match
 	# the port in HAMLANEH_ADMIN_ADDR, which install.sh writes as :9090.
@@ -217,7 +224,7 @@ https://{$HAMLANEH_DEFAULT_SNI:localhost}:{$HAMLANEH_ADMIN_PORT:9443} {
 	# (ADR 015). Reaching it is not being an admin: the same session and the
 	# same authz.Can call refuse everyone else, exactly as on the app port —
 	# which is why sharing the sign-in routes confers nothing.
-	@adminsurface path /admin /admin/* /api/v1/admin/* /scim/v2/* /api/v1/instance /api/v1/users/me /api/v1/auth/* /assets/* /brand/*
+	@adminsurface path /admin /admin/* /api/v1/admin/* /scim/v2/* /api/v1/instance /api/v1/users/me /api/v1/users/me/totp* /api/v1/auth/* /assets/* /brand/*
 	handle @adminsurface {
 		reverse_proxy server:9090
 	}

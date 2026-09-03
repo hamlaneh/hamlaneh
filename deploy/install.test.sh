@@ -590,6 +590,41 @@ test_resolve_admin_port() {
   fi
 }
 
+# The admin origin's allow-list in deploy/Caddyfile, stated here independently
+# of that file — the same discipline expected_family_for uses above, and for
+# the same reason: if somebody changes the list there, they have to change it
+# here too, deliberately.
+#
+# It exists because this list has already drifted behind the server's
+# adminListenerServes twice in one slice, and neither time did the symptom look
+# like a proxy problem: the dashboard served a document whose boot calls went to
+# the app origin, were refused cross-origin, and left a page that never
+# finished loading. A path added to sharedSurface or adminSurface in
+# server/internal/httpserver/server.go has to be added below in the same change.
+EXPECTED_ADMIN_ALLOWLIST='/admin /admin/* /api/v1/admin/* /scim/v2/* /api/v1/instance /api/v1/users/me /api/v1/users/me/totp* /api/v1/auth/* /assets/* /brand/*'
+
+test_caddy_admin_allowlist() {
+  local line got
+  line="$(grep -F '@adminsurface path ' "${SCRIPT_DIR}/Caddyfile" | head -n 1)"
+  if [ -z "$line" ]; then
+    bad "deploy/Caddyfile declares no @adminsurface matcher"
+    return
+  fi
+  got="${line#*@adminsurface path }"
+  check_eq "the admin origin serves exactly the paths the server's admin listener does" \
+    "$EXPECTED_ADMIN_ALLOWLIST" "$got"
+
+  # And the app site must still send the page on and refuse the API — the two
+  # halves are not interchangeable, so neither handler may quietly become the
+  # other.
+  check_contains "the app site refuses the powered half" "@adminmoved path_regexp" \
+    "$(cat "${SCRIPT_DIR}/Caddyfile")"
+  # shellcheck disable=SC2016 # the needle is the Caddyfile's literal text
+  check_contains "the app site redirects the page half to the admin origin" \
+    'redir https://{$HAMLANEH_DEFAULT_SNI:localhost}:{$HAMLANEH_ADMIN_PORT:9443}{uri}' \
+    "$(cat "${SCRIPT_DIR}/Caddyfile")"
+}
+
 test_domain_kind() {
   check_eq "domain_kind localhost" "localhost" "$(run_in_subshell domain_kind localhost)"
   check_eq "domain_kind ipv4" "ipv4" "$(run_in_subshell domain_kind 203.0.113.5)"
@@ -1224,6 +1259,7 @@ main() {
   test_resolve_domain_prompt
   test_resolve_ports
   test_resolve_admin_port
+  test_caddy_admin_allowlist
   test_domain_kind
   test_write_env_generates_real_secrets
   test_idempotent_rerun
