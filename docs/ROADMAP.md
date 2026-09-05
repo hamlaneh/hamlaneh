@@ -464,8 +464,17 @@ public registration is off by default, it is **the** way users come into existen
       offboard (kills all sessions + sockets), unlock/reset access
 - [x] Role & permission management from the dashboard (org admin/member now; channel-level
       roles from 1.2 surface here)
-- [x] Org customization from the dashboard: org name, logo, default locale (`en`/`fa`),
-      org-wide policies (2FA enforcement, session lifetime, password policy, registration mode)
+- [x] Org customization from the dashboard: org name, default locale (`en`/`fa`), org-wide
+      policies (2FA enforcement, session lifetime, password policy, registration mode)
+- [ ] **Org logo** — the one item of that list that never shipped, and this entry exists
+      because the line above used to claim it. `BRIEFS.md` §3 asks for "org logo upload (shown
+      on login + sidebar)" and §1 tells the designer to leave a slot for it near the wordmark;
+      the delivered artboards draw the product name as text and no slot for a symbol
+      (`design/STATUS.md`, "Brand assets"), and nothing carries a logo end to end: no column,
+      no field on `OrgSettings`, no upload endpoint, no `<img>` on either screen. It is a
+      vertical slice of its own — a stored image an unauthenticated screen must be able to
+      fetch, which is the files-origin question asked again for a public asset — and it is
+      blocked on a mockup before it can be built at all (`design/STATUS.md`, "Org logo")
 - [x] Tamper-evident audit log (hash-chained/HMAC; logins, admin actions, exports) — schema
       designed now, SIEM export later
 - [ ] **The invite token rides the URL path**, while the reset token deliberately rides a

@@ -603,8 +603,11 @@ headers) → Postgres (internal network).
 
 Ships inside the same install — same stack, zero extra setup. Public registration is off by
 default, so the dashboard is **the** way users are created, permissions are granted, and the
-org is customized (name, logo, default locale, 2FA enforcement, session policy). First admin
-is created at install time; everyone else comes from the dashboard or invite links.
+org is customized (name, default locale, 2FA enforcement, session policy, and which kind of
+conversation the instance creates). First admin is created at install time; everyone else
+comes from the dashboard or invite links. An **org logo is not among them** — it is asked for
+in `docs/design/BRIEFS.md` §3 and tracked unbuilt in ROADMAP 1.4; nothing stores, serves or
+draws one today.
 
 ## How this project is built
 

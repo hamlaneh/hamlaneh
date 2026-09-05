@@ -9,8 +9,10 @@ Visual identity — layout, color, typography, spacing, mood — is entirely the
 territory. Where a brief mentions a component, the designer decides what it looks like.
 
 **Priority order:** ~~§1 Login~~, ~~§2 Chat shell~~, ~~§3 Admin dashboard~~, ~~§4 User settings~~
-(**all delivered 2026-08-21**) → §5 Calls (Phase 2, not yet needed) → the three chat screens the
-chat set omitted (create channel, invite picker, DM picker — see STATUS.md).
+(**all delivered 2026-08-21**), ~~§5 Calls~~ (delivered 2026-08-29), ~~the three chat screens the
+chat set omitted~~ (create channel, invite picker, DM picker — delivered as the §2 addenda)
+→ **§3 addendum, the admin surfaces drawn by nothing** (five of them, all shipping unstyled or
+unbuilt) → the E2EE surfaces STATUS.md lists as `awaiting-design`.
 
 ---
 
@@ -145,6 +147,136 @@ different mode from chat, but the same family.
 **Artboards needed (7):** `admin-users` (populated), `admin-users-empty` (fresh install —
 guidance to create the first users), `admin-create-user` (modal open), `admin-invites`,
 `admin-org-settings`, `admin-audit-log`, `admin-users-dark`.
+
+---
+
+## 3 addendum. Admin surfaces the delivered set does not draw
+
+Everything in this section is **built and shipping unstyled today**, except the org logo, which
+is not built at all. These are not new ideas: four of them arrived after 2026-08-21, when the
+admin set was drawn, and one (the logo) was asked for in §3 above and never came back. Each
+currently renders as plain semantic HTML with no delivered treatment borrowed, because the
+pipeline forbids inventing one — so each is a real screen an administrator meets, wearing
+nothing.
+
+Per-surface status, and the questions each artboard has to answer, are in
+[STATUS.md](STATUS.md) under the row named in each heading. This section is the other half:
+what the screen must contain.
+
+**Read first:** [ADMIN_HANDOFF.md](ADMIN_HANDOFF.md) — all of this extends the delivered admin
+set (260px rail, 40px gutter, the `ADMINISTRATION` kicker, the records-table treatment) rather
+than starting a parallel one.
+
+### 3a. Org logo (STATUS row "Org logo")
+
+The one thing §3 asked for that was never built, and the reason it is here rather than in the
+implementation queue: it cannot be built until it is drawn, because it appears on two screens
+that already exist and neither has a slot for it.
+
+- **Admin → Org settings:** the control. Current logo (or the absence of one), a file picker,
+  and remove. Everything else on that screen saves on blur; an upload does not, so it needs a
+  between-state of its own.
+- **Sign-in:** where §1 of this document asked for "a slot where an org logo could appear
+  above/near the wordmark without breaking the layout when absent". The delivered auth set drew
+  the product name as text and no slot, so this is that request, restated with the constraint
+  made explicit: **the absent case is the common case** — every install has no logo on day one,
+  and most will never set one.
+- **Chat sidebar:** §2 lists "org name (+ org logo slot)" in the sidebar. Same absent-case rule,
+  plus a second one: the org *name* is already the first thing in the sidebar, so a logo beside
+  it is either identity or duplication and the artboard has to pick.
+
+Product facts the design cannot change:
+
+- The sign-in page is **unauthenticated**, so the logo is a public asset fetched before any
+  session exists. It cannot use the signed, hour-lived, cookie-less files origin every other
+  upload uses (ADR 003). Anyone who can reach the sign-in page can fetch it.
+- Uploads are made on the admin origin and displayed on the app origin (ADR 015), so the
+  reference is rooted or absolute, never relative to where it was set.
+- One asset, unless the artboard says otherwise: a dark-ink logo on the dark canvas is
+  invisible, and asking for two files is a real product decision, not a detail.
+
+States: absent (both display screens, and the admin control), chosen-but-not-yet-uploaded,
+uploading, uploaded, refused (wrong type, too large, wrong aspect), removed.
+
+### 3b. Organization encryption mode (STATUS rows "Organization encryption mode", "Encryption-mode switch dialog")
+
+On `admin-org-settings`, and the **one setting on that screen with a ceremony**: everything else
+there saves as you type, and this one has its own endpoint, its own audit entry, and a
+confirmation, because it decides what every conversation created afterwards is
+([ADR 011](../adr/011-encryption-mode.md)).
+
+The section must contain:
+
+- What the instance does **now**, as a sentence, not a label — "every new conversation is
+  end-to-end encrypted" rather than "Mode: strict".
+- A permanent count of the conversations the current mode does **not** describe, **shown at
+  zero as well as above it**. A figure that appears only when non-zero teaches an administrator
+  that silence means the mode covers everything, which is the one thing it never means.
+- Two choices, **Strict** and **Compliance**, each with a line saying what it does.
+- **Compliance is shown and unavailable.** Not hidden — hiding it teaches nobody what the
+  product will offer — and not offered, because it is honest only once encryption at rest,
+  retention and compliance export exist, and a mode delivering nothing but the absence of E2EE
+  is the dishonest toggle. Its reason sits beside it and must not read as an error: nothing is
+  broken.
+
+The **switch confirmation** is a separate surface and carries three or four load-bearing
+sentences, none of which can be cut to fit a one-line confirm dialog:
+
+1. Nothing already stored changes. No conversation is converted, in either direction.
+2. The new mode begins with what is created after it.
+3. Choosing Compliance: a complete export of the past is **impossible**, and that is the
+   product working — the server holds no key for what is already encrypted. This has to read
+   as the guarantee, not as a failure.
+4. How many conversations will sit outside the mode being **chosen** (not the one in force).
+
+States: current mode strict, current mode compliance, the confirmation in each direction, the
+switch failing, and the count at zero.
+
+### 3c. Provisioning tokens (STATUS row "SCIM provisioning tokens")
+
+A **fifth nav row**, appended after "Audit log" so the drawn four keep their positions, and it
+has no glyph of its own — it currently borrows the shield from the settings Security rail.
+
+The only credential in the product that belongs to a machine rather than a person: an identity
+provider's sync engine authenticates with it, so there is no cookie and no CSRF header
+anywhere near it.
+
+Must contain: a sentence saying what these are for; a way to mint one, taking an optional note
+naming what it is for; the minted value **shown exactly once** (the server keeps only a hash of
+it — the same show-once step `admin-create-user` and the invite link already use); a list of
+existing tokens with note, created, and last used; and revoke, with the confirm that invite
+revocation already uses.
+
+The design problem: **`Last used` is empty on every token nobody has configured yet**, which is
+unremarkable an hour after minting and a real signal a month later, and the screen cannot tell
+those apart.
+
+States: no tokens yet (fresh install, and the common case), tokens listed, the show-once panel
+open, revoke confirmation, and the list failing to load.
+
+### 3d. Just-in-time provisioning (STATUS row "Just-in-time provisioning toggle")
+
+A switch inside the **account-creation panel** on `admin-org-settings`, which that artboard
+draws as a radio group and one warning note and nothing else. It belongs there rather than in
+Security because it answers the same question the registration mode answers — how an account
+comes into existence here — but it is not part of that choice and must not be greyed out when
+the radio group saves.
+
+It carries three hint lines under one label: what it does, that it is *not* the registration
+setting, and — on an instance with no identity provider configured — that there is nothing for
+it to govern. That is one more hint line than any drawn control has.
+
+### 3e. The whole admin set at 375 (STATUS row "Admin dashboard at phone width")
+
+Worth answering in the same pass rather than a second one. The set is drawn at 1440 with a
+260px rail and a 40px gutter, which leaves roughly 75px of table on a phone. Below 899 it
+currently stacks — the rail becomes a horizontal strip above the content, the gutter drops to
+16px, the document scrolls as one — which is a stopgap, not a design.
+
+What a phone artboard has to settle: whether a records table is a table at all or a stack of
+rows; where the org identity, the exit and the signed-in-as footer go when three stacked blocks
+of chrome sit above the first row; and whether the row menu, 260px wide and anchored to the
+row's end edge, becomes a sheet.
 
 ---
 
