@@ -5,7 +5,7 @@
 > commit (enforced via the Definition of Done in CLAUDE.md). Strategy lives in
 > [PLAN.md](PLAN.md); task-level execution lives in [ROADMAP.md](ROADMAP.md).
 >
-> **Last updated:** 2026-08-31
+> **Last updated:** 2026-09-05
 
 ## What is Hamlaneh?
 
@@ -13,12 +13,12 @@ Hamlaneh (هم‌لانه, "shared nest") is a self-hosted team communication pl
 DMs, file sharing, 1:1 and group voice/video calls, screen sharing, and conferences. A company
 installs it on its own server with one command and owns its communication completely.
 
-One item on that list is a promise rather than a description today: **file sharing is built and
-unreachable on every install**, because the encryption mode a fresh instance comes up in refuses
-the only conversations there are to upload into. The mechanism is written out under *Files*
-below, where the code that causes it lives. It is named here rather than only there because this
-file is what external tools are handed, and a reader who takes the sentence above at face value
-would plan around a feature nobody can use.
+Every item on that list now works on a fresh install. File sharing was the exception until
+2026-08-31 — built, and unreachable, because a fresh instance comes up in a mode whose
+conversations refused attachments — and encrypted attachments closed it
+([ADR 013](adr/013-encrypted-attachments.md)). The one thing still missing from a *fresh*
+install is an organization logo, which is asked for in the design briefs and has never been
+built; the sign-in screen and the sidebar carry the product's own name and nothing else.
 
 **The four promises:**
 1. **Installation is the product** — fresh VPS to working instance in under 5 minutes, one command.
@@ -207,22 +207,25 @@ would plan around a feature nobody can use.
   alive, and each confirm says which it is. The audit log is hash-chained with a key kept
   outside the database: that does not make it tamper-proof — anybody who can write to the
   database can rewrite rows — it makes a rewrite show.
-- **Files (Phase 1.3) — built, and unreachable on every install.** Two decisions that are
-  each right on their own close the door between them. Strict is the schema default
+- **Files (Phase 1.3) — reachable since 2026-08-31.** For a while it was not, and the reason is
+  worth keeping because it is the shape of bug this project produces: two decisions each right
+  on its own closed the door between them. Strict is the schema default
   (`0018_org_encryption_mode.up.sql`: `NOT NULL DEFAULT 'strict'`) and the only mode an
   administrator can select — `admin_handlers.go` refuses `compliance` outright, because the
   server-side half it promises is not built — so every channel and every DM is born encrypted.
-  And an encrypted conversation refuses attachments: `httpserver/e2ee.go` answers `400
-  e2ee_attachments_unsupported`, since storing an unencrypted file in an encrypted conversation
-  would be a lie about what the conversation is. Neither decision is wrong; together they mean
-  there is no conversation anywhere into which any file can be uploaded. What records this rather
-  than letting it rot is `webapp/e2e/specs/chat-files.e2e.ts`, which keeps all four of its tests
-  and every assertion in them and carries `test.fail()`: it goes red the moment uploading works,
-  so it cannot outlive the gap. Encrypted attachments are what close it — Phase 3 work that was
-  missed, not Phase 4 polish. Everything in the rest of this bullet exists and is tested; it is
-  the way in that is missing.
+  And an encrypted conversation refused attachments, since storing an unencrypted file in an
+  encrypted conversation would be a lie about what the conversation is. Neither decision was
+  wrong; together they meant there was no conversation anywhere into which any file could be
+  uploaded. [ADR 013](adr/013-encrypted-attachments.md) closed it: a fresh 16-byte AES-GCM key
+  per file rides inside the attaching message's ciphertext, so a file opens exactly when its
+  message reads. The exporter approach was refuted by the system's own forward secrecy — a file
+  needs a key for the past, and merged epochs delete theirs. The upload path is two branches
+  rather than one with conditionals, so the sniff-and-strip pipeline is *unreachable* from the
+  encrypted path; EXIF stripping and thumbnail generation moved to the sender, since the server
+  can no longer see an image; and what decides whether decrypted bytes render is a
+  four-signature sniff with SVG deliberately absent, never the sender's declared type.
 
-  What is behind that door: upload is channel-scoped from birth, so a file is readable exactly
+  What the plaintext path does, and what the encrypted one inherits: upload is channel-scoped from birth, so a file is readable exactly
   by its channel's members — the same one rule, the same 404 for everyone else. Bytes
   are sniffed and labels are decoration: only proven images are ever served inline; everything
   else, SVG and HTML included, is a download with nosniff and a sandboxing CSP, so uploaded
@@ -479,11 +482,45 @@ pins an older contract and the picture did not win.
 
 ## What's next
 
-**Phase 4 — packaging polish, and the gate public launch waits on.** Everything through Phase 2
-is code-complete, and Phase 3 is most of the way there: five slices and the encryption mode
-shipped, with the multi-device half, encrypted attachments and Compliance mode's server-side
-half still missing (the paragraph above says which is which). Phase 4 is running in parallel
-rather than after it, which is why the two lists overlap. Landed on the Phase 4 side:
+### Where to pick this up
+
+Read this block first if you are starting a session on this project. It is ordered, and each
+line names the file that holds the detail — which is the authority, not this summary.
+
+1. **Mentions under E2EE, the client half.** The server half shipped 2026-08-31
+   ([ADR 014](adr/014-mentions-under-e2ee.md)) and nothing feeds it: the composer still does
+   not send the declared list, so an encrypted mention notifies nobody while the picker and the
+   rendered `@Name` both suggest otherwise. Smallest remaining slice with a user-visible bug
+   behind it. ROADMAP Phase 0 tasks, last entry.
+2. **The admin design round.** Five admin surfaces ship unstyled today; the prompt for the
+   design pipeline is written and waiting at
+   [`CLAUDE_DESIGN_ADMIN_ADDENDUM_PROMPT.md`](design/CLAUDE_DESIGN_ADMIN_ADDENDUM_PROMPT.md),
+   the requirements at [`BRIEFS.md`](design/BRIEFS.md) §3 addendum. This is the user's step,
+   not a code task — but the org logo slice, the encryption-mode reskin and the provisioning
+   screen are all blocked behind it.
+3. **Multi-device key sync**, Phase 3's largest remaining piece: nothing carries a person's
+   device state between their own devices, so each browser profile enrols separately and starts
+   with no history. ROADMAP Phase 3.
+4. **Compliance mode's server-side half** — encryption at rest, retention policy, compliance
+   export. Until it exists the mode stays unselectable, which is deliberate and documented, not
+   a defect. ROADMAP Phase 3, [ADR 011](adr/011-org-encryption-mode.md).
+5. **The sub-5-minute install**, which is at structural risk for a reason written out under
+   *What is honestly not done in Phase 4* below.
+
+**Not code, and blocked on nobody but the user:** Phase 2's manual NAT drill
+(`docs/drills/nat-drill.md`), Phase 1's two consecutive weeks of daily-driving, the E2EE
+recovery drills, and running the install matrix on real VMs.
+
+**Live instance:** one is running for the user's own testing. It is not a deployment this repo
+manages, and nothing in the tree depends on it.
+
+### Phase 4 — packaging polish, and the gate public launch waits on
+
+Everything through Phase 2 is code-complete. Phase 3 is most of the way there: five slices, the
+encryption mode, encrypted attachments and the server half of mentions have all shipped, with
+multi-device key sync, Compliance mode's server-side half and the mentions client half still
+missing. Phase 4 is running in parallel rather than after it, which is why the two lists
+overlap. Landed on the Phase 4 side:
 
 - **A second storage driver.** `internal/sqlitestore` implements the same 102 methods as the
   PostgreSQL store, behind the *consumer-side* interfaces that already existed rather than a
@@ -559,9 +596,13 @@ contract's parts array has to reconstruct it, and TOTP secrets are stored raw pe
 key-management decision deferred to Phase 5.
 
 **Desktop designs are delivered for every Phase 1 screen** — auth, chat, admin dashboard, user
-settings. Phone-width artboards are not: `docs/design/STATUS.md` is the authority on which
-screens still say `awaiting-design`, and it is the file to read rather than this sentence,
-which cannot know what was delivered after it was written.
+settings — but not for everything built since. Five admin surfaces ship unstyled today
+(encryption mode and its switch dialog, provisioning tokens, the just-in-time toggle, and the
+whole set at phone width), and the org logo is undrawn and therefore unbuilt; their
+requirements are `docs/design/BRIEFS.md` §3 addendum and the pipeline prompt is
+`docs/design/CLAUDE_DESIGN_ADMIN_ADDENDUM_PROMPT.md`. `docs/design/STATUS.md` is the authority
+on which screens still say `awaiting-design`, and it is the file to read rather than this
+sentence, which cannot know what was delivered after it was written.
 
 - **The organisation's encryption mode ([ADR 011](adr/011-org-encryption-mode.md)).** An
   instance is in one of two modes, and the mode decides what kind of conversation is *born* from
@@ -597,7 +638,10 @@ which cannot know what was delivered after it was written.
 | E2EE | MLS via OpenMLS → WASM in the browser client (ADR 006; transport shipped, phase in progress) | Compromised server sees only ciphertext |
 
 Request flow: browser → Caddy (TLS, HSTS) → Go server (:8080 — web UI, API, security
-headers) → Postgres (internal network).
+headers) → Postgres (internal network). Since [ADR 015](adr/015-admin-origin.md) the server can
+open a **second listener** carrying only the admin surface, published on its own port, so a
+firewall — which filters by port and never by path — can reach the dashboard separately from
+the chat app. It is off unless the installer is told otherwise.
 
 ## The admin dashboard (first-class, decided Aug 2026)
 
@@ -631,6 +675,7 @@ draws one today.
 | [api/openapi.yaml](api/openapi.yaml) | The API contract (source of truth for codegen) |
 | [design/STATUS.md](design/STATUS.md) | Which screens have delivered designs |
 | [design/BRIEFS.md](design/BRIEFS.md) | Functional design requirements per screen |
+| [design/CLAUDE_DESIGN_ADMIN_ADDENDUM_PROMPT.md](design/CLAUDE_DESIGN_ADMIN_ADDENDUM_PROMPT.md) | Ready-to-paste prompt for the five undesigned admin surfaces |
 | [design/LOGIN_HANDOFF.md](design/LOGIN_HANDOFF.md) | The delivered auth design contract (mockup in `design/mockups/`) |
 | [releasing.md](releasing.md) | How a release is cut, verified, and coordinated with an advisory |
 | [../SECURITY.md](../SECURITY.md) | Threat model, non-goals, disclosure policy, response and patch targets |

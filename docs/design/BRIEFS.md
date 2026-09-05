@@ -163,6 +163,11 @@ Per-surface status, and the questions each artboard has to answer, are in
 [STATUS.md](STATUS.md) under the row named in each heading. This section is the other half:
 what the screen must contain.
 
+**The pipeline prompt for this whole section is already written**:
+[CLAUDE_DESIGN_ADMIN_ADDENDUM_PROMPT.md](CLAUDE_DESIGN_ADMIN_ADDENDUM_PROMPT.md) — paste it
+into Claude Design with `tokens.css`, `ADMIN_HANDOFF.md` and this file attached. Fifteen
+artboards covering all five surfaces in one round.
+
 **Read first:** [ADMIN_HANDOFF.md](ADMIN_HANDOFF.md) — all of this extends the delivered admin
 set (260px rail, 40px gutter, the `ADMINISTRATION` kicker, the records-table treatment) rather
 than starting a parallel one.

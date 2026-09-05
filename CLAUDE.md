@@ -11,13 +11,16 @@ sharing, voice/video calls, screen share, and conferencing. One-line install, se
 - `docs/ROADMAP.md` — executable phases with test gates. Execution lives there.
 
 **Current status:** Phase 0 through Phase 2 are code-complete. Phase 3 (MLS end-to-end
-encryption) has shipped five slices and the organisation's encryption mode, and Phase 4
-(packaging) is running alongside it rather than after it. Phase 3's open half is multi-device,
-encrypted attachments, and Compliance mode's server side — and the first two are why file
-sharing, though built, is unreachable on a fresh install. Two gates are outstanding and are the
-user's to run, not code tasks: Phase 2's manual NAT drill and Phase 1's two weeks of
-daily-driving. This paragraph is a signpost and goes stale by design; `docs/OVERVIEW.md` is
-updated per slice by the Definition of Done below, so read it, not this line, for detail.
+encryption) has shipped five slices, the organisation's encryption mode, encrypted attachments
+and the server half of mentions; Phase 4 (packaging) is running alongside it rather than after
+it. Phase 3's open half is multi-device key sync, Compliance mode's server side, and the
+mentions client half — the last of which means an encrypted mention still notifies nobody.
+Separately, five admin surfaces ship unstyled because no artboard draws them, and the org logo
+is undrawn and therefore unbuilt. Gates outstanding, and the user's to run rather than code
+tasks: Phase 2's manual NAT drill, Phase 1's two weeks of daily-driving, and the E2EE recovery
+drills. This paragraph is a signpost and goes stale by design; `docs/OVERVIEW.md` is updated
+per slice by the Definition of Done below and opens with a *Where to pick this up* block —
+read that, not this line.
 
 ## Tech stack (decided — see "Changing a decision" below for the only way to relitigate)
 
