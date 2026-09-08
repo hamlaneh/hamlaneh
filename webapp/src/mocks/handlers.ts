@@ -26,6 +26,26 @@ type RecoveryCodes = components["schemas"]["RecoveryCodes"];
 type SessionFamily = components["schemas"]["SessionFamily"];
 type OidcRedirect = components["schemas"]["OidcRedirect"];
 type SessionFamilyList = components["schemas"]["SessionFamilyList"];
+type UpdateStatus = components["schemas"]["UpdateStatus"];
+
+/**
+ * A healthy, current, self-updating instance: the state an operator sees on a
+ * host whose timer is installed and whose last check found nothing new. Every
+ * other case in the Updates panel is a per-test handler, because each is a
+ * different shape of unhappy and none of them is the default an install has.
+ */
+export const FIXTURE_UPDATE_STATUS: UpdateStatus = {
+  installed_version: "v1.4.2",
+  updatable: true,
+  self_update_available: true,
+  channel: "security",
+  state: "idle",
+  available_version: null,
+  available_outside_channel: false,
+  last_check_at: "2026-09-08T04:00:00Z",
+  last_run_at: null,
+  message: null,
+};
 
 /** Cookie names from the spec's `sessionCookie` scheme and CSRF description. */
 const SESSION_COOKIE = "hamlaneh_session";
@@ -923,6 +943,10 @@ export const handlers = [
   http.get<never, never, UserPage>("/api/v1/admin/users", () =>
     // Single page: no next_cursor.
     HttpResponse.json({ users: [FIXTURE_ADMIN, FIXTURE_MEMBER] }),
+  ),
+
+  http.get<never, never, UpdateStatus>("/api/v1/admin/update", () =>
+    HttpResponse.json(FIXTURE_UPDATE_STATUS),
   ),
 
   ...chatHandlers,

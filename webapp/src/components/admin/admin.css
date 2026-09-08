@@ -419,6 +419,17 @@
   color: var(--color-text-secondary);
 }
 
+/* Containment, not a treatment: `hm-admin-mono` above carries the whole
+ * appearance and this adds no colour, spacing or typographic step of its own.
+ * It exists because the updater's last line is host-written, can be any
+ * length, and may carry no spaces to break at — a bare <pre> would widen the
+ * panel and take the column's layout with it. */
+.hm-admin-mono--block {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Role: a tag whose fill differs as well as its colour. */
 .hm-admin-tag {
   block-size: 22px; /* off-scale (artboard) */

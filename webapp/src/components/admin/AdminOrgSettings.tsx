@@ -10,6 +10,7 @@ import { useInstance } from "../../instance/instanceInfo";
 import { AdminLoadFailed } from "./AdminStates";
 import { AdminShell } from "./AdminShell";
 import { EncryptionModeSection } from "./EncryptionModeSection";
+import { UpdatesSection } from "./UpdatesSection";
 import { NoticeBanner } from "../auth/NoticeBanner";
 import { RefreshCwIcon, TriangleAlertIcon } from "../icons";
 import { SavedMark } from "../settings/SavedMark";
@@ -365,6 +366,12 @@ export function AdminOrgSettings({
                 not (ADR 011 decision 2 — it is confirmed, and audited). It is
                 also undesigned, so it borrows none of the panel treatment. */}
             <EncryptionModeSection settings={current} onSwitched={settings.update} />
+
+            {/* Its own panel with its own fetch, because it answers a question
+                about the host rather than about the organization: nothing here
+                comes from `OrgSettings`, and a host with no update state must
+                not be able to take these settings down with it. */}
+            <UpdatesSection />
           </div>
         </div>
       )}
