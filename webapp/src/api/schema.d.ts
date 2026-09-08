@@ -742,6 +742,33 @@ export interface paths {
         patch: operations["updateOrgSettings"];
         trace?: never;
     };
+    "/api/v1/admin/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What version this instance runs, and whether a newer one is waiting.
+         * @description adminOnly. Everything here is read from a state directory the host's updater writes; the server runs nothing and knows nothing on its own. See [ADR 016](../adr/016-operator-triggered-updates.md).
+         *     `self_update_available` is the field the screen turns on: it is true only when something on the host is actually listening for a request. Where nothing is — a host without systemd, an install whose timer was never enabled — it is false and the dashboard says updates are managed outside this instance rather than drawing a button that does nothing.
+         */
+        get: operations["getUpdateStatus"];
+        put?: never;
+        /**
+         * Ask the host to check for, or apply, an update.
+         * @description adminOnly, audited (`update.check_requested`, `update.apply_requested`), and rate limited.
+         *     This does not update anything. It writes a request that the host's watcher picks up, and the watcher runs the updater with its own fixed arguments — the same ones the timer runs. The body carries no version, no repository and no flags, and none of it ever reaches a command line. That is deliberate and is the security argument of [ADR 016](../adr/016-operator-triggered-updates.md): a body that could name a version would grow a force flag, and a force flag is a downgrade to any signed release with a known vulnerability.
+         *     So the widest outcome available here is the release the host was already going to apply within six hours. Poll the GET for progress.
+         */
+        post: operations["requestUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/audit": {
         parameters: {
             query?: never;
@@ -1907,6 +1934,46 @@ export interface components {
             require_totp?: boolean;
             sso_jit_provisioning?: boolean;
             session_lifetime_hours?: number;
+        };
+        /** @description The whole body. There is no version field, no repository field and no force field, and that is the point rather than an omission — see [ADR 016](../adr/016-operator-triggered-updates.md) §1. The host maps this literal to a fixed argument vector and refuses anything else, so nothing a caller writes ever reaches a command line. */
+        RequestUpdateRequest: {
+            /**
+             * @description `check` asks the host what a run would do and changes nothing. `apply` asks it to run the update it would have run on schedule.
+             * @enum {string}
+             */
+            kind: "check" | "apply";
+        };
+        /**
+         * @description What the last run did, or what the current one is doing.
+         *     `rolled_back` is its own state rather than a kind of failure: the new version was applied, did not come up healthy, and the previous one is serving again. An operator reading `failed` would go looking for a broken instance; the instance is fine and the release is not.
+         *     `refused` is the updater declining on purpose — an offered release older than the installed one, with no force available from here. `unknown` is a host that has never written a status file.
+         * @enum {string}
+         */
+        UpdateState: "idle" | "requested" | "running" | "succeeded" | "failed" | "rolled_back" | "refused" | "unknown";
+        /** @description Read from the state directory the host's updater writes. The server performs no check of its own and reaches no network: everything here is as fresh as `last_check_at` says it is. */
+        UpdateStatus: {
+            /** @description What the running binary answers to `--version`. Usually a `vX.Y.Z` tag; `dev` on a build that was never stamped by the release workflow. */
+            installed_version: string;
+            /** @description Whether this install can be updated in place at all. False when `installed_version` is not a semantic version, because the anti-rollback check has nothing to compare against and the updater refuses the run rather than guessing. That is not a bug to route around — it is the one control standing between a signed old release and this instance — so the screen says the install came from a checkout rather than a release, and points at reinstalling from one. */
+            updatable: boolean;
+            /** @description Whether anything on the host is listening for a request. False on a host with no systemd, or one whose timer was never enabled. The dashboard draws no button when this is false; an offer the instance cannot honour would leave an operator believing they are patched. */
+            self_update_available: boolean;
+            /**
+             * @description Which releases the host applies. `security` is the default and takes patch releases of the installed MAJOR.MINOR only, which is where fixes are backported. A newer release outside the channel is reported here, never silently ignored.
+             * @enum {string}
+             */
+            channel: "security" | "all";
+            state: components["schemas"]["UpdateState"];
+            /** @description The newest release the last check saw, or null. */
+            available_version?: string | null;
+            /** @description True when `available_version` exists but the channel will not apply it — a new MAJOR.MINOR while the channel is `security`. Applying it is a deliberate act on the host, not a click here. */
+            available_outside_channel?: boolean;
+            /** Format: date-time */
+            last_check_at?: string | null;
+            /** Format: date-time */
+            last_run_at?: string | null;
+            /** @description The updater's own last line, verbatim. Rendered as preformatted text and never as markup: it is a host-generated string and the dashboard is the most authenticated surface in the product. */
+            message?: string | null;
         };
         /** @description One recorded action. `actor` is null for something the system did rather than a person. */
         AuditEntry: {
@@ -3496,6 +3563,74 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    getUpdateStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The update picture as the host last recorded it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    requestUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description The request was written. The state is `requested` until the host picks it up, which is normally immediate. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateStatus"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description A run is already in flight (code `update_in_progress`). The updater takes a host-wide lock, so this is also what a request racing the scheduled timer gets. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            /** @description Nothing on the host is listening, so the request would never be read (code `self_update_unavailable`). The same condition `self_update_available: false` reports on the GET. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     listAuditEntries: {
