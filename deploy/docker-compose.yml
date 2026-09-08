@@ -211,8 +211,14 @@ services:
       # is the ONLY way LiveKit's admin API is reachable at all — Caddy
       # publishes /rtc and nothing else (see Caddyfile).
       HAMLANEH_LIVEKIT_URL: http://livekit:7880
+      # Where the admin dashboard's update control exchanges state with the
+      # host's updater (ADR 016). Empty — the default — turns the control off
+      # entirely: the dashboard then says updates are managed outside this
+      # instance rather than drawing a button nothing is listening for.
+      HAMLANEH_UPDATE_STATE_DIR: /var/lib/hamlaneh-update
     volumes:
       - file_data:/var/lib/hamlaneh
+      - update_state:/var/lib/hamlaneh-update
     # No ports published: only Caddy talks to the server.
     networks:
       - edge
@@ -367,3 +373,16 @@ volumes:
   # a fresh named volume — which is what lets the non-root, read-only-rootfs
   # server write to it at all.
   file_data:
+  # The letterbox between the admin dashboard and the host's updater (ADR
+  # 016): the server writes a request here, the host's systemd path unit
+  # reads it and writes back what its run did. Same ownership trick as
+  # file_data.
+  #
+  # This is emphatically NOT a way into the host. It carries JSON that names
+  # no command and no version — the host maps a two-valued literal onto its
+  # own fixed argument vector — and it exists precisely so the server can ask
+  # for an update without being handed the docker socket, which is what a
+  # sidecar updater would have required.
+  #
+  # It holds no user data. Deleting it costs the record of the last run.
+  update_state:

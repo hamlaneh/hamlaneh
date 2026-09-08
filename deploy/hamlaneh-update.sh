@@ -41,7 +41,10 @@
 #                      [--compose-file PATH] [--env-file PATH]
 #                      [--repo OWNER/NAME] [--key FILE]
 #                      [--cosign PATH] [--docker PATH]
+#                      [--state-dir DIR] [--no-prune]
 #   hamlaneh-update.sh --install-timer
+#   hamlaneh-update.sh --serve-request
+#   hamlaneh-update.sh --prune-only
 #
 #   --mode        deployment shape. Default: detected (a running compose
 #                 server service means compose, otherwise home).
@@ -80,10 +83,25 @@
 #                 refused in compose mode rather than half-checked.
 #   --cosign      path to cosign. Also $COSIGN_BIN. Default: cosign.
 #   --docker      path to docker. Also $DOCKER_BIN. Default: docker.
+#   --state-dir   where the admin dashboard and this script exchange state
+#                 (ADR 016). Default: the directory the running server has
+#                 mounted at /var/lib/hamlaneh-update in compose mode, and
+#                 /var/lib/hamlaneh-update in home mode. Every run that can
+#                 resolve it records what it did there, which is the only way
+#                 the dashboard learns that the last run failed.
+#   --no-prune    keep the images, containers and build cache this run
+#                 orphaned. Off by default: see prune_docker.
 #   --install-timer
 #                 write and enable the systemd timer that runs this script on
-#                 the security channel, then exit. This is what makes
+#                 the security channel, AND the path unit that watches for a
+#                 request from the dashboard, then exit. This is what makes
 #                 auto-update on by default; see the block above install_timer.
+#   --serve-request
+#                 consume one request written by the server and act on it.
+#                 What the dashboard's button ultimately reaches, and the one
+#                 entry point that reads a file somebody else wrote — see
+#                 serve_request for why that file cannot name what runs.
+#   --prune-only  run the cleanup and nothing else.
 #
 # Exit codes:
 #   0  up to date, or updated successfully
@@ -144,6 +162,29 @@ key=""
 cosign_bin="${COSIGN_BIN:-cosign}"
 docker_bin="${DOCKER_BIN:-docker}"
 install_timer_only=0
+serve_request_only=0
+prune_only=0
+state_dir="${HAMLANEH_UPDATE_STATE_DIR:-}"
+no_prune=0
+
+# Where the server container has the state volume mounted. One constant in
+# two places — deploy/docker-compose.yml mounts it there and the server is
+# told the same path — so changing it means changing both.
+STATE_MOUNT="/var/lib/hamlaneh-update"
+
+# The id of the request being served, echoed back into status.json so the
+# dashboard can tell its own click apart from the timer's scheduled run.
+request_id=""
+
+# Set to 1 when a newer release exists that this channel will not apply. Its
+# own field rather than a kind of "up to date", because those are different
+# sentences to an operator: one means there is nothing to do, the other means
+# there is something to do somewhere else.
+available_outside_channel=0
+
+# Stamped once, at the top of main, so every status this run writes agrees
+# about when the run began.
+run_started_at=""
 
 # Cleanup state, set as the run progresses so the EXIT trap knows what it owns.
 download_dir=""
@@ -156,8 +197,13 @@ usage() {
 
 log() { printf '[hamlaneh-update] %s\n' "$*"; }
 
+# Every failure exits through here, so this is also the one place that has to
+# remember to tell the dashboard. write_status is a no-op until the run knows
+# where its state directory is, which is why it is safe on the early paths
+# that fail before anything is resolved.
 fail() {
   printf '[hamlaneh-update] FAIL: %s\n' "$*" >&2
+  write_status failed 1 "$*"
   exit 1
 }
 
@@ -246,6 +292,219 @@ version_series() {
   v="${v%%-*}"
   v="${v%%+*}"
   printf '%s.%s' "${v%%.*}" "$(cut -d. -f2 <<<"$v")"
+}
+
+# ---------------------------------------------------------------------------
+# The state directory (ADR 016)
+#
+# Where this script tells the admin dashboard what it did, and where it finds
+# a request the dashboard wrote. Nothing here is authoritative about anything:
+# the dashboard renders it, and the only file this script READS is
+# request.json, whose entire influence is described above serve_request.
+#
+# Every write is a temporary file plus a rename, because the reader is a
+# different process with no lock: rename(2) is atomic, so the server sees
+# either the whole previous file or the whole new one, never half of either.
+# ---------------------------------------------------------------------------
+
+now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# The subset of JSON string escaping these values can actually need. Version
+# strings and the updater's own log lines are the only free-form things that
+# reach a status file, but "only" is how an injected quote gets in, so both
+# metacharacters are escaped and control characters are dropped rather than
+# emitted raw (a literal newline inside a JSON string is invalid, and would
+# make the dashboard's parse fail on exactly the run it most needs to read).
+json_escape() {
+  printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+# The directory, or empty if this deployment does not have one. Empty is a
+# normal answer, not an error: an install whose stack is down, or a home-mode
+# host that never created the directory, simply has no state to publish, and
+# the dashboard reports the feature as unavailable rather than lying.
+#
+# In compose mode the path is read off the running container's mount table
+# rather than reconstructed from the volume's name, for the same reason
+# apply_compose reads the image it is replacing: the project name is not ours
+# to predict, and a guess here writes the status somewhere nobody reads.
+resolve_state_dir() {
+  local cid src
+  if [ -n "$state_dir" ]; then
+    printf '%s' "$state_dir"
+    return
+  fi
+  if [ "$mode" = "compose" ]; then
+    cid="$(compose_container)" || return 0
+    [ -n "$cid" ] || return 0
+    src="$("$docker_bin" inspect --format \
+      "{{range .Mounts}}{{if eq .Destination \"${STATE_MOUNT}\"}}{{.Source}}{{end}}{{end}}" \
+      "$cid" 2>/dev/null)" || return 0
+    printf '%s' "$src"
+    return
+  fi
+  [ -d "$STATE_MOUNT" ] && printf '%s' "$STATE_MOUNT"
+  return 0
+}
+
+# state, exit code, message. Everything else comes from what the run already
+# knows. Failure to write is logged and never fatal: an instance that cannot
+# record its status is still an instance that must finish updating.
+write_status() {
+  local state="$1" code="$2" message="$3"
+  local dir tmp available="null" outside="false"
+  dir="$(resolve_state_dir)"
+  [ -n "$dir" ] && [ -d "$dir" ] || return 0
+
+  [ -n "$version" ] && available="\"$(json_escape "$version")\""
+  [ "$available_outside_channel" -eq 1 ] && outside="true"
+
+  tmp="${dir}/.status.json.$$"
+  {
+    printf '{"schema":1'
+    printf ',"id":"%s"' "$(json_escape "$request_id")"
+    printf ',"state":"%s"' "$state"
+    printf ',"channel":"%s"' "$channel"
+    printf ',"available_version":%s' "$available"
+    printf ',"available_outside_channel":%s' "$outside"
+    printf ',"exit_code":%s' "$code"
+    printf ',"started_at":"%s"' "$run_started_at"
+    printf ',"finished_at":"%s"' "$(now_utc)"
+    printf ',"checked_at":"%s"' "$(now_utc)"
+    printf ',"message":"%s"' "$(json_escape "$message")"
+    printf '}\n'
+  } >"$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv -f "$tmp" "${dir}/status.json" 2>/dev/null || rm -f "$tmp"
+  return 0
+}
+
+# What makes the dashboard's button appear at all: proof that something on
+# this host is listening. Refreshed on every run, so a host whose units were
+# removed stops claiming to listen once the server's staleness window passes
+# — a claim that expires beats a flag nobody remembers to clear.
+stamp_watcher() {
+  local dir="$1" tmp installed_at
+  [ -n "$dir" ] && [ -d "$dir" ] || return 0
+  installed_at="$(now_utc)"
+  if [ -f "${dir}/watcher.json" ]; then
+    installed_at="$(sed -n 's/.*"installed_at":"\([^"]*\)".*/\1/p' \
+      "${dir}/watcher.json" 2>/dev/null | head -n 1)"
+    [ -n "$installed_at" ] || installed_at="$(now_utc)"
+  fi
+  tmp="${dir}/.watcher.json.$$"
+  printf '{"schema":1,"installed_at":"%s","last_seen":"%s","channel":"%s"}\n' \
+    "$(json_escape "$installed_at")" "$(now_utc)" "$channel" \
+    >"$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv -f "$tmp" "${dir}/watcher.json" 2>/dev/null || rm -f "$tmp"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Cleanup
+#
+# What "no leftovers on the disk" means, spelled out as three narrow commands
+# rather than one broad one. `docker system prune` is the command everybody
+# reaches for and it is the wrong one here: its --volumes form would take
+# db_data, file_data and caddy_data — the database, every uploaded file, and
+# the certificate store — and there is no version of this feature worth that
+# risk. No path below passes --volumes, and none ever should.
+#
+#   image prune      dangling images only, never -a. A retag orphans the
+#                    image it replaced, and that orphan is what accumulates
+#                    across updates. Anything a container still uses is
+#                    skipped by docker itself.
+#   container prune  scoped to this compose project by label, so a host that
+#                    also runs something else keeps its stopped containers.
+#   builder prune    the build cache, which is the big one: an install that
+#                    builds images locally leaves gigabytes here and nothing
+#                    else ever removes it.
+#
+# Called after a run that SUCCEEDED or found nothing to do. Deliberately not
+# after a rollback — the previous image is untagged at that moment and is
+# exactly what an image prune would take — and not after a failure, where
+# what is left behind is evidence.
+# ---------------------------------------------------------------------------
+prune_docker() {
+  local project=""
+  if [ "$no_prune" -eq 1 ]; then
+    log "skipping cleanup (--no-prune)"
+    return 0
+  fi
+  command -v "$docker_bin" >/dev/null 2>&1 || return 0
+
+  log "removing what the update orphaned (no volume is touched)"
+  "$docker_bin" image prune -f >/dev/null 2>&1 || true
+
+  if [ "$mode" = "compose" ]; then
+    project="$("$docker_bin" inspect --format \
+      '{{index .Config.Labels "com.docker.compose.project"}}' \
+      "$(compose_container)" 2>/dev/null)" || project=""
+  fi
+  if [ -n "$project" ]; then
+    "$docker_bin" container prune -f \
+      --filter "label=com.docker.compose.project=${project}" >/dev/null 2>&1 || true
+  fi
+
+  "$docker_bin" builder prune -f >/dev/null 2>&1 || true
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Serving a request from the dashboard
+#
+# THE ONE PLACE THIS SCRIPT READS A FILE SOMEBODY ELSE WROTE, and therefore
+# the place worth reading carefully.
+#
+# Exactly one field is consulted, and it selects between two fixed argument
+# vectors written out below in full. No value from the file is interpolated
+# into a command, expanded, or passed as an argument to anything. The id is
+# copied into status.json and nowhere else, and it is escaped on the way.
+#
+# That is not defensive style, it is the security property (ADR 016 §1): a
+# request that could name a version could name an older one, and the flag
+# that applies an older one is --force, which is the whole anti-rollback
+# control. There is no code path from this file to that flag.
+#
+# The request is deleted BEFORE it is acted on. The path unit retriggers
+# while the file exists, so a request that survived its own run would run
+# forever; and a request that crashes the updater must not be retried
+# automatically, because the second attempt would meet a half-applied stack.
+# ---------------------------------------------------------------------------
+serve_request() {
+  local dir req kind id
+  dir="$(resolve_state_dir)"
+  [ -n "$dir" ] && [ -d "$dir" ] ||
+    fail "no state directory — nothing asked for an update, or the stack is down"
+  req="${dir}/request.json"
+  [ -f "$req" ] || { log "no request to serve"; exit 0; }
+
+  kind="$(sed -n 's/.*"kind"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$req" 2>/dev/null | head -n 1)"
+  id="$(sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([0-9A-Za-z-]*\)".*/\1/p' "$req" 2>/dev/null | head -n 1)"
+  rm -f "$req"
+
+  request_id="$id"
+  # The second and last test seam in this script, alongside
+  # HAMLANEH_UPDATE_LOCK_DIR: what gets re-invoked. A test needs to read the
+  # argument vector rather than infer it, because "the vector is fixed" is the
+  # property, and asserting a property by inference is how it stops holding.
+  local self="${HAMLANEH_UPDATE_SERVE_EXEC:-$SCRIPT_PATH}"
+  case "$kind" in
+    check)
+      log "serving a check requested from the dashboard"
+      "$self" --check --state-dir "$dir" --request-id "$id"
+      ;;
+    apply)
+      log "serving an update requested from the dashboard"
+      "$self" --state-dir "$dir" --request-id "$id"
+      ;;
+    *)
+      # fail writes the status. A request naming something else is a failure
+      # and not the contract's `refused`, which means the updater declined a
+      # real release on purpose — the operator needs to be able to tell "the
+      # dashboard sent nonsense" from "a downgrade was blocked".
+      fail "request.json named '${kind:-nothing}'; only 'check' and 'apply' exist"
+      ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -338,6 +597,8 @@ verify_release() {
     3)
       printf '[hamlaneh-update] REFUSED: verify-release.sh refused %s as a downgrade from %s. Nothing was changed.\n' \
         "$version" "$installed" >&2
+      write_status refused 3 \
+        "${version} was refused as a downgrade from ${installed}; nothing was changed"
       exit 3
       ;;
     *)
@@ -440,6 +701,11 @@ apply_compose() {
     rollback_compose "$previous_id" "$local_tag"
     printf '[hamlaneh-update] ROLLED BACK: %s did not come up healthy; the previous image is running again.\n' \
       "$version" >&2
+    # No prune on this path, deliberately: the image rollback just restored
+    # is untagged at this moment and is exactly what a dangling-image prune
+    # would take. See prune_docker.
+    write_status rolled_back 4 \
+      "${version} did not come up healthy; ${installed} is running again"
     exit 4
   fi
 
@@ -529,6 +795,8 @@ apply_home() {
     rollback_home "$previous"
     printf '[hamlaneh-update] ROLLED BACK: %s did not come up healthy; %s is running again.\n' \
       "$version" "$installed" >&2
+    write_status rolled_back 4 \
+      "${version} did not come up healthy; ${installed} is running again"
     exit 4
   fi
 
@@ -609,6 +877,73 @@ EOF
   log "auto-update is on: hamlaneh-update.timer, security channel"
   log "status:  systemctl list-timers hamlaneh-update.timer"
   log "off:     systemctl disable --now hamlaneh-update.timer"
+
+  install_request_watcher "$unit_dir"
+}
+
+# The half that makes the dashboard's button real (ADR 016 §3).
+#
+# A .path unit rather than a second timer, because the whole point of a
+# button is that it does not wait: PathExists fires within a moment of the
+# server writing the file. It also retriggers as long as the file is there,
+# which is why serve_request deletes the request before acting on it.
+#
+# Resolving the directory needs the stack to be up, and at install time it
+# is — install.sh calls this after wait_for_stack. Where it cannot be
+# resolved, no unit is written and no watcher.json is stamped, so the server
+# reports the feature as unavailable and draws no button. A control that
+# quietly does nothing is worse than no control, because the operator then
+# believes the instance is patched.
+install_request_watcher() {
+  local unit_dir="$1" dir
+  if [ -z "$mode" ]; then mode="$(detect_mode 2>/dev/null || true)"; fi
+  dir="$(resolve_state_dir)"
+  if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+    log "no update state directory yet, so the dashboard's update control stays off."
+    log "It appears once the stack has run with the update_state volume; re-run '$0 --install-timer' then."
+    return 0
+  fi
+
+  cat >"${unit_dir}/hamlaneh-update-request.service" <<EOF
+[Unit]
+Description=Hamlaneh update requested from the admin dashboard
+Documentation=https://github.com/${repo}/blob/main/docs/adr/016-operator-triggered-updates.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=${SCRIPT_PATH} --serve-request --state-dir ${dir}
+# The same hardening the scheduled unit carries, and for the same reason: it
+# does the same work. What it does NOT get is any additional authority for
+# having been asked by a person rather than a clock.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+EOF
+
+  cat >"${unit_dir}/hamlaneh-update-request.path" <<EOF
+[Unit]
+Description=Watch for a Hamlaneh update requested from the admin dashboard
+
+[Path]
+PathExists=${dir}/request.json
+Unit=hamlaneh-update-request.service
+
+[Install]
+WantedBy=paths.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now hamlaneh-update-request.path
+  stamp_watcher "$dir"
+  log "the dashboard can now ask for an update: hamlaneh-update-request.path"
 }
 
 # ---------------------------------------------------------------------------
@@ -646,8 +981,16 @@ while [ $# -gt 0 ]; do
     --key) key="${2-}"; shift 2 ;;
     --cosign) cosign_bin="${2-}"; shift 2 ;;
     --docker) docker_bin="${2-}"; shift 2 ;;
+    --state-dir) state_dir="${2-}"; shift 2 ;;
+    # Not in the usage block on purpose: serve_request passes it to the child
+    # it spawns, and nothing else should. It labels a status line; it selects
+    # nothing and reaches no command.
+    --request-id) request_id="${2-}"; shift 2 ;;
     --force) force=1; shift ;;
     --check) check_only=1; shift ;;
+    --no-prune) no_prune=1; shift ;;
+    --prune-only) prune_only=1; shift ;;
+    --serve-request) serve_request_only=1; shift ;;
     --install-timer) install_timer_only=1; shift ;;
     -h | --help) usage; exit 0 ;;
     *) usage_error "unknown argument: $1" ;;
@@ -667,8 +1010,22 @@ case "$channel" in
   *) usage_error "--channel must be 'security' or 'all', not '${channel}'" ;;
 esac
 
+run_started_at="$(now_utc)"
+
 if [ "$install_timer_only" -eq 1 ]; then
   install_timer
+  exit 0
+fi
+
+if [ "$serve_request_only" -eq 1 ]; then
+  if [ -z "$mode" ]; then mode="$(detect_mode)"; fi
+  serve_request
+  exit 0
+fi
+
+if [ "$prune_only" -eq 1 ]; then
+  if [ -z "$mode" ]; then mode="$(detect_mode 2>/dev/null || true)"; fi
+  prune_docker
   exit 0
 fi
 
@@ -712,6 +1069,11 @@ version_is_valid "$version" ||
 
 if [ "$version" = "$installed" ]; then
   log "already on ${version} — nothing to do"
+  # A run that found nothing still prunes. Four of these a day is what keeps
+  # a long-lived host clean without a second timer to forget about.
+  prune_docker
+  version=""
+  write_status idle 0 "up to date on ${installed}"
   exit 0
 fi
 
@@ -721,6 +1083,9 @@ if [ "$channel" = "security" ] &&
   log "${version} is available but outside the security channel (installed ${installed})."
   log "The security channel applies patch releases of ${installed%.*}.x only, which is where fixes are backported."
   log "Apply it deliberately with: $0 --channel all"
+  available_outside_channel=1
+  prune_docker
+  write_status idle 0 "${version} is available but outside the ${channel} channel"
   exit 0
 fi
 
@@ -728,8 +1093,14 @@ if [ -z "$asset" ]; then asset="$(host_asset)"; fi
 
 if [ "$check_only" -eq 1 ]; then
   log "would apply ${version} over ${installed} in ${mode} mode (--check: nothing changed)"
+  write_status idle 0 "${version} is available (installed ${installed})"
   exit 0
 fi
+
+# From here the run does real work and takes real time — a download, a
+# signature check, a container recreate. Saying so before starting is what
+# lets the dashboard draw progress instead of an unexplained pause.
+write_status running 0 "applying ${version} over ${installed}"
 
 if [ -n "$from_dir" ]; then
   [ -d "$from_dir" ] || usage_error "--from-dir '${from_dir}' is not a directory"
@@ -745,3 +1116,9 @@ if [ "$mode" = "compose" ]; then
 else
   apply_home "$release_dir"
 fi
+
+# Reached only when the new version came up healthy: both apply paths exit 4
+# from inside on a rollback and never return here, which is what keeps the
+# cleanup below away from the image a rollback just restored.
+prune_docker
+write_status succeeded 0 "updated to ${version}"
