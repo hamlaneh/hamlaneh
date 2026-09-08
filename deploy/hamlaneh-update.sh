@@ -241,7 +241,15 @@ trap cleanup EXIT
 # manual, which TMPDIR does cover.
 take_lock() {
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    fail "another update is already running (lock: $LOCK_DIR). Remove it by hand only if no updater is running."
+    # Losing this race is not a failure of anything, and the dashboard must
+    # not say it is. The endpoint's own guard covers a click racing another
+    # click, but not a click racing the timer — the server cannot see a lock
+    # on the host — so the honest status for an operator watching is that a
+    # run is in flight, which is exactly what is true.
+    write_status running 0 "another update run already holds the lock on this host"
+    printf '[hamlaneh-update] another update is already running (lock: %s). Remove it by hand only if no updater is running.\n' \
+      "$LOCK_DIR" >&2
+    exit 1
   fi
   lock_held=1
 }
@@ -379,9 +387,13 @@ write_status() {
 }
 
 # What makes the dashboard's button appear at all: proof that something on
-# this host is listening. Refreshed on every run, so a host whose units were
-# removed stops claiming to listen once the server's staleness window passes
-# — a claim that expires beats a flag nobody remembers to clear.
+# this host is listening. The claim expires — the server treats a stamp older
+# than 48h as nobody listening — because a flag nobody remembers to clear
+# would keep offering a button after the units were removed.
+#
+# An expiring claim has to be renewed by something, which is refresh_watcher
+# below, and the two must be read together: this function only writes the
+# file, and says nothing about whether the host is in fact listening.
 stamp_watcher() {
   local dir="$1" tmp installed_at
   [ -n "$dir" ] && [ -d "$dir" ] || return 0
@@ -397,6 +409,25 @@ stamp_watcher() {
     >"$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
   mv -f "$tmp" "${dir}/watcher.json" 2>/dev/null || rm -f "$tmp"
   return 0
+}
+
+# Renew the claim, and only when it is true.
+#
+# The stamp means "a request written now would be picked up". That is a claim
+# about the .path unit, NOT about this script having run — so a manual run on
+# a host that never installed the watcher must not refresh it, or an operator
+# running the updater by hand would switch on a dashboard button that nothing
+# is behind. The unit is therefore asked rather than assumed, and a host with
+# no systemd stamps nothing at all, which is the honest answer there.
+#
+# The scheduled timer runs four times a day and the server's window is 48
+# hours, so a listening host stays listening across eight missed runs, and a
+# host whose units were removed goes quiet within two days without anybody
+# having to remember to clear anything.
+refresh_watcher() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  systemctl is-enabled hamlaneh-update-request.path >/dev/null 2>&1 || return 0
+  stamp_watcher "$(resolve_state_dir)"
 }
 
 # ---------------------------------------------------------------------------
@@ -478,8 +509,16 @@ serve_request() {
   req="${dir}/request.json"
   [ -f "$req" ] || { log "no request to serve"; exit 0; }
 
-  kind="$(sed -n 's/.*"kind"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$req" 2>/dev/null | head -n 1)"
-  id="$(sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([0-9A-Za-z-]*\)".*/\1/p' "$req" 2>/dev/null | head -n 1)"
+  # Read a bounded prefix, never the whole file. The server caps its own
+  # reads of this directory at 64KB and the host has to do the same: the one
+  # process that writes here is the one this design assumes could be
+  # compromised, and handing sed a file of unbounded size is a way to spend
+  # the host's memory without ever getting past the two literals below.
+  # A real request is a couple of hundred bytes.
+  local head_bytes
+  head_bytes="$(head -c 65536 "$req" 2>/dev/null)" || head_bytes=""
+  kind="$(sed -n 's/.*"kind"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' <<<"$head_bytes" | head -n 1)"
+  id="$(sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([0-9A-Za-z-]*\)".*/\1/p' <<<"$head_bytes" | head -n 1)"
   rm -f "$req"
 
   request_id="$id"
@@ -1037,6 +1076,12 @@ case "$mode" in
   compose | home) ;;
   *) usage_error "--mode must be 'compose' or 'home', not '${mode}'" ;;
 esac
+
+# Renew the listening claim before doing anything else. It has to happen on
+# the ordinary scheduled run and not only at install time: the claim expires
+# after 48 hours, so an install-time stamp alone would take the dashboard's
+# button away two days later on a host that was listening the whole time.
+refresh_watcher
 
 if [ "$mode" = "compose" ] && [ -n "$key" ]; then
   usage_error "--key verifies the release artifacts against a public key, but the container image can only be checked against the keyless GitHub identity. Refusing to apply a compose update with half of it verified."

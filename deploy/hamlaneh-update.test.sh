@@ -753,6 +753,70 @@ else
   pass_check "the image prune is dangling-only"
 fi
 
+printf '\n--- the claim that this host is listening ---\n'
+
+# watcher.json is what turns the dashboard's button on, and the server treats
+# a stamp older than 48h as nobody listening. So SOMETHING has to renew it,
+# and it has to be the ordinary scheduled run: an install-time stamp alone
+# would take the button away two days later on a host that was listening the
+# whole time — the feature going dark exactly the way the failure it was built
+# to surface did.
+#
+# It must renew it only when the watcher unit really is enabled, which is the
+# other half and the one that matters for safety: a manual run on a host with
+# no watcher must not switch on a button with nothing behind it.
+SYSTEMCTL_STUB_DIR="$WORK/systemctl-stub"
+mkdir -p "$SYSTEMCTL_STUB_DIR"
+cat >"$SYSTEMCTL_STUB_DIR/systemctl" <<'SYSCTL'
+#!/usr/bin/env bash
+# is-enabled succeeds only while the marker exists, which is how a test says
+# "this host has the watcher unit" and "this host does not".
+[ "${1:-}" = "is-enabled" ] && [ -f "${SYSTEMCTL_STUB_ENABLED:-/nonexistent}" ]
+SYSCTL
+chmod +x "$SYSTEMCTL_STUB_DIR/systemctl"
+export SYSTEMCTL_STUB_ENABLED="$WORK/watcher-enabled"
+
+# stamp <state dir> <last_seen> — a watcher file as it would be after install.
+stamp() {
+  printf '{"schema":1,"installed_at":"2026-01-01T00:00:00Z","last_seen":"%s","channel":"security"}\n' \
+    "$2" >"$1/watcher.json"
+}
+
+# last_seen <state dir>
+last_seen() {
+  sed -n 's/.*"last_seen":"\([^"]*\)".*/\1/p' "$1/watcher.json" 2>/dev/null | head -n 1
+}
+
+STALE="2026-01-02T00:00:00Z"
+
+: >"$SYSTEMCTL_STUB_ENABLED"
+seed_compose 0
+stamp "$STATE_DIR" "$STALE"
+PATH="$SYSTEMCTL_STUB_DIR:$PATH" compose_update "$REL_140" v1.4.0 --installed v1.4.0 \
+  --cosign "$COSIGN_COMPOSE" >/dev/null 2>&1 || true
+checks=$((checks + 1))
+if [ "$(last_seen "$STATE_DIR")" != "$STALE" ]; then
+  pass_check "a scheduled run renews the listening claim, so the button does not expire"
+else
+  fail_check "a scheduled run left last_seen at its install-time value" \
+    "The server stops believing a stamp after 48h, so the dashboard's button" \
+    "would disappear two days after install on a host that never stopped listening."
+fi
+
+rm -f "$SYSTEMCTL_STUB_ENABLED"
+seed_compose 0
+stamp "$STATE_DIR" "$STALE"
+PATH="$SYSTEMCTL_STUB_DIR:$PATH" compose_update "$REL_140" v1.4.0 --installed v1.4.0 \
+  --cosign "$COSIGN_COMPOSE" >/dev/null 2>&1 || true
+checks=$((checks + 1))
+if [ "$(last_seen "$STATE_DIR")" = "$STALE" ]; then
+  pass_check "a run on a host with no watcher unit claims nothing"
+else
+  fail_check "a run renewed the listening claim on a host with no watcher" \
+    "That switches on a dashboard button with nothing behind it, which is the" \
+    "one direction ADR 016 section 3 says must fail closed."
+fi
+
 # ---------------------------------------------------------------------------
 
 printf '\n%d checks, %d failures\n' "$checks" "$failures"

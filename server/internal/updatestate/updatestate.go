@@ -72,6 +72,14 @@ const maxStateFileBytes = 64 << 10
 // more than a log line and far less than a payload.
 const maxMessageBytes = 4 << 10
 
+// maxVersionBytes caps the version the host says is available. A release tag
+// is a dozen characters and the longest imaginable one is nowhere near this,
+// so the bound is not a judgement about versions — it is the same refusal to
+// pass a length chosen by whatever wrote the file straight through to a
+// screen. The message got a cap for that reason and this field arrives by
+// exactly the same route.
+const maxVersionBytes = 64
+
 // ErrNotConfigured is a request made against a deployment that has no state
 // directory. Nothing is broken when it happens: there is simply nothing on
 // this host to ask, which is what the endpoint answers 503 for.
@@ -203,11 +211,11 @@ func (d Dir) Read(now time.Time) Snapshot {
 	if haveStatus {
 		snap.Channel = channelOr(status.Channel, snap.Channel)
 		snap.State = hostState(status.State)
-		snap.AvailableVersion = status.AvailableVersion
+		snap.AvailableVersion = clip(status.AvailableVersion, maxVersionBytes)
 		snap.AvailableOutsideChannel = status.AvailableOutsideChannel
 		snap.LastCheckAt = parseTime(status.CheckedAt)
 		snap.LastRunAt = lastRun(status)
-		snap.Message = clip(status.Message)
+		snap.Message = clip(status.Message, maxMessageBytes)
 	}
 
 	// A request the host has not answered. It deletes the file before it acts
@@ -427,15 +435,18 @@ func parseTime(raw string) time.Time {
 	return t.UTC()
 }
 
-// clip bounds the host's own line and takes the teeth out of it. The text is
-// carried verbatim except for two things: it is cut to maxMessageBytes, and
-// C0 control characters other than newline and tab are dropped. Neither
+// clip bounds a string the host wrote and takes the teeth out of it. The
+// text is carried verbatim except for two things: it is cut to max bytes,
+// and C0 control characters other than newline and tab are dropped. Neither
 // belongs in a log line, and both survive into places that read them as
 // instructions rather than as text — a terminal, a log aggregator — long
 // after the browser has rendered them harmlessly.
-func clip(msg string) string {
-	if len(msg) > maxMessageBytes {
-		msg = msg[:maxMessageBytes]
+//
+// The bound is a parameter rather than a constant because the two fields it
+// guards are different sizes of thing: a log line, and a release tag.
+func clip(msg string, limit int) string {
+	if len(msg) > limit {
+		msg = msg[:limit]
 		// The cut lands wherever the byte count did, so it may have split a
 		// character. Half of one is not text.
 		for len(msg) > 0 {
