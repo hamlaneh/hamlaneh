@@ -19,6 +19,7 @@
 #      binding rather than probed, see check_db_not_exposed for why a probe
 #      would be the weaker test here
 #   6. caddy, server, livekit and db containers all run as a non-root UID
+#      and none of them can reach the docker socket (ADR 016)
 #   7. The media plane exposes its signal path and nothing else (ADR 005):
 #      /rtc reaches LiveKit, its RoomService admin API and debug dumps do
 #      not, its HTTP port is unpublished, it publishes exactly the three
@@ -460,6 +461,37 @@ check_nonroot_containers() {
   done
 }
 
+# No container may hold the docker socket.
+#
+# This is the assumption the whole update design rests on (ADR 016). The
+# dashboard can ask for an update, and the reason that is safe is that the
+# asking travels as a file rather than as a command: the authority to swap the
+# running image lives on the host, in a systemd unit, and never inside a
+# container. /var/run/docker.sock mounted anywhere hands whatever holds it
+# root on the host, which would make every other check in this file decorative.
+#
+# It is checked here rather than trusted from the compose file because the
+# tempting version of this feature — an updater sidecar — is exactly the one
+# that needs the socket, and it would arrive looking like a simplification.
+check_no_docker_socket() {
+  local svc cid mounts
+  for svc in caddy server livekit db; do
+    cid="$(docker ps -q \
+      --filter "label=${PROJECT_LABEL}" \
+      --filter "label=com.docker.compose.service=${svc}" | head -n 1)"
+    [ -n "$cid" ] || continue
+    mounts="$(docker inspect -f '{{range .Mounts}}{{.Source}} {{end}}' "$cid")"
+    case "$mounts" in
+      *docker.sock*)
+        failure "service '${svc}' has the docker socket mounted, which is root on this host"
+        ;;
+      *)
+        pass "service '${svc}' cannot reach the docker socket"
+        ;;
+    esac
+  done
+}
+
 # Auth surface must fail closed for anonymous callers, with the contract's
 # JSON error shape and no account enumeration.
 check_auth_defaults() {
@@ -597,6 +629,7 @@ main() {
   check_caddy_ports
   check_db_not_exposed
   check_nonroot_containers
+  check_no_docker_socket
 
   printf '\n%d passed, %d failed\n' "$PASS_COUNT" "${#FAILURES[@]}"
   if [ "${#FAILURES[@]}" -gt 0 ]; then
