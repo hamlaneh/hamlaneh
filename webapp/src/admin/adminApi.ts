@@ -24,6 +24,9 @@ export type CreateInviteRequest = components["schemas"]["CreateInviteRequest"];
 export type ScimToken = components["schemas"]["ScimToken"];
 export type CreatedScimToken = components["schemas"]["CreatedScimToken"];
 export type CreateScimTokenRequest = components["schemas"]["CreateScimTokenRequest"];
+export type UpdateStatus = components["schemas"]["UpdateStatus"];
+export type UpdateState = components["schemas"]["UpdateState"];
+export type RequestUpdateRequest = components["schemas"]["RequestUpdateRequest"];
 
 /**
  * A row of the users table.
@@ -67,6 +70,15 @@ export class AdminError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
+    /**
+     * The refusal itself, kept because the status and the code are not all a
+     * screen needs: every 429 the contract describes carries `Retry-After`
+     * (spec: RateLimited), and `useRateLimitNotice` counts it down from the
+     * response rather than from a number copied out of it here. The body is
+     * already consumed by the time this is thrown — only the headers and the
+     * status are worth reading off it.
+     */
+    readonly response: Response,
   ) {
     super(`admin request failed: ${String(status)} ${code}`);
     this.name = "AdminError";
@@ -80,7 +92,11 @@ function unwrap<T>(
   if (result.data !== undefined) {
     return result.data;
   }
-  throw new AdminError(result.response.status, result.error?.error.code ?? "unexpected");
+  throw new AdminError(
+    result.response.status,
+    result.error?.error.code ?? "unexpected",
+    result.response,
+  );
 }
 
 /**
@@ -161,7 +177,7 @@ export async function revokeInvite(inviteId: string): Promise<void> {
     params: { path: { inviteId } },
   });
   if (response.status !== 204) {
-    throw new AdminError(response.status, error?.error.code ?? "unexpected");
+    throw new AdminError(response.status, error?.error.code ?? "unexpected", response);
   }
 }
 
@@ -184,7 +200,7 @@ export async function revokeScimToken(tokenId: string): Promise<void> {
     params: { path: { tokenId } },
   });
   if (response.status !== 204) {
-    throw new AdminError(response.status, error?.error.code ?? "unexpected");
+    throw new AdminError(response.status, error?.error.code ?? "unexpected", response);
   }
 }
 
@@ -210,6 +226,35 @@ export async function setOrgEncryptionMode(mode: EncryptionMode): Promise<OrgSet
   return unwrap(
     await api.PUT("/api/v1/admin/org/encryption-mode", { body: { encryption_mode: mode } }),
   );
+}
+
+/**
+ * What version this instance runs and whether a newer one is waiting, read from
+ * the state directory the host's updater writes (ADR 016). The server performs
+ * no check of its own and reaches no network, so this is as fresh as
+ * `last_check_at` says it is — never fresher.
+ */
+export async function getUpdateStatus(): Promise<UpdateStatus> {
+  return unwrap(await api.GET("/api/v1/admin/update"));
+}
+
+/**
+ * Asks the host to check for, or apply, an update — and carries nothing else.
+ *
+ * There is no version, no repository and no force flag in the body, which is
+ * ADR 016 decision 1 rather than an omission on this side: the host maps the
+ * literal to a fixed argument vector, so the widest outcome a caller can reach
+ * is the release the timer would have applied within six hours anyway. If this
+ * function ever grows a second argument, that property is what it is spending.
+ *
+ * Answers 202 with the status the request produced (`requested`), which the
+ * screen shows while it polls the GET. Throws `AdminError` for the three
+ * refusals the panel tells apart: 409 `update_in_progress`, 429 (whose
+ * `Retry-After` rides along on the error's response), and 503
+ * `self_update_unavailable`.
+ */
+export async function requestUpdate(kind: RequestUpdateRequest["kind"]): Promise<UpdateStatus> {
+  return unwrap(await api.POST("/api/v1/admin/update", { body: { kind } }));
 }
 
 export interface AuditQuery {
