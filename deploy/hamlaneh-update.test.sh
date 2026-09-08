@@ -646,17 +646,18 @@ write_request() {
   : >"$REQ_LOG"
 }
 
-# serve <extra args...> — runs the recorder's copy of the script so the child
-# invocation is captured. SCRIPT_PATH is derived from $0, so invoking the
-# recorder by path is what redirects the re-invocation.
+# serve — consumes one request with the recorder standing in for the script's
+# own re-invocation, so the argument vector the child was given can be read
+# rather than inferred. A function rather than an inline `bash -c`, because
+# what these cases assert is the exact argv and a layer of nested quoting is
+# the last thing that should sit between the reader and it.
 serve() {
-  bash "$UPDATE" --serve-request --mode home --state-dir "$REQ_DIR" "$@"
+  HAMLANEH_UPDATE_SERVE_EXEC="$SERVE_RECORDER" \
+    bash "$UPDATE" --serve-request --mode home --state-dir "$REQ_DIR"
 }
 
 write_request '{"schema":1,"id":"req-1","kind":"apply","requested_at":"2026-09-08T12:00:00Z"}'
-check "an apply request is served" 0 "serving an update requested from the dashboard" \
-  bash -c 'HAMLANEH_UPDATE_SERVE_EXEC="'"$SERVE_RECORDER"'" "$0" --serve-request --mode home --state-dir "$1"' \
-  "$UPDATE" "$REQ_DIR"
+check "an apply request is served" 0 "serving an update requested from the dashboard" serve
 
 checks=$((checks + 1))
 if [ ! -f "$REQ_DIR/request.json" ]; then
@@ -666,14 +667,31 @@ else
     "PathExists retriggers while the file exists; a surviving request runs without end."
 fi
 
+# The vector itself, read rather than inferred. What must NOT be in it is the
+# point: no --force, no --version, no --repo, no --channel. An apply is the
+# bare run, which is the same one the timer performs.
+checks=$((checks + 1))
+if grep -q -- '--force\|--version\|--repo\|--channel' "$REQ_LOG"; then
+  fail_check "the served vector carries a flag a request must never reach" "$(cat "$REQ_LOG")"
+else
+  pass_check "an apply runs the bare update, with no flag a request could have chosen"
+fi
+
+write_request '{"schema":1,"id":"req-3","kind":"check","requested_at":"2026-09-08T12:00:00Z"}'
+check "a check request is served" 0 "serving a check requested from the dashboard" serve
+checks=$((checks + 1))
+if grep -q -- '--check' "$REQ_LOG" && ! grep -q -- '--force' "$REQ_LOG"; then
+  pass_check "a check runs --check and nothing more"
+else
+  fail_check "a check did not map to --check alone" "$(cat "$REQ_LOG")"
+fi
+
 # The refusal that matters. A request naming anything but the two literals
 # must run nothing at all — not a shell, not the updater, not a 'safe'
 # fallback. This is the assertion that would catch somebody 'helpfully'
 # passing the value through to the command line.
 write_request '{"schema":1,"id":"req-2","kind":"apply; rm -rf /","requested_at":"2026-09-08T12:00:00Z"}'
-check "a request naming anything else is refused" 1 "only 'check' and 'apply' exist" \
-  bash -c 'HAMLANEH_UPDATE_SERVE_EXEC="'"$SERVE_RECORDER"'" "$0" --serve-request --mode home --state-dir "$1"' \
-  "$UPDATE" "$REQ_DIR"
+check "a request naming anything else is refused" 1 "only 'check' and 'apply' exist" serve
 
 checks=$((checks + 1))
 if [ ! -s "$REQ_LOG" ]; then

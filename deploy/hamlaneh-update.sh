@@ -504,8 +504,9 @@ prune_docker() {
 serve_request() {
   local dir req kind id
   dir="$(resolve_state_dir)"
-  [ -n "$dir" ] && [ -d "$dir" ] ||
+  if [ -z "$dir" ] || [ ! -d "$dir" ]; then
     fail "no state directory — nothing asked for an update, or the stack is down"
+  fi
   req="${dir}/request.json"
   [ -f "$req" ] || { log "no request to serve"; exit 0; }
 
