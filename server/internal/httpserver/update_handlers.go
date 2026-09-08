@@ -92,6 +92,14 @@ func (s *apiServer) RequestUpdate(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	// A body carrying more than `kind` — `{"kind":"apply","force":true}` is
+	// the one worth naming — is decoded into a struct that has nowhere to put
+	// it, so the extra field is dropped here and reaches nothing. That is
+	// worth saying out loud rather than leaving to be rediscovered: the
+	// question "why does this endpoint accept force?" has the answer "it does
+	// not, in the only sense that matters", because the sole value that ever
+	// leaves this handler is the validated enum below. The request file is
+	// built from that enum and from nothing the caller wrote (ADR 016 §1).
 	if !req.Kind.Valid() {
 		writeError(w, r, http.StatusBadRequest, codeInvalidRequest,
 			"kind must be one of: check, apply")
