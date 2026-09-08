@@ -64,6 +64,15 @@
 // an authorization decision, and reaching it still faces the same session
 // and the same role check.
 //
+// HAMLANEH_UPDATE_STATE_DIR names the directory this server shares with the
+// host's updater (ADR 016), which the compose stack mounts at
+// /var/lib/hamlaneh-update. The server writes one parameterless request file
+// there when an administrator asks for an update, and reads the status the
+// host writes back; it never runs the updater and never passes it an
+// argument. Unset — the default, and any host whose watcher was never
+// installed — reports the control as unavailable in the dashboard rather than
+// offering a button nothing would answer. Both modes read it.
+//
 // HAMLANEH_COMPRESS_RESPONSES=1 gzips the embedded web build on the way out.
 // It is for home mode, which is a single binary with nothing in front of it:
 // the compose stack's Caddy already runs `encode zstd gzip`, so leaving it
@@ -401,6 +410,14 @@ func start(ctx context.Context, m mode) error {
 		// them, and it leaves the session endpoints a page needs on both.
 		// Home mode refuses the variable outright.
 		httpserver.WithAdminListener(m.adminAddr),
+		// The update control (ADR 016). The version is the one variable
+		// --version prints, passed rather than duplicated so the dashboard
+		// and the updater can never disagree about what is installed; the
+		// directory is the handoff with the host's watcher, and an install
+		// without one reports the control as unavailable rather than drawing
+		// a button that does nothing.
+		httpserver.WithVersion(version),
+		httpserver.WithUpdateState(m.updateStateDir),
 	)
 
 	srvs := []*http.Server{srv}

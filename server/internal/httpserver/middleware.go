@@ -233,6 +233,15 @@ var routePolicies = map[string]routePolicy{
 	// every other route above it.
 	"GET /api/v1/admin/audit": {class: classAdmin, action: authz.AdminAuditList},
 
+	// Phase 4: the operator's update control (ADR 016). Two ordinary
+	// classAdmin rows, and they are ordinary because the endpoint behind them
+	// deliberately holds no power the gate would have to size itself against:
+	// the request file names no version, no repository and no flag, so what
+	// an administrator gets here is the release the host was going to apply
+	// anyway, at a moment of their choosing.
+	"GET /api/v1/admin/update":  {class: classAdmin, action: authz.AdminUpdateRead},
+	"POST /api/v1/admin/update": {class: classAdmin, action: authz.AdminUpdateRequest},
+
 	// Phase 1.6 SCIM provisioning tokens (ADR 004 slice 3). These three are
 	// ordinary admin contract routes and go through every gate above. The
 	// provisioning surface they mint credentials FOR is not in this table at

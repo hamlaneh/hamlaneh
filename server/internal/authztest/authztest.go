@@ -850,6 +850,18 @@ func instanceRegistry() []Entry {
 			func(Fixture) string { return `{"encryption_mode":"strict"}` },
 			http.StatusOK, ""),
 
+		// Phase 4: the operator's update control (ADR 016). The matrix server
+		// names no state directory, so the read honestly answers 200 with
+		// self_update_available false and the request answers 503 — and the
+		// pair is the right one to pin here, because what these rows are
+		// about is the five refusals to their left. The request row asks for
+		// a check rather than an apply so that a cell reaching the handler by
+		// mistake could still not ask a host to restart anything.
+		adminEntry(http.MethodGet, "/api/v1/admin/update", "", nil, http.StatusOK, ""),
+		adminEntry(http.MethodPost, "/api/v1/admin/update", "",
+			func(Fixture) string { return `{"kind":"check"}` },
+			http.StatusServiceUnavailable, "self_update_unavailable"),
+
 		// The two public halves of an invitation, asked with a token of the
 		// right shape that was never issued. All four principals get one
 		// 404: an unknown, expired, revoked or spent token is one answer, and

@@ -120,6 +120,7 @@ func canChannel(user *storage.User, action Action, res Channel) bool {
 		AdminInvitesList, AdminInvitesCreate, AdminInvitesRevoke,
 		AdminOrgRead, AdminOrgUpdate, AdminAuditList,
 		AdminScimTokensList, AdminScimTokensCreate, AdminScimTokensRevoke,
+		AdminUpdateRead, AdminUpdateRequest,
 		ConferenceListAll, ConferenceRevoke:
 		// Instance-level actions are not decided by channel membership, and a
 		// conference is not a channel: it has no membership at all.
@@ -151,6 +152,7 @@ func canMessage(user *storage.User, action Action, res Message) bool {
 		AdminInvitesList, AdminInvitesCreate, AdminInvitesRevoke,
 		AdminOrgRead, AdminOrgUpdate, AdminAuditList,
 		AdminScimTokensList, AdminScimTokensCreate, AdminScimTokensRevoke,
+		AdminUpdateRead, AdminUpdateRequest,
 		ConferenceListAll, ConferenceRevoke:
 		return false
 	default:

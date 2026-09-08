@@ -17,6 +17,7 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
 	"github.com/hamlaneh/hamlaneh/server/internal/ratelimit"
 	"github.com/hamlaneh/hamlaneh/server/internal/storage"
+	"github.com/hamlaneh/hamlaneh/server/internal/updatestate"
 )
 
 // Store is everything the HTTP layer needs from persistent storage.
@@ -392,6 +393,20 @@ type apiServer struct {
 	// the port it names is not being an admin: securityMiddleware's one
 	// authz.Can call site still decides that, identically on both listeners.
 	adminAddr string
+
+	// version is the release this binary was built as, and the update screen
+	// reports it as what is installed. It defaults to defaultVersion, which
+	// is what an unstamped build honestly is; nothing outside this process
+	// can set it, because a state directory that could would be choosing what
+	// the instance claims to be running (update_handlers.go).
+	version string
+
+	// updates is the state directory shared with the host's updater (ADR
+	// 016). Its zero value is an install whose host has no watcher, which is
+	// most of them: the status endpoint then reports self_update_available
+	// false and a request answers 503. Every method on it is safe on that
+	// zero value, so no handler needs a check to say so.
+	updates updatestate.Dir
 }
 
 var _ api.ServerInterface = (*apiServer)(nil)
@@ -411,6 +426,7 @@ func newAPIServer(store Store, opts ...Option) *apiServer {
 		budgets:                newBudgetLimiters(),
 		fileSigner:             unsignedFileURLs{},
 		audit:                  noAudit{},
+		version:                defaultVersion,
 	}
 	for _, opt := range opts {
 		opt(s)

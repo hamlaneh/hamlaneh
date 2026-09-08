@@ -165,6 +165,24 @@ func (e RegistrationMode) Valid() bool {
 	}
 }
 
+// Defines values for RequestUpdateRequestKind.
+const (
+	Apply RequestUpdateRequestKind = "apply"
+	Check RequestUpdateRequestKind = "check"
+)
+
+// Valid indicates whether the value is a known member of the RequestUpdateRequestKind enum.
+func (e RequestUpdateRequestKind) Valid() bool {
+	switch e {
+	case Apply:
+		return true
+	case Check:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SearchKind.
 const (
 	Files    SearchKind = "files"
@@ -228,6 +246,60 @@ func (e UpdateOrgSettingsRequestDefaultLocale) Valid() bool {
 	case UpdateOrgSettingsRequestDefaultLocaleEn:
 		return true
 	case UpdateOrgSettingsRequestDefaultLocaleFa:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateState.
+const (
+	Failed     UpdateState = "failed"
+	Idle       UpdateState = "idle"
+	Refused    UpdateState = "refused"
+	Requested  UpdateState = "requested"
+	RolledBack UpdateState = "rolled_back"
+	Running    UpdateState = "running"
+	Succeeded  UpdateState = "succeeded"
+	Unknown    UpdateState = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the UpdateState enum.
+func (e UpdateState) Valid() bool {
+	switch e {
+	case Failed:
+		return true
+	case Idle:
+		return true
+	case Refused:
+		return true
+	case Requested:
+		return true
+	case RolledBack:
+		return true
+	case Running:
+		return true
+	case Succeeded:
+		return true
+	case Unknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateStatusChannel.
+const (
+	All      UpdateStatusChannel = "all"
+	Security UpdateStatusChannel = "security"
+)
+
+// Valid indicates whether the value is a known member of the UpdateStatusChannel enum.
+func (e UpdateStatusChannel) Valid() bool {
+	switch e {
+	case All:
+		return true
+	case Security:
 		return true
 	default:
 		return false
@@ -922,6 +994,15 @@ type ReplaceMlsKeyPackagesRequest struct {
 	KeyPackages []string `json:"key_packages"`
 }
 
+// RequestUpdateRequest The whole body. There is no version field, no repository field and no force field, and that is the point rather than an omission — see [ADR 016](../adr/016-operator-triggered-updates.md) §1. The host maps this literal to a fixed argument vector and refuses anything else, so nothing a caller writes ever reaches a command line.
+type RequestUpdateRequest struct {
+	// Kind `check` asks the host what a run would do and changes nothing. `apply` asks it to run the update it would have run on schedule.
+	Kind RequestUpdateRequestKind `json:"kind"`
+}
+
+// RequestUpdateRequestKind `check` asks the host what a run would do and changes nothing. `apply` asks it to run the update it would have run on schedule.
+type RequestUpdateRequestKind string
+
 // ScimToken A provisioning token as the table lists it. Never the token.
 type ScimToken struct {
 	CreatedAt time.Time `json:"created_at"`
@@ -1136,6 +1217,45 @@ type UpdateOrgSettingsRequest struct {
 // UpdateOrgSettingsRequestDefaultLocale defines model for UpdateOrgSettingsRequest.DefaultLocale.
 type UpdateOrgSettingsRequestDefaultLocale string
 
+// UpdateState What the last run did, or what the current one is doing.
+// `rolled_back` is its own state rather than a kind of failure: the new version was applied, did not come up healthy, and the previous one is serving again. An operator reading `failed` would go looking for a broken instance; the instance is fine and the release is not.
+// `refused` is the updater declining on purpose — an offered release older than the installed one, with no force available from here. `unknown` is a host that has never written a status file.
+type UpdateState string
+
+// UpdateStatus Read from the state directory the host's updater writes. The server performs no check of its own and reaches no network: everything here is as fresh as `last_check_at` says it is.
+type UpdateStatus struct {
+	// AvailableOutsideChannel True when `available_version` exists but the channel will not apply it — a new MAJOR.MINOR while the channel is `security`. Applying it is a deliberate act on the host, not a click here.
+	AvailableOutsideChannel *bool `json:"available_outside_channel,omitempty"`
+
+	// AvailableVersion The newest release the last check saw, or null.
+	AvailableVersion *string `json:"available_version,omitempty"`
+
+	// Channel Which releases the host applies. `security` is the default and takes patch releases of the installed MAJOR.MINOR only, which is where fixes are backported. A newer release outside the channel is reported here, never silently ignored.
+	Channel UpdateStatusChannel `json:"channel"`
+
+	// InstalledVersion What the running binary answers to `--version`. Usually a `vX.Y.Z` tag; `dev` on a build that was never stamped by the release workflow.
+	InstalledVersion string     `json:"installed_version"`
+	LastCheckAt      *time.Time `json:"last_check_at,omitempty"`
+	LastRunAt        *time.Time `json:"last_run_at,omitempty"`
+
+	// Message The updater's own last line, verbatim. Rendered as preformatted text and never as markup: it is a host-generated string and the dashboard is the most authenticated surface in the product.
+	Message *string `json:"message,omitempty"`
+
+	// SelfUpdateAvailable Whether anything on the host is listening for a request. False on a host with no systemd, or one whose timer was never enabled. The dashboard draws no button when this is false; an offer the instance cannot honour would leave an operator believing they are patched.
+	SelfUpdateAvailable bool `json:"self_update_available"`
+
+	// State What the last run did, or what the current one is doing.
+	// `rolled_back` is its own state rather than a kind of failure: the new version was applied, did not come up healthy, and the previous one is serving again. An operator reading `failed` would go looking for a broken instance; the instance is fine and the release is not.
+	// `refused` is the updater declining on purpose — an offered release older than the installed one, with no force available from here. `unknown` is a host that has never written a status file.
+	State UpdateState `json:"state"`
+
+	// Updatable Whether this install can be updated in place at all. False when `installed_version` is not a semantic version, because the anti-rollback check has nothing to compare against and the updater refuses the run rather than guessing. That is not a bug to route around — it is the one control standing between a signed old release and this instance — so the screen says the install came from a checkout rather than a release, and points at reinstalling from one.
+	Updatable bool `json:"updatable"`
+}
+
+// UpdateStatusChannel Which releases the host applies. `security` is the default and takes patch releases of the installed MAJOR.MINOR only, which is where fixes are backported. A newer release outside the channel is reported here, never silently ignored.
+type UpdateStatusChannel string
+
 // UpdateUserAdminRequest Only the fields present are changed.
 type UpdateUserAdminRequest struct {
 	IsActive *bool `json:"is_active,omitempty"`
@@ -1339,6 +1459,9 @@ type SetOrgEncryptionModeJSONRequestBody = SetEncryptionModeRequest
 // CreateScimTokenJSONRequestBody defines body for CreateScimToken for application/json ContentType.
 type CreateScimTokenJSONRequestBody = CreateScimTokenRequest
 
+// RequestUpdateJSONRequestBody defines body for RequestUpdate for application/json ContentType.
+type RequestUpdateJSONRequestBody = RequestUpdateRequest
+
 // AdminCreateUserJSONRequestBody defines body for AdminCreateUser for application/json ContentType.
 type AdminCreateUserJSONRequestBody = AdminCreateUserRequest
 
@@ -1455,6 +1578,12 @@ type ServerInterface interface {
 	// RevokeScimToken Revoke a provisioning token.
 	// (DELETE /api/v1/admin/scim/tokens/{tokenId})
 	RevokeScimToken(w http.ResponseWriter, r *http.Request, tokenId openapi_types.UUID)
+	// GetUpdateStatus What version this instance runs, and whether a newer one is waiting.
+	// (GET /api/v1/admin/update)
+	GetUpdateStatus(w http.ResponseWriter, r *http.Request)
+	// RequestUpdate Ask the host to check for, or apply, an update.
+	// (POST /api/v1/admin/update)
+	RequestUpdate(w http.ResponseWriter, r *http.Request)
 	// AdminListUsers List users (dashboard). adminOnly.
 	// (GET /api/v1/admin/users)
 	AdminListUsers(w http.ResponseWriter, r *http.Request, params AdminListUsersParams)
@@ -1918,6 +2047,34 @@ func (siw *ServerInterfaceWrapper) RevokeScimToken(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RevokeScimToken(w, r, tokenId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetUpdateStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetUpdateStatus(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetUpdateStatus(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RequestUpdate operation middleware
+func (siw *ServerInterfaceWrapper) RequestUpdate(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RequestUpdate(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3795,6 +3952,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/admin/org/encryption-mode", wrapper.SetOrgEncryptionMode)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/org", wrapper.GetOrgSettings)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/admin/org", wrapper.UpdateOrgSettings)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/update", wrapper.GetUpdateStatus)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/admin/update", wrapper.RequestUpdate)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/admin/audit", wrapper.ListAuditEntries)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/channels", wrapper.ListChannels)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/channels", wrapper.CreateChannel)
