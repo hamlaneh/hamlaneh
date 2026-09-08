@@ -70,7 +70,7 @@ backup script. Three files, all JSON, all written atomically by rename:
 
 | file | written by | says |
 |---|---|---|
-| `watcher.json` | the host unit, when installed and on every run | that something is listening, and when it last was |
+| `watcher.json` | the host, when the watcher is installed and on every run that finds it still enabled | that something is listening, and when it last was |
 | `request.json` | the server | a `kind` and a request id |
 | `status.json` | the host unit | what the last run did, and what it found |
 
@@ -85,6 +85,16 @@ Where systemd does not exist — home mode on a host without it, the case
 `hamlaneh-backup.sh` already handles by falling back to cron — nothing stamps that file, and
 the server publishes `self_update_available: false`. The dashboard then says updates are
 managed outside this instance and draws no button.
+
+**The claim expires, so something has to renew it, and that something has to check.** The
+server stops believing a stamp older than 48 hours. Every scheduled run therefore refreshes
+it — four times a day, so a listening host survives eight missed runs — but only after asking
+whether the watcher unit is still enabled. Both halves are load-bearing and each fails in a
+different direction. Without the renewal the button vanishes two days after install on a host
+that never stopped listening, which is this feature going dark exactly the way the failure it
+was built to surface did. Without the check, an operator running the updater by hand on a host
+with no watcher would switch on a button with nothing behind it, which is the direction that
+must never happen. A host with no systemd stamps nothing at all.
 
 This follows `password_reset_available` exactly (Phase 1.1b): a capability the instance
 cannot actually perform is never offered. A button that silently does nothing is worse than
