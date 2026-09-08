@@ -5,7 +5,7 @@
 > commit (enforced via the Definition of Done in CLAUDE.md). Strategy lives in
 > [PLAN.md](PLAN.md); task-level execution lives in [ROADMAP.md](ROADMAP.md).
 >
-> **Last updated:** 2026-09-05
+> **Last updated:** 2026-09-08
 
 ## What is Hamlaneh?
 
@@ -541,6 +541,26 @@ overlap. Landed on the Phase 4 side:
   contains no signature logic and no version ordering: `verify-release.sh`'s exit code is the
   authority, so there is exactly one copy of that check to rot. An older validly-signed release
   is refused unless forced.
+- **The admin dashboard can ask for an update** ([ADR 016](adr/016-operator-triggered-updates.md)),
+  which until now only a clock could do: the operator sees the installed version, whether a
+  release is waiting, and what the last run did — including that it failed, which is the state
+  that had no way of being seen. The click does not update anything. The server writes a request
+  carrying a two-valued literal and no version, no repository and no flags, and a systemd path
+  unit on the host runs the updater with its own fixed argument vector. No value from that file
+  ever reaches a command line, which is the point rather than the caution: a request that could
+  name a version would grow a force flag, and force is a downgrade to any signed release with a
+  known vulnerability. So the widest outcome a stolen admin session buys is the release the host
+  was going to apply within six hours anyway. Where nothing on the host is listening the control
+  is absent rather than dead, the way `password_reset_available` already works — an offer the
+  instance cannot honour would leave an operator believing they were patched.
+- **Updates and installs leave nothing behind.** Every successful or no-op run removes the image
+  the retag orphaned, this project's stopped containers and the build cache; the installer does
+  the same after building. Three narrow commands rather than `docker system prune`, and
+  `--volumes` appears on no path in either file — those volumes are the database, every uploaded
+  file and the certificate store. A run that rolled back prunes nothing, because the image a
+  rollback restores is untagged at exactly that moment and is what a dangling-image prune takes.
+  The build cache is the half that matters in practice: measured on a real instance a week after
+  install, 761 MB of images against 8 GB of cache that nothing had ever removed.
 - **Operator backups and a restore that refuses rather than half-runs**, verifying before
   anything is stopped or written. The encryption check is four assertions rather than one,
   because gzip hides a literal string as well as a cipher does and a naive canary scan would
