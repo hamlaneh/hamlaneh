@@ -50,7 +50,11 @@ info:
     E2EE transport: MLS device registration, key-package publish and claim,
     per-channel groups with a first-wins commit log, Welcome delivery, and
     the encrypted-message envelope — all opaque to the server by design.
-  version: 0.7.0
+    Phase 4 adds the operator surface for updates: what version this
+    instance runs, whether a newer one is waiting, and a request that asks
+    the host to apply it — carrying no version and no flags, because the
+    server has no authority to update itself and deliberately keeps none.
+  version: 0.8.0
   license:
     name: AGPL-3.0
     url: https://www.gnu.org/licenses/agpl-3.0.html
