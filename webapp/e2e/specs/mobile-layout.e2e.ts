@@ -81,6 +81,19 @@ test("@fa-smoke the chat shell fits a 375px phone", async ({ app, accounts, page
   // Reachable, not merely present: a composer pushed under the scrim, off the
   // edge or behind the keyboard bar still passes `toBeVisible`.
   await expectWithinViewport(app.composerForm, "composer");
+
+  // Reachable is still not typeable. The composer is disabled until this
+  // channel's MLS group is ready (ChatShell: `disconnected || encryptionNotReady`),
+  // and that finishes AFTER the shell renders — so the drawer toggle above can
+  // be visible while the field is still inert. Clicking straight into it makes
+  // this a race against key exchange, which is the race it lost on a contended
+  // runner: the click retried for the whole 60s budget against a field reading
+  // `disabled`, and the failure was reported against the click.
+  //
+  // Waiting on enablement is what e2ee-key-swap already does for the same
+  // reason and with the same allowance. It also fails better: encryption that
+  // never arrives now says so, instead of surfacing as an unclickable element.
+  await expect(app.composerField).toBeEnabled({ timeout: 30_000 });
   await app.composerField.click();
   await expect(app.composerField).toBeFocused();
   await app.sendMessage("mobile");
