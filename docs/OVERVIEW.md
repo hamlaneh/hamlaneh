@@ -5,7 +5,7 @@
 > commit (enforced via the Definition of Done in CLAUDE.md). Strategy lives in
 > [PLAN.md](PLAN.md); task-level execution lives in [ROADMAP.md](ROADMAP.md).
 >
-> **Last updated:** 2026-09-08
+> **Last updated:** 2026-09-09
 
 ## What is Hamlaneh?
 
@@ -51,11 +51,11 @@ built; the sign-in screen and the sidebar carry the product's own name and nothi
 - The Go server also serves `/healthz` (liveness) and `/readyz`
   (DB + schema readiness), connects to Postgres via pgx, and **runs embedded migrations
   automatically at startup** — the series now runs from `0001_create_users` to
-  `0019_mls_backups`. `server/internal/storage/migrations/` is the list; naming them here
+  `0020_attachment_order`. `server/internal/storage/migrations/` is the list; naming them here
   would be a copy that goes stale on the next slice, and the reason to look is usually a
   specific one anyway (0006 records why search matches substrings, 0017 why an MLS leaf is a
   device rather than a user, 0018 why Strict is the default).
-- The API contract lives in [`docs/api/openapi.yaml`](api/openapi.yaml) — 79 operations, from
+- The API contract lives in [`docs/api/openapi.yaml`](api/openapi.yaml) — 81 operations, from
   health and auth through channels, messages, search, files, invites, admin, conferences, calls
   and the MLS transport. Both sides generate code from it (oapi-codegen for Go,
   openapi-typescript for the webapp); CI fails if generated code drifts. The realtime half is
@@ -691,6 +691,7 @@ draws one today.
 |---|---|
 | [PLAN.md](PLAN.md) | Vision, market, security plan, business model, decisions log |
 | [ROADMAP.md](ROADMAP.md) | Executable phases with measurable test gates |
+| [CHECKLIST.md](CHECKLIST.md) | One-page snapshot of this file, ROADMAP and PLAN: done, remaining, gate status, open questions. Derived — when it disagrees with the three above, they are right |
 | [CLAUDE.md](../CLAUDE.md) | Engineering rules: stack, workflow, testing, git, CI |
 | [api/openapi.yaml](api/openapi.yaml) | The API contract (source of truth for codegen) |
 | [design/STATUS.md](design/STATUS.md) | Which screens have delivered designs |

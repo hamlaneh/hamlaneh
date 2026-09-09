@@ -97,4 +97,6 @@ install has not been timed on real VMs across the distributions it claims.
 [docs/OVERVIEW.md](docs/OVERVIEW.md) is the living description of what exists.
 The full plan, with phases and measurable test gates, lives in
 [docs/ROADMAP.md](docs/ROADMAP.md); strategy and rationale live in
-[docs/PLAN.md](docs/PLAN.md).
+[docs/PLAN.md](docs/PLAN.md). [docs/CHECKLIST.md](docs/CHECKLIST.md) is a one-page
+snapshot across all three — done, remaining, gate status, open questions — for
+anyone who wants the shape before the detail.
