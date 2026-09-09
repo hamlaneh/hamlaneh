@@ -169,6 +169,13 @@ Listed here so nobody re-opens them as bugs.
   proper key management is deferred to Phase 5
 - **One MLS device per browser profile**, shared across tabs
 - A message sealed before a device joined the group can never be opened by that device
+- **A moderate advisory in the desktop bundle cannot be closed from here.**
+  GHSA-wrw7-89jp-8q8g is unsoundness in `glib::VariantStrIter`, fixed in glib 0.20. Tauri is
+  already on its newest release, and every wry version — 0.55 through the current 0.57 —
+  requires `gtk ^0.18`, which pins the gtk-rs generation and with it glib 0.18.5. No
+  `cargo update` moves it; it stays open until wry changes generations upstream. It is
+  Linux-only besides, the gtk stack being `cfg(target_os = "linux")`-gated, so Windows and
+  macOS bundles never compile glib at all.
 
 ### 3d. Known-incomplete, written down rather than hidden
 
