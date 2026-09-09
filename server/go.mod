@@ -1,6 +1,6 @@
 module github.com/hamlaneh/hamlaneh/server
 
-go 1.26
+go 1.26.0
 
 toolchain go1.26.6
 
@@ -18,7 +18,7 @@ require (
 	github.com/oapi-codegen/runtime v1.7.0
 	github.com/pquerna/otp v1.5.0
 	github.com/twitchtv/twirp v8.1.3+incompatible
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/image v0.45.0
 	golang.org/x/net v0.58.0
 	golang.org/x/oauth2 v0.36.0
@@ -114,7 +114,7 @@ require (
 	golang.org/x/tools v0.48.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/grpc v1.82.1 // indirect
+	google.golang.org/grpc v1.83.1 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
