@@ -33,7 +33,7 @@ RUN cargo build --release --target wasm32-unknown-unknown --locked \
 
 # Node LTS, pinned by digest (CLAUDE.md "CI gates": base images pinned by
 # digest; Dependabot's docker ecosystem covers deploy/ and keeps it fresh).
-FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS webbuild
+FROM node:26-bookworm-slim@sha256:367679cf9792759492a486e4aa4b421764d71a9546a6dae8aab81a99eb797b3e AS webbuild
 
 WORKDIR /src/webapp
 
