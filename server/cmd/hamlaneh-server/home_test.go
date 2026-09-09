@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -27,12 +28,49 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/sqlitestore"
 )
 
+// isolateUserConfigDir points os.UserConfigDir at a temporary root, so that a
+// test which clears the data-directory override resolves somewhere empty
+// instead of the developer's real per-user application directory.
+//
+// Without this, "deciding where the directory is must not make one" below
+// fails on any machine where Hamlaneh has actually been run in home mode:
+// the assertion sees the live hamlaneh.db and reads it as a directory this
+// call created. CI never sees that, because its containers start empty, so
+// the failure lands only on whoever is daily-driving the app.
+func isolateUserConfigDir(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	switch runtime.GOOS {
+	case "windows":
+		t.Setenv("AppData", root)
+	case "darwin", "ios":
+		t.Setenv("HOME", root)
+	case "plan9":
+		t.Setenv("home", root)
+	default:
+		t.Setenv("XDG_CONFIG_HOME", root)
+	}
+
+	// Confirm the redirect actually took, rather than trusting that this OS
+	// still reads the variable set above. Falling back to the real directory
+	// is precisely the bug this helper exists to prevent, and it is invisible
+	// on a machine that has never run the app.
+	got, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatalf("os.UserConfigDir() after isolation: %v", err)
+	}
+	if !strings.HasPrefix(got, root) {
+		t.Fatalf("os.UserConfigDir() = %q, want a path under the test's %q", got, root)
+	}
+}
+
 // homeTestEnv gives a test its own data directory and clears every variable
 // the boot path reads. A developer's shell must not be able to change what
 // these tests assert — and one of them (a stray SMTP or LiveKit variable)
 // would otherwise stop the process instead of failing an assertion.
 func homeTestEnv(t *testing.T) string {
 	t.Helper()
+	isolateUserConfigDir(t)
 	for _, name := range []string{
 		blobstore.EnvDataDir, envHomeAddr,
 		filesign.EnvKey, audit.EnvKey,
