@@ -192,6 +192,21 @@ const (
 	// which is the dishonest toggle the mode exists to avoid being.
 	codeEncryptionModeLocked errorCode = "encryption_mode_locked"
 
+	// Phase 4: the operator's update control (ADR 016).
+	//
+	// codeSelfUpdateUnavailable answers a request on an instance where nothing
+	// on the host is listening — no systemd, a watcher that was never
+	// installed, one whose units were removed. It is the same condition
+	// self_update_available reports false for, and it is a 503 rather than a
+	// 403 because nothing is refused: there is simply nothing to ask.
+	//
+	// codeUpdateInProgress answers a request made while a run is already in
+	// flight, including one racing the host's own scheduled timer — the
+	// updater takes a host-wide lock, so a second run is not something this
+	// endpoint could grant even if it wanted to.
+	codeSelfUpdateUnavailable errorCode = "self_update_unavailable"
+	codeUpdateInProgress      errorCode = "update_in_progress"
+
 	// codeNotFound answers a path under /api that no contract route claims.
 	// It is the router's answer, not a resource's: the contract's
 	// resource-level 404s carry their own codes (session_not_found,

@@ -23,6 +23,7 @@ import (
 	"github.com/hamlaneh/hamlaneh/server/internal/httpserver"
 	"github.com/hamlaneh/hamlaneh/server/internal/passwordreset"
 	"github.com/hamlaneh/hamlaneh/server/internal/sqlitestore"
+	"github.com/hamlaneh/hamlaneh/server/internal/updatestate"
 	"github.com/hamlaneh/hamlaneh/server/internal/wsgateway"
 )
 
@@ -105,6 +106,15 @@ type mode struct {
 	// leaves it empty always: it binds loopback already, its threat model is
 	// one machine, and it has no proxy to publish a second port with.
 	adminAddr string
+
+	// updateStateDir is the directory this server shares with the host's
+	// updater (ADR 016). Empty is off, and both modes read the same variable:
+	// the installer's watcher is a host unit rather than a compose service,
+	// so a single-binary install that ran `hamlaneh-update.sh --install-timer`
+	// has one exactly as a compose install does. What decides whether the
+	// control appears is the watcher stamp inside the directory, never the
+	// mode.
+	updateStateDir string
 }
 
 // serverMode is the deployment the compose stack runs: PostgreSQL from the
@@ -121,9 +131,10 @@ func serverMode() mode {
 		// Off unless the operator named an address (ADR 015). The compose
 		// stack is where a second published port is a control an operator
 		// already has, so this is the only mode that reads it.
-		adminAddr: os.Getenv(httpserver.EnvAdminAddr),
-		compress:  os.Getenv(httpserver.EnvCompressResponses) == "1",
-		publicURL: os.Getenv(passwordreset.EnvPublicURL),
+		adminAddr:      os.Getenv(httpserver.EnvAdminAddr),
+		compress:       os.Getenv(httpserver.EnvCompressResponses) == "1",
+		publicURL:      os.Getenv(passwordreset.EnvPublicURL),
+		updateStateDir: os.Getenv(updatestate.EnvStateDir),
 	}
 }
 
@@ -191,6 +202,11 @@ func homeMode() (mode, error) {
 		// the WebSocket gateway refuses every upgrade, so leaving it empty
 		// would ship a chat that cannot receive a message.
 		publicURL: envOr(passwordreset.EnvPublicURL, "http://"+addr),
+		// Read here as well as in server mode, and NOT refused the way the
+		// admin listener above is: the updater's watcher is a host unit, so
+		// this mode can genuinely have one, and an operator who installed the
+		// timer should see the control it installs (ADR 016 §3).
+		updateStateDir: os.Getenv(updatestate.EnvStateDir),
 	}, nil
 }
 

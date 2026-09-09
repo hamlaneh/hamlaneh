@@ -429,11 +429,27 @@ case "${1:-}" in
   inspect)
     case "$3" in
       *Config.Image*) cat "$S/local_tag" ;;
+      # The two reads the state directory and the scoped prune need. Answered
+      # from files so a test can decide what this host looks like: no
+      # state_dir file models a stack with no update volume.
+      *Destination*) cat "$S/state_dir" 2>/dev/null || true ;;
+      *Config.Labels*) cat "$S/project" 2>/dev/null || true ;;
       *) cat "$S/current_image_id" ;;
     esac
     exit 0
     ;;
-  image) printf '%s@sha256:%064d\n' "$5" 1; exit 0 ;;
+  # The cleanup verbs. They only have to succeed and be visible in the log:
+  # what the tests assert is WHICH of them ran and on which paths, which is
+  # the part a careless change breaks.
+  image)
+    case "${2:-}" in
+      prune) exit 0 ;;
+      *) printf '%s@sha256:%064d\n' "$5" 1; exit 0 ;;
+    esac
+    ;;
+  container | builder)
+    [ "${2:-}" = "prune" ] && exit 0
+    ;;
 esac
 exit 2
 STUB
@@ -457,7 +473,35 @@ seed_compose() {
   printf '%s' "$1" >"$STATE/img.${NEW_IMAGE//[^A-Za-z0-9]/_}.health"
   printf 'v1.4.0' >"$STATE/current_version"
   printf '0' >"$STATE/current_health"
+  printf 'hamlaneh' >"$STATE/project"
   : >"$STATE/log"
+  # The state directory the server and this script exchange status through
+  # (ADR 016). Seeded empty and REAL, so the assertions below read files the
+  # updater actually wrote rather than a mock of them.
+  STATE_DIR="$WORK/update-state"
+  rm -rf "$STATE_DIR"
+  mkdir -p "$STATE_DIR"
+  printf '%s' "$STATE_DIR" >"$STATE/state_dir"
+}
+
+# status_field <field> — pulls one value out of the status file the run wrote.
+# Deliberately a plain sed rather than a JSON parser: the file has to be
+# readable by a shell on a host with no jq, and a test that needed more tools
+# than the thing it tests would be testing the wrong file format.
+status_field() {
+  sed -n "s/.*\"$1\":\"\\([^\"]*\\)\".*/\\1/p" "$STATE_DIR/status.json" 2>/dev/null | head -n 1
+}
+
+# assert_status <field> <expected> <name>
+assert_status() {
+  local field="$1" want="$2" name="$3" got
+  checks=$((checks + 1))
+  got="$(status_field "$field")"
+  if [ "$got" = "$want" ]; then
+    pass_check "$name"
+  else
+    fail_check "$name — status.json $field was '${got:-nothing}', wanted '$want'"
+  fi
 }
 
 COMPOSE_ENV="$WORK/compose.env"
@@ -567,6 +611,228 @@ if grep -q '^PrivateTmp=true' "$UPDATE" &&
     "operator would each take their own and both would swap the binary."
 else
   pass_check "the lock lives outside the /tmp the unit's PrivateTmp namespaces"
+fi
+
+# ---------------------------------------------------------------------------
+# ADR 016: the dashboard asks, the host decides
+#
+# The security property under test is narrow and worth stating before the
+# assertions: a request file can select between two fixed argument vectors
+# and can influence NOTHING else. Every check below is a way of asking
+# whether that is still true.
+# ---------------------------------------------------------------------------
+
+printf '\n--- the request a dashboard writes ---\n'
+
+REQ_DIR="$WORK/request-state"
+REQ_LOG="$WORK/request-argv.log"
+
+# A stand-in for this script that records the argument vector it was called
+# with. serve_request re-invokes $SCRIPT_PATH, so pointing that at a recorder
+# is how the argv can be read rather than inferred.
+SERVE_RECORDER="$WORK/serve-recorder.sh"
+cat >"$SERVE_RECORDER" <<RECORDER
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$REQ_LOG"
+exit 0
+RECORDER
+chmod +x "$SERVE_RECORDER"
+
+# write_request <kind-json-fragment> — the file as the server writes it.
+write_request() {
+  rm -rf "$REQ_DIR"
+  mkdir -p "$REQ_DIR"
+  printf '%s\n' "$1" >"$REQ_DIR/request.json"
+  : >"$REQ_LOG"
+}
+
+# serve — consumes one request with the recorder standing in for the script's
+# own re-invocation, so the argument vector the child was given can be read
+# rather than inferred. A function rather than an inline `bash -c`, because
+# what these cases assert is the exact argv and a layer of nested quoting is
+# the last thing that should sit between the reader and it.
+serve() {
+  HAMLANEH_UPDATE_SERVE_EXEC="$SERVE_RECORDER" \
+    bash "$UPDATE" --serve-request --mode home --state-dir "$REQ_DIR"
+}
+
+write_request '{"schema":1,"id":"req-1","kind":"apply","requested_at":"2026-09-08T12:00:00Z"}'
+check "an apply request is served" 0 "serving an update requested from the dashboard" serve
+
+checks=$((checks + 1))
+if [ ! -f "$REQ_DIR/request.json" ]; then
+  pass_check "the request is consumed, so the path unit cannot retrigger on it forever"
+else
+  fail_check "request.json survived its own run" \
+    "PathExists retriggers while the file exists; a surviving request runs without end."
+fi
+
+# The vector itself, read rather than inferred. What must NOT be in it is the
+# point: no --force, no --version, no --repo, no --channel. An apply is the
+# bare run, which is the same one the timer performs.
+checks=$((checks + 1))
+if grep -q -- '--force\|--version\|--repo\|--channel' "$REQ_LOG"; then
+  fail_check "the served vector carries a flag a request must never reach" "$(cat "$REQ_LOG")"
+else
+  pass_check "an apply runs the bare update, with no flag a request could have chosen"
+fi
+
+write_request '{"schema":1,"id":"req-3","kind":"check","requested_at":"2026-09-08T12:00:00Z"}'
+check "a check request is served" 0 "serving a check requested from the dashboard" serve
+checks=$((checks + 1))
+if grep -q -- '--check' "$REQ_LOG" && ! grep -q -- '--force' "$REQ_LOG"; then
+  pass_check "a check runs --check and nothing more"
+else
+  fail_check "a check did not map to --check alone" "$(cat "$REQ_LOG")"
+fi
+
+# The refusal that matters. A request naming anything but the two literals
+# must run nothing at all — not a shell, not the updater, not a 'safe'
+# fallback. This is the assertion that would catch somebody 'helpfully'
+# passing the value through to the command line.
+write_request '{"schema":1,"id":"req-2","kind":"apply; rm -rf /","requested_at":"2026-09-08T12:00:00Z"}'
+check "a request naming anything else is refused" 1 "only 'check' and 'apply' exist" serve
+
+checks=$((checks + 1))
+if [ ! -s "$REQ_LOG" ]; then
+  pass_check "a refused request ran nothing"
+else
+  fail_check "a refused request still invoked something" "$(cat "$REQ_LOG")"
+fi
+
+rm -rf "$REQ_DIR"
+mkdir -p "$REQ_DIR"
+check "no request is not an error" 0 "no request to serve" \
+  bash "$UPDATE" --serve-request --mode home --state-dir "$REQ_DIR"
+
+# The source-level half of the same property: there must be no path from the
+# request file to --force, which is the flag that switches off anti-rollback.
+# Asserted against the source because a runtime test can only sample the
+# inputs somebody thought of.
+checks=$((checks + 1))
+if awk '/^serve_request\(\)/,/^}/' "$UPDATE" | grep -q -- '--force'; then
+  fail_check "serve_request can reach --force" \
+    "A dashboard request that can force would be a downgrade to any signed" \
+    "release with a known vulnerability. See ADR 016 section 1."
+else
+  pass_check "no path from a dashboard request to --force"
+fi
+
+printf '\n--- what the run records, and what it cleans up ---\n'
+
+# A run with nothing to do still reports, because 'the last run found nothing'
+# and 'nothing has run for a week' are different sentences and the dashboard
+# has to be able to tell them apart.
+seed_compose 0
+compose_update "$REL_140" v1.4.0 --installed v1.4.0 --cosign "$COSIGN_COMPOSE" \
+  >/dev/null 2>&1 || true
+assert_status state idle "an up-to-date run records that it found nothing"
+
+checks=$((checks + 1))
+if grep -q 'builder prune' "$STATE/log"; then
+  pass_check "an up-to-date run still clears the build cache"
+else
+  fail_check "an up-to-date run left the build cache alone" \
+    "Four no-op runs a day is what keeps a long-lived host clean." "$(cat "$STATE/log")"
+fi
+
+# The rollback path, where the cleanup must NOT run: the image a rollback just
+# restored is untagged at that moment, which is exactly what an image prune
+# takes. This is the check that stops a tidy-up from eating the safety net.
+seed_compose 1
+compose_update "$REL_141_SICK" v1.4.1 --cosign "$COSIGN_COMPOSE" >/dev/null 2>&1 || true
+assert_status state rolled_back "a rollback is recorded as its own state, not as a failure"
+
+checks=$((checks + 1))
+if grep -q 'prune' "$STATE/log"; then
+  fail_check "a rollback pruned" \
+    "The previous image is untagged at that instant and a dangling-image prune" \
+    "would remove the very thing the rollback restored." "$(cat "$STATE/log")"
+else
+  pass_check "a rollback prunes nothing"
+fi
+
+# No prune anywhere may take a volume. Asserted against the source, because
+# the one run that got this wrong would take the database with it and there
+# is no test worth writing that discovers that afterwards.
+checks=$((checks + 1))
+if grep -n 'prune' "$UPDATE" | grep -q -- '--volumes'; then
+  fail_check "a prune in the updater passes --volumes" \
+    "Those volumes are the database, every uploaded file and the certificate store."
+else
+  pass_check "no prune in the updater can reach a volume"
+fi
+
+checks=$((checks + 1))
+if grep -q 'image prune -f -a\|image prune -af\|image prune -a' "$UPDATE"; then
+  fail_check "the image prune is -a, which takes images no container happens to be running" \
+    "That includes the previous version, which is the rollback anchor."
+else
+  pass_check "the image prune is dangling-only"
+fi
+
+printf '\n--- the claim that this host is listening ---\n'
+
+# watcher.json is what turns the dashboard's button on, and the server treats
+# a stamp older than 48h as nobody listening. So SOMETHING has to renew it,
+# and it has to be the ordinary scheduled run: an install-time stamp alone
+# would take the button away two days later on a host that was listening the
+# whole time — the feature going dark exactly the way the failure it was built
+# to surface did.
+#
+# It must renew it only when the watcher unit really is enabled, which is the
+# other half and the one that matters for safety: a manual run on a host with
+# no watcher must not switch on a button with nothing behind it.
+SYSTEMCTL_STUB_DIR="$WORK/systemctl-stub"
+mkdir -p "$SYSTEMCTL_STUB_DIR"
+cat >"$SYSTEMCTL_STUB_DIR/systemctl" <<'SYSCTL'
+#!/usr/bin/env bash
+# is-enabled succeeds only while the marker exists, which is how a test says
+# "this host has the watcher unit" and "this host does not".
+[ "${1:-}" = "is-enabled" ] && [ -f "${SYSTEMCTL_STUB_ENABLED:-/nonexistent}" ]
+SYSCTL
+chmod +x "$SYSTEMCTL_STUB_DIR/systemctl"
+export SYSTEMCTL_STUB_ENABLED="$WORK/watcher-enabled"
+
+# stamp <state dir> <last_seen> — a watcher file as it would be after install.
+stamp() {
+  printf '{"schema":1,"installed_at":"2026-01-01T00:00:00Z","last_seen":"%s","channel":"security"}\n' \
+    "$2" >"$1/watcher.json"
+}
+
+# last_seen <state dir>
+last_seen() {
+  sed -n 's/.*"last_seen":"\([^"]*\)".*/\1/p' "$1/watcher.json" 2>/dev/null | head -n 1
+}
+
+STALE="2026-01-02T00:00:00Z"
+
+: >"$SYSTEMCTL_STUB_ENABLED"
+seed_compose 0
+stamp "$STATE_DIR" "$STALE"
+PATH="$SYSTEMCTL_STUB_DIR:$PATH" compose_update "$REL_140" v1.4.0 --installed v1.4.0 \
+  --cosign "$COSIGN_COMPOSE" >/dev/null 2>&1 || true
+checks=$((checks + 1))
+if [ "$(last_seen "$STATE_DIR")" != "$STALE" ]; then
+  pass_check "a scheduled run renews the listening claim, so the button does not expire"
+else
+  fail_check "a scheduled run left last_seen at its install-time value" \
+    "The server stops believing a stamp after 48h, so the dashboard's button" \
+    "would disappear two days after install on a host that never stopped listening."
+fi
+
+rm -f "$SYSTEMCTL_STUB_ENABLED"
+seed_compose 0
+stamp "$STATE_DIR" "$STALE"
+PATH="$SYSTEMCTL_STUB_DIR:$PATH" compose_update "$REL_140" v1.4.0 --installed v1.4.0 \
+  --cosign "$COSIGN_COMPOSE" >/dev/null 2>&1 || true
+checks=$((checks + 1))
+if [ "$(last_seen "$STATE_DIR")" = "$STALE" ]; then
+  pass_check "a run on a host with no watcher unit claims nothing"
+else
+  fail_check "a run renewed the listening claim on a host with no watcher" \
+    "That switches on a dashboard button with nothing behind it, which is the" \
+    "one direction ADR 016 section 3 says must fail closed."
 fi
 
 # ---------------------------------------------------------------------------

@@ -415,6 +415,48 @@
             "confirm": "Switch to Strict"
           }
         }
+      },
+      "updates": {
+        "title": "Updates",
+        "installedLabel": "Installed version",
+        "channel": {
+          "security": "Release channel: Security. This host applies patch releases of the version installed here, which is where fixes are backported.",
+          "all": "Release channel: All. This host applies every release it is offered, including new feature versions."
+        },
+        "capability": {
+          "managedElsewhere": "Updates are managed outside this instance. Nothing on this host is listening for a request from this screen, so this panel reports and cannot act — whatever installed this instance is what updates it.",
+          "notFromRelease": "This instance was built from a checkout rather than installed from a release, so it cannot be updated in place: there is no version number to check a new release against, and the updater refuses the run rather than guessing. Installing from a release is what restores updates here."
+        },
+        "availability": {
+          "unchecked": "Nothing has checked for a release yet, so this instance cannot say whether a newer one exists.",
+          "upToDate": "No newer release was found.",
+          "available": "{{version}} is available.",
+          "outsideChannel": "{{version}} has been released, and this instance's release channel will not apply it: it is a new feature version, and this channel takes patch releases of the installed one. Applying it is a deliberate act on the host, not a click here."
+        },
+        "checkedAt": "Last checked {{when}}.",
+        "ranAt": "Last run {{when}}.",
+        "progress": {
+          "requested": "The request has been written. The host picks it up within moments, and this panel is following it.",
+          "running": "An update is running. This instance may restart while it finishes; this panel keeps reading the host's own record of the run."
+        },
+        "outcome": {
+          "succeeded": "The last update run finished without error.",
+          "failed": "The last update run failed. This instance is still running the version above, and what the run left behind is kept rather than cleaned up so it can be looked into.",
+          "rolled_back": "A new release was applied, did not come up healthy, and the previous one is serving again. This instance is working — that release was not.",
+          "refused": "The updater declined the run on purpose. It will not move this instance to a release older than the one installed, and nothing here can override that."
+        },
+        "messageLabel": "What the updater reported",
+        "check": "Check for updates",
+        "checking": "Checking…",
+        "apply": "Apply update",
+        "applying": "Applying…",
+        "loadFailed": "We could not read the update status.",
+        "error": {
+          "inProgress": "An update run is already in flight — this one, or the host's scheduled one. Nothing new was started.",
+          "unavailable": "Nothing on this host is listening for the request, so it was not written.",
+          "rateLimited": "Too many requests. Try again in a few minutes.",
+          "unexpected": "That request did not reach the host. Nothing has been started."
+        }
       }
     },
     "audit": {

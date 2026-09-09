@@ -60,6 +60,23 @@ const (
 	AdminScimTokensRevoke Action = "admin:scim-tokens:revoke" // #nosec G101 -- as above: a permission name, not a credential
 )
 
+// Phase 4 actions: the operator's update control (ADR 016). Two rather than
+// one, because seeing that a release is waiting and spending a maintenance
+// window on it are different asks — and the split costs nothing today, while
+// collapsing them would have to be undone the first time an instance wants a
+// read-only operator.
+//
+// Neither confers any authority over WHAT the host runs. The request file
+// names no version, no repository and no flag, so the widest outcome either
+// of these permits is the release the host was going to apply anyway.
+const (
+	// AdminUpdateRead is reading what version this instance runs and what the
+	// host's last run did.
+	AdminUpdateRead Action = "admin:update:read"
+	// AdminUpdateRequest is asking the host to check for, or apply, an update.
+	AdminUpdateRequest Action = "admin:update:request"
+)
+
 // Can reports whether user may perform action on resource. resource is nil
 // for org-level actions, and otherwise one of the types the switch below
 // names: Channel, Message, Conference. There is no File resource and there
@@ -87,6 +104,7 @@ func Can(_ context.Context, user *storage.User, action Action, resource any) boo
 		AdminInvitesList, AdminInvitesCreate, AdminInvitesRevoke,
 		AdminOrgRead, AdminOrgUpdate, AdminAuditList,
 		AdminScimTokensList, AdminScimTokensCreate, AdminScimTokensRevoke,
+		AdminUpdateRead, AdminUpdateRequest,
 		ConferenceListAll:
 		return user.IsAdmin
 	case ChannelRead, ChannelUpdate, ChannelMemberAdd, ChannelMemberRemove,

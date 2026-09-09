@@ -1609,11 +1609,26 @@ recreate_stale_containers() {
 # worth of layers a week. Untagged images only: nothing the stack runs is
 # untagged (recreate_stale_containers just made sure of that), so nothing
 # in use can be pulled out from under it.
-prune_dangling_images() {
+# An install builds its images from source, and building is what actually
+# fills a small VPS: the layers this run replaced are one part of it and the
+# BUILD CACHE is the rest, by an order of magnitude. Measured on a real
+# instance a week after install: 761 MB of images against 8 GB of cache,
+# which nothing removed because nothing ever asked it to.
+#
+# Both are caches by definition — docker skips anything a container still
+# uses — so neither line can take something the stack needs. What is
+# deliberately absent is --volumes in any form: those are the database, the
+# uploaded files and the certificate store. The updater's prune_docker is
+# the same decision on the update path; see the comment above it.
+prune_build_leftovers() {
   local out reclaimed
   out="$(docker image prune -f 2>/dev/null || true)"
   reclaimed="$(printf '%s\n' "$out" | grep -o 'Total reclaimed space: .*' || true)"
   log "old build images removed (${reclaimed:-nothing to remove})"
+
+  out="$(docker builder prune -f 2>/dev/null || true)"
+  reclaimed="$(printf '%s\n' "$out" | grep -o 'Total:.*' || true)"
+  log "build cache removed (${reclaimed:-nothing to remove})"
 }
 
 # "docker compose up -d" returning 0 means the containers were CREATED. It
@@ -1880,7 +1895,7 @@ main() {
   wait_for_stack
   enable_update_timer
   enable_backup_timer
-  prune_dangling_images
+  prune_build_leftovers
   print_success
 }
 

@@ -90,12 +90,18 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}"
 # whatever the image has at the mount point, ownership included, and that is
 # the only thing that lets the non-root server write to it — a volume Docker
 # creates from nothing is owned by root, and the container cannot chown it.
-RUN mkdir -p /out/data
+# The same trick a second time for the update state directory (ADR 016),
+# which the server writes a request into and the host's updater writes a
+# status back into. A sibling of the data directory rather than a child, so
+# the backup script's walk of HAMLANEH_DATA_DIR does not pick up a second
+# mount that holds no user data.
+RUN mkdir -p /out/data /out/update
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 COPY --from=build /out/hamlaneh-server /usr/local/bin/hamlaneh-server
 COPY --from=build --chown=65532:65532 /out/data /var/lib/hamlaneh
+COPY --from=build --chown=65532:65532 /out/update /var/lib/hamlaneh-update
 
 # Numeric UID of the distroless "nonroot" user, stated explicitly so
 # runtime non-root checks are unambiguous.

@@ -25,6 +25,13 @@ func TestCan(t *testing.T) {
 		{"member denied admin create", member, authz.AdminUsersCreate, false},
 		{"admin allowed admin list", admin, authz.AdminUsersList, true},
 		{"admin allowed admin create", admin, authz.AdminUsersCreate, true},
+		// The update control (ADR 016). Reading it is as much an admin
+		// decision as spending a maintenance window on it: what the host last
+		// did, and what release is waiting, is instance operations.
+		{"member denied the update status", member, authz.AdminUpdateRead, false},
+		{"member denied requesting an update", member, authz.AdminUpdateRequest, false},
+		{"admin allowed the update status", admin, authz.AdminUpdateRead, true},
+		{"admin allowed requesting an update", admin, authz.AdminUpdateRequest, true},
 		{"unknown action denied even for admin", admin, authz.Action("bogus:action"), false},
 		{"empty action denied", admin, authz.Action(""), false},
 	}

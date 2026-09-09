@@ -868,6 +868,23 @@ Goal: median stranger, fresh VPS → working instance, **under 5 minutes, measur
       **On by default only where systemd is** — on a systemd-less host the timer cannot be armed
       and the installer says so rather than reporting success; backups already have a cron
       fallback and the updater does not
+- [x] **An operator can see and trigger an update from the dashboard** — *2026-09-08*,
+      [ADR 016](adr/016-operator-triggered-updates.md). The timer worked and was invisible: no
+      screen said a release existed, and none said the last run had failed. It now does both,
+      and the button that applies one crosses the container/host boundary without carrying any
+      authority across it. The server writes a request naming a two-valued literal and nothing
+      else; a systemd path unit runs the updater with its own fixed argument vector; no value
+      from that file reaches a command line. The refusal is asserted two ways — a request whose
+      kind is anything but the two literals runs nothing at all, and a source-level check that
+      there is no path from the request to `--force`, which is the flag anti-rollback turns on.
+      Absent rather than dead where nothing is listening, following `password_reset_available`
+- [x] **Updates and installs clean up after themselves** — *2026-09-08*. Dangling images, this
+      project's stopped containers, and the build cache, which is the one that actually fills a
+      small VPS: 761 MB of images against 8 GB of cache on a real instance a week after install,
+      because nothing had ever removed it. Three narrow commands rather than
+      `docker system prune`, `--volumes` on no path in either script, and **no prune on the
+      rollback path** — the image a rollback restores is untagged at that instant and is exactly
+      what a dangling-image prune takes
 - [x] **Automated encrypted backups on by default; documented restore** — *2026-08-30*,
       `deploy/hamlaneh-backup.sh`, [`docs/backups.md`](backups.md). Verification happens before
       anything is stopped or written, so a wrong key or a tampered archive leaves the instance

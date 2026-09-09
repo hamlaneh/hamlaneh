@@ -57,7 +57,8 @@ func canConference(user *storage.User, action Action, res Conference) bool {
 		AdminUsersList, AdminUsersCreate, AdminUsersUpdate, AdminUsersResetPassword,
 		AdminInvitesList, AdminInvitesCreate, AdminInvitesRevoke,
 		AdminOrgRead, AdminOrgUpdate, AdminAuditList,
-		AdminScimTokensList, AdminScimTokensCreate, AdminScimTokensRevoke:
+		AdminScimTokensList, AdminScimTokensCreate, AdminScimTokensRevoke,
+		AdminUpdateRead, AdminUpdateRequest:
 		// Nothing else is decided against a conference. Listing scope is an
 		// instance-role question asked with no resource, and every other
 		// action names a resource this is not.

@@ -117,6 +117,7 @@ case "$1 $2" in
   "volume inspect") [ "${STUB_DB_VOLUME:-0}" = "1" ] ;;
   "image inspect") printf '%s\n' "${STUB_SERVICE_IMAGE:-sha256:same}" ;;
   "image prune") printf 'Total reclaimed space: 1.2GB\n' ;;
+  "builder prune") printf 'Total:\t8.0GB\n' ;;
   "inspect -f") printf '%s\n' "${STUB_CONTAINER_IMAGE:-sha256:same}" ;;
   "compose -f")
     case " $* " in
@@ -1198,8 +1199,11 @@ test_recreate_stale_containers() {
     ok "an up-to-date container is left running"
   fi
 
-  out="$(run_in_subshell prune_dangling_images)"
-  check_contains "the prune reports what it reclaimed" "Total reclaimed space: 1.2GB" "$out"
+  # Both halves of the cleanup. The build cache is the one that actually
+  # fills a small VPS, and it is the one nothing removed before.
+  out="$(run_in_subshell prune_build_leftovers)"
+  check_contains "the prune reports the images it reclaimed" "Total reclaimed space: 1.2GB" "$out"
+  check_contains "the prune also clears the build cache" "8.0GB" "$out"
 }
 
 test_help_output() {

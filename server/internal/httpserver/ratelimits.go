@@ -145,6 +145,7 @@ const (
 	budgetMlsGroupWork      budgetName = "mls-group-work"
 	budgetMlsMemberDevices  budgetName = "mls-member-devices"
 	budgetMlsBackup         budgetName = "mls-backup"
+	budgetUpdateRequest     budgetName = "update-request"
 )
 
 // budgetSpec is one budget: how many requests fit its sliding window, how
@@ -419,6 +420,24 @@ var budgetSpecs = map[budgetName]budgetSpec{
 	// handful of tries a person needs to land on a username nobody has
 	// taken, and far below a loop worth running.
 	budgetInviteRedeem: {limit: 10, window: 5 * time.Minute, perIP: true},
+
+	// Asking the host to update (ADR 016). It is the only admin endpoint
+	// whose click leaves this process: the host pulls an image over the
+	// network and restarts the stack, and even a check costs a fetch of the
+	// release feed.
+	//
+	// It is not a defence against the administrator, who can already do all
+	// of that from the host. What it bounds is a session that is no longer
+	// theirs, and — far more likely — a client stuck in a retry loop against
+	// an endpoint whose work happens somewhere this server cannot see, so
+	// nothing here would ever slow down on its own.
+	//
+	// 5 in 10 minutes clears the real shape of the flow, which is a check, an
+	// apply, and then polling the GET (which is unbudgeted) while it runs. It
+	// is far below anything that looks like a stack restarted in a loop, and
+	// a refusal costs an operator a wait rather than an outcome: the timer
+	// applies the same release within six hours regardless.
+	budgetUpdateRequest: {limit: 5, window: 10 * time.Minute},
 }
 
 // endpointBudgets is the rate-limit table for every contract endpoint, keyed
@@ -505,6 +524,15 @@ var endpointBudgets = map[string]budgetName{
 	// The encryption mode. One indexed update of one column by an admin who
 	// already holds the instance, and the contract reserves no 429 on it.
 	"PUT /api/v1/admin/org/encryption-mode": budgetNone,
+
+	// Phase 4: the update control (ADR 016). The read is what the dashboard
+	// polls while a run is in flight, and it costs three small file reads by
+	// an admin who already holds the instance, so the contract reserves no
+	// 429 on it — budgeting the poll would only make the screen stop
+	// updating at the moment it matters. The write is the one that leaves
+	// this process.
+	"GET /api/v1/admin/update":  budgetNone,
+	"POST /api/v1/admin/update": budgetUpdateRequest,
 	// The preview is public and carries no 429 in the contract. It runs one
 	// indexed lookup against a hash and answers the same 404 to everything
 	// that is not live, so there is nothing here a budget would protect that
