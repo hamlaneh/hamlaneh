@@ -15,7 +15,7 @@
 # when someone opens an encrypted conversation. Same toolchain versions as
 # webapp/src-mls/Dockerfile (the dev-machine build) — drift between the two
 # would ship a bundle nobody tested.
-FROM rust:1.91-bookworm@sha256:c1e5f19e773b7878c3f7a805dd00a495e747acbdc76fb2337a4ebf0418896b33 AS mlswasm
+FROM rust:1.99-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS mlswasm
 
 RUN rustup target add wasm32-unknown-unknown \
  && cargo install wasm-bindgen-cli --version 0.2.127 --locked
